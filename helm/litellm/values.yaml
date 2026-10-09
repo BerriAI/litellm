@@ -641,6 +641,35 @@ lensWorker:
   tokenSecret:
     name: ""
     key: token
+  serviceTokenSecret:
+    name: ""
+    key: service-token
+  clickhouse:
+    enabled: true
+    image: clickhouse/clickhouse-server:26.9.6.6
+    storage: 20Gi
+    storageClassName: null
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+  clickhouseDatabase: litellm
+  retentionDays: 14
+  clickhouseSecret:
+    name: ""
+    key: url
+  publicUrl: ""
+  service:
+    port: 4318
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
   url: ""
   tmpSizeLimit: 1Gi
   resources:

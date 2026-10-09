@@ -1173,3 +1173,30 @@ def test_llm_span_sets_top_level_model_name(logger: DataDogLLMObsLogger) -> None
     assert span["meta"]["kind"] == "llm"
     assert span["meta"]["model_name"] == "openai/gpt-4.1-mini"
     assert span["meta"]["model_provider"] == "openai"
+
+@pytest.mark.parametrize(
+    ("raw_arguments", "shipped"),
+    [
+        ('{"city": "Paris", "days": [1, 2]}', {"city": "Paris", "days": [1, 2]}),
+        ("{}", {}),
+        ("[1, 2]", "[1, 2]"),
+        ("null", "null"),
+        ("true", "true"),
+        ('"text"', '"text"'),
+        ("1.5", "1.5"),
+        ("", ""),
+    ],
+)
+def test_tool_arguments_ship_as_an_object_only_when_they_decode_to_one(
+    logger: DataDogLLMObsLogger, raw_arguments: str, shipped: object
+) -> None:
+    payload = build(
+        logger,
+        response_message={
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": raw_arguments}}],
+        },
+    )
+
+    assert payload["meta"]["output"]["messages"][0]["tool_calls"][0]["arguments"] == shipped

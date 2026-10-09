@@ -83,7 +83,7 @@ async def test_create_prompt_stores_environment_and_created_by():
     from litellm.proxy.prompts.prompt_endpoints import create_prompt, Prompt
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234",
+        api_key="sk-9876",
         user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id="user-789",
     )
@@ -146,7 +146,7 @@ async def test_update_prompt_stores_environment_and_created_by():
     from litellm.proxy.prompts.prompt_endpoints import update_prompt, Prompt
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234",
+        api_key="sk-9876",
         user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id="user-update",
     )
@@ -217,7 +217,7 @@ async def test_delete_prompt_scoped_to_environment():
     from litellm.proxy.prompts.prompt_endpoints import delete_prompt
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234",
+        api_key="sk-9876",
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialSetupStep, readiness, type ReadinessInput } from "./readiness";
+import { initialSetupStep, readiness, recordedActivity, type ReadinessInput } from "./readiness";
 
 const base: ReadinessInput = {
   traces: { recorded: undefined, failed: false, disabled: false, checked: false },
@@ -49,5 +49,25 @@ describe("initialSetupStep", () => {
     const recorded = { ...offline, activity: { traces: false, requests: true } };
     expect(initialSetupStep(readiness(recorded))).toBe(2);
     expect(initialSetupStep(readiness({ ...recorded, connected: true }))).toBe(3);
+  });
+});
+
+describe("recordedActivity", () => {
+  it("requires a confirmed empty response or disabled tracing before showing trace setup", () => {
+    expect(recordedActivity(base).missingTraces).toBe(false);
+    expect(recordedActivity({ ...base, traces: { ...base.traces, failed: true } }).missingTraces).toBe(false);
+    expect(recordedActivity({ ...base, traces: { ...base.traces, recorded: false } }).missingTraces).toBe(true);
+    expect(recordedActivity({ ...base, traces: { ...base.traces, disabled: true } }).missingTraces).toBe(true);
+  });
+
+  it("preserves known activity through failed refreshes without enabling investigation actions", () => {
+    const failed = { ...base, activityError: new Error("offline"), traces: { ...base.traces, failed: true } };
+    const knownTraces = { ...failed, traces: { ...failed.traces, recorded: true } };
+    expect(recordedActivity(knownTraces)).toEqual({ missingTraces: false, hasRecordedActivity: true });
+    expect(readiness(knownTraces).ready).toBe(false);
+    const knownRequests = { ...failed, activity: { traces: false, requests: true } };
+    expect(recordedActivity(knownRequests).hasRecordedActivity).toBe(true);
+    expect(readiness(knownRequests).ready).toBe(false);
+    expect(recordedActivity({ ...failed, activity: { traces: true, requests: false } }).missingTraces).toBe(false);
   });
 });

@@ -3,13 +3,13 @@ from __future__ import annotations
 import ssl
 import threading
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import Final
+from typing import BinaryIO, Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,37 @@ class Request:
     target: str
     headers: Mapping[str, str]
     body: bytes
+
+
+class AbortedBody(Exception):
+    """The client closed the connection before the body it announced was complete."""
+
+
+def exactly(stream: BinaryIO, size: int) -> bytes:
+    data: Final = stream.read(size)
+    if len(data) < size:
+        raise AbortedBody
+    return data
+
+
+def chunked_body(stream: BinaryIO) -> Iterator[bytes]:
+    while True:
+        size_line: Final = stream.readline()
+        if not size_line:
+            raise AbortedBody
+        size: Final = int(size_line.split(b";")[0].strip(), 16)
+        if size == 0:
+            while stream.readline().strip():
+                pass
+            return
+        yield exactly(stream, size)
+        stream.readline()
+
+
+def read_body(headers: Mapping[str, str], stream: BinaryIO) -> bytes:
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        return b"".join(chunked_body(stream))
+    return exactly(stream, int(headers.get("content-length", "0")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +78,13 @@ class Wire:
         return self.connected.qsize()
 
 
+def _await_release(gate: threading.Event, closing: threading.Event) -> bool:
+    while not closing.is_set():
+        if gate.wait(timeout=0.05):
+            return True
+    return gate.is_set()
+
+
 @contextmanager
 def wire_server(
     respond: Callable[[Request], Reply],
@@ -60,6 +98,7 @@ def wire_server(
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
     connected: Final[SimpleQueue[str]] = SimpleQueue()
+    closing: Final = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -70,12 +109,14 @@ def wire_server(
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def respond(self) -> None:
-            request: Final = Request(
-                self.command,
-                self.path,
-                {name.lower(): value for name, value in self.headers.items()},
-                self.rfile.read(int(self.headers.get("content-length", "0"))),
-            )
+            headers: Final = {name.lower(): value for name, value in self.headers.items()}
+            try:
+                body: Final = read_body(headers, self.rfile)
+            except AbortedBody:
+                self.close_connection = True
+                disconnected.put(self.path)
+                return
+            request: Final = Request(self.command, self.path, headers, body)
             received.put(request)
             try:
                 reply = respond(request)
@@ -108,8 +149,12 @@ def wire_server(
                             break
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()
-                        if index == 0 and reply.gate_after_first is not None:
-                            assert reply.gate_after_first.wait(timeout=5), "Stream barrier was never released"
+                        if (
+                            index == 0
+                            and reply.gate_after_first is not None
+                            and not _await_release(reply.gate_after_first, closing)
+                        ):
+                            break
                         if reply.pause_between_chunks and index + 1 < len(reply.chunks):
                             time.sleep(reply.pause_between_chunks)
                     else:
@@ -151,6 +196,7 @@ def wire_server(
                 connected,
             )
         finally:
+            closing.set()
             server.shutdown()
             thread.join(timeout=6)
             assert not thread.is_alive(), "Owned HTTP server survived cleanup"

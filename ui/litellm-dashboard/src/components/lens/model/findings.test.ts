@@ -1,4 +1,4 @@
-import { mergeFeedback, sortedFindings, briefMarkdown } from "./findings";
+import { findingMarkdown, mergeFeedback, sortedFindings, briefMarkdown } from "./findings";
 import { describe, expect, it } from "vitest";
 import { type Finding } from "./types";
 
@@ -45,6 +45,35 @@ describe("Lens findings", () => {
       ].join("\n\n"),
     );
   });
+});
+
+it("copies a finding for an agent with its summary, fix and every quoted line", () => {
+  const finding: Finding = {
+    kind: "issue",
+    status: "open",
+    reason: "",
+    suggestion: "Reconnect with files:read",
+    limitation: "",
+    occurrences: [],
+    id: "f",
+    check_id: "check",
+    title: "Attachments unread",
+    description: "Five turns got a notice",
+    evidence: [{ execution_id: "e", span_id: "s", quote: "could not\nbe read", role: "support" }],
+    revision: 1,
+    priority: "high",
+    first_seen: "2026-09-30T10:00:00Z",
+    last_seen: "2026-09-30T12:00:00Z",
+  };
+  expect(findingMarkdown(finding)).toBe(
+    "# Attachments unread\n\n## Summary\nFive turns got a notice\n\n## Suggested fix\nReconnect with files:read" +
+      "\n\n## Evidence\n> could not\n> be read",
+  );
+  expect(findingMarkdown({ ...finding, suggestion: "", evidence: [] })).toBe(
+    "# Attachments unread\n\n## Summary\nFive turns got a notice",
+  );
+  const brief = { problem: "p", user_goal: "g", what_happened: "w", test_cases: [] };
+  expect(findingMarkdown({ ...finding, brief })).toBe(briefMarkdown(finding.title, brief));
 });
 
 it("applies current feedback to a historical snapshot while preserving its original evidence", () => {

@@ -36,12 +36,12 @@ async def resolve_owned_read_scope(
 
 
 def can_read_team_logs(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable) -> bool:
-    from litellm.proxy.management.teams.access import is_team_admin
+    from litellm.proxy.management.teams.authz import is_team_admin
     from litellm.proxy.management_endpoints.common_utils import (
-        _team_member_has_permission,  # pyright: ignore[reportPrivateUsage]  # reuse existing team permission policy
+        team_member_has_permission,  # pyright: ignore[reportPrivateUsage]  # reuse existing team permission policy
     )
 
-    return is_team_admin(user_api_key_dict=auth, team_obj=team) or _team_member_has_permission(
+    return is_team_admin(user_api_key_dict=auth, team_obj=team) or team_member_has_permission(
         user_api_key_dict=auth,
         team_obj=team,
         permission=KeyManagementRoutes.SPEND_LOGS.value,

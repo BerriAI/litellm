@@ -14,7 +14,7 @@ maps (litellm.completion_cost, batch_cost_calculator), the tokenizer
 deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
-import json
+import asyncio, json, time
 import logging
 from types import MappingProxyType
 
@@ -27,6 +27,15 @@ from openai.types.batch import BatchRequestCounts
 import litellm
 import litellm.batches.batch_utils as bu
 from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
+from litellm.batches.batch_utils import(
+    _aggregate_batch_cost_usage_models,
+    get_file_content_as_dictionary,
+    _get_response_from_batch_job_output_file,
+    calculate_batch_cost_and_usage,
+)
+from litellm.cost_calculator import batch_cost_calculator
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from unittest.mock import AsyncMock, patch
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -86,6 +95,13 @@ def test_get_response_body_present():
     }
 
 
+def test_get_response_body_is_returned_without_validation():
+    response_body = ["provider-specific response"]
+    row = {"response": {"body": response_body}}
+
+    assert bu._get_response_from_batch_job_output_file(row) is response_body
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -125,13 +141,13 @@ def test_get_usage_from_response_body_missing_is_zero():
 
 
 # =========================================================================== #
-# _get_file_content_as_dictionary  (JSONL parsing)
+# get_file_content_as_dictionary  (JSONL parsing)
 # =========================================================================== #
 
 
 def test_parse_jsonl_multiple_lines():
     content = b'{"a": 1}\n{"b": 2}\n{"c": 3}'
-    assert bu._get_file_content_as_dictionary(content) == [
+    assert bu.get_file_content_as_dictionary(content) == [
         {"a": 1},
         {"b": 2},
         {"c": 3},
@@ -141,16 +157,16 @@ def test_parse_jsonl_multiple_lines():
 def test_parse_jsonl_trailing_newline_skipped():
     # outer content is stripped; the trailing-newline empty line is dropped.
     content = b'{"a": 1}\n{"b": 2}\n'
-    assert bu._get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
+    assert bu.get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
 
 
 def test_parse_jsonl_empty_content_is_empty_list():
-    assert bu._get_file_content_as_dictionary(b"") == []
+    assert bu.get_file_content_as_dictionary(b"") == []
 
 
 def test_parse_jsonl_malformed_lines_skipped():
     content = b'{"a": 1}\nnot valid json\n{"b": 2}\n'
-    assert bu._get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
+    assert bu.get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
 
 
 # =========================================================================== #
@@ -345,6 +361,10 @@ def test_count_tokens_unsupported_shape_is_zero(fake_token_counter):
 def test_count_entry_messages_path(fake_token_counter):
     entry = {"body": {"model": "gpt-4o", "messages": [{"role": "user"}, {"role": "x"}]}}
     assert bu._count_entry_tokens(entry) == 2  # len(messages)
+
+
+def test_count_entry_uses_dynamic_length_for_messages(fake_token_counter):
+    assert bu._count_entry_tokens({"body": {"messages": "abc"}}) == 3
 
 
 def test_count_entry_prompt_path(fake_token_counter):
@@ -948,7 +968,7 @@ async def test_output_file_content_vertex_fetches_via_afile_content(monkeypatch)
         },
     )
 
-    assert bu._get_file_content_as_dictionary(result) == rows
+    assert bu.get_file_content_as_dictionary(result) == rows
     assert captured["file_id"] == "gs://litellm-bucket/output/predictions.jsonl"
     assert captured["custom_llm_provider"] == "vertex_ai"
     assert captured["vertex_project"] == "proj-1"
@@ -1078,7 +1098,7 @@ async def test_output_file_content_vertex_managed_uri_accepted_by_real_validatio
             "gcs_bucket_name": "litellm-bucket",
         },
     )
-    result = bu._get_file_content_as_dictionary(file_content)
+    result = bu.get_file_content_as_dictionary(file_content)
 
     assert route.call_count == 1
     request = route.calls.last.request
@@ -1126,7 +1146,7 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
 
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
 
-    result = await bu._handle_completed_batch(
+    result = await bu.handle_completed_batch(
         _batch("gs://litellm-bucket/output/predictions.jsonl"),
         custom_llm_provider="vertex_ai",
         litellm_params={"vertex_project": "proj-1", "vertex_location": "us-central1"},
@@ -1164,7 +1184,7 @@ async def test_output_file_content_fetches_and_parses(monkeypatch):
         return type("R", (), {"content": b'{"a": 1}\n{"b": 2}'})()
 
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
-    monkeypatch.setattr(cu, "_is_base64_encoded_unified_file_id", lambda fid: False)
+    monkeypatch.setattr(cu, "is_base64_encoded_unified_file_id", lambda fid: False)
 
     result = await bu._fetch_batch_output_file_content(
         _batch("file-out"),
@@ -1197,7 +1217,7 @@ async def test_output_file_content_unified_file_id_extraction(monkeypatch):
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
     monkeypatch.setattr(
         cu,
-        "_is_base64_encoded_unified_file_id",
+        "is_base64_encoded_unified_file_id",
         lambda fid: "litellm_proxy;llm_output_file_id,real-file-99;rest",
     )
 
@@ -1207,7 +1227,7 @@ async def test_output_file_content_unified_file_id_extraction(monkeypatch):
 
 
 # =========================================================================== #
-# _handle_completed_batch  (async orchestrator: fetch -> single-pass aggregate)
+# handle_completed_batch  (async orchestrator: fetch -> single-pass aggregate)
 # =========================================================================== #
 
 
@@ -1223,7 +1243,7 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
     monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (2.0, 1.3))
 
-    result = await bu._handle_completed_batch(_batch("of"), custom_llm_provider="openai")
+    result = await bu.handle_completed_batch(_batch("of"), custom_llm_provider="openai")
 
     assert result.cost == 3.3
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (10, 5, 15)
@@ -1271,7 +1291,7 @@ async def test_handle_completed_batch_counts_error_file_failures(monkeypatch):
         error_file_id="ef",
     )
 
-    result = await bu._handle_completed_batch(batch, custom_llm_provider="openai")
+    result = await bu.handle_completed_batch(batch, custom_llm_provider="openai")
 
     assert result.successful_requests == 1
     assert result.failed_requests == 1
@@ -1318,7 +1338,7 @@ async def test_handle_completed_batch_decodes_model_encoded_error_file_id(monkey
         error_file_id=encoded_error_file_id,
     )
 
-    result = await bu._handle_completed_batch(batch, custom_llm_provider="openai")
+    result = await bu.handle_completed_batch(batch, custom_llm_provider="openai")
 
     assert requested_file_ids == [provider_error_file_id]
     assert result.failed_requests == 1
@@ -1334,7 +1354,7 @@ async def test_handle_completed_batch_no_error_file_id_reports_zero_error_failur
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
     monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
 
-    result = await bu._handle_completed_batch(_batch("of"), custom_llm_provider="openai")
+    result = await bu.handle_completed_batch(_batch("of"), custom_llm_provider="openai")
 
     assert result.successful_requests == 1
     assert result.failed_requests == 0
@@ -1344,7 +1364,7 @@ async def test_handle_completed_batch_no_error_file_id_reports_zero_error_failur
 async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
     """
     Regression: an all-error batch completes with output_file_id=None (results go
-    to a separate error_file_id). _handle_completed_batch must report an empty
+    to a separate error_file_id). handle_completed_batch must report an empty
     result set - zero cost, zero usage, no models - instead of letting the file
     fetch raise "Output file id is None" on every aretrieve_batch logging poll.
     """
@@ -1355,7 +1375,7 @@ async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", _must_not_fetch)
 
-    result = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
+    result = await bu.handle_completed_batch(_batch(None), custom_llm_provider="openai")
 
     assert result.cost == 0.0
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (0, 0, 0)
@@ -1388,7 +1408,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
 
     monkeypatch.setattr(bu, "calculate_vertex_ai_batch_cost_and_usage", fake_vertex_calc)
 
-    result = await bu._handle_completed_batch(
+    result = await bu.handle_completed_batch(
         _batch("gs://litellm-bucket/output/predictions.jsonl"),
         custom_llm_provider="vertex_ai",
         model_name="gemini-x",
@@ -1712,7 +1732,7 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
 
 
 # =========================================================================== #
-# _handle_completed_batch threads the deployment's model identity + pricing
+# handle_completed_batch threads the deployment's model identity + pricing
 # =========================================================================== #
 
 
@@ -1747,7 +1767,7 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
 
-    result = await bu._handle_completed_batch(
+    result = await bu.handle_completed_batch(
         _batch("of"),
         custom_llm_provider="bedrock",
         model_name="bedrock/global.anthropic.claude-sonnet-4-6",
@@ -1756,7 +1776,7 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (1800, 1000, 2800)
 
     # The response model alone cannot price a bedrock batch: this is the $0 bug.
-    zero_result = await bu._handle_completed_batch(
+    zero_result = await bu.handle_completed_batch(
         _batch("of"),
         custom_llm_provider="bedrock",
         model_name=None,
@@ -1775,7 +1795,7 @@ async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> 
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
 
-    free_result = await bu._handle_completed_batch(
+    free_result = await bu.handle_completed_batch(
         _batch("of"),
         custom_llm_provider="vertex_ai",
         model_name="vertex_ai/gemini-2.5-flash",
@@ -1788,7 +1808,7 @@ async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> 
     )
     assert free_result.cost == 0.0
 
-    billed_result = await bu._handle_completed_batch(
+    billed_result = await bu.handle_completed_batch(
         _batch("of"),
         custom_llm_provider="vertex_ai",
         model_name="vertex_ai/gemini-2.5-flash",
@@ -1895,9 +1915,9 @@ class TestFileAccessCredentialsCarryFederation:
     has to inherit the federation fields or it cannot authenticate and the batch is never billed."""
 
     def test_federation_fields_survive_extraction(self):
-        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.batches.batch_utils import extract_file_access_credentials
 
-        credentials = _extract_file_access_credentials(
+        credentials = extract_file_access_credentials(
             {
                 "model": "anthropic/claude-sonnet-4-5",
                 "anthropic_federation_rule_id": "fdrl_x",
@@ -1914,12 +1934,12 @@ class TestFileAccessCredentialsCarryFederation:
 
     def test_every_federation_field_is_carried(self):
         """Derived from the kwargs set, so a new federation field is carried without an edit here."""
-        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.batches.batch_utils import extract_file_access_credentials
         from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
 
         params = {name: f"value-{name}" for name in ANTHROPIC_WIF_KWARGS_KEYS}
 
-        credentials = _extract_file_access_credentials(params)
+        credentials = extract_file_access_credentials(params)
 
         assert set(credentials) == set(ANTHROPIC_WIF_KWARGS_KEYS)
 
@@ -2291,7 +2311,7 @@ async def test_handle_completed_batch_routes_native_rows_without_flag(monkeypatc
     calls = _capture_cost_calls(monkeypatch, prompt_cost=0.7, completion_cost=0.3)
     deployment_model_info = {"input_cost_per_token_batches": 1e-6, "output_cost_per_token_batches": 2e-6}
 
-    result = await bu._handle_completed_batch(
+    result = await bu.handle_completed_batch(
         _batch(PASSTHROUGH_OUTPUT_URI),
         custom_llm_provider="vertex_ai",
         model_name="gemini-2.5-flash",
@@ -2485,3 +2505,831 @@ async def test_flag_sends_every_vertex_row_down_the_native_path_when_a_model_is_
 
     assert calls == []
     assert (result.successful_requests, result.failed_requests) == (0, 1)
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest.fixture(scope="function")
+def setup_and_teardown(event_loop):
+    original_state = _copy_litellm_state()
+    _clear_logging_queue(event_loop)
+    _reset_litellm_callbacks()
+    asyncio.set_event_loop(event_loop)
+    yield
+    _clear_logging_queue(event_loop)
+    _reset_litellm_callbacks()
+    _restore_litellm_state(original_state)
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+def _copy_litellm_state():
+    state = {}
+    for attr in _CALLBACK_ATTRS:
+        if hasattr(litellm, attr):
+            value = getattr(litellm, attr)
+            state[attr] = value.copy() if isinstance(value, list) else value
+    for attr in _SCALAR_ATTRS:
+        if hasattr(litellm, attr):
+            state[attr] = getattr(litellm, attr)
+    return state
+
+_CALLBACK_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+)
+
+_SCALAR_ATTRS = (
+    "num_retries",
+    "set_verbose",
+    "cache",
+    "allowed_fails",
+    "disable_aiohttp_transport",
+    "force_ipv4",
+    "drop_params",
+    "modify_params",
+    "api_base",
+    "api_key",
+    "cohere_key",
+)
+
+def _clear_logging_queue(loop=None) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    if loop is not None and (not loop.is_closed()) and (not loop.is_running()):
+        loop.run_until_complete(GLOBAL_LOGGING_WORKER.clear_queue())
+        return
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+
+def _reset_litellm_callbacks() -> None:
+    for attr in _CALLBACK_ATTRS:
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    manager = getattr(litellm, "logging_callback_manager", None)
+    reset = getattr(manager, "_reset_all_callbacks", None)
+    if callable(reset):
+        reset()
+
+def _restore_litellm_state(state) -> None:
+    for attr, value in state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, value)
+
+def _make_batch_output_line(prompt_tokens: int = 10, completion_tokens: int = 5):
+    """Return a single successful batch output line (OpenAI JSONL format)."""
+    return {
+        "id": "batch_req_1",
+        "custom_id": "req-1",
+        "response": {
+            "status_code": 200,
+            "body": {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": "fake-batch-model",
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        },
+        "error": None,
+    }
+
+CUSTOM_MODEL_INFO = {
+    "input_cost_per_token_batches": 0.00125,
+    "output_cost_per_token_batches": 0.005,
+}
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_batch_cost_calculator_explicit_zero_pricing_not_overridden_by_global(
+    monkeypatch,
+):
+    """
+    Explicit ``0`` / ``0.0`` pricing must count as present so we do not fall back
+    to the global pricing table (truthiness would treat zero as missing).
+    """
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    def fake_get_model_info(*args, **kwargs):
+        return {
+            "input_cost_per_token_batches": 1e-3,
+            "output_cost_per_token_batches": 2e-3,
+        }
+
+    monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage,
+        model="any-model",
+        custom_llm_provider="openai",
+        model_info={
+            "input_cost_per_token_batches": 0.0,
+            "output_cost_per_token_batches": 0.0,
+        },
+    )
+
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_batch_cost_calculator_uses_custom_model_info():
+    """batch_cost_calculator should use model_info override when provided."""
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage,
+        model="fake-batch-model",
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected_prompt = 10 * 0.00125
+    expected_completion = 5 * 0.005
+    assert prompt_cost == pytest.approx(expected_prompt), f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
+    assert completion_cost == pytest.approx(expected_completion), (
+        f"Expected completion cost {expected_completion}, got {completion_cost}"
+    )
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_aggregate_batch_cost_uses_custom_model_info():
+    """_aggregate_batch_cost_usage_models should thread model_info to batch_cost_calculator."""
+    file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
+
+    result = _aggregate_batch_cost_usage_models(
+        entries=file_content,
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected = (10 * 0.00125) + (5 * 0.005)
+    assert result.cost == pytest.approx(expected), f"Expected total cost {expected}, got {result.cost}"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("data_residency", ["eu", "us"])
+def test_batch_cost_calculator_applies_data_residency_uplift(data_residency, monkeypatch):
+    """batch_cost_calculator should apply the regional uplift multiplier when
+    data_residency is set and the model carries a configured multiplier."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    prev_model_cost = litellm.model_cost
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+        base_prompt, base_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+        )
+        regional_prompt, regional_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            data_residency=data_residency,
+        )
+
+        assert base_prompt > 0 and base_completion > 0
+        assert regional_prompt == pytest.approx(base_prompt * 1.10, rel=1e-9)
+        assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
+    finally:
+        litellm.model_cost = prev_model_cost
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
+    """calculate_batch_cost_and_usage should thread model_info."""
+    file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
+
+    result = await calculate_batch_cost_and_usage(
+        file_content_dictionary=file_content,
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected = (10 * 0.00125) + (5 * 0.005)
+    assert result.cost == pytest.approx(expected), f"Expected total cost {expected}, got {result.cost}"
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 5
+
+@pytest.fixture
+def sample_file_content():
+    return b"""
+{"id": "batch_req_6769ca596b38819093d7ae9f522de924", "custom_id": "request-1", "response": {"status_code": 200, "request_id": "07bc45ab4e7e26ac23a0c949973327e7", "body": {"id": "chatcmpl-AhjSMl7oZ79yIPHLRYgmgXSixTJr7", "object": "chat.completion", "created": 1734986202, "model": "gpt-4o-mini-2024-07-18", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello! How can I assist you today?", "refusal": null}, "logprobs": null, "finish_reason": "stop"}], "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30, "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}}, "system_fingerprint": "fp_0aa8d3e20b"}}, "error": null}
+{"id": "batch_req_6769ca597e588190920666612634e2b4", "custom_id": "request-2", "response": {"status_code": 200, "request_id": "82e04f4c001fe2c127cbad199f5fd31b", "body": {"id": "chatcmpl-AhjSNgVB4Oa4Hq0NruTRsBaEbRWUP", "object": "chat.completion", "created": 1734986203, "model": "gpt-4o-mini-2024-07-18", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello! What can I do for you today?", "refusal": null}, "logprobs": null, "finish_reason": "length"}], "usage": {"prompt_tokens": 22, "completion_tokens": 10, "total_tokens": 32, "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}}, "system_fingerprint": "fp_0aa8d3e20b"}}, "error": null}
+"""
+
+@pytest.fixture
+def sample_file_content_dict():
+    return [
+        {
+            "id": "batch_req_6769ca596b38819093d7ae9f522de924",
+            "custom_id": "request-1",
+            "response": {
+                "status_code": 200,
+                "request_id": "07bc45ab4e7e26ac23a0c949973327e7",
+                "body": {
+                    "id": "chatcmpl-AhjSMl7oZ79yIPHLRYgmgXSixTJr7",
+                    "object": "chat.completion",
+                    "created": 1734986202,
+                    "model": "gpt-4o-mini-2024-07-18",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Hello! How can I assist you today?",
+                                "refusal": None,
+                            },
+                            "logprobs": None,
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 10,
+                        "total_tokens": 30,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 0,
+                            "audio_tokens": 0,
+                        },
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 0,
+                            "audio_tokens": 0,
+                            "accepted_prediction_tokens": 0,
+                            "rejected_prediction_tokens": 0,
+                        },
+                    },
+                    "system_fingerprint": "fp_0aa8d3e20b",
+                },
+            },
+            "error": None,
+        },
+        {
+            "id": "batch_req_6769ca597e588190920666612634e2b4",
+            "custom_id": "request-2",
+            "response": {
+                "status_code": 200,
+                "request_id": "82e04f4c001fe2c127cbad199f5fd31b",
+                "body": {
+                    "id": "chatcmpl-AhjSNgVB4Oa4Hq0NruTRsBaEbRWUP",
+                    "object": "chat.completion",
+                    "created": 1734986203,
+                    "model": "gpt-4o-mini-2024-07-18",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Hello! What can I do for you today?",
+                                "refusal": None,
+                            },
+                            "logprobs": None,
+                            "finish_reason": "length",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 22,
+                        "completion_tokens": 10,
+                        "total_tokens": 32,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 0,
+                            "audio_tokens": 0,
+                        },
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 0,
+                            "audio_tokens": 0,
+                            "accepted_prediction_tokens": 0,
+                            "rejected_prediction_tokens": 0,
+                        },
+                    },
+                    "system_fingerprint": "fp_0aa8d3e20b",
+                },
+            },
+            "error": None,
+        },
+    ]
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_get_file_content_as_dictionary(sample_file_content):
+    result = get_file_content_as_dictionary(sample_file_content)
+    assert len(result) == 2
+    assert result[0]["id"] == "batch_req_6769ca596b38819093d7ae9f522de924"
+    assert result[0]["custom_id"] == "request-1"
+    assert result[0]["response"]["status_code"] == 200
+    assert result[0]["response"]["body"]["usage"]["total_tokens"] == 30
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
+    with patch("litellm.completion_cost", return_value=0.0):
+        result = _aggregate_batch_cost_usage_models(entries=sample_file_content_dict, custom_llm_provider="openai")
+    assert result.usage.total_tokens == 62  # 30 + 32
+    assert result.usage.prompt_tokens == 42  # 20 + 22
+    assert result.usage.completion_tokens == 20  # 10 + 10
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_batch_cost_calculator(sample_file_content_dict):
+    """
+    mock batch_cost_calculator to return (0.3, 0.2) per line
+
+    we know sample_file_content_dict has 2 successful responses
+
+    so we expect the cost to be (0.3 + 0.2) * 2 = 1.0, split 0.6 / 0.4
+    """
+    with patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.3, 0.2)):
+        result = _aggregate_batch_cost_usage_models(
+            entries=sample_file_content_dict,
+            custom_llm_provider="openai",
+        )
+        assert result.cost == pytest.approx(1.0)  # (0.3 + 0.2) * 2 successful responses
+        assert result.prompt_cost == pytest.approx(0.6)
+        assert result.completion_cost == pytest.approx(0.4)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_get_response_from_batch_job_output_file(sample_file_content_dict):
+    result = _get_response_from_batch_job_output_file(sample_file_content_dict[0])
+    assert result["id"] == "chatcmpl-AhjSMl7oZ79yIPHLRYgmgXSixTJr7"
+    assert result["object"] == "chat.completion"
+    assert result["usage"]["total_tokens"] == 30
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cost():
+    """
+    Test that cost is calculated for completed batches when no explicit cost data is provided.
+
+    Regression test for: When batch status is "completed" and explicit batch_cost/batch_usage/batch_models
+    are not provided, the system should compute batch data by calling _handle_completed_batch.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes, LiteLLMBatch
+
+    # Mock batch result with completed status
+    mock_batch = LiteLLMBatch(
+        id="batch-test-123",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-123",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-123",
+        error_file_id=None,
+        created_at=1234567890,
+        in_progress_at=1234567900,
+        expires_at=1234654290,
+        finalizing_at=1234568000,
+        completed_at=1234568100,
+        failed_at=None,
+        expired_at=None,
+        cancelling_at=None,
+        cancelled_at=None,
+        request_counts={
+            "total": 10,
+            "completed": 10,
+            "failed": 0,
+        },
+        metadata=None,
+    )
+    mock_batch._hidden_params = {}
+
+    # Create logging object
+    logging_obj = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type=CallTypes.aretrieve_batch.value,
+        litellm_call_id="test-call-123",
+        function_id="test-function",
+        start_time=time.time(),
+        dynamic_success_callbacks=[],
+    )
+    logging_obj.custom_llm_provider = "openai"
+
+    # Mock handle_completed_batch to return cost data
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
+    expected_cost = 0.05
+    expected_usage = litellm.Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    expected_models = ["gpt-5-mini"]
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        new=AsyncMock(
+            return_value=BatchCostUsageResult(
+                cost=expected_cost,
+                usage=expected_usage,
+                models=expected_models,
+                successful_requests=10,
+                failed_requests=0,
+            )
+        ),
+    ) as mock_handle_batch:
+        # Call async_success_handler
+        await logging_obj.async_success_handler(
+            result=mock_batch,
+            start_time=time.time(),
+            end_time=time.time() + 1,
+        )
+
+        # Verify handle_completed_batch was called
+        mock_handle_batch.assert_called_once()
+
+        # Verify cost and usage were set on the batch result
+        assert mock_batch._hidden_params["response_cost"] == expected_cost
+        assert mock_batch._hidden_params["batch_models"] == expected_models
+        assert mock_batch._hidden_params["batch_successful_requests"] == 10
+        assert mock_batch._hidden_params["batch_failed_requests"] == 0
+        assert mock_batch.usage == expected_usage
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_handle_completed_batch_computes_real_cost_from_output_file(
+    sample_file_content_dict,
+):
+    """Integration: a completed batch's cost and usage are computed from its output
+    file via the real cost-calc chain (only the file download is stubbed). This is
+    the function the retrieve handler invokes on completion; a dropped output line, a
+    wrong token sum, or mispriced model fails this test.
+    """
+    from litellm.batches.batch_utils import handle_completed_batch
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="batch-real-cost-123",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-123",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-123",
+        created_at=1234567890,
+    )
+
+    sample_file_content_bytes = "\n".join(json.dumps(row) for row in sample_file_content_dict).encode()
+    with patch(
+        "litellm.batches.batch_utils._fetch_batch_output_file_content",
+        new=AsyncMock(return_value=sample_file_content_bytes),
+    ):
+        result = await handle_completed_batch(batch=batch, custom_llm_provider="openai")
+
+    pricing = litellm.model_cost["gpt-4o-mini-2024-07-18"]
+    expected_cost = 42 * pricing["input_cost_per_token_batches"] + 20 * pricing["output_cost_per_token_batches"]
+
+    assert result.cost == pytest.approx(expected_cost)
+    assert result.cost > 0
+    assert result.cost < 42 * pricing["input_cost_per_token"] + 20 * pricing["output_cost_per_token"]
+    assert result.usage.prompt_tokens == 42
+    assert result.usage.completion_tokens == 20
+    assert result.usage.total_tokens == 62
+    assert result.models == ["gpt-4o-mini-2024-07-18", "gpt-4o-mini-2024-07-18"]
+    assert result.successful_requests == 2
+    assert result.failed_requests == 0
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
+    """
+    Test that explicit cost data is used when provided, skipping computation.
+
+    Regression test for: When batch_cost, batch_usage, and batch_models are explicitly
+    provided in kwargs, they should be used directly without calling _handle_completed_batch.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes, LiteLLMBatch
+
+    # Mock batch result with completed status
+    mock_batch = LiteLLMBatch(
+        id="batch-test-456",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-456",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-456",
+        error_file_id=None,
+        created_at=1234567890,
+        in_progress_at=1234567900,
+        expires_at=1234654290,
+        finalizing_at=1234568000,
+        completed_at=1234568100,
+        failed_at=None,
+        expired_at=None,
+        cancelling_at=None,
+        cancelled_at=None,
+        request_counts={
+            "total": 5,
+            "completed": 5,
+            "failed": 0,
+        },
+        metadata=None,
+    )
+    mock_batch._hidden_params = {}
+
+    # Create logging object
+    logging_obj = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type=CallTypes.aretrieve_batch.value,
+        litellm_call_id="test-call-456",
+        function_id="test-function",
+        start_time=time.time(),
+        dynamic_success_callbacks=[],
+    )
+    logging_obj.custom_llm_provider = "openai"
+
+    # Explicit cost data to pass in kwargs
+    explicit_cost = 0.10
+    explicit_usage = litellm.Usage(
+        prompt_tokens=200,
+        completion_tokens=100,
+        total_tokens=300,
+    )
+    explicit_models = ["gpt-5-mini", "gpt-5.5"]
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        new=AsyncMock(),
+    ) as mock_handle_batch:
+        # Call async_success_handler with explicit cost data
+        await logging_obj.async_success_handler(
+            result=mock_batch,
+            start_time=time.time(),
+            end_time=time.time() + 1,
+            batch_cost=explicit_cost,
+            batch_usage=explicit_usage,
+            batch_models=explicit_models,
+        )
+
+        # Verify handle_completed_batch was NOT called (since explicit data provided)
+        mock_handle_batch.assert_not_called()
+
+        # Verify explicit cost data was used
+        assert mock_batch._hidden_params["response_cost"] == explicit_cost
+        assert mock_batch._hidden_params["batch_models"] == explicit_models
+        assert mock_batch.usage == explicit_usage
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_batch_retrieve_explicit_cost_split_sets_cost_breakdown():
+    """The poller passes the batch's prompt/completion cost split so the spend row's
+    cost_breakdown carries real input/output costs; without it the UI's Cost Breakdown
+    card renders blank for every batch. Regression for the split being dropped."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes, LiteLLMBatch
+
+    mock_batch = LiteLLMBatch(
+        id="batch-breakdown-1",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-1",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-1",
+        created_at=1234567890,
+    )
+    mock_batch._hidden_params = {}
+
+    logging_obj = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type=CallTypes.aretrieve_batch.value,
+        litellm_call_id="test-call-breakdown",
+        function_id="test-function",
+        start_time=time.time(),
+        dynamic_success_callbacks=[],
+    )
+    logging_obj.custom_llm_provider = "openai"
+
+    await logging_obj.async_success_handler(
+        result=mock_batch,
+        start_time=time.time(),
+        end_time=time.time() + 1,
+        batch_cost=0.10,
+        batch_usage=litellm.Usage(prompt_tokens=200, completion_tokens=100, total_tokens=300),
+        batch_models=["gpt-5-mini"],
+        batch_prompt_cost=0.06,
+        batch_completion_cost=0.04,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] == 0.06
+    assert logging_obj.cost_breakdown["output_cost"] == 0.04
+    assert logging_obj.cost_breakdown["total_cost"] == 0.10
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batch():
+    """
+    Test that cost computation is skipped for unified file IDs with non-completed batches.
+
+    Regression test for: For unified file IDs (base64 encoded), cost should only be computed
+    when batch status is "completed" and explicit data is not provided.
+    """
+    import base64
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes, LiteLLMBatch, SpecialEnums
+
+    # Create a proper unified file ID by encoding the correct prefix
+    unified_id_str = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:test_file_789;unified_id:batch-789"
+    encoded_unified_id = base64.urlsafe_b64encode(unified_id_str.encode()).decode().rstrip("=")
+
+    # Mock batch result with in_progress status and unified file ID
+    mock_batch = LiteLLMBatch(
+        id=encoded_unified_id,  # Properly encoded unified ID
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-789",
+        completion_window="24h",
+        status="in_progress",  # Not completed
+        output_file_id=None,
+        error_file_id=None,
+        created_at=1234567890,
+        in_progress_at=1234567900,
+        expires_at=1234654290,
+        finalizing_at=None,
+        completed_at=None,
+        failed_at=None,
+        expired_at=None,
+        cancelling_at=None,
+        cancelled_at=None,
+        request_counts={
+            "total": 10,
+            "completed": 3,
+            "failed": 0,
+        },
+        metadata=None,
+    )
+    mock_batch._hidden_params = {}
+
+    # Create logging object
+    logging_obj = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type=CallTypes.aretrieve_batch.value,
+        litellm_call_id="test-call-789",
+        function_id="test-function",
+        start_time=time.time(),
+        dynamic_success_callbacks=[],
+    )
+    logging_obj.custom_llm_provider = "openai"
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        new=AsyncMock(),
+    ) as mock_handle_batch:
+        # Call async_success_handler with in_progress batch (unified file ID)
+        await logging_obj.async_success_handler(
+            result=mock_batch,
+            start_time=time.time(),
+            end_time=time.time() + 1,
+        )
+
+        # Verify handle_completed_batch was NOT called (batch not completed and is unified file ID)
+        mock_handle_batch.assert_not_called()
+
+        # Verify cost data was not set
+        assert "response_cost" not in mock_batch._hidden_params
+        assert "batch_models" not in mock_batch._hidden_params
+        assert not hasattr(mock_batch, "usage") or mock_batch.usage is None
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
+    """
+    Test that cost is computed when only partial explicit data is provided.
+
+    Regression test for: If batch_cost, batch_usage, or batch_models is missing
+    (not all three provided), and batch is completed, system should compute the data.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes, LiteLLMBatch
+
+    # Mock batch result with completed status
+    mock_batch = LiteLLMBatch(
+        id="batch-test-partial",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-partial",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-partial",
+        error_file_id=None,
+        created_at=1234567890,
+        in_progress_at=1234567900,
+        expires_at=1234654290,
+        finalizing_at=1234568000,
+        completed_at=1234568100,
+        failed_at=None,
+        expired_at=None,
+        cancelling_at=None,
+        cancelled_at=None,
+        request_counts={
+            "total": 8,
+            "completed": 8,
+            "failed": 0,
+        },
+        metadata=None,
+    )
+    mock_batch._hidden_params = {}
+
+    # Create logging object
+    logging_obj = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type=CallTypes.aretrieve_batch.value,
+        litellm_call_id="test-call-partial",
+        function_id="test-function",
+        start_time=time.time(),
+        dynamic_success_callbacks=[],
+    )
+
+    logging_obj.custom_llm_provider = "openai"
+
+    # Only provide batch_cost, missing batch_usage and batch_models
+    partial_cost = 0.08
+
+    expected_cost = 0.06
+    expected_usage = litellm.Usage(
+        prompt_tokens=150,
+        completion_tokens=75,
+        total_tokens=225,
+    )
+    expected_models = ["gpt-5-mini"]
+
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        new=AsyncMock(
+            return_value=BatchCostUsageResult(
+                cost=expected_cost,
+                usage=expected_usage,
+                models=expected_models,
+                successful_requests=8,
+                failed_requests=0,
+            )
+        ),
+    ) as mock_handle_batch:
+        # Call async_success_handler with partial explicit data
+        await logging_obj.async_success_handler(
+            result=mock_batch,
+            start_time=time.time(),
+            end_time=time.time() + 1,
+            batch_cost=partial_cost,  # Only cost provided, not usage or models
+        )
+
+        # Verify handle_completed_batch WAS called (since not all data provided)
+        mock_handle_batch.assert_called_once()
+
+        # Verify computed cost data was used (not partial explicit data)
+        assert mock_batch._hidden_params["response_cost"] == expected_cost
+        assert mock_batch._hidden_params["batch_models"] == expected_models
+        assert mock_batch._hidden_params["batch_successful_requests"] == 8
+        assert mock_batch._hidden_params["batch_failed_requests"] == 0
+        assert mock_batch.usage == expected_usage
