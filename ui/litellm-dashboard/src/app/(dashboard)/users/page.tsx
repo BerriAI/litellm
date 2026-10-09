@@ -5,7 +5,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 
 export default function UsersPage() {
-  const { accessToken, token, userRole, userId } = useAuthorized();
+  const { accessToken, token, userRole, userId, premiumUser } = useAuthorized();
   const { data: teams } = useTeams();
   return (
     <ViewUserDashboard
@@ -14,6 +14,7 @@ export default function UsersPage() {
       token={token}
       teams={teams ?? null}
       accessToken={accessToken}
+      premiumUser={premiumUser === true}
     />
   );
 }
