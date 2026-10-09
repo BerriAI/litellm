@@ -31,6 +31,7 @@ from openai.types.responses import (
     ResponseReasoningItem,
 )
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.response_reasoning_item import Content as ReasoningContent
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -2639,7 +2640,11 @@ class LiteLLMCompletionResponsesConfig:
                             # summary is required by the SDK/spec; the bridge has
                             # no summarized reasoning, so it stays empty
                             summary=[],
-                            content=[{"type": "reasoning_text", "text": text} for text in (reasoning_content,) if text],
+                            content=[
+                                ReasoningContent(type="reasoning_text", text=text)
+                                for text in (reasoning_content,)
+                                if text
+                            ],
                             status=cast(  # cast-ok: the map only returns completed/incomplete, both valid for a reasoning item's narrower status union
                                 "Literal['in_progress', 'completed', 'incomplete']",
                                 LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
