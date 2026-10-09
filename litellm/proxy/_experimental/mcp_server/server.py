@@ -1416,6 +1416,12 @@ if MCP_AVAILABLE:
 
         while True:
             message = await receive()
+            if (
+                full_body
+                and peeked_bytes + len(message.get("body", b"") or b"")
+                > session_manager_stateless.max_request_body_size
+            ):
+                raise HTTPException(status_code=413, detail="Request body too large")
             consumed_messages.append(message)
 
             if message.get("type") != "http.request":
@@ -2044,7 +2050,7 @@ if MCP_AVAILABLE:
         authorized_names: Final = [target.alias or target.name for target in allowed]
         await _raise_preemptive_401_for_unauthenticated_servers(
             scope=scope,
-            mcp_servers=authorized_names,
+            mcp_servers=list(context.mcp_servers) if context.mcp_servers is not None else authorized_names,
             oauth2_headers=dict(context.oauth2_headers) if context.oauth2_headers is not None else None,
             mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
             if context.mcp_server_auth_headers is not None

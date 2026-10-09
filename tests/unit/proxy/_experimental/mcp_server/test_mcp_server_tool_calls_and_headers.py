@@ -11169,8 +11169,9 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
 @pytest.mark.parametrize("continuation", ("initial", "valid", "tampered", "revoked"))
 @pytest.mark.parametrize("large_body", (False, True))
 @pytest.mark.parametrize("passthrough", (False, True))
+@pytest.mark.parametrize("route_name", ("interactive", "friendly"))
 async def test_modern_oauth_challenge_follows_continuation_authorization(
-    method, params, continuation, large_body, passthrough, monkeypatch
+    method, params, continuation, large_body, passthrough, route_name, monkeypatch
 ):
     import time
     from pydantic import TypeAdapter
@@ -11183,12 +11184,13 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
     caller = UserAPIKeyAuth(user_id="alice")
     target = _make_oauth2_server("interactive", oauth2_flow="authorization_code").model_copy(
-        update={"auth_type": MCPAuth.none, "extra_headers": ["Authorization"], "oauth_passthrough": True}
-        if passthrough
-        else {}
+        update={
+            "alias": "friendly",
+            **({"auth_type": MCPAuth.none, "extra_headers": ["Authorization"], "oauth_passthrough": True} if passthrough else {}),
+        }
     )
     operation = TypeAdapter(InteractionOperation).validate_python({"method": method, "params": params})
-    context = OperationContext(_caller=caller, mcp_servers=("interactive",))
+    context = OperationContext(_caller=caller, mcp_servers=(route_name,))
     sealed = seal_continuation(
         bind_target(InputRequiredResult(request_state="upstream"), target), operation, context, now=int(time.time())
     )
@@ -11218,7 +11220,7 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/mcp/interactive",
+        "path": f"/mcp/{route_name}",
         "scheme": "http",
         "server": ("localhost", 8000),
         "query_string": b"",
@@ -11248,7 +11250,7 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
                 return_value=(
                     caller,
                     None,
-                    ["interactive"],
+                    [route_name],
                     None,
                     {"Authorization": "Bearer expired-upstream-token"},
                     None,
@@ -11283,7 +11285,7 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
                 token.assert_not_awaited()
             else:
                 assert (
-                    'Bearer authorization_uri="http://localhost:8000/.well-known/oauth-authorization-server/mcp/interactive"'
+                    f'Bearer authorization_uri="http://localhost:8000/.well-known/oauth-authorization-server/mcp/{route_name}"'
                     == rejected.value.headers["www-authenticate"]
                 )
                 token.assert_awaited_once()
@@ -11309,6 +11311,63 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
             discovery.assert_not_awaited()
             token.assert_not_awaited()
         dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("tools/call", "prompts/get", "resources/read"))
+@pytest.mark.parametrize("size_delta", (-1, 0, 1))
+@pytest.mark.parametrize("chunked", (False, True))
+async def test_modern_preflight_enforces_sdk_body_limit(method, size_delta, chunked, monkeypatch):
+    from litellm.proxy._experimental.mcp_server import server
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
+    limit = server.session_manager_stateless.max_request_body_size
+    params = {"uri": "test://confirm"} if method == "resources/read" else {"name": "confirm"}
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": 7, "method": method,
+        "params": {**params, "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "padding": "",
+        }},
+    }).encode()
+    body = payload.replace(b'"padding": ""', b'"padding": "' + b"x" * (limit + size_delta - len(payload)) + b'"', 1)
+    assert len(body) == limit + size_delta
+    chunks = (body[:limit - 1], body[limit - 1:]) if chunked else (body,)
+    messages = [
+        {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1 or size_delta > 0}
+        for index, chunk in enumerate(chunks)
+    ]
+    receive = AsyncMock(side_effect=[*messages, {"type": "http.request", "body": b"", "more_body": False}])
+    scope = {
+        "type": "http", "method": "POST", "path": "/mcp", "scheme": "http",
+        "server": ("localhost", 8000), "query_string": b"", "root_path": "",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+            (b"mcp-method", method.encode()),
+            (b"mcp-name", next(iter(params.values())).encode()),
+            *([] if chunked else [(b"content-length", str(len(body)).encode())]),
+        ],
+    }
+    with (
+        patch.object(server, "extract_mcp_auth_context", AsyncMock(return_value=(UserAPIKeyAuth(), None, None, None, None, None))),
+        patch.object(server, "_SESSION_MANAGERS_INITIALIZED", True),
+        patch.object(server.session_manager_stateless, "handle_request", AsyncMock()) as dispatch,
+        patch.object(server.operations, "_get_allowed_mcp_servers", AsyncMock()) as authorization,
+    ):
+        if size_delta > 0:
+            with pytest.raises(HTTPException) as rejected:
+                await server.handle_streamable_http_mcp(scope, receive, AsyncMock())
+            assert rejected.value.status_code == 413
+            assert rejected.value.detail == "Request body too large"
+            dispatch.assert_not_awaited()
+        else:
+            await server.handle_streamable_http_mcp(scope, receive, AsyncMock())
+            dispatch.assert_awaited_once()
+        assert receive.await_count == len(chunks)
+        authorization.assert_not_awaited()
 
 
 @pytest.mark.asyncio
