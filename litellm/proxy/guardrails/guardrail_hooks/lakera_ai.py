@@ -77,9 +77,17 @@ class lakeraAI_Moderation(CustomGuardrail):
             return
 
         flagged: Final = _results[0].get("flagged", False)
-        category_scores: Final[dict | None] = _results[0].get("category_scores", None)
+        if flagged is True:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated content safety policy",
+                    "lakera_ai_response": response,
+                },
+            )
 
         if self.category_thresholds is not None:
+            category_scores: Final[dict | None] = _results[0].get("category_scores", None)
             if category_scores is not None:
                 typed_cat_scores: Final = LakeraCategoryThresholds(**category_scores)
                 if "jailbreak" in typed_cat_scores and "jailbreak" in self.category_thresholds:
@@ -101,14 +109,6 @@ class lakeraAI_Moderation(CustomGuardrail):
                                 "lakera_ai_response": response,
                             },
                         )
-        elif flagged is True:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Violated content safety policy",
-                    "lakera_ai_response": response,
-                },
-            )
 
         return
 
