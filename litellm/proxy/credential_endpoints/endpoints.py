@@ -53,15 +53,16 @@ def _reject_non_admin_wif_fields(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """A credential referenced by ``litellm_credential_name`` feeds its values into the same
-    workload identity federation resolution as a deployment's own ``litellm_params``. Only proxy
-    admins may touch a server-owned WIF field, whether they write it, drop it, or edit a stored
-    credential that already carries one.
+    server-owned federation or OAuth token-exchange configuration as a deployment's own
+    ``litellm_params``. Only proxy admins may touch one, whether they write it, drop it, or edit a
+    stored credential that already carries it.
     """
     if not wif_fields or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
     raise ProxyException(
         message=(
-            f"Only proxy admins can change {wif_fields[0]!r}, a server-owned workload identity federation parameter."
+            f"Only proxy admins can change {wif_fields[0]!r}, a server-owned workload identity federation "
+            "or OAuth token exchange parameter."
         ),
         type=ProxyErrorTypes.auth_error.value,
         code=status.HTTP_403_FORBIDDEN,

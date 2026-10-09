@@ -35,16 +35,72 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.router import Router
+from litellm.types.utils import oauth_token_exchange_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 
-@pytest.mark.parametrize("param", sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS))
-def test_every_wif_kwarg_key_is_refused_from_a_request_body(param: str):
-    """Every key the kwargs funnel carries into litellm_params selects a server-side secret or the
-    scope a token is minted for, so each one must be refused from a request body even with the
-    proxy-wide client-credential opt-in; a key added to the funnel without joining the ban shows up
-    here as a body the proxy accepted."""
-    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+@pytest.mark.parametrize(
+    "field",
+    [
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+        "token_exchange_audience",
+    ],
+)
+def test_token_exchange_settings_in_request_body_are_rejected(field: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ) as error:
+        is_request_body_safe(
+            request_body={"model": "microsoft_365_copilot/chat", field: "attacker-chosen"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="microsoft_365_copilot/chat",
+            route="/v1/chat/completions",
+        )
+
+    assert field in str(error.value)
+
+
+def test_model_opt_in_cannot_allow_a_token_exchange_endpoint_in_a_request_body() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "microsoft_365_copilot/chat",
+                "litellm_params": {
+                    "model": "microsoft_365_copilot/chat",
+                    "configurable_clientside_auth_params": ["token_exchange_endpoint"],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
+        is_request_body_safe(
+            request_body={
+                "model": "microsoft_365_copilot/chat",
+                "token_exchange_endpoint": "https://identity.example.com/token",
+            },
+            general_settings={},
+            llm_router=router,
+            model="microsoft_365_copilot/chat",
+        )
+
+
+@pytest.mark.parametrize(
+    "param",
+    sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS | set(oauth_token_exchange_litellm_params)),
+)
+def test_every_server_owned_identity_param_is_refused_from_a_request_body(param: str):
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
         is_request_body_safe(
             request_body={"model": "claude-sonnet-5", param: "attacker-chosen"},
             general_settings={"allow_client_side_credentials": True},
@@ -82,7 +138,10 @@ def test_a_request_body_cannot_pick_a_federated_identity_by_credential_name(monk
         ],
     )
 
-    with pytest.raises(ValueError, match="names a credential configured for workload identity federation"):
+    with pytest.raises(
+        ValueError,
+        match="names a credential configured for workload identity federation or OAuth token exchange",
+    ):
         is_request_body_safe(
             request_body=body,
             general_settings={"allow_client_side_credentials": True},
@@ -188,7 +247,10 @@ def test_configuring_a_deployment_may_name_a_federated_credential(federated_cred
 def test_a_call_still_cannot_pick_a_federated_identity_by_credential_name(federated_credential, route: str | None):
     """The exemption covers the deployment-management routes and nothing that shares their prefix,
     so a call still cannot move its token exchange onto a federated credential by naming it."""
-    with pytest.raises(ValueError, match="names a credential configured for workload identity federation"):
+    with pytest.raises(
+        ValueError,
+        match="names a credential configured for workload identity federation or OAuth token exchange",
+    ):
         is_request_body_safe(
             request_body={"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
             general_settings={"allow_client_side_credentials": True},
@@ -202,7 +264,10 @@ def test_a_call_still_cannot_pick_a_federated_identity_by_credential_name(federa
 def test_configuring_a_deployment_still_cannot_carry_federation_fields_inline(route: str):
     """Only the credential reference is exempt. Federation fields typed straight into a body stay
     refused everywhere, since a stored credential is the surface an admin has to go through."""
-    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
         is_request_body_safe(
             request_body={"model": "claude-sonnet-5", "anthropic_federation_rule_id": "fdrl_attacker"},
             general_settings={"allow_client_side_credentials": True},
@@ -2359,6 +2424,51 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         )
         assert out["api_base"] == "self-hosted.example.com:50051"
         assert "use_ssl" not in out
+
+    def test_clears_oauth_token_exchange_fields_for_other_provider_base_overrides(self):
+        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+        oauth_values: Final = {
+            "token_exchange_audience": "https://graph.microsoft.com",
+            "token_exchange_endpoint": "https://identity.example.com/token",
+            "token_exchange_profile": "jwt_bearer_obo",
+            "token_exchange_scope": "https://graph.microsoft.com/.default",
+            "client_id": "copilot-client",
+            "client_secret": "copilot-secret",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "model": "openai/gpt-4o",
+                "api_base": "https://admin.example.com/v1",
+                **oauth_values,
+            },
+            request_kwargs={"api_base": "https://caller.example.com/v1"},
+        )
+
+        assert all(field not in out for field in oauth_values)
+
+    def test_clears_oauth_token_exchange_fields_for_microsoft_365_copilot_base_overrides(self):
+        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+        oauth_values: Final = {
+            "token_exchange_audience": "https://graph.microsoft.com",
+            "token_exchange_endpoint": "https://identity.example.com/token",
+            "token_exchange_profile": "jwt_bearer_obo",
+            "token_exchange_scope": "https://graph.microsoft.com/.default",
+            "client_id": "copilot-client",
+            "client_secret": "copilot-secret",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "model": "microsoft_365_copilot/chat",
+                "api_base": "https://graph.microsoft.com/beta",
+                **oauth_values,
+            },
+            request_kwargs={"api_base": "https://caller.example.com/v1"},
+        )
+
+        assert out["api_base"] == "https://caller.example.com/v1"
+        assert all(field not in out for field in oauth_values)
 
     def test_caller_resupplied_value_overrides_admin_value_on_base_override(self):
         # When the caller redirects ``api_base`` and *also* supplies their
