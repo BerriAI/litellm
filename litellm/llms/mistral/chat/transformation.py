@@ -520,7 +520,7 @@ class MistralConfig(OpenAIGPTConfig):
         return "\n".join([block.get("text", "") for block in thinking_blocks["thinking"]])
 
     @staticmethod
-    def _extract_content_block_text(block: dict) -> str:
+    def _extract_content_block_text(block: Mapping[str, object]) -> str:
         if block.get("type") == "text":
             return str(block.get("text", ""))
         if block.get("type") == "reference":
