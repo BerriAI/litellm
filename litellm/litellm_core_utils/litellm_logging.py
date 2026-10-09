@@ -1608,10 +1608,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 attr = "debug"
 
             callattr: Final = verbose_logger.warning if attr == "warning" else verbose_logger.debug
+            # Formatted by logging only when the line is emitted: the body can be a whole image or embedding batch.
             callattr(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self.model_call_details.get("original_response", self.model_call_details)
-                )
+                "RAW RESPONSE:\n%s\n\n",
+                self.model_call_details.get("original_response", self.model_call_details),
             )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
