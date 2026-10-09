@@ -2,6 +2,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar, cast
+from urllib.parse import urlparse
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -12,10 +13,12 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
 from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
+from litellm.llms.vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
@@ -24,6 +27,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    ChatCompletionVideoObject,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -73,6 +77,8 @@ class _GenAIRequestFunctionCall(TypedDict, total=False):
 class _GenAIContentPart(TypedDict, total=False):
     text: ReadOnly[str]
     inline_data: ReadOnly[Mapping[str, str]]
+    fileData: ReadOnly[object]
+    file_data: ReadOnly[object]
     functionResponse: ReadOnly[_GenAIFunctionResponse]
     functionCall: ReadOnly[_GenAIRequestFunctionCall]
 
@@ -101,6 +107,65 @@ class _GenAISystemInstruction(TypedDict, total=False):
 
 
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
+_YOUTUBE_HOSTS: Final = ("youtube.com/", "youtu.be/")
+_FILE_DATA_FIELDS: Final = TypeAdapter(Mapping[str, str])
+_PDF_MIME_TYPE: Final = "application/pdf"
+_UserContentPart: TypeAlias = (
+    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionVideoObject | ChatCompletionFileObject
+)
+
+
+def _is_fetchable_document_uri(uri: str, mime_type: str | None) -> bool:
+    if uri.startswith(GEMINI_FILES_API_URI_PREFIX):
+        return True
+    if not uri.startswith(("https://", "http://", "gs://")):
+        return False
+    if mime_type is not None:
+        return mime_type == _PDF_MIME_TYPE
+    return urlparse(uri).path.lower().endswith(".pdf")
+
+
+def _file_data_to_content_part(file_data: object) -> _UserContentPart | None:
+    """Map a Gemini fileData part (a URI the model fetches itself) to the matching OpenAI content part
+
+    Images go to image_url and videos (by mime type, or a YouTube link with no mime type) go to video_url,
+    which is what OpenRouter and other OpenAI-compatible providers accept for remote media. PDF URLs and
+    Gemini Files API URIs go to a file part with the URI as file_id, so downstream transforms can fetch it.
+    Anything else is rejected: other documents would be fetched and labelled as PDFs downstream, and opaque
+    IDs would be resolved as managed files without the proxy's ownership check
+    """
+    fields: Final = _validated(_FILE_DATA_FIELDS, file_data)
+    if fields is None:
+        raise BadRequestError(
+            message=f"fileData must be an object of string fields (fileUri, mimeType), got {file_data!r}",
+            model=None,
+            llm_provider="google_genai",
+        )
+    uri: Final = fields.get("fileUri") or fields.get("file_uri")
+    if not uri:
+        return None
+    mime_type: Final = fields.get("mimeType") or fields.get("mime_type")
+    if mime_type is not None and mime_type.startswith("image/"):
+        return ChatCompletionImageObject(type="image_url", image_url={"url": uri})
+    if (mime_type is not None and mime_type.startswith("video/")) or (
+        mime_type is None and any(host in uri for host in _YOUTUBE_HOSTS)
+    ):
+        return ChatCompletionVideoObject(type="video_url", video_url={"url": uri})
+    if not _is_fetchable_document_uri(uri, mime_type):
+        raise BadRequestError(
+            message=(
+                "fileData on this model supports image, video and YouTube URIs, PDF URLs, and Gemini Files API "
+                f"URIs. Got fileUri={uri!r} mimeType={mime_type!r}"
+            ),
+            model=None,
+            llm_provider="google_genai",
+        )
+    return ChatCompletionFileObject(
+        type="file",
+        file={"file_id": uri, "format": mime_type} if mime_type is not None else {"file_id": uri},
+    )
+
+
 _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
 _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
@@ -488,7 +553,7 @@ class GoogleGenAIAdapter:
 
             if role == "user":
                 # Handle user messages with potential function responses
-                content_parts: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
+                content_parts: list[_UserContentPart] = []
                 tool_messages: list[ChatCompletionToolMessage] = []
 
                 for part in parts:
@@ -514,6 +579,10 @@ class GoogleGenAIAdapter:
                                     },
                                 )
                             )
+                        elif "fileData" in part or "file_data" in part:
+                            file_part = _file_data_to_content_part(part.get("fileData") or part.get("file_data") or {})
+                            if file_part is not None:
+                                content_parts.append(file_part)
                         elif "functionResponse" in part:
                             # Transform function response to tool message
                             func_response = part["functionResponse"]
