@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import random
 import time
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1452,7 +1453,7 @@ class TestCallerScopedOAuthAuthFailureCooldown:
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestPerUserCopilotAuthFailureCooldown:
     @staticmethod
-    def _router(model_id: str, litellm_params: dict[str, object]) -> Router:
+    def _router(model_id: str, litellm_params: Mapping[str, object]) -> Router:
         return _make_router(
             model_list=[
                 {
@@ -1521,6 +1522,54 @@ class TestPerUserCopilotAuthFailureCooldown:
                 litellm.AuthenticationError("upstream rejected the shared token", "github_copilot", "gpt-4o"),
             )
         assert get_deployment_failures_for_current_minute(router, model_id) == 1
+        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+
+    @pytest.mark.asyncio
+    async def test_fallback_per_user_caller_auth_failure_does_not_cooldown(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.constants import GITHUB_COPILOT_AUTH_TYPE_KEY, GITHUB_COPILOT_PER_USER_AUTH_TYPE
+
+        model_id: Final = "fallback-per-user"
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-per-user",
+                    credential_values={GITHUB_COPILOT_AUTH_TYPE_KEY: GITHUB_COPILOT_PER_USER_AUTH_TYPE},
+                    credential_info={"custom_llm_provider": "github_copilot"},
+                )
+            ],
+        )
+        router: Final = self._router(model_id, {"litellm_credential_name": "copilot-per-user"})
+        exception: Final = litellm.CallerCredentialAuthenticationError(
+            message="reconnect", llm_provider="github_copilot", model=""
+        )
+        exception.failed_deployment_id = model_id
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
+        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_fallback_shared_mode_auth_failure_still_cools_down(self) -> None:
+        from litellm.llms.github_copilot.authenticator import Authenticator
+
+        model_id: Final = "fallback-shared"
+        with (
+            patch.object(Authenticator, "get_api_key", return_value="shared-copilot-token"),
+            patch.object(Authenticator, "get_api_base", return_value="https://api.githubcopilot.com"),
+        ):
+            router: Final = self._router(model_id, {"api_key": "sk-shared"})
+            exception: Final = litellm.AuthenticationError(
+                "upstream rejected the shared token", "github_copilot", "gpt-4o"
+            )
+            exception.failed_deployment_id = model_id
+
+            _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
         assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
 
