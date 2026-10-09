@@ -1260,3 +1260,88 @@ async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map
 
     assert route.called
     assert get_response_cost_from_hidden_params(response.hidden_params) == cost
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base",
+    (
+        "https://res.services.ai.azure.com",
+        "https://res.services.ai.azure.com/",
+        "https://res.services.ai.azure.com/models",
+        "https://res.services.ai.azure.com/openai/v1",
+        "https://res.services.ai.azure.com/api/projects/proj",
+        "https://res.services.ai.azure.com/api/projects/proj/openai/v1",
+        "https://res.services.ai.azure.com/api/projects/proj/models",
+        "https://res.services.ai.azure.com/models?api-version=2024-05-01-preview",
+    ),
+)
+async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str,
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base=api_base,
+        api_key="foundry-key",
+    )
+
+    assert route.called
+    request: Final = respx_mock.calls[0].request
+    assert request.headers["authorization"] == "Bearer foundry-key"
+    assert "api-key" not in request.headers
+    assert json.loads(request.content) == {
+        "model": "decision-1",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
+    assert response._hidden_params["model"] == "azure_ai/decision-1"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decision_reads_foundry_env_and_keeps_gateway_path_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://gateway.example.com/foundry/models")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-foundry-key")
+    route: Final = respx_mock.post("https://gateway.example.com/foundry/providers/microsoft/v1/systemone").respond(
+        json=_RESPONSE
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer env-foundry-key"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decision_requires_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "foundry-key")
+
+    with pytest.raises(litellm.BadRequestError, match="Missing AZURE_AI_API_BASE"):
+        await litellm.adecisions(
+            model="azure_ai/decision-1",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
