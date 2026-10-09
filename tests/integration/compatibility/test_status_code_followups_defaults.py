@@ -50,6 +50,7 @@ pytestmark: Final = pytest.mark.timeout(180)
 def _drained_upstream() -> None:
     drain_rig_upstream()
 
+
 _UNSET: Final = object()
 
 

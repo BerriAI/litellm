@@ -135,9 +135,7 @@ def chaos(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Chaos]:
         )
         config: Final = directory / "chaos.yaml"
         config.write_text(
-            json.dumps(
-                {"model_list": model_list, "router_settings": {"num_retries": 0, "disable_cooldowns": True}}
-            ),
+            json.dumps({"model_list": model_list, "router_settings": {"num_retries": 0, "disable_cooldowns": True}}),
             encoding="utf-8",
         )
         burst_key: Final = scenario.key(key_alias=f"chaos-burst-{uuid.uuid4().hex}")
@@ -195,9 +193,7 @@ def _burst(chaos: _Chaos, phase: str) -> tuple[_Outcome, ...]:
 
 
 def _missing_model_cells(chaos: _Chaos) -> tuple[_Outcome, ...]:
-    return tuple(
-        _call(chaos, kind, f"missing-{kind}-{uuid.uuid4().hex}", model="") for kind in _KINDS
-    )
+    return tuple(_call(chaos, kind, f"missing-{kind}-{uuid.uuid4().hex}", model="") for kind in _KINDS)
 
 
 def _upstream_hits(slot: UpstreamSlot, markers: frozenset[str]) -> Mapping[str, int]:
@@ -331,4 +327,3 @@ def test_killed_worker_leaves_the_sibling_serving_and_the_respawn_rejecting(chao
     eventually(lambda: _settled(chaos), lambda ok: ok, seconds=120)
     _assert_served(_burst(chaos, "respawned"))
     _assert_rejected_without_a_model(chaos, _missing_model_cells(chaos))
-

@@ -45,6 +45,7 @@ pytestmark: Final = pytest.mark.timeout(180)
 def _drained_upstream() -> None:
     drain_rig_upstream()
 
+
 _UNSET: Final = object()
 _MODEL_SHAPES: Final[dict[str, object]] = {"missing": _UNSET, "null": None, "empty": ""}
 _TARGETS: Final[dict[str, str]] = {
@@ -288,4 +289,3 @@ def test_fixed_target_wildcard_streams_a_request_without_a_model(
     outbound: Final = one_outbound(wildcard.gateway, wildcard.identity)
     assert outbound.get("model") == "gpt-4o-mini", outbound
     assert outbound.get("stream") is True, outbound
-

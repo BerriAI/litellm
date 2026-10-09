@@ -40,6 +40,7 @@ pytestmark: Final = pytest.mark.timeout(180)
 def _drained_upstream() -> None:
     drain_rig_upstream()
 
+
 _UNSET: Final = object()
 _OCR: Final[dict[str, JsonValue]] = {
     "pages": [{"index": 0, "markdown": "scripted page", "images": [], "dimensions": None}],
@@ -124,7 +125,11 @@ def test_ocr_unsupported_json_document_returns_400(
         pytest.param(b"{not json", "application/json", "Invalid JSON payload", "request_body", id="invalid-json"),
         pytest.param(b"hello", "text/plain", "Invalid JSON payload", "request_body", id="text-plain"),
         pytest.param(
-            b"--x\r\n", "multipart/form-data", "Invalid form payload: 400: Missing boundary", "request_body", id="no-boundary"
+            b"--x\r\n",
+            "multipart/form-data",
+            "Invalid form payload: 400: Missing boundary",
+            "request_body",
+            id="no-boundary",
         ),
     ),
 )
@@ -219,7 +224,9 @@ def test_responses_max_output_tokens_forwarding(gateway: Gateway, sent: object, 
         assert outbound.get("max_output_tokens", _UNSET) == forwarded, outbound
 
 
-_BELOW_MINIMUM: Final = "Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16, but got {} instead."
+_BELOW_MINIMUM: Final = (
+    "Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16, but got {} instead."
+)
 
 
 @pytest.mark.parametrize("sent", (0, -1), ids=("zero", "negative"))
@@ -252,7 +259,9 @@ def test_responses_small_max_output_tokens_stream_is_raised_to_the_minimum(gatew
         assert one_outbound(gateway, identity).get("max_output_tokens") == 16
 
 
-def _sdk_responses(gateway: Gateway, model: str, sent: int, *, asynchronous: bool, stream: bool) -> Callable[[], object]:
+def _sdk_responses(
+    gateway: Gateway, model: str, sent: int, *, asynchronous: bool, stream: bool
+) -> Callable[[], object]:
     base_url: Final = f"{gateway.client.base_url}/v1"
 
     def sync_call() -> object:
@@ -322,7 +331,9 @@ def test_vector_store_file_attributes_reach_the_provider(
         identity, handle = register(scenario, "audit-attributes", json_response(_VECTOR_STORE_FILE))
         store: Final = _registered_store(gateway, scenario, identity, handle)
         path: Final = (
-            f"/v1/vector_stores/{store}/files" if operation == "create" else f"/v1/vector_stores/{store}/files/file-audit"
+            f"/v1/vector_stores/{store}/files"
+            if operation == "create"
+            else f"/v1/vector_stores/{store}/files/file-audit"
         )
         body: Final[dict[str, JsonValue]] = {"attributes": attributes}
         if operation == "create":
@@ -343,16 +354,28 @@ def test_vector_store_file_number_and_boolean_attributes_reach_the_provider(gate
         identity, handle = register(scenario, "audit-attributes-typed", json_response(_VECTOR_STORE_FILE))
         store: Final = _registered_store(gateway, scenario, identity, handle)
         path: Final = (
-            f"/v1/vector_stores/{store}/files" if operation == "create" else f"/v1/vector_stores/{store}/files/file-audit"
+            f"/v1/vector_stores/{store}/files"
+            if operation == "create"
+            else f"/v1/vector_stores/{store}/files/file-audit"
         )
-        body: Final[dict[str, JsonValue]] = {"attributes": attributes, **({"file_id": "file-audit"} if operation == "create" else {})}
+        body: Final[dict[str, JsonValue]] = {
+            "attributes": attributes,
+            **({"file_id": "file-audit"} if operation == "create" else {}),
+        }
         response: Final = post(gateway, path, body)
         assert response.status_code == 200, response.text
         assert one_outbound(gateway, identity).get("attributes") == attributes
 
 
 _ENTITIES: Final = ("agent", "customer", "organization", "tag", "team", "user")
-_SUFFIXES: Final = ("", "/aggregated", "/aggregated/keys", "/aggregated/model_top_keys", "/aggregated/search", "/export")
+_SUFFIXES: Final = (
+    "",
+    "/aggregated",
+    "/aggregated/keys",
+    "/aggregated/model_top_keys",
+    "/aggregated/search",
+    "/export",
+)
 _DAILY_ROUTES: Final = tuple(
     f"/{entity}/daily/activity{suffix}"
     for entity in _ENTITIES
