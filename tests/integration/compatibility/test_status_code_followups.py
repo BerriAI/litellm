@@ -37,6 +37,16 @@ _MESSAGE: Final[dict[str, JsonValue]] = {
     "stop_sequence": None,
     "usage": {"input_tokens": 1, "output_tokens": 1},
 }
+_CHAT: Final[dict[str, JsonValue]] = {
+    "id": "chatcmpl-$UNIQUE_ID",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o-mini",
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "scripted"}, "finish_reason": "stop"},
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
 _RESPONSE: Final[dict[str, JsonValue]] = {
     "id": "resp_$UNIQUE_ID",
     "object": "response",
@@ -108,6 +118,17 @@ def _assert_no_provider_call(gateway: Gateway, identity: str) -> None:
     observations: Final = _Observations(gateway.upstream_url)
     observations.read()
     assert observations.provider_calls(identity) == ()
+
+
+def _assert_no_call_to_deployment(gateway: Gateway, model_name: str) -> None:
+    observations: Final = _Observations(gateway.upstream_url)
+    observations.read()
+    calls: Final = tuple(
+        f"{item.get('method')} {item.get('path')}"
+        for item in observations.items
+        if f"/{model_name}-" in str(item.get("path")) and not str(item.get("path")).endswith("/models")
+    )
+    assert calls == (), calls
 
 
 def _post(gateway: Gateway, path: str, body: dict[str, JsonValue]) -> httpx.Response:
@@ -212,6 +233,33 @@ def wildcard_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[G
             yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url), identity
 
 
+@pytest.fixture(scope="module")
+def fixed_target_wildcard_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
+    """A proxy whose only deployment is a `*` wildcard pinned to one fixed upstream model."""
+    directory: Final = tmp_path_factory.mktemp("fixed-wildcard")
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        identity, handle = _scripted(
+            scenario, "followup-fixed-wildcard", JsonResponse(content_type="application/json", body=_CHAT)
+        )
+        config: Final = _write_config(
+            directory / "fixed-wildcard.yaml",
+            {
+                "model_list": [
+                    {
+                        "model_name": "*",
+                        "litellm_params": {
+                            "model": "openai/gpt-4o-mini",
+                            "api_base": handle.api_base(),
+                            "api_key": identity,
+                        },
+                    }
+                ]
+            },
+        )
+        with owned_proxy_process(gateway, directory, {}, config=config) as owned:
+            yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url), identity
+
+
 def test_ocr_multipart_without_file_returns_400(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         identity, handle = _scripted(
@@ -266,6 +314,15 @@ def test_messages_missing_model_with_wildcard_deployment_returns_400(wildcard_pr
     error: Final = object_value(JSON_OBJECT.validate_python(response.json())["error"])
     assert error.get("type") == "invalid_request_error", response.text
     _assert_no_provider_call(proxy, identity)
+
+
+def test_missing_model_with_fixed_target_wildcard_reaches_that_model(
+    fixed_target_wildcard_proxy: tuple[Gateway, str],
+) -> None:
+    proxy, identity = fixed_target_wildcard_proxy
+    response: Final = _post(proxy, "/v1/chat/completions", {"messages": [{"role": "user", "content": "Hello"}]})
+    assert response.status_code == 200, response.text
+    assert _outbound(proxy, identity).get("model") == "gpt-4o-mini"
 
 
 @pytest.mark.parametrize("max_output_tokens", (-1, 0), ids=("negative", "zero"))
@@ -363,6 +420,7 @@ def test_router_default_for_positional_param_returns_400(
     response: Final = _post(router_default_proxy, path, body)
     error: Final = _invalid_request(response)
     assert error.get("param") == missing, response.text
+    _assert_no_call_to_deployment(router_default_proxy, str(body["model"]))
 
 
 def test_router_default_for_model_outside_router_returns_400(router_default_proxy: Gateway) -> None:
