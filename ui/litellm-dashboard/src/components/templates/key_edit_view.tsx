@@ -33,7 +33,7 @@ import {
 import {
   KeyAgentAndSkillFields,
   KeyBudgetNumberField,
-  KeyBudgetWindowsField,
+  BUDGET_WINDOWS_HINT,
   KeyMetadataField,
   KeyModelAliasField,
   KeyRateLimitFields,
@@ -57,7 +57,7 @@ import {
 } from "../key_team_helpers/endUserBudgetPayload";
 import { ModelMaxBudgetField } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { useModelMaxBudgetField } from "../key_team_helpers/useModelMaxBudgetField";
-import { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import {
   TagRateLimitEditor,
   TagRateLimitEntry,
@@ -469,7 +469,10 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <KeyBudgetWindowsField value={budgetLimits} onChange={setBudgetLimits} />
+          <Field>
+            <FieldLabel>{labelWithHint("Budget Windows", BUDGET_WINDOWS_HINT)}</FieldLabel>
+            <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+          </Field>
 
           <ModelMaxBudgetField
             key={keyData.token}
