@@ -15,7 +15,7 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Final, Mapping, Optional, Sequence
 
 import pytest
 
@@ -71,13 +71,13 @@ def test_prompt_caching_5m_bedrock_converse(compat_result):
             api_key=api_key,
         )
 
-    first = run(BEDROCK_CONVERSE_MODELS)
-    uncached = [
+    first: Final = run(BEDROCK_CONVERSE_MODELS)
+    uncached: Final = tuple(
         model
         for model, outcome in first.items()
         if not isinstance(outcome, ClaudeCLIError) and outcome.exit_code == 0 and _cache_tokens(outcome.usage) <= 0
-    ]
-    outcomes = {**first, **run(uncached)} if uncached else first
+    )
+    outcomes: Final = {**first, **run(uncached)} if uncached else first
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:

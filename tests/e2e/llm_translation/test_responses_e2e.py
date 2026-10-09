@@ -1063,12 +1063,13 @@ class TodayReport(BaseModel):
     number_of_r: str
 
 
+def _has_reasoning_item(response: Response) -> bool:
+    return any(isinstance(item, ResponseReasoningItem) for item in response.output)
+
+
 def _until_reasoning_emitted(create: Callable[[], Response]) -> Response:
-    for _ in range(REASONING_ATTEMPTS - 1):
-        response = create()
-        if any(isinstance(item, ResponseReasoningItem) for item in response.output):
-            return response
-    return create()
+    attempts: Final = (create() for _ in range(REASONING_ATTEMPTS - 1))
+    return next(filter(_has_reasoning_item, attempts), None) or create()
 
 
 class TestResponsesOpenAIHostedFeatures:
@@ -1100,7 +1101,7 @@ class TestResponsesOpenAIHostedFeatures:
             ),
         }
 
-        first = _until_reasoning_emitted(
+        first: Final = _until_reasoning_emitted(
             lambda: client.responses.create(
                 model=model,
                 input=[question],

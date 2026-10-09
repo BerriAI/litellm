@@ -29,6 +29,7 @@ import json
 import tempfile
 import time
 import tracemalloc
+from pathlib import Path
 from typing import Any, Final
 
 import httpx
@@ -256,24 +257,24 @@ class TestGetObjectNameLazyParse:
 
 
 class TestStreamingLaziness:
-    def test_upload_stream_transforms_rows_only_as_they_are_pulled(self):
-        cfg = VertexAIFilesConfig()
-        valid_rows = 3
-        raw = _make_openai_jsonl_bytes(valid_rows) + b"\n" + b"\n".join(b"not-json" for _ in range(8000))
+    def test_upload_stream_transforms_rows_only_as_they_are_pulled(self) -> None:
+        cfg: Final = VertexAIFilesConfig()
+        valid_rows: Final = 3
+        raw: Final = _make_openai_jsonl_bytes(valid_rows) + b"\n" + b"\n".join(b"not-json" for _ in range(8000))
         mapped: Final[list[dict[str, Any]]] = []
 
         def counting_mapper(params: dict[str, Any]) -> dict[str, object]:
             mapped.append(params)
             return cfg._map_openai_to_vertex_params(params)
 
-        chunks = _OpenAIToVertexBatchUploadStream(raw, counting_mapper).iter_bytes()
-        pulled = [next(chunks) for _ in range(valid_rows)]
-        custom_ids = [
+        chunks: Final = _OpenAIToVertexBatchUploadStream(raw, counting_mapper).iter_bytes()
+        pulled: Final = tuple(next(chunks) for _ in range(valid_rows))
+        custom_ids: Final = tuple(
             _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"]) for chunk in pulled
-        ]
+        )
 
         assert len(mapped) == valid_rows
-        assert custom_ids == ["request-0", "request-1", "request-2"]
+        assert custom_ids == ("request-0", "request-1", "request-2")
         with pytest.raises(json.JSONDecodeError):
             next(chunks)
 
@@ -331,11 +332,11 @@ class TestPathSourcedStreaming:
         first_labels = json.loads(lines[0])["request"]["labels"]
         assert _get_litellm_batch_custom_id_from_labels(first_labels) == "request-0"
 
-    def test_path_source_is_read_as_the_upload_is_pulled(self, tmp_path):
-        cfg = VertexAIFilesConfig()
-        n_rows = 8000
+    def test_path_source_is_read_as_the_upload_is_pulled(self, tmp_path: Path) -> None:
+        cfg: Final = VertexAIFilesConfig()
+        n_rows: Final = 8000
         path, raw = self._write_jsonl(tmp_path, n_rows)
-        data = self._batch_request(path)
+        data: Final = self._batch_request(path)
         cfg.get_complete_file_url(
             api_base=None,
             api_key=None,
@@ -344,17 +345,19 @@ class TestPathSourcedStreaming:
             litellm_params={"gcs_bucket_name": "test-bucket"},
             data=data,
         )
-        out = cfg.transform_create_file_request(model="", create_file_data=data, optional_params={}, litellm_params={})
-        chunks = _upload_stream(out).iter_bytes()
-        first = next(chunks)
+        out: Final = cfg.transform_create_file_request(
+            model="", create_file_data=data, optional_params={}, litellm_params={}
+        )
+        chunks: Final = _upload_stream(out).iter_bytes()
+        first: Final = next(chunks)
 
         with open(path, "r+b") as handle:
             handle.seek(raw.index(b'"request-6000"'))
             handle.write(b'"rewrote-6000"')
-        custom_ids = [
+        custom_ids: Final = tuple(
             _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"])
             for chunk in (first, *chunks)
-        ]
+        )
 
         assert len(custom_ids) == n_rows
         assert custom_ids[0] == "request-0"
