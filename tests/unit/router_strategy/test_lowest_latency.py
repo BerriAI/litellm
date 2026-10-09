@@ -7,7 +7,6 @@
 import copy
 import json
 import sys
-import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -481,8 +480,24 @@ async def test_runtime_routing_strategy_args_update_is_a_noop_without_a_selector
     assert await _pick_streaming(router) == FAST_TTFT_ID
 
 
+FROZEN_NOW = datetime(2026, 1, 15, 12, 30, 15)
+FROZEN_EPOCH = FROZEN_NOW.timestamp()
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW if tz is None else FROZEN_NOW.astimezone(tz)
+
+
+@pytest.fixture
+def frozen_latency_clock(monkeypatch):
+    monkeypatch.setattr("litellm.router_strategy.lowest_latency.datetime", _FrozenDatetime)
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
 async def test_latency_memory_leak(sync_mode):
     """
     Test to make sure there's no memory leak caused by lowest latency routing
@@ -503,7 +518,7 @@ async def test_latency_memory_leak(sync_mode):
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = start_time + 5
     for _ in range(10):
@@ -562,6 +577,7 @@ def get_size(obj, seen=None):
     return size
 
 
+@pytest.mark.usefixtures("frozen_latency_clock")
 def test_latency_updated():
     test_cache = DualCache()
     lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
@@ -576,7 +592,7 @@ def test_latency_updated():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = start_time + 5
     lowest_latency_logger.log_success_event(
@@ -589,6 +605,7 @@ def test_latency_updated():
     assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
 
 
+@pytest.mark.usefixtures("frozen_latency_clock")
 def test_get_available_deployments():
     test_cache = DualCache()
     model_list = [
@@ -615,7 +632,7 @@ def test_get_available_deployments():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = start_time + 3
     lowest_latency_logger.log_success_event(
@@ -634,7 +651,7 @@ def test_get_available_deployments():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 20}}
     end_time = start_time + 2
     lowest_latency_logger.log_success_event(
@@ -653,6 +670,7 @@ def test_get_available_deployments():
     )
 
 
+@pytest.mark.usefixtures("frozen_latency_clock")
 def test_router_get_available_deployments():
     """
     Test if routers 'get_available_deployments' returns the fastest deployment
@@ -695,7 +713,7 @@ def test_router_get_available_deployments():
             "model_info": {"id": 1},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = start_time + 3
     router.lowestlatency_logger.log_success_event(
@@ -713,7 +731,7 @@ def test_router_get_available_deployments():
             "model_info": {"id": 2},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 20}}
     end_time = start_time + 2
     router.lowestlatency_logger.log_success_event(
@@ -729,6 +747,7 @@ def test_router_get_available_deployments():
 
 @pytest.mark.parametrize("buffer", [0, 1])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
 async def test_lowest_latency_routing_buffer(buffer):
     """
     Allow shuffling calls within a certain latency buffer
@@ -772,7 +791,7 @@ async def test_lowest_latency_routing_buffer(buffer):
             "model_info": {"id": 1},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 50}}
     end_time = start_time + 3
     router.lowestlatency_logger.log_success_event(
@@ -790,7 +809,7 @@ async def test_lowest_latency_routing_buffer(buffer):
             "model_info": {"id": 2},
         }
     }
-    start_time = time.time()
+    start_time = FROZEN_EPOCH
     response_obj = {"usage": {"total_tokens": 20}}
     end_time = start_time + 2
     router.lowestlatency_logger.log_success_event(
@@ -813,6 +832,7 @@ async def test_lowest_latency_routing_buffer(buffer):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
 async def test_lowest_latency_routing_time_to_first_token(sync_mode):
     """
     If a deployment has
@@ -850,7 +870,7 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
         num_retries=3,
     )
     deployment_id = 1
-    start_time = datetime.now()
+    start_time = FROZEN_NOW
     one_second_later = start_time + timedelta(seconds=1)
 
     three_seconds_later = start_time + timedelta(seconds=3)
@@ -937,6 +957,7 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
     assert "1" in list(selected_deployments.keys())
 
 
+@pytest.mark.usefixtures("frozen_latency_clock")
 def test_latency_list_trimming_discards_oldest_entry():
     """
     When the latency list reaches max_latency_list_size, the oldest entry is
@@ -963,7 +984,7 @@ def test_latency_list_trimming_discards_oldest_entry():
 
     latencies_to_add = []
     for i in range(max_size + 1):
-        start_time = time.time()
+        start_time = FROZEN_EPOCH
         response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
         expected_latency = float(i + 1)
         end_time = start_time + expected_latency
@@ -997,6 +1018,7 @@ def test_latency_list_trimming_discards_oldest_entry():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
 async def test_latency_list_trimming_discards_oldest_entry_async():
     """
     Async counterpart: the oldest entry is discarded when the latency list is
@@ -1022,7 +1044,7 @@ async def test_latency_list_trimming_discards_oldest_entry_async():
 
     latencies_to_add = []
     for i in range(max_size + 1):
-        start_time = time.time()
+        start_time = FROZEN_EPOCH
         response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
         expected_latency = float(i + 1)
         end_time = start_time + expected_latency
@@ -1054,6 +1076,7 @@ async def test_latency_list_trimming_discards_oldest_entry_async():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
 async def test_timeout_penalty_discards_oldest_entry():
     """
     Timeout penalties (1000.0) are appended to the latency list and, when the
@@ -1078,7 +1101,7 @@ async def test_timeout_penalty_discards_oldest_entry():
     }
 
     for i in range(max_size):
-        start_time = time.time()
+        start_time = FROZEN_EPOCH
         response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
         end_time = start_time + float(i + 1)
 
@@ -1097,8 +1120,8 @@ async def test_timeout_penalty_discards_oldest_entry():
     await lowest_latency_logger.async_log_failure_event(
         kwargs=timeout_kwargs,
         response_obj=None,
-        start_time=time.time(),
-        end_time=time.time() + 30,
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 30,
     )
 
     latency_key = f"{model_group}_map"
@@ -1114,6 +1137,7 @@ async def test_timeout_penalty_discards_oldest_entry():
         assert abs(latency - 1.0) > tolerance, f"Oldest latency 1.0 should have been discarded, found {latency}"
 
 
+@pytest.mark.usefixtures("frozen_latency_clock")
 def test_list_order_preserved_after_multiple_trims():
     """
     After many trims, the list still holds the most recent `max_size` entries
@@ -1139,7 +1163,7 @@ def test_list_order_preserved_after_multiple_trims():
 
     all_latencies = []
     for i in range(10):
-        start_time = time.time()
+        start_time = FROZEN_EPOCH
         response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
         expected_latency = float(i + 1)
         end_time = start_time + expected_latency
