@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Info } from "lucide-react";
+import { Check, ExternalLink, Info } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -167,20 +167,18 @@ export function BuilderInsightsDemoBanner({ builders }: { builders: readonly Bui
                 </div>
               ) : (
                 <div className="grid gap-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <label htmlFor="builder-insights-token" className="text-sm font-medium">
-                      Personal access token
-                    </label>
-                    <Button
-                      type="button"
-                      nativeButton={false}
-                      variant="link"
-                      size="sm"
-                      render={<a href={TOKEN_URL} target="_blank" rel="noopener noreferrer" />}
-                    >
-                      Create token on GitHub
-                    </Button>
-                  </div>
+                  <label htmlFor="builder-insights-token" className="text-sm font-medium">
+                    Personal access token
+                  </label>
+                  <Button
+                    nativeButton={false}
+                    variant="outline"
+                    size="sm"
+                    render={<a href={TOKEN_URL} target="_blank" rel="noreferrer" />}
+                  >
+                    <ExternalLink aria-hidden="true" className="size-4" />
+                    Create token on GitHub
+                  </Button>
                   <Input
                     id="builder-insights-token"
                     aria-label="Personal access token"

@@ -10,6 +10,14 @@ describe("BuilderInsightsDemoBanner", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "How to connect" }));
     fireEvent.click(screen.getByRole("button", { name: /Personal access token/ }));
+    const tokenLink = screen.getByRole("button", { name: "Create token on GitHub" });
+    expect(tokenLink.tagName).toBe("A");
+    expect(tokenLink).toHaveAttribute(
+      "href",
+      "https://github.com/settings/tokens/new?scopes=repo,read:org&description=LiteLLM%20Builder%20Insights",
+    );
+    expect(tokenLink).toHaveAttribute("target", "_blank");
+    expect(tokenLink).toHaveAttribute("rel", "noreferrer");
 
     const organization = screen.getByRole("textbox", { name: "GitHub organization" });
     const token = screen.getByLabelText("Personal access token");
