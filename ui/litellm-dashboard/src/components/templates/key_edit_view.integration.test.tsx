@@ -1530,7 +1530,9 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
-      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      const clearButtons = screen.getAllByRole("button", { name: "Clear" });
+      expect(clearButtons).toHaveLength(2);
+      await userEvent.click(clearButtons[0]);
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -1571,7 +1573,7 @@ describe("KeyEditView", () => {
       const view = renderWithProviders(renderEditor());
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
       expect(screen.getByRole("combobox", { name: "Organization" })).toBeDisabled();
-      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
       await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(onCancel).toHaveBeenCalledOnce();
       expect(onSubmit).not.toHaveBeenCalled();
@@ -1582,9 +1584,9 @@ describe("KeyEditView", () => {
       await waitFor(() =>
         expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach), expect.any(Array)),
       );
-      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
       view.rerender(renderEditor({ ...key, project_id: null }));
-      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeEnabled();
+      expect(screen.getByRole("combobox", { name: "Team" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
       view.rerender(renderEditor(key, "Internal User"));
       expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
@@ -1615,7 +1617,7 @@ describe("KeyEditView", () => {
         />,
       );
       expect(await screen.findByRole("combobox", { name: "Organization" })).toBeDisabled();
-      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
       expect(onSubmit.mock.calls[0][0]).toMatchObject({ organization_id: "org-1", team_id: "group-maple" });
@@ -2435,7 +2437,7 @@ describe("KeyEditView", () => {
       );
       await screen.findByRole("button", { name: /save changes/i });
 
-      await userEvent.click(screen.getByLabelText("Team ID"));
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
       await userEvent.click(await screen.findByRole("option", { name: /Team Nine/ }));
 
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
@@ -2444,6 +2446,74 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
       expect(onSubmitMock.mock.calls[0][0].team_id).toBe("team-9");
+    });
+
+    it("shows team aliases and IDs in the Team combobox", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, team_id: "team-1" }}
+          teams={[
+            { team_id: "team-1", team_alias: "Alpha" },
+            { team_id: "team-2", team_alias: "Beta" },
+          ]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      const teamCombobox = screen.getByRole("combobox", { name: "Team" });
+      expect(teamCombobox).toHaveValue("Alpha");
+      await userEvent.click(teamCombobox);
+
+      const alphaOption = await screen.findByRole("option", { name: /Alpha/ });
+      const betaOption = screen.getByRole("option", { name: /Beta/ });
+      expect(alphaOption).toHaveTextContent("team-1");
+      expect(betaOption).toHaveTextContent("team-2");
+    });
+
+    it("clears the team in the update payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, team_id: "team-1" }}
+          teams={[{ team_id: "team-1", team_alias: "Alpha" }]}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("Alpha");
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ team_id: null }), expect.any(Array));
+      });
+    });
+
+    it("shows the selected team alias when it is outside the visible teams", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "team-9" }}
+          teams={[{ team_id: "team-9", team_alias: "Gamma", organization_id: "org-2" }]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("Gamma");
     });
 
     it("carries a picked MCP server into the payload", async () => {
