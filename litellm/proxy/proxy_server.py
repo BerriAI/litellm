@@ -752,6 +752,9 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
+from litellm.proxy.telemetry.middleware import TelemetryMiddleware
+from litellm.proxy.telemetry.runtime import TelemetryRuntime
+from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -1732,6 +1735,17 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             else ()
         )
 
+        telemetry_settings: Final = load_telemetry_settings()
+        if isinstance(telemetry_settings, ValidationError):
+            verbose_proxy_logger.warning(
+                "telemetry: invalid LITELLM_TELEMETRY_* settings, leaving it off: %s", telemetry_settings
+            )
+        else:
+            await telemetry_runtime.start(
+                litellm_version=version,
+                settings=telemetry_settings,
+                register=litellm.logging_callback_manager.add_litellm_callback,
+            )
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
@@ -1789,6 +1803,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
             await _drain_spend_event_producer_on_shutdown()
+            await telemetry_runtime.stop()
 
             # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
             if scheduler is not None and scheduler_executor is not None:
@@ -2646,6 +2661,13 @@ app.add_middleware(
     # since without one the fold would never be drained. Read at call time, so
     # it sees prisma_client as of the first request rather than import time.
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
+)
+telemetry_runtime: Final = TelemetryRuntime()
+app.add_middleware(
+    TelemetryMiddleware,
+    sink_provider=lambda: telemetry_runtime.sink,
+    spawn=telemetry_runtime.spawn,
+    settle_timeout_s=lambda: telemetry_runtime.settings.settle_timeout_seconds,
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
