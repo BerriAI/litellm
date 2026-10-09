@@ -164,6 +164,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           <span className="flex-1 font-semibold">Check</span>
           <span className="w-28 text-right font-semibold">Action</span>
           <span className="w-28 pl-4 font-semibold">Threshold</span>
+          <span className="w-10" />
         </div>
         <div>
           {presets.map((preset) => {
@@ -226,6 +227,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     onChange={(event) => setCheck(preset.name, { threshold: Number(event.target.value) || 0 })}
                   />
                 </div>
+                <div className="w-10" />
               </div>
             );
           })}
@@ -254,15 +256,6 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       <Badge variant="secondary" className="ml-2">
                         custom
                       </Badge>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Remove ${check.name}`}
-                        className="ml-1 size-6 text-destructive hover:text-destructive/80"
-                        onClick={() => removeCheck(check.name)}
-                      >
-                        <X className="size-4" />
-                      </Button>
                       <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
                     </div>
                   </div>
@@ -301,6 +294,17 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       value={check.threshold}
                       onChange={(event) => setCheck(check.name, { threshold: Number(event.target.value) || 0 })}
                     />
+                  </div>
+                  <div className="flex w-10 justify-end">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${check.name}`}
+                      className="size-6 text-destructive hover:text-destructive/80"
+                      onClick={() => removeCheck(check.name)}
+                    >
+                      <X className="size-4" />
+                    </Button>
                   </div>
                 </div>
               );
