@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import json
 import os
@@ -8,17 +9,16 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Final
 
-from typing_extensions import ReadOnly, TypedDict
-
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 FILES_JSON: Final = PurePosixPath(".greptile/files.json")
 WRITE_FLAG: Final = "--write"
 
 
-class _ContextFile(TypedDict):
-    path: ReadOnly[str]
-    description: ReadOnly[str]
-    scope: ReadOnly[tuple[str, ...]]
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ContextFile:
+    path: str
+    description: str
+    scope: tuple[str, ...]
 
 
 def _nested_agents_md_paths(repo_root: Path) -> tuple[PurePosixPath, ...]:
@@ -39,7 +39,7 @@ def _context_file(agents_md: PurePosixPath) -> _ContextFile:
 
 
 def render(repo_root: Path) -> str:
-    files: Final = tuple(_context_file(path) for path in _nested_agents_md_paths(repo_root))
+    files: Final = tuple(dataclasses.asdict(_context_file(path)) for path in _nested_agents_md_paths(repo_root))
     return json.dumps({"files": files}, indent=2) + "\n"
 
 
