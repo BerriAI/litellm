@@ -47,7 +47,7 @@ export function BuilderList({
         {sortedBuilders.map((builder, index) => {
           const costPerPr = perPr(builder);
           const agents = builder.agents
-            .filter((agent) => agent.spend > 0)
+            .filter((agent) => agent.spend > 0 && agent.id !== "unlabeled" && agent.id !== "browser")
             .sort((left, right) => right.spend - left.spend)
             .slice(0, 2);
           const selected = builder.id === selectedId;
