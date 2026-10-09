@@ -22,6 +22,7 @@ from litellm.caching.caching_handler import (
     CachingHandlerResponse,
     _is_chat_completion_cached_dict,
     _should_defer_streaming_cache_hit_callbacks,
+    is_json_serializable,
 )
 from litellm.caching import DualCache, InMemoryCache
 from litellm.caching.caching import LiteLLMCacheType
@@ -135,6 +136,53 @@ async def test_async_set_get_cache(response):
 
     assert cached_response.cached_result is not None
     assert cached_response.cached_result.id == result.id
+
+
+def test_is_json_serializable():
+    """Plain values round-trip; arbitrary objects don't."""
+
+    class _NotSerializable:
+        pass
+
+    assert is_json_serializable({"a": 1}) is True
+    assert is_json_serializable("hello") is True
+    assert is_json_serializable(None) is True
+    assert is_json_serializable(_NotSerializable()) is False
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_skips_non_serializable_result():
+    """
+    Regression test: a response object that is neither one of the
+    recognized response types (ModelResponse, EmbeddingResponse, etc.) nor
+    JSON-serializable (e.g. a provider-specific synthetic streaming
+    iterator) must be skipped instead of being handed to the cache backend,
+    which would raise `TypeError: Object of type ... is not JSON
+    serializable`.
+    """
+    setup_cache()
+    caching_handler = LLMCachingHandler(
+        original_function=completion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    class _UnserializableStreamWrapper:
+        """Stand-in for a provider-specific object that can't be cached."""
+
+        pass
+
+    result = _UnserializableStreamWrapper()
+    messages = [{"role": "user", "content": f"Unique message {datetime.now()}"}]
+
+    with patch(
+        "litellm.caching.caching_handler.create_cache_write_task"
+    ) as mock_create_cache_write_task:
+        await caching_handler.async_set_cache(
+            result=result,
+            original_function=litellm.acompletion,
+            kwargs={"messages": messages},
+        )
+
+        mock_create_cache_write_task.assert_not_called()
 
 
 @pytest.mark.asyncio

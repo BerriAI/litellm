@@ -17,6 +17,7 @@ In each method it will call the appropriate method from caching.py
 import asyncio
 import datetime
 import inspect
+import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
@@ -200,6 +201,21 @@ async def _complete_cache_write_despite_cancellation(write_factory: Callable[[],
                     "LiteLLM Cache: pending cache write failed during event loop shutdown: %s", flush_error
                 )
             raise
+
+
+def is_json_serializable(value: object) -> bool:
+    """
+    Whether `value` can be round-tripped through json.dumps.
+
+    Used to guard cache writes against provider-specific response wrappers
+    (e.g. synthetic streaming iterators) that aren't a recognized response
+    type but also aren't safe to hand to the cache backend as-is.
+    """
+    try:
+        json.dumps(value)
+    except TypeError:
+        return False
+    return True
 
 
 def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
@@ -1165,7 +1181,7 @@ class LLMCachingHandler:
                             **new_kwargs,
                         )
                     )
-            else:
+            elif is_json_serializable(result):
                 create_cache_write_task(lambda: cache.async_add_cache(result, **new_kwargs))
 
     def sync_set_cache(
