@@ -2159,8 +2159,21 @@ def _failing_response_scans(reply: Reply) -> Callable[[Request], Reply]:
     return guardrail
 
 
+def _detect_only_pipeline_policy(identity: str) -> dict[str, JsonValue]:
+    return {
+        "guardrails": {"add": [identity]},
+        "pipeline": {"mode": "post_call", "steps": [{"guardrail": identity, "on_pass": "allow", "on_fail": "next"}]},
+    }
+
+
 def _post_call_config(
-    tmp_path: Path, identity: str, policy_url: str, params: Mapping[str, JsonValue], default_on: bool
+    tmp_path: Path,
+    identity: str,
+    policy_url: str,
+    params: Mapping[str, JsonValue],
+    default_on: bool,
+    *,
+    pipeline: bool = False,
 ) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["guardrails"] = [
@@ -2176,6 +2189,9 @@ def _post_call_config(
             },
         }
     ]
+    if pipeline:
+        config["policies"] = {f"{identity}-pipeline": _detect_only_pipeline_policy(identity)}
+        config["policy_attachments"] = [{"policy": f"{identity}-pipeline", "scope": "*"}]
     path: Final = tmp_path / f"{identity}.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -2227,6 +2243,7 @@ def _disconnect_rig(
     shape: str = "text",
     default_on: bool = True,
     workers: int = 1,
+    pipeline: bool = False,
 ) -> Iterator[_DisconnectRig]:
     identity: Final = "guardrail" + uuid.uuid4().hex
     gate: Final = threading.Event()
@@ -2234,7 +2251,7 @@ def _disconnect_rig(
         wire_server(guardrail) as policy,
         wire_server(_scripted_provider(gate if gated else None, pause, shape)) as upstream,
     ):
-        config: Final = _post_call_config(tmp_path, identity, policy.url, params, default_on)
+        config: Final = _post_call_config(tmp_path, identity, policy.url, params, default_on, pipeline=pipeline)
         try:
             with (
                 owned_proxy_process(gateway, tmp_path, {}, config=config, workers=workers) as owned,
@@ -2602,6 +2619,37 @@ def test_client_disconnect_mid_stream_scans_for_a_guardrail_the_request_opted_in
         assert _post_call_statuses(rig, rig.model) == (("success",),)
 
 
+_LIVE_DETECT_ONLY_PIPELINE: Final = MappingProxyType({"streaming_buffer_until_moderated": False})
+
+
+@pytest.mark.parametrize(
+    "disconnect",
+    (
+        pytest.param(_chat_httpx, id="chat-httpx"),
+        pytest.param(_responses_httpx, id="responses-httpx"),
+        pytest.param(_messages_httpx, id="messages-httpx"),
+    ),
+)
+def test_live_detect_only_pipeline_releases_chunks_before_the_scan_and_scans_what_a_disconnected_client_received(
+    gateway: Gateway, tmp_path: Path, disconnect: Callable[[_DisconnectRig, int], str]
+) -> None:
+    with _disconnect_rig(
+        gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True
+    ) as rig:
+        scans: Final = _scanned_while_upstream_is_held(rig, disconnect)
+        assert len(scans) == 1, scans
+
+
+def test_live_detect_only_pipeline_records_the_verdict_of_a_disconnected_stream_on_the_spend_row(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _disconnect_rig(
+        gateway, tmp_path, params=_LIVE_DETECT_ONLY_PIPELINE, default_on=False, pipeline=True
+    ) as rig:
+        _scanned_while_upstream_is_held(rig, _chat_httpx)
+        assert _post_call_statuses(rig, rig.model) == (("success",),)
+
+
 def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Gateway, tmp_path: Path) -> None:
     with _disconnect_rig(gateway, tmp_path, shape="empty") as rig:
         try:
@@ -2614,16 +2662,17 @@ def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Ga
 
 
 @pytest.mark.parametrize(
-    "params",
+    ("params", "pipeline"),
     (
-        pytest.param(dict(_END_OF_STREAM_ONLY), id="end-of-stream-only"),
-        pytest.param({"streaming_buffer_until_moderated": True}, id="buffered"),
+        pytest.param(dict(_END_OF_STREAM_ONLY), False, id="end-of-stream-only"),
+        pytest.param({"streaming_buffer_until_moderated": True}, False, id="buffered"),
+        pytest.param(dict(_LIVE_DETECT_ONLY_PIPELINE), True, id="live-detect-only-pipeline"),
     ),
 )
 def test_a_fully_read_stream_is_scanned_exactly_once(
-    gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue]
+    gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue], pipeline: bool
 ) -> None:
-    with _disconnect_rig(gateway, tmp_path, params=params, gated=False) as rig:
+    with _disconnect_rig(gateway, tmp_path, params=params, gated=False, default_on=not pipeline, pipeline=pipeline) as rig:
         response: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0))
         assert response.status_code == 200, response.text
         assert rig.secret() in response.text and "[DONE]" in response.text, response.text

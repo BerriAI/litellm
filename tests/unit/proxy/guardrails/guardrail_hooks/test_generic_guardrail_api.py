@@ -1332,6 +1332,43 @@ class TestGenericGuardrailAPIStreamingConfig:
         assert guardrail.streaming_end_of_stream_only is False
         assert guardrail.streaming_sampling_rate == 3
 
+    @pytest.mark.parametrize(
+        ("configured", "streams_live"),
+        [
+            pytest.param(None, False, id="unset-keeps-the-pipeline-buffered"),
+            pytest.param(True, False, id="true-keeps-the-pipeline-buffered"),
+            pytest.param(False, True, id="false-streams-the-pipeline-live"),
+        ],
+    )
+    def test_initialize_guardrail_streaming_buffer_until_moderated_reaches_the_pipeline_live_check(
+        self, monkeypatch, configured, streams_live
+    ):
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.proxy.utils import _pipelines_stream_live
+        from litellm.types.guardrails import LitellmParams
+        from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+        litellm_params = LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="post_call",
+            api_base="https://api.test.guardrail.com",
+            default_on=False,
+        )
+        if configured is not None:
+            litellm_params.streaming_buffer_until_moderated = configured  # type: ignore[attr-defined]
+
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            guardrail = initialize_guardrail(litellm_params, {"guardrail_name": "pipeline-scanner"})
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        pipeline = GuardrailPipeline(
+            mode="post_call",
+            steps=[PipelineStep(guardrail="pipeline-scanner", on_pass="allow", on_fail="next")],
+        )
+
+        assert _pipelines_stream_live((("detect-only", pipeline),)) is streams_live
+
     def test_initialize_guardrail_optional_params_defaults_do_not_shadow_top_level(
         self,
     ):
