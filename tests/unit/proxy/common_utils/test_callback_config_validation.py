@@ -264,10 +264,33 @@ def test_arize_sampling_rates_are_not_family_credentials():
     assert cross_entry_family_error({"arize_error_sampling_rate": "0.5"}, stored) is None
 
 
+@pytest.fixture
+def otel_v2_on(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.usefixtures("otel_v2_on")
 @pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
 @pytest.mark.parametrize("value", ["no_content", "span_only", "event_only", "span_and_event"])
 def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callback_name: str, value: str) -> None:
     assert callback_config_error(callback_name, {"capture_message_content": value}) is None
+
+
+def test_capture_message_content_is_rejected_while_otel_v2_is_off(monkeypatch) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        error: Final = callback_config_error("langfuse_otel", {"capture_message_content": "no_content"})
+    finally:
+        is_otel_v2_enabled.cache_clear()
+    assert error is not None and "capture_message_content" in error and "LITELLM_OTEL_V2" in error
 
 
 @pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
@@ -276,6 +299,7 @@ def test_capture_message_content_is_rejected_where_it_would_never_take_effect(ca
     assert error is not None and "capture_message_content" in error and "langfuse_otel" in error
 
 
+@pytest.mark.usefixtures("otel_v2_on")
 def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metadata() -> None:
     error: Final = logging_metadata_config_error(
         {
@@ -291,6 +315,7 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
     assert error is not None and "Invalid capture_message_content" in error
 
 
+@pytest.mark.usefixtures("otel_v2_on")
 def test_each_entry_keeps_its_own_capture_message_content() -> None:
     error: Final = logging_metadata_config_error(
         {
@@ -311,6 +336,7 @@ def test_each_entry_keeps_its_own_capture_message_content() -> None:
     assert error is None
 
 
+@pytest.mark.usefixtures("otel_v2_on")
 def test_a_failure_only_entry_rejects_capture_message_content() -> None:
     error: Final = callback_config_error("langfuse_otel", {"capture_message_content": "no_content"}, "failure")
     assert error is not None and "capture_message_content" in error and "success_and_failure" in error
@@ -333,6 +359,7 @@ def test_entries_for_one_backend_share_one_capture_message_content(
     assert (error is not None) is rejected
 
 
+@pytest.mark.usefixtures("otel_v2_on")
 def test_key_logging_entries_for_one_backend_may_not_disagree_on_capture_message_content() -> None:
     def entry(callback_type: str, capture: str) -> dict[str, str | dict[str, str]]:
         return {

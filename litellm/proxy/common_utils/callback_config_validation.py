@@ -91,6 +91,7 @@ def _capture_message_content_error(
     value: Final = callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
     if value is None:
         return None
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.destinations import destination_capable_backends
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         validate_capture_message_content_value,
@@ -99,6 +100,8 @@ def _capture_message_content_error(
     supported: Final = sorted(destination_capable_backends())
     if callback_name not in supported:
         return f"{CAPTURE_MESSAGE_CONTENT_VAR} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
+    if not is_otel_v2_enabled():
+        return f"Per-destination {CAPTURE_MESSAGE_CONTENT_VAR} requires the proxy to run with LITELLM_OTEL_V2=true."
     try:
         validate_capture_message_content_value(value)
     except ValueError as e:

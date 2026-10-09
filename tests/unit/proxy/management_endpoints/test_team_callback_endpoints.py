@@ -1737,6 +1737,17 @@ async def test_add_team_callbacks_rejects_capture_message_content_on_a_non_otel_
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
 
 
+@pytest.fixture
+def otel_v2_on(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.usefixtures("otel_v2_on")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capture", ["no_content", "span_only", "event_only", "span_and_event"])
 async def test_add_team_callbacks_stores_capture_message_content_in_the_existing_callback_metadata(
