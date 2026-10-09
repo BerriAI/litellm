@@ -4568,9 +4568,7 @@ def get_optional_params(
                     # with a known type, and the table is the set that warns.
                     for hinted_param in UNVALIDATED_PARAM_DROP_HINTS:
                         if hinted_param == k:
-                            warn_unvalidated_param_dropped(
-                                hinted_param, custom_llm_provider, model
-                            )
+                            warn_unvalidated_param_dropped(hinted_param, custom_llm_provider, model)
                             break
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
