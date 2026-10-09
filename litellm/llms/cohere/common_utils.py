@@ -251,8 +251,7 @@ class CohereV2ModelResponseIterator:
 
     def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:
         """Parse tool-plan-delta events to extract tool plan."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
+        delta: Final = chunk.get("delta", {})
         message: Final = delta.get("message", {})
         tool_plan: Final = message.get("tool_plan", "")
         if tool_plan:
@@ -261,8 +260,7 @@ class CohereV2ModelResponseIterator:
 
     def _parse_citation_start(self, chunk: dict) -> dict | None:
         """Parse citation-start events to extract citations."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
+        delta: Final = chunk.get("delta", {})
         message: Final = delta.get("message", {})
         citations: Final = message.get("citations", {})
         if citations:
@@ -278,8 +276,7 @@ class CohereV2ModelResponseIterator:
 
     def _parse_message_end(self, chunk: dict) -> tuple[bool, str, ChatCompletionUsageBlock | None]:
         """Parse message-end events to extract finish info and usage."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
+        delta: Final = chunk.get("delta", {})
         is_finished: Final = True
         finish_reason: Final = delta.get("finish_reason", "stop")
 
@@ -302,9 +299,9 @@ class CohereV2ModelResponseIterator:
         v2 format:
         - Content: chunk.type == "content-delta" -> chunk.delta.message.content.text
         - Tool calls: chunk.type == "tool-call-delta" -> chunk.delta.tool_calls
-        - Tool plan: chunk.event == "tool-plan-delta" -> chunk.data.delta.message.tool_plan
-        - Citations: chunk.event == "citation-start" -> chunk.data.delta.message.citations
-        - Finish: chunk.event == "message-end" -> chunk.data.delta.finish_reason
+        - Tool plan: chunk.type == "tool-plan-delta" -> chunk.delta.message.tool_plan
+        - Citations: chunk.type == "citation-start" -> chunk.delta.message.citations
+        - Finish: chunk.type == "message-end" -> chunk.delta.finish_reason
         """
         try:
             text = ""
@@ -316,18 +313,19 @@ class CohereV2ModelResponseIterator:
 
             index: Final = int(chunk.get("index", 0))
             chunk_type: Final = chunk.get("type", "")
-            event_type: Final = chunk.get("event", "")
 
-            # Handle different chunk types
+            # Handle different chunk types. Cohere's /v2/chat stream tags every
+            # event with a top-level ``type`` discriminator (not ``event``) and
+            # carries each payload under a top-level ``delta`` key.
             if chunk_type == "content-delta":
                 text = self._parse_content_delta(chunk)
             elif chunk_type == "tool-call-delta":
                 tool_use = self._parse_tool_call_delta(chunk)
-            elif event_type == "tool-plan-delta":
+            elif chunk_type == "tool-plan-delta":
                 provider_specific_fields = self._parse_tool_plan_delta(chunk)
-            elif event_type == "citation-start":
+            elif chunk_type == "citation-start":
                 provider_specific_fields = self._parse_citation_start(chunk)
-            elif event_type == "message-end":
+            elif chunk_type == "message-end":
                 is_finished, finish_reason, usage = self._parse_message_end(chunk)
 
             # Handle citations in any chunk type (fallback)
