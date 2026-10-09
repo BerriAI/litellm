@@ -97,7 +97,7 @@
         "internal": false,
         "status": 200,
         "call_id": "426915ce-5aee-43df-8e3b-7b4ce54a13ab",
-        "cost": "8.400000000000001e-05",
+        "cost": "0.00008400000000000001",
         "response_id": "chatcmpl-EWwsBOlHwlDgotfQ14ABIU0MxaHMn",
         "usage": {
           "completion_tokens": 6,
@@ -122,7 +122,7 @@
         "internal": true,
         "status": 200,
         "call_id": "7412583f-e8e6-4993-8d57-a5dfd41d9b07",
-        "cost": "8.400000000000001e-05",
+        "cost": "0.00008400000000000001",
         "response_id": "chatcmpl-EWwsDjeG5ZF8I8qewy0134cIbsAyD",
         "usage": {
           "completion_tokens": 6,
@@ -632,12 +632,21 @@
     }
   },
   "embedded_ui": {
-    "qualification": "Final source package; published release adoption pending",
+    "qualification": "Published source pin verified; release artifact adoption and final image qualification pending",
     "companion_base_sha": "a54b38e779c5d960b2515e2807c1858cc5842b4d",
     "package": {
       "path": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
       "sha256": "490d2848dce174826d275959fbb1a5d456acdca45f58cd283487dce89ea3b602",
-      "integrity": "sha512-Rht4jazqGbdJSGHeBHOs6L2AW2O/X1Q6hBavKv8GgtmDkFUWa9KDp/o0mgiCS4+B+kKa78qLSuIPbVbHbYIGSg=="
+      "integrity": "sha512-Rht4jazqGbdJSGHeBHOs6L2AW2O/X1Q6hBavKv8GgtmDkFUWa9KDp/o0mgiCS4+B+kKa78qLSuIPbVbHbYIGSg==",
+      "source": {
+        "repository": "https://github.com/BerriAI/lens",
+        "commit": "b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38",
+        "source_directory": "src/ui/lib",
+        "entries": 394,
+        "all_package_files_match_commit": true,
+        "file_manifest_sha256": "d64c1288133b26eea271c95c9e6e917a8c876aecf9e932739c37dd2052df85a7",
+        "comparison": "Every regular file in the tarball matches the committed source byte for byte; inherited LICENSE resolves at repository root"
+      }
     },
     "sources": {
       "ui/litellm-dashboard/src/components/lens/EmbeddedLens.tsx": "7eab9ed647367903c85426786fa027977b1c0d10acf9e9d7fc00c4b51c317b88",
@@ -710,7 +719,8 @@
         "screenshot": {
           "repository": "BerriAI/lens",
           "path": "docs/extraction/evidence/ui/connected/setup-agent-embedded.png",
-          "sha256": "8615be2e0f27819bc00268c066e8f1ea8fa510ecf2f77047d7dd3e84e4c80639"
+          "sha256": "8615be2e0f27819bc00268c066e8f1ea8fa510ecf2f77047d7dd3e84e4c80639",
+          "repository_commit": "b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38"
         }
       }
     },
@@ -746,5 +756,36 @@
         }
       }
     }
+  },
+  "publication_preflight": {
+    "companion_integration_commit": "59b577dd0a7e238f212b0b18e70a8d15b95eb381",
+    "companion_default_branch": "main",
+    "companion_merge_base": "145d382089ccf578684ffb79e54752ae98d32b61",
+    "lens_source_commit": "b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38",
+    "checks": [
+      {
+        "command": "make check",
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-host-final-main-check.log",
+          "sha256": "879841545c2795920c767495ec4a725b737b9404ec1385802947b2498fbcee57"
+        }
+      },
+      {
+        "command": ".venv/bin/pytest -q tests/unit/tracing tests/unit/proxy/test_tracing_endpoints.py tests/unit/proxy/lens",
+        "result": "passed",
+        "tests": 217,
+        "log": {
+          "path": "/tmp/lens-host-final-main-tests.log",
+          "sha256": "7f32f7577e4556c89f6bf63bf47057aacfb30260b290442923bd4594988363c6"
+        }
+      }
+    ],
+    "remaining": [
+      "Current-tip end-to-end replay and before/after browser captures",
+      "Both real chart-installation variants with final images",
+      "Published signed release artifact adoption",
+      "Required CI and automated reviews"
+    ]
   }
 }
