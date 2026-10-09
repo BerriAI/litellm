@@ -63,6 +63,30 @@ def test_transform_create_request(config: OpenAIVectorStoreFilesConfig):
     assert payload["attributes"]["key"] == "value"
 
 
+_SEVENTEEN_ATTRIBUTES = {f"key_{index}": f"value_{index}" for index in range(17)}
+
+
+def test_transform_create_request_keeps_every_attribute(config: OpenAIVectorStoreFilesConfig):
+    _, payload = config.transform_create_vector_store_file_request(
+        vector_store_id="vs_123",
+        create_request={"file_id": "file-abc", "attributes": {**_SEVENTEEN_ATTRIBUTES, "hidden_params": "x"}},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert payload["attributes"] == _SEVENTEEN_ATTRIBUTES
+
+
+def test_transform_update_request_keeps_every_attribute(config: OpenAIVectorStoreFilesConfig):
+    _, payload = config.transform_update_vector_store_file_request(
+        vector_store_id="vs_123",
+        file_id="file-abc",
+        update_request={"attributes": {**_SEVENTEEN_ATTRIBUTES, "hidden_params": "x"}},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert payload["attributes"] == _SEVENTEEN_ATTRIBUTES
+
+
 def test_transform_list_request(config: OpenAIVectorStoreFilesConfig):
     api_base = "https://api.example.com/v1/vector_stores/vs_123/files"
     url, params = config.transform_list_vector_store_files_request(

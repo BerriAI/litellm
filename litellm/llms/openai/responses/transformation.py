@@ -183,10 +183,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         OpenAI's Responses API rejects max_output_tokens below 16 for every model
         (not gpt-5 specific), so a client like Claude Code that sends a max_tokens=1
-        warmup probe on model switch would otherwise 400. Values that are None or
-        already at/above the minimum are returned unchanged.
+        warmup probe on model switch would otherwise 400. Values that are None,
+        already at/above the minimum, or not positive are returned unchanged.
         """
-        if isinstance(max_output_tokens, int) and max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
+        if isinstance(max_output_tokens, int) and 0 < max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
             return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
         return max_output_tokens
 
