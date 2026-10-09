@@ -1555,9 +1555,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         litellm_params: Final = kwargs.get("litellm_params") or {}
         metadata: Final = litellm_params.get("metadata") or {}
         litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
-        proxy_span: Final = metadata.get("litellm_parent_otel_span") or litellm_metadata.get(
-            "litellm_parent_otel_span"
-        )
+        proxy_span: Final = metadata.get("litellm_parent_otel_span") or litellm_metadata.get("litellm_parent_otel_span")
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
