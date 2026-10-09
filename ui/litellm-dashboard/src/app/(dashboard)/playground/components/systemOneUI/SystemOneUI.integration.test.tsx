@@ -12,14 +12,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
 import type { SystemOneResponse } from "./lib/schemas";
-import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 
-const mockFetchAvailableModels = vi.hoisted(() => vi.fn<(accessToken: string) => Promise<ModelGroup[]>>());
-vi.mock("@/components/llm_calls/fetch_models", () => ({
-  fetchAvailableModels: (accessToken: string) => mockFetchAvailableModels(accessToken),
-}));
+interface ModelGroupInfo {
+  model_group: string;
+  mode: string;
+}
 
-const DECISION_AND_CHAT_MODELS: ModelGroup[] = [
+const DECISION_AND_CHAT_MODELS: ModelGroupInfo[] = [
   { model_group: "gpt-5.5", mode: "chat" },
   { model_group: "jev-latest", mode: "evaluation" },
   { model_group: "pplx-decider", mode: "evaluation" },
@@ -44,6 +43,21 @@ const render = (ui: ReactElement) =>
     </QueryClientProvider>,
   );
 
+const modelGroupInfoResponse = (groups: ModelGroupInfo[]) =>
+  ({ ok: true, status: 200, text: async () => JSON.stringify({ data: groups }) }) as Response;
+
+const EXPIRED_KEY_RESPONSE = {
+  ok: false,
+  status: 401,
+  text: async () =>
+    JSON.stringify({ error: { message: "Authentication Error - Expired Key.", type: "expired_key", code: "401" } }),
+} as Response;
+
+const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/model_group/info");
+
+const lookupAuthHeaders = (calls: Parameters<typeof fetch>[]) =>
+  calls.map(([, init]) => Object.values((init?.headers ?? {}) as Record<string, string>));
+
 const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =>
   ({
     ok: status >= 200 && status < 300,
@@ -53,19 +67,23 @@ const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =
 
 describe("SystemOneUI integration", () => {
   const mockFetch = vi.fn<typeof fetch>();
+  const mockModelLookup = vi.fn<typeof fetch>();
 
   beforeEach(() => {
     sessionStorage.clear();
     mockFetch.mockReset();
-    vi.stubGlobal("fetch", mockFetch);
+    mockModelLookup.mockReset();
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+      isModelLookup(input) ? mockModelLookup(input, init) : mockFetch(input, init),
+    );
     mockFetch.mockResolvedValue(createResponse(responseBody));
-    mockFetchAvailableModels.mockReset();
-    mockFetchAvailableModels.mockResolvedValue([]);
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse([]));
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     sessionStorage.clear();
+    document.cookie = "token=; path=/; max-age=0";
   });
 
   it("restores the example after the request is edited", async () => {
@@ -107,11 +125,11 @@ describe("SystemOneUI integration", () => {
 
   it("opens on /v1/systemone with the first decision model the key can call", async () => {
     const user = userEvent.setup();
-    mockFetchAvailableModels.mockResolvedValue(DECISION_AND_CHAT_MODELS);
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
 
     expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
-    expect(mockFetchAvailableModels).toHaveBeenCalledWith("session-key");
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer session-key"])]);
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
@@ -125,7 +143,7 @@ describe("SystemOneUI integration", () => {
 
   it("offers only decision models and writes the picked one into the request", async () => {
     const user = userEvent.setup();
-    mockFetchAvailableModels.mockResolvedValue(DECISION_AND_CHAT_MODELS);
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
     const picker = await screen.findByRole("combobox", { name: "Decision model" });
 
@@ -162,16 +180,42 @@ describe("SystemOneUI integration", () => {
     );
   });
 
+  it("looks up a typed virtual key's decision models once, after typing settles", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+
+    await user.type(screen.getByLabelText("Virtual Key", { exact: true }), "sk-typed-key");
+
+    expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer sk-typed-key"])]);
+  });
+
+  it("keeps the admin signed in when a typed virtual key has expired", async () => {
+    document.cookie = "token=ui-session; path=/";
+    mockModelLookup.mockResolvedValue(EXPIRED_KEY_RESPONSE);
+    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+
+    fireEvent.change(screen.getByLabelText("Virtual Key", { exact: true }), { target: { value: "sk-expired" } });
+
+    await waitFor(() => expect(mockModelLookup).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.cookie).toContain("token=ui-session");
+    expect(screen.getByRole("combobox", { name: "Decision endpoint" })).toHaveTextContent("/typesafe/v1/systemone");
+  });
+
   it("keeps an edited TypeSafe request in place when decision models load afterwards", async () => {
-    const models = Promise.withResolvers<ModelGroup[]>();
-    mockFetchAvailableModels.mockReturnValue(models.promise);
+    const models = Promise.withResolvers<Response>();
+    mockModelLookup.mockReturnValue(models.promise);
     render(<SystemOneUI accessToken="session-key" />);
     const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
     const draft = JSON.stringify({ state: "edited", questions: { q: { type: "noul", instructions: "Yes?" } } });
     fireEvent.change(editor, { target: { value: draft } });
 
     await act(async () => {
-      models.resolve(DECISION_AND_CHAT_MODELS);
+      models.resolve(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 

@@ -5,10 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
-import { DECISIONS_DOCS_URL, isDecisionMode } from "@/lib/decisionModels";
+import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
@@ -19,13 +18,12 @@ import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
 import ResponseView from "./ResponseView";
 import { validateSystemOnePayload } from "./lib/validatePayload";
+import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
 
 interface SystemOneUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
 }
-
-type ApiKeySource = "session" | "custom";
 
 interface SystemOneSendVariables {
   payload: PlaygroundRequest;
@@ -45,18 +43,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(disabledPersonalKeyCreation ? "custom" : "session");
   const [customApiKey, setCustomApiKey] = useState("");
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
-  const decisionModelsQueryOptions = {
-    queryKey: ["playground", "systemOne", "decisionModels", effectiveApiKey],
-    queryFn: () => fetchAvailableModels(effectiveApiKey),
-    enabled: effectiveApiKey !== "",
-    retry: false,
-    staleTime: 60 * 1000,
-  };
-  const decisionModelsQuery = useQuery(decisionModelsQueryOptions);
-  const decisionModels = useMemo(
-    () =>
-      (decisionModelsQuery.data ?? []).filter((model) => isDecisionMode(model.mode)).map((model) => model.model_group),
-    [decisionModelsQuery.data],
+  const { decisionModels, isLoaded: decisionModelsLoaded } = useDecisionModels(
+    apiKeySource,
+    effectiveApiKey,
+    getCustomProxyBaseUrl(),
   );
   const [chosenEndpoint, setChosenEndpoint] = useState<DecisionEndpoint | null>(null);
   const endpoint: DecisionEndpoint =
@@ -170,7 +160,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                   allowClear={false}
                 />
               </div>
-              {decisionModelsQuery.isSuccess && decisionModels.length === 0 && (
+              {decisionModelsLoaded && decisionModels.length === 0 && (
                 <a href={uiHref("models-and-endpoints")} className="text-sm text-primary underline">
                   Add a decision model
                 </a>
