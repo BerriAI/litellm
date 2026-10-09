@@ -11,6 +11,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.decisions import (
@@ -1055,3 +1056,33 @@ async def test_requests_a_provider_cannot_serve_are_rejected_before_http(
         await litellm.adecisions(model=model, api_key="caller-key", **request_kwargs)
 
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(litellm.model_cost, "openrouter/typesafe/jev-1.13", raising=False)
+    cost: Final = 1.1802e-5
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(
+        json={
+            "model": "typesafe/jev-1.13",
+            "answers": _RESPONSE["answers"],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "cost": cost,
+            },
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model="openrouter/typesafe/jev-1.13",
+        state={"source": "unit-test"},
+        questions=_QUESTIONS,
+        api_key="caller-key",
+    )
+
+    assert route.called
+    assert get_response_cost_from_hidden_params(response.hidden_params) == cost

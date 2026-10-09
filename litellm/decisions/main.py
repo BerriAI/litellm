@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
@@ -205,11 +206,13 @@ def _prepare_call(
 
 def _format_response(response: DecisionsIRResponse, call: _DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
     formatted: Final = _formatted_response(response, call)
+    provider_cost: Final = call.provider_config.provider_reported_cost(response)
     formatted.set_hidden_params(
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
             "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
+            **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
     return formatted
