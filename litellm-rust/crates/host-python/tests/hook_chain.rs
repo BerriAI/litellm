@@ -818,6 +818,7 @@ fn native_hooks_rewrite_the_wire_request_in_chain_order() {
 
 #[test]
 fn native_hook_rejection_raises_and_stops_the_chain() {
+    Python::initialize();
     Python::attach(|py| {
         let log = Arc::default();
         let mut hooks = native_chain(&log, Some("b"));
@@ -830,6 +831,7 @@ fn native_hook_rejection_raises_and_stops_the_chain() {
 
 #[test]
 fn native_hooks_see_events_in_onion_order_and_leave_arguments_alone() {
+    Python::initialize();
     Python::attach(|py| {
         let log: Arc<Mutex<Vec<String>>> = Arc::default();
         let mut hooks = native_chain(&log, None);
