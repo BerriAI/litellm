@@ -28,7 +28,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import DEFAULT_API_BASE, DEFAULT_TIMEOUT
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -79,9 +80,7 @@ def _message_text(message: Mapping[str, object]) -> str:
 def _copy_message(value: object) -> Mapping[str, object] | None:
     if not isinstance(value, Mapping):
         return None
-    return {  # mutable-ok: shallow copy for write-back
-        str(key): item for key, item in TypeAdapter(Mapping[object, object]).validate_python(value).items()
-    }
+    return {str(key): item for key, item in TypeAdapter(Mapping[object, object]).validate_python(value).items()}
 
 
 def _copy_messages(messages: Sequence[object]) -> tuple[Mapping[str, object], ...] | None:
@@ -116,8 +115,7 @@ def _rewrite_last_user_message(
     user_indices: Final = tuple(index for index, message in enumerate(messages) if message.get("role") == "user")
     target: Final = user_indices[-1] if user_indices else len(messages) - 1
     return tuple(
-        {**message, "content": redacted} if index == target else dict(message)  # mutable-ok: write-back message
-        for index, message in enumerate(messages)
+        {**message, "content": redacted} if index == target else dict(message) for index, message in enumerate(messages)
     )
 
 
@@ -132,8 +130,8 @@ def _model_name(
 
 def _assistant_message(text: str | None, tool_calls: object) -> Mapping[str, object]:
     if tool_calls:
-        return {"role": "assistant", "content": text, "tool_calls": tool_calls}  # mutable-ok: outbound JSON
-    return {"role": "assistant", "content": text}  # mutable-ok: outbound JSON
+        return {"role": "assistant", "content": text, "tool_calls": tool_calls}
+    return {"role": "assistant", "content": text}
 
 
 def _assistant_messages(texts: Sequence[str], tool_calls: object) -> tuple[Mapping[str, object], ...]:
@@ -152,7 +150,7 @@ def _sent_messages(
     structured: Final = inputs.get("structured_messages")
     if structured:
         return structured
-    return tuple({"role": "user", "content": text} for text in (inputs.get("texts") or ()))  # mutable-ok: outbound JSON
+    return tuple({"role": "user", "content": text} for text in (inputs.get("texts") or ()))
 
 
 def _inputs_with_messages(
@@ -165,18 +163,29 @@ def _inputs_with_messages(
     original_tool_calls: Final = inputs.get("tool_calls")
     if extracted is not None and original_tool_calls is not None and len(extracted) != len(original_tool_calls):
         raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
+    try:
+        normalized_messages: Final = tuple(
+            {**message, "content": ""} if message.get("role") == "user" and message.get("content") is None else message
+            for message in messages
+        )
+        structured_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(normalized_messages)
+        rewritten_tool_calls: Final = (
+            TypeAdapter(list[ChatCompletionMessageToolCall]).validate_python(extracted)
+            if extracted is not None
+            else None
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=TRANSFORM_MISSING) from exc
     merged: Final[GenericGuardrailAPIInputs] = {
         **inputs,
-        "structured_messages": list(messages),  # mutable-ok: GenericGuardrailAPIInputs.structured_messages is a list
+        "structured_messages": structured_messages,
     }
     rebuilt: Final[GenericGuardrailAPIInputs] = (
-        {**merged, "texts": list(_texts_from_messages(messages))}  # mutable-ok: TypedDict field is a list
-        if inputs.get("texts")
-        else merged
+        {**merged, "texts": list(_texts_from_messages(messages))} if inputs.get("texts") else merged
     )
     if extracted is None:
         return rebuilt
-    return {**rebuilt, "tool_calls": list(extracted)}  # mutable-ok: GenericGuardrailAPIInputs.tool_calls is a list
+    return {**rebuilt, "tool_calls": rewritten_tool_calls} if rewritten_tool_calls is not None else rebuilt
 
 
 class NeuralTrustGuardrail(CustomGuardrail):
@@ -192,7 +201,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail contract
-        return [  # mutable-ok: CustomGuardrail.supported_event_hooks is a list
+        return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
         ]
@@ -268,7 +277,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         if status in BLOCKING_STATUSES:
             raise HTTPException(
                 status_code=400,
-                detail={  # mutable-ok: FastAPI HTTPException.detail is a JSON object
+                detail={
                     "error": "Violated guardrail policy",
                     "neuraltrust_guardrail_response": "Blocked by NeuralTrust TrustGuard.",
                     "verdict": status,
@@ -299,7 +308,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
             return inputs
         held: Final[GenericGuardrailAPIInputs] = {
             **inputs,
-            "stream_holdback_chars": [len(text) for text in texts],  # mutable-ok: the field is a list
+            "stream_holdback_chars": [len(text) for text in texts],
         }
         return held
 
@@ -312,17 +321,17 @@ class NeuralTrustGuardrail(CustomGuardrail):
     ) -> dict[str, object]:  # mutable-ok: outbound JSON
         session_id: Final = get_session_id_from_request_data(request_data)
         consumer_id: Final = _consumer_id(request_data)
-        return {  # mutable-ok: outbound JSON
+        return {
             "payload": self._payload(inputs, input_type),
             "direction": "input" if input_type == "request" else "output",
             "protocol": "llm",
-            "attributes": {  # mutable-ok: outbound JSON
+            "attributes": {
                 "content_type": "application/json",
-                "model": {"name": _model_name(inputs, logging_obj)},  # mutable-ok: outbound JSON
+                "model": {"name": _model_name(inputs, logging_obj)},
             },
-            **({"collector_key": self.collector_key} if self.collector_key else {}),  # mutable-ok: outbound JSON
-            **({"session_id": session_id} if session_id else {}),  # mutable-ok: outbound JSON
-            **({"consumer_id": consumer_id} if consumer_id is not None else {}),  # mutable-ok: outbound JSON
+            **({"collector_key": self.collector_key} if self.collector_key else {}),
+            **({"session_id": session_id} if session_id else {}),
+            **({"consumer_id": consumer_id} if consumer_id is not None else {}),
         }
 
     @staticmethod
@@ -333,12 +342,12 @@ class NeuralTrustGuardrail(CustomGuardrail):
         messages: Final = _sent_messages(inputs, input_type)
         tools: Final = inputs.get("tools") if input_type == "request" else None
         if tools:
-            return {"messages": messages, "tools": tools}  # mutable-ok: outbound JSON
-        return {"messages": messages}  # mutable-ok: outbound JSON
+            return {"messages": messages, "tools": tools}
+        return {"messages": messages}
 
     async def _call_evaluate(self, body: dict[str, object]) -> dict[str, object]:  # mutable-ok: TrustGuard JSON
         url: Final = f"{self.api_base}{EVALUATE_PATH}"
-        headers: Final = {  # mutable-ok: AsyncHTTPHandler.post declares headers as dict
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
@@ -379,10 +388,11 @@ class NeuralTrustGuardrail(CustomGuardrail):
             raise _TrustGuardUnreachable("TrustGuard returned non-JSON body") from exc
         if not isinstance(parsed, dict):
             raise HTTPException(status_code=503, detail="TrustGuard returned an invalid response")
-        status: Final = parsed.get("status")
+        typed_response: Final = METADATA_ADAPTER.validate_python(parsed)
+        status: Final = typed_response.get("status")
         if not isinstance(status, str) or status.lower() not in KNOWN_STATUSES:
             raise HTTPException(status_code=503, detail="TrustGuard returned an unknown verdict")
-        return {**parsed, "status": status.lower()}  # mutable-ok: TrustGuard JSON object
+        return {**typed_response, "status": status.lower()}
 
     def _handle_unreachable(
         self,
@@ -412,14 +422,18 @@ class NeuralTrustGuardrail(CustomGuardrail):
         if not isinstance(transformed, Mapping):
             raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
 
-        raw_messages: Final = transformed.get("messages")
+        try:
+            typed_transform: Final = METADATA_ADAPTER.validate_python(transformed)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=TRANSFORM_MISSING) from exc
+        raw_messages: Final = typed_transform.get("messages")
         if isinstance(raw_messages, list) and raw_messages:
             rewritten_messages: Final = _copy_messages(TypeAdapter(tuple[object, ...]).validate_python(raw_messages))
             if rewritten_messages is None or len(rewritten_messages) != len(_sent_messages(inputs, input_type)):
                 raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
             return _inputs_with_messages(inputs, rewritten_messages, replace_tool_calls=True)
 
-        raw_input: Final = transformed.get("input")
+        raw_input: Final = typed_transform.get("input")
         if not isinstance(raw_input, str) or not raw_input:
             raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
 
@@ -440,4 +454,4 @@ class NeuralTrustGuardrail(CustomGuardrail):
         if not original_texts:
             raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
         rewritten_texts: Final = (*original_texts[:-1], raw_input)
-        return {**inputs, "texts": list(rewritten_texts)}  # mutable-ok: GenericGuardrailAPIInputs.texts is a list
+        return {**inputs, "texts": list(rewritten_texts)}

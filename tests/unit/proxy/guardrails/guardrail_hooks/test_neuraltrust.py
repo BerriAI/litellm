@@ -529,7 +529,7 @@ class TestNeuralTrustGuardrail:
                 input_type="response",
                 logging_obj=_logging(),
             )
-        assert result["tool_calls"] == rewritten_tool_calls
+        assert [call.model_dump() for call in result["tool_calls"]] == rewritten_tool_calls
         assert result["tool_calls"] is not original_tool_calls
         assert result["structured_messages"][0]["tool_calls"] == rewritten_tool_calls
 
@@ -628,7 +628,7 @@ class TestNeuralTrustGuardrail:
                 logging_obj=_logging(),
             )
         assert not result.get("texts")
-        assert result["tool_calls"] == rewritten_tool_calls
+        assert [call.model_dump() for call in result["tool_calls"]] == rewritten_tool_calls
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("emptied", ["", None])
@@ -653,7 +653,7 @@ class TestNeuralTrustGuardrail:
                 logging_obj=_logging(),
             )
         assert result["texts"] == [""]
-        assert result["structured_messages"] == [{"role": "user", "content": emptied}]
+        assert result["structured_messages"] == [{"role": "user", "content": ""}]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("returned", [1, 3])

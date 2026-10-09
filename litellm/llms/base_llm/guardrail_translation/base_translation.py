@@ -34,6 +34,10 @@ class StreamTransformSink:
     mutated_text_per_choice: Mapping[int, str] = field(default_factory=dict)
     holdback_per_choice: Mapping[int, int] = field(default_factory=dict)
 
+    def record(self, texts: Mapping[int, str], holdback: Mapping[int, int]) -> None:
+        self.mutated_text_per_choice = texts
+        self.holdback_per_choice = holdback
+
 
 @dataclass(frozen=True, slots=True)
 class StreamingScanKey:

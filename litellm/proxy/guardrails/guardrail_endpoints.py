@@ -2302,7 +2302,7 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
     try:
         return _GUARDRAIL_METADATA_ADAPTER.validate_python(value)
     except ValidationError:
-        return {}  # mutable-ok: empty fallback for the request_data dict contract
+        return {}
 
 
 def _guardrail_request_metadata(caller: object, proxy: object) -> Mapping[str, object]:
@@ -2312,7 +2312,7 @@ def _guardrail_request_metadata(caller: object, proxy: object) -> Mapping[str, o
     key_identity: Final = tuple(
         (key, value) for key, value in _metadata_fields(proxy).items() if key.startswith("user_api_key_")
     )
-    return dict((*caller_fields, *key_identity))  # mutable-ok: request_data is the apply_guardrail dict contract
+    return dict((*caller_fields, *key_identity))
 
 
 def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:

@@ -28,10 +28,10 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
     return _callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: guardrail_registry discovers dict registries
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.NEURALTRUST.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {  # mutable-ok: guardrail_registry discovers dict registries
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.NEURALTRUST.value: NeuralTrustGuardrail,
 }

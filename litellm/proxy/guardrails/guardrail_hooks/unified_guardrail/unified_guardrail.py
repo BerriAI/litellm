@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
+GUARDRAIL_ADAPTER: Final[TypeAdapter[CustomGuardrail | None]] = TypeAdapter(InstanceOf[CustomGuardrail] | None)
 
 _RequestData: TypeAlias = dict[str, object]
 
@@ -846,7 +847,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         endpoint_translation: _EndpointTranslation,
         guardrail_to_apply: CustomGuardrail,
-        request_data: dict,
+        request_data: _RequestData,
         user_api_key_dict: UserAPIKeyAuth,
         responses_so_far: Sequence[object],
         responses_yielded: Sequence[object],
@@ -1050,14 +1051,15 @@ class UnifiedLLMGuardrails(CustomLogger):
         # litellm.integrations.custom_guardrail.
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
-        if guardrail_to_apply is None:
-            guardrail_to_apply = TypeAdapter(InstanceOf[CustomGuardrail] | None).validate_python(
-                request_data.pop("guardrail_to_apply", None)
-            )
+        resolved_guardrail: Final[CustomGuardrail | None] = (
+            guardrail_to_apply
+            if guardrail_to_apply is not None
+            else GUARDRAIL_ADAPTER.validate_python(request_data.pop("guardrail_to_apply", None))
+        )
         typed_request_data: Final[_RequestData] = request_data
 
         def _streaming_flag(name: str, default: object) -> Any:
-            return self.resolve_streaming_flag(guardrail_to_apply, name, default)
+            return self.resolve_streaming_flag(resolved_guardrail, name, default)
 
         sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
@@ -1080,30 +1082,30 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         if (
             buffer_until_moderated
-            and guardrail_to_apply is not None
-            and getattr(guardrail_to_apply, "mask_response_content", False)
+            and resolved_guardrail is not None
+            and getattr(resolved_guardrail, "mask_response_content", False)
         ):
             verbose_proxy_logger.warning(
                 "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s "
                 "because mask_response_content=True -- buffered replay would release "
                 "unredacted original chunks instead of the moderated output.",
-                guardrail_to_apply.guardrail_name,
+                resolved_guardrail.guardrail_name,
             )
             buffer_until_moderated = False
 
         if buffer_until_moderated and not release_on_scan:
             end_of_stream_only = True
 
-        if guardrail_to_apply is None:
+        if resolved_guardrail is None:
             async for item in response:
                 yield item
             return
 
         event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.post_call
-        if guardrail_to_apply.should_run_guardrail(data=request_data, event_type=event_type) is not True:
+        if resolved_guardrail.should_run_guardrail(data=request_data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
                 "UnifiedLLMGuardrails: Post-call streaming scanning disabled for %s",
-                guardrail_to_apply.guardrail_name,
+                resolved_guardrail.guardrail_name,
             )
             async for item in response:
                 yield item
@@ -1123,7 +1125,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             if transform_call_type is not None:
                 async with contextlib.aclosing(
                     self._run_incremental_transform_stream(
-                        guardrail_to_apply=guardrail_to_apply,
+                        guardrail_to_apply=resolved_guardrail,
                         response=response,
                         request_data=typed_request_data,
                         user_api_key_dict=user_api_key_dict,
@@ -1140,7 +1142,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 "UnifiedLLMGuardrails: streaming_transform_mode=incremental_diff is only supported "
                 "for the OpenAI chat completions streaming path with a resolvable request route; "
                 "falling back to block_only for %s",
-                getattr(guardrail_to_apply, "guardrail_name", None),
+                getattr(resolved_guardrail, "guardrail_name", None),
             )
 
         # Infer call type from first chunk
@@ -1212,7 +1214,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         verbose_proxy_logger.debug(
                             "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
                             chunk_counter,
-                            guardrail_to_apply.guardrail_name,
+                            resolved_guardrail.guardrail_name,
                         )
                         if buffer_until_moderated:
                             if hold_window:
@@ -1232,7 +1234,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                         chunk_counter,
                         sampling_rate,
-                        guardrail_to_apply.guardrail_name,
+                        resolved_guardrail.guardrail_name,
                     )
 
                     original_items = (
@@ -1242,7 +1244,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     try:
                         await endpoint_translation.process_output_streaming_response(
                             responses_so_far=responses_so_far,
-                            guardrail_to_apply=guardrail_to_apply,
+                            guardrail_to_apply=resolved_guardrail,
                             litellm_logging_obj=request_data.get("litellm_logging_obj"),
                             user_api_key_dict=user_api_key_dict,
                             request_data=request_data,
@@ -1288,7 +1290,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         verbose_proxy_logger.debug(
                             "Holding %s buffered chunks for guardrail %s: this round could not scan the whole window",
                             len(withheld_items),
-                            guardrail_to_apply.guardrail_name,
+                            resolved_guardrail.guardrail_name,
                         )
                         withheld_items[:] = original_items
                         continue
@@ -1308,7 +1310,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 verbose_proxy_logger.debug(
                     "Processing final streaming response with all %s chunks for guardrail %s",
                     len(responses_so_far),
-                    guardrail_to_apply.guardrail_name,
+                    resolved_guardrail.guardrail_name,
                 )
 
                 endpoint_translation = mappings[CallTypes(call_type)]()
@@ -1325,7 +1327,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if _is_redundant_scan(end_scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
                         "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
-                        guardrail_to_apply.guardrail_name,
+                        resolved_guardrail.guardrail_name,
                     )
                     for buffered_item in buffered_items or ():
                         yield buffered_item
@@ -1338,7 +1340,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     with anyio.CancelScope(shield=chunks_yielded):
                         await endpoint_translation.process_output_streaming_response(
                             responses_so_far=responses_so_far,
-                            guardrail_to_apply=guardrail_to_apply,
+                            guardrail_to_apply=resolved_guardrail,
                             litellm_logging_obj=request_data.get("litellm_logging_obj"),
                             user_api_key_dict=user_api_key_dict,
                             request_data=request_data,
@@ -1382,13 +1384,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                 chunks_yielded
                 and not verdict_settled
                 and translation_class is not None
-                and isinstance(guardrail_to_apply, CustomGuardrail)
+                and isinstance(resolved_guardrail, CustomGuardrail)
             ):
                 await self._scan_released_stream_after_disconnect(
                     endpoint_translation=translation_class(),
                     responses_released=responses_yielded,
                     last_scan_key=last_scan_key,
-                    guardrail_to_apply=guardrail_to_apply,
+                    guardrail_to_apply=resolved_guardrail,
                     user_api_key_dict=user_api_key_dict,
                     request_data=typed_request_data,
                 )

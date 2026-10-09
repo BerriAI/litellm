@@ -798,8 +798,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
         raw_by_index: Final = self._accumulate_string_content_by_choice_index(responses_so_far)
         if not raw_by_index:
-            sink.mutated_text_per_choice = MappingProxyType({})
-            sink.holdback_per_choice = MappingProxyType({})
+            sink.record(MappingProxyType({}), MappingProxyType({}))
             return
 
         # Fix #2 — sort by StreamingChoices.index so an n>1 stream that emits
@@ -811,16 +810,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         indices: Final = sorted(raw_by_index.keys())
         texts_to_check: Final = [raw_by_index[i] for i in indices]
 
-        if request_data is None:
-            request_data = {"responses": responses_so_far}
-        elif "responses" not in request_data:
-            request_data["responses"] = responses_so_far
-        self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
+        resolved_request_data: Final[
+            dict[str, object]
+        ] = (
+            request_data if request_data is not None else {"responses": responses_so_far}
+        )
+        if "responses" not in resolved_request_data:
+            resolved_request_data["responses"] = responses_so_far
+        self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if self._streamed_tool_call_fingerprints(responses_so_far):
             assembled: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
-            request_data["response"] = assembled
+            resolved_request_data["response"] = assembled
             if len(assembled.choices) > 1:
                 choice_rounds: Final = tuple(
                     (
@@ -832,33 +834,36 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
                 try:
                     for choice, choice_sink, choice_chunks in choice_rounds:
-                        request_data["response"] = assembled.model_copy(update=MappingProxyType({"choices": [choice]}))
-                        request_data["responses"] = choice_chunks
+                        resolved_request_data["response"] = assembled.model_copy(
+                            update=MappingProxyType({"choices": [choice]})
+                        )
+                        resolved_request_data["responses"] = choice_chunks
                         await self._process_streaming_transform(
                             responses_so_far=choice_chunks,
                             guardrail_to_apply=guardrail_to_apply,
                             litellm_logging_obj=litellm_logging_obj,
                             user_api_key_dict=user_api_key_dict,
-                            request_data=request_data,
+                            request_data=resolved_request_data,
                             sink=choice_sink,
                         )
                 finally:
-                    request_data["response"] = assembled
-                    request_data["responses"] = responses_so_far
-                sink.mutated_text_per_choice = MappingProxyType(
+                    resolved_request_data["response"] = assembled
+                    resolved_request_data["responses"] = responses_so_far
+                merged_texts: Final = MappingProxyType(
                     dict(
                         chain.from_iterable(
                             choice_sink.mutated_text_per_choice.items() for _, choice_sink, _ in choice_rounds
                         )
                     )
                 )
-                sink.holdback_per_choice = MappingProxyType(
+                merged_holdback: Final = MappingProxyType(
                     dict(
                         chain.from_iterable(
                             choice_sink.holdback_per_choice.items() for _, choice_sink, _ in choice_rounds
                         )
                     )
                 )
+                sink.record(merged_texts, merged_holdback)
                 return
             tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
             inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
@@ -872,7 +877,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs["model"] = responses_so_far[0].model
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data=request_data,
+            request_data=resolved_request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
@@ -893,12 +898,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
         holdback: Final = guardrailed_inputs.get("stream_holdback_chars") or ()
-        sink.mutated_text_per_choice = MappingProxyType(
+        transformed_texts: Final = MappingProxyType(
             {idx: returned_texts[i] for i, idx in enumerate(indices) if i < len(returned_texts)}
         )
-        sink.holdback_per_choice = MappingProxyType(
+        transformed_holdback: Final = MappingProxyType(
             {indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)}
         )
+        sink.record(transformed_texts, transformed_holdback)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
