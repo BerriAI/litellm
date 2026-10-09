@@ -403,7 +403,7 @@ def image_generation(
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
-                _is_async=aimg_generation,
+                _is_async=aimg_generation is True,
             )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)
