@@ -4,7 +4,7 @@ import datetime
 import json
 import logging
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
+from typing import AsyncGenerator, Callable, Coroutine, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3003,7 +3003,7 @@ class TestExtractErrorFromSSEChunk:
 
 
 @pytest.fixture(params=("systemone", "openai"))
-def frozen_decisions_response(request):
+def frozen_decisions_response(request: pytest.FixtureRequest) -> DecisionsResponse | OpenAIDecisionResponse:
     if request.param == "systemone":
         return DecisionsResponse(model="jev-1.13.0", answers={"defect": NoulAnswer(type="noul", noul=0.5)})
     return OpenAIDecisionResponse(
@@ -3469,16 +3469,18 @@ class TestOverrideOpenAIResponseModel:
 
         assert "model" not in response_obj
 
-    def test_override_model_warns_on_setattr_failure_and_returns_the_same_response(self, caplog):
+    def test_override_model_warns_on_setattr_failure_and_returns_the_same_response(
+        self, caplog: pytest.LogCaptureFixture
+    ):
         class ReadOnlyModelResponse:
             @property
             def model(self) -> str:
                 return "downstream-model"
 
-        response_obj = ReadOnlyModelResponse()
+        response_obj: Final = ReadOnlyModelResponse()
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            overridden = _override_openai_response_model(
+            overridden: Final = _override_openai_response_model(
                 response_obj=response_obj,
                 requested_model="my-model",
                 log_context="test_context",
@@ -3486,13 +3488,15 @@ class TestOverrideOpenAIResponseModel:
 
         assert overridden is response_obj
         assert response_obj.model == "downstream-model"
-        failure_levels = [record.levelno for record in caplog.records if "failed to override" in record.getMessage()]
+        failure_levels: Final = [
+            record.levelno for record in caplog.records if "failed to override" in record.getMessage()
+        ]
         assert failure_levels == [logging.WARNING]
 
     def test_mutable_response_is_restamped_in_place(self):
-        response_obj = litellm.ModelResponse(model="gpt-4o-2024-08-06")
+        response_obj: Final = litellm.ModelResponse(model="gpt-4o-2024-08-06")
 
-        overridden = _override_openai_response_model(
+        overridden: Final = _override_openai_response_model(
             response_obj=response_obj,
             requested_model="gpt-4o",
             log_context="test_context",
@@ -3502,13 +3506,13 @@ class TestOverrideOpenAIResponseModel:
         assert response_obj.model == "gpt-4o"
 
     def test_frozen_response_comes_back_as_an_aliased_copy_without_a_failure_log(
-        self, frozen_decisions_response, caplog
+        self, frozen_decisions_response: DecisionsResponse | OpenAIDecisionResponse, caplog: pytest.LogCaptureFixture
     ):
         frozen_decisions_response.set_hidden_params({"model_id": "deployment-1"})
-        downstream_model = frozen_decisions_response.model
+        downstream_model: Final = frozen_decisions_response.model
 
         with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
-            overridden = _override_openai_response_model(
+            overridden: Final = _override_openai_response_model(
                 response_obj=frozen_decisions_response,
                 requested_model="my-decider",
                 log_context="test_context",
@@ -5192,34 +5196,40 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
 
 
 @pytest.mark.asyncio
-async def test_decisions_response_echoes_the_alias_the_client_sent(monkeypatch, caplog, frozen_decisions_response):
+async def test_decisions_response_echoes_the_alias_the_client_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    frozen_decisions_response: DecisionsResponse | OpenAIDecisionResponse,
+):
     """The decisions response types are frozen, so restamping `model` in place fails: the proxy must send
     back an aliased copy, the way chat completions already echo the requested model group."""
     import litellm.proxy.common_request_processing as cpr
 
-    async def llm():
+    async def llm() -> DecisionsResponse | OpenAIDecisionResponse:
         return frozen_decisions_response
 
-    async def fake_route_request(**_kwargs):
+    async def fake_route_request(
+        **_kwargs: object,
+    ) -> Coroutine[object, object, DecisionsResponse | OpenAIDecisionResponse]:
         return llm()
 
-    logging_obj = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
-    proxy_logging = MagicMock(spec=ProxyLogging)
+    logging_obj: Final = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
+    proxy_logging: Final = MagicMock(spec=ProxyLogging)
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     proxy_logging.post_call_success_hook = AsyncMock(side_effect=lambda data, user_api_key_dict, response: response)
     proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
     proxy_logging._callback_capabilities_cache = {}
     monkeypatch.setattr(cpr, "route_request", fake_route_request)
 
-    processor = ProxyBaseLLMRequestProcessing(data={"model": "my-decider", "state": "ticket", "questions": {}})
+    processor: Final = ProxyBaseLLMRequestProcessing(data={"model": "my-decider", "state": "ticket", "questions": {}})
     monkeypatch.setattr(
         processor, "common_processing_pre_call_logic", AsyncMock(return_value=({"model": "my-decider"}, logging_obj))
     )
     monkeypatch.setattr(processor, "_has_post_call_guardrails", MagicMock(return_value=False))
-    scope = {"type": "http", "method": "POST", "path": "/v1/decisions", "headers": [], "query_string": b""}
+    scope: Final = {"type": "http", "method": "POST", "path": "/v1/decisions", "headers": [], "query_string": b""}
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
-        response = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=Request(scope),
             fastapi_response=Response(),
             user_api_key_dict=ProxyUserAPIKeyAuth(),
