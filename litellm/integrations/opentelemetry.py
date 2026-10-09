@@ -1558,9 +1558,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         metadata_value: Final[Any] = cast(Any, litellm_params.get("metadata"))  # cast-ok: dynamic metadata payload
         metadata: Final[Mapping[str, Any]] = metadata_value if isinstance(metadata_value, Mapping) else {}
-        litellm_metadata_value: Final[Any] = cast(
-            Any, litellm_params.get("litellm_metadata")
-        )  # cast-ok: dynamic metadata payload
+        litellm_metadata_value: Final[Any] = cast(Any, litellm_params.get("litellm_metadata"))  # cast-ok: dynamic field
         litellm_metadata: Final[Mapping[str, Any]] = (
             litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
         )
