@@ -176,24 +176,22 @@ class TestLangfuseOtelIntegration:
         ],
         ids=["aware", "naive_local_time"],
     )
-    def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time):
+    def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time: datetime):
         """The first-token time goes out as Langfuse's completion start time, with an explicit offset."""
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                MagicMock(), {"completion_start_time": completion_start_time}, {}
-            )
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
 
-        attributes: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
-        sent: Final = datetime.fromisoformat(attributes["langfuse.observation.completion_start_time"])
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {"completion_start_time": completion_start_time}, {})
+
+        sent: Final = datetime.fromisoformat(span.attributes["langfuse.observation.completion_start_time"])
         assert sent.tzinfo is not None
         assert sent.timestamp() == completion_start_time.timestamp()
 
     def test_set_langfuse_specific_attributes_without_completion_start_time(self):
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), {}, {})
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
 
-        keys: Final = {call.args[1] for call in mock_safe_set_attribute.call_args_list}
-        assert "langfuse.observation.completion_start_time" not in keys
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {}, {})
+
+        assert "langfuse.observation.completion_start_time" not in span.attributes
 
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""

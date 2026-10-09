@@ -219,7 +219,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 )
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
+    def _set_langfuse_specific_attributes(span: Span, kwargs: dict[str, Any], response_obj):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
