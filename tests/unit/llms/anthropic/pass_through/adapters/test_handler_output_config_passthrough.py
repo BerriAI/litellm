@@ -246,3 +246,163 @@ class TestPromptCacheOptionsForwarded:
         result = _call_prepare(extra_kwargs={"prompt_cache_options": {"mode": "explicit"}}, model="gpt-5.6")
         completion_kwargs = result[0] if isinstance(result, tuple) else result
         assert completion_kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+# --- response cost captured before usage flattening (#44743) -------------------
+#
+# ``translate_completion_output_params`` flattens the OpenAI-shaped usage into the
+# Anthropic response TypedDict, dropping ``completion_tokens_details.image_tokens``.
+# The proxy rebuilds the ``x-litellm-response-cost`` header from that translated
+# response whenever the async success handler has not stored a cost yet, and the
+# rebuild cannot tell image tokens from text tokens, so they get priced at the text
+# rate. The adapter therefore records usage plus cost from the untouched
+# ModelResponse first, which is what makes the header and the spend row agree.
+
+
+class _StubCostCalculator:
+    """Stands in for the pricing lookup, handed to a real ``Logging`` instance.
+
+    Binding it to the instance means no class attribute is replaced, so a
+    concurrent test using another ``Logging`` object is unaffected.
+    """
+
+    def __init__(self, cost=None, raises=False):
+        self.cost = cost
+        self.raises = raises
+        self.seen: list[object] = []
+
+    def __call__(self, result, **kwargs):
+        self.seen.append(result)
+        if self.raises:
+            raise RuntimeError("no pricing configured")
+        return self.cost
+
+
+def _real_logging_obj(calculator):
+    """A real ``Logging`` object, which ``litellm_logging_obj_from_kwargs`` requires.
+
+    The cost calculator is bound on the instance, so nothing at class level is
+    patched and the object still satisfies the ``isinstance`` guard.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    obj = Logging(
+        model="gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "a red square"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=None,
+        litellm_call_id="cost-probe",
+        function_id="cost-probe",
+    )
+    obj._response_cost_calculator = calculator
+    return obj
+
+
+def _image_usage_response():
+    from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
+
+    return ModelResponse(
+        id="resp_1",
+        model="gemini-3.1-flash-image",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=7,
+            completion_tokens=1120,
+            completion_tokens_details=CompletionTokensDetailsWrapper(image_tokens=1120),
+        ),
+    )
+
+
+def test_response_cost_is_recorded_while_image_tokens_are_still_visible():
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        _store_response_cost_before_usage_flattening,
+    )
+
+    calculator = _StubCostCalculator(cost=0.0672035)
+    logging_obj = _real_logging_obj(calculator)
+
+    _store_response_cost_before_usage_flattening(
+        _image_usage_response(), {"litellm_logging_obj": logging_obj}
+    )
+
+    stored_usage = logging_obj.model_call_details.get("combined_usage_object")
+    assert stored_usage is not None, "adapter skipped response-cost bookkeeping on the non-streaming path"
+    # The whole point of the fix: the usage handed to the cost calculator, and the
+    # one recorded for the spend row, still carry image_tokens.
+    assert stored_usage.completion_tokens_details.image_tokens == 1120
+    assert calculator.seen[0].usage.completion_tokens_details.image_tokens == 1120
+    assert logging_obj.model_call_details["response_cost"] == 0.0672035
+
+
+def test_response_cost_bookkeeping_is_a_noop_without_logging_obj():
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        _store_response_cost_before_usage_flattening,
+    )
+
+    _store_response_cost_before_usage_flattening(_image_usage_response(), {})
+
+
+def test_response_cost_bookkeeping_swallows_calculator_failure():
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        _store_response_cost_before_usage_flattening,
+    )
+
+    logging_obj = _real_logging_obj(_StubCostCalculator(raises=True))
+
+    _store_response_cost_before_usage_flattening(
+        _image_usage_response(), {"litellm_logging_obj": logging_obj}
+    )
+
+    assert "combined_usage_object" not in logging_obj.model_call_details
+
+
+def test_translated_response_cannot_be_repriced_for_image_tokens():
+    """Pins why the cost has to be captured before translation: the Anthropic
+    response the proxy recomputes from has no image-token breakdown left, so any
+    recompute from it necessarily charges the text rate."""
+    from litellm.llms.anthropic.pass_through.adapters.handler import ANTHROPIC_ADAPTER
+    from litellm.types.utils import ModelResponse
+
+    translated = ANTHROPIC_ADAPTER.translate_completion_output_params(_image_usage_response())
+    assert translated is not None
+    usage = translated["usage"]
+    assert usage["output_tokens"] == 1120
+    assert "completion_tokens_details" not in usage
+    assert isinstance(_image_usage_response(), ModelResponse)
+
+
+def test_anthropic_messages_handler_records_cost_before_flattening():
+    """Drives the real non-streaming handler end to end.
+
+    The helper-level tests above pass even when the handler stops calling the
+    helper, so this one asserts on what the handler leaves on the logging object.
+    That is the regression the fix is for: if the handler stops recording before
+    flattening, the proxy's recompute prices image tokens at the text rate.
+    """
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    calculator = _StubCostCalculator(cost=0.0672035)
+    logging_obj = _real_logging_obj(calculator)
+
+    with patch("litellm.completion", return_value=_image_usage_response()):
+        result = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "a red square"}],
+            model="gemini-3.1-flash-image",
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert result is not None
+    stored_usage = logging_obj.model_call_details.get("combined_usage_object")
+    assert stored_usage is not None, (
+        "the handler returned an Anthropic response without recording image-token usage first, "
+        "so the proxy's response-cost recompute cannot price image tokens correctly"
+    )
+    assert stored_usage.completion_tokens_details.image_tokens == 1120
+    assert logging_obj.model_call_details["response_cost"] == 0.0672035
+    # The returned Anthropic response is what the proxy recomputes from, and it is
+    # exactly the shape that no longer carries the image-token breakdown.
+    assert "completion_tokens_details" not in result["usage"]
