@@ -434,7 +434,6 @@ jobs:
               tests/unit/harness
               tests/unit/rust_bridge
               tests/unit/sandbox
-              --ignore=tests/unit/rust_bridge/native_route_wheel_test.py
             python-version: "3.12"
             workers: 4
             reruns: 0
