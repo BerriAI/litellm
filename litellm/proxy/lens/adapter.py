@@ -3,7 +3,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
-from io import BytesIO
 from typing import Annotated, Final
 from urllib.parse import quote
 
@@ -17,10 +16,18 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.lens.buffering import FORWARD_BUFFER_BUDGET, BodyReservation, BufferBudget, BufferedResponse
+from litellm.proxy.lens.buffering import (
+    FORWARD_BUFFER_BUDGET,
+    AdmittedBody,
+    BodyReservation,
+    BufferBudget,
+    BufferedResponse,
+    LensRoute,
+    request_body,
+)
 from litellm.tracing.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
 
-router: Final = APIRouter(prefix="/lens", tags=["Lens"])
+router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 PUBLIC_CONTRACT: Final = 1
 _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempotency-key"})
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
@@ -167,7 +174,9 @@ async def forward(
             request.method,
             endpoint,
             params=tuple(request.query_params.multi_items()),
-            content=await request_body(request, reservation=reservation),
+            content=request.receive.body
+            if isinstance(request.receive, AdmittedBody)
+            else await request_body(request, reservation=reservation),
             headers=headers,
         ) as response:
             body: Final = await bounded_response(response, MAX_RESPONSE_BYTES, reserve=reservation.reserve)
@@ -183,19 +192,6 @@ async def forward(
     except BaseException:
         reservation.release()
         raise
-
-
-async def request_body(
-    request: Request, limit: int = MAX_RESPONSE_BYTES, reservation: BodyReservation | None = None
-) -> bytes:
-    with BytesIO() as body:
-        async for chunk in request.stream():
-            if body.tell() + len(chunk) > limit:
-                raise HTTPException(413, "Lens request is too large")
-            if reservation is not None:
-                reservation.reserve(len(chunk))
-            body.write(chunk)
-        return body.getvalue()
 
 
 @router.api_route("", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
