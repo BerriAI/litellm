@@ -117,7 +117,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::test_support::preflight_stubs;
+    use crate::test_support::{preflight_lock, preflight_stubs};
     use strum::VariantArray;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
@@ -388,10 +388,11 @@ arguments = {'litellm_credential_name': 'ocr-test'}
 
     #[rstest::rstest]
     fn an_unknown_name_is_reported_with_the_loaded_count_and_leaves_the_arguments_alone() {
+        let _guard = preflight_lock();
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
-            let _guard = preflight_stubs(
+            preflight_stubs(
                 py,
                 &locals,
                 c"
@@ -425,10 +426,11 @@ assert preflight.checked == [arguments]
 
     #[rstest::rstest]
     fn limits_are_checked_on_the_arguments_after_credentials_are_inherited() {
+        let _guard = preflight_lock();
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
-            let _guard = preflight_stubs(
+            preflight_stubs(
                 py,
                 &locals,
                 c"

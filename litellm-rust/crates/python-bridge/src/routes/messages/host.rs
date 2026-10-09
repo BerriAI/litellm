@@ -296,7 +296,8 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
 }
 
 impl PythonOwned for MessagesPythonHost {
-    fn close(&mut self, _: Python<'_>) {
+    fn close(&mut self, py: Python<'_>) {
+        self.request = PyDict::new(py).unbind();
         self.cache.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {

@@ -453,10 +453,7 @@ arguments.update({
     #[case::explicit_none_is_unset(c"arguments['pages'] = None", None)]
     #[case::absent(c"", None)]
     #[case::supplied(c"arguments['pages'] = [0]", Some(serde_json::json!([0])))]
-    fn optional_params_drop_none(
-        #[case] script: &std::ffi::CStr,
-        #[case] expected: Option<Value>,
-    ) {
+    fn optional_params_drop_none(#[case] script: &std::ffi::CStr, #[case] expected: Option<Value>) {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);

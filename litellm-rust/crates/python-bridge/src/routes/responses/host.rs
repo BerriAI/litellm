@@ -121,7 +121,9 @@ impl PythonHostCalls<Responses> for ResponsesPythonHost {
 }
 
 impl PythonOwned for ResponsesPythonHost {
-    fn close(&mut self, _: Python<'_>) {}
+    fn close(&mut self, py: Python<'_>) {
+        self.0.close(py);
+    }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.0.request)
     }

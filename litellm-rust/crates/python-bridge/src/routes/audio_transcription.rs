@@ -44,8 +44,7 @@ async fn execute(
 #[pyfunction]
 pub(crate) fn transcription(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
     let arguments = &call.resolved;
-    let audio: Value =
-        litellm_host_python::from_py_argument(&required_field(arguments, "audio")?)?;
+    let audio: Value = litellm_host_python::from_py_argument(&required_field(arguments, "audio")?)?;
     let options = value_route_options(arguments)?;
     let optional_params = optional_object_field(arguments, "optional_params")?.unwrap_or_default();
     let http = crate::http::provider_client(py, arguments, false)?;
@@ -63,8 +62,7 @@ pub(crate) fn atranscription<'py>(
     call: NativeCall<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let arguments = &call.resolved;
-    let audio: Value =
-        litellm_host_python::from_py_argument(&required_field(arguments, "audio")?)?;
+    let audio: Value = litellm_host_python::from_py_argument(&required_field(arguments, "audio")?)?;
     let options = value_route_options(arguments)?;
     let optional_params = optional_object_field(arguments, "optional_params")?.unwrap_or_default();
     let http = crate::http::provider_client(py, arguments, true)?;

@@ -199,19 +199,20 @@ pub(crate) fn legacy_call(
 }
 
 /// Tests share one interpreter, and the preflight stub module is global state, so the
-/// tests that install it run one at a time.
+/// tests that install it run one at a time. Take the guard before attaching to Python: a
+/// thread that blocks on it while attached deadlocks the thread holding it as soon as the
+/// interpreter switches threads.
 static PREFLIGHT_MODULE: Mutex<()> = Mutex::new(());
 
-/// A fresh stand-in for `litellm.rust_bridge.preflight` that records every call, bound in
-/// `locals` as `preflight`, then `script` run against it. The guard serializes the tests.
-pub(crate) fn preflight_stubs(
-    py: Python<'_>,
-    locals: &Bound<'_, PyDict>,
-    script: &CStr,
-) -> MutexGuard<'static, ()> {
-    let guard = PREFLIGHT_MODULE
+pub(crate) fn preflight_lock() -> MutexGuard<'static, ()> {
+    PREFLIGHT_MODULE
         .lock()
-        .unwrap_or_else(|error| error.into_inner());
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// A fresh stand-in for `litellm.rust_bridge.preflight` that records every call, bound in
+/// `locals` as `preflight`, then `script` run against it. Callers hold [`preflight_lock`].
+pub(crate) fn preflight_stubs(py: Python<'_>, locals: &Bound<'_, PyDict>, script: &CStr) {
     run(
         py,
         locals,
@@ -231,5 +232,4 @@ sys.modules['litellm.rust_bridge.preflight'] = preflight
 ",
     );
     run(py, locals, script);
-    guard
 }

@@ -151,7 +151,8 @@ impl PythonHostCalls<Ocr> for OcrPythonHost {
 }
 
 impl PythonOwned for OcrPythonHost {
-    fn close(&mut self, _: Python<'_>) {
+    fn close(&mut self, py: Python<'_>) {
+        self.request = PyDict::new(py).unbind();
         self.data = OcrHostData::Released;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {

@@ -83,8 +83,8 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
+    use crate::test_support::{local, local_dict, namespace, preflight_lock, preflight_stubs, run};
     use crate::{LegacyLayer, PublicCall};
-    use crate::test_support::{local, local_dict, namespace, preflight_stubs, run};
 
     /// A logger that keeps what `update_logging` and `pre_call` hand it, a Messages body
     /// whose fan-out replaces `pages`, and one listed credential the call names.
@@ -112,6 +112,7 @@ class Credential:
     credential_values = {'api_key': 'inherited'}
 
 preflight.credential_list = lambda: [Credential()]
+preflight.check_limits = lambda kwargs: preflight.checked.append(dict(kwargs))
 logger = RecordingLogger()
 logger.hooks = {'pre': lambda kwargs: kwargs}
 original = [0]
@@ -184,10 +185,11 @@ kwargs = {'logger': logger, 'model': 'anthropic/claude', 'litellm_credential_nam
 
     #[rstest]
     fn the_resolved_call_leaves_the_layer_and_every_keyword_rewrite_reaches_the_logger() {
+        let _guard = preflight_lock();
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"");
-            let _guard = preflight_stubs(py, &locals, CALL);
+            preflight_stubs(py, &locals, CALL);
             let (mut chain, resolved) = prepared(py, &locals, Operation::Messages, true);
             locals.set_item("resolved", &resolved).unwrap();
             run(
@@ -224,10 +226,11 @@ assert original == [0]
         #[case] operation: Operation,
         #[case] asynchronous: bool,
     ) {
+        let _guard = preflight_lock();
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"");
-            let _guard = preflight_stubs(py, &locals, CALL);
+            preflight_stubs(py, &locals, CALL);
             let (mut chain, resolved) = prepared(py, &locals, operation, asynchronous);
             locals.set_item("resolved", &resolved).unwrap();
             send(py, &mut chain);

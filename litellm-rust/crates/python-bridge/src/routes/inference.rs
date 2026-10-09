@@ -104,6 +104,10 @@ impl InferenceHost {
         })
     }
 
+    pub fn close(&mut self, py: Python<'_>) {
+        self.request = PyDict::new(py).unbind();
+    }
+
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
         public_response(py, self.module, response)
     }
