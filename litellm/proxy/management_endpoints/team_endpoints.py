@@ -5981,7 +5981,7 @@ async def list_team_v2(
             caller_user_id=user_api_key_dict.user_id,
             now=get_utc_datetime(),
         )
-        if not use_deleted_table
+        if not use_deleted_table and team_list
         else team_list
     )
     return {
