@@ -137,6 +137,8 @@ def _request_inherits_config_credentials(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool,
+    *,
+    selected_by_id: bool,
 ) -> bool:
     """Whether the configuration's credentials are this request's to be probed with.
 
@@ -144,15 +146,15 @@ def _request_inherits_config_credentials(
     also matches wildcard routes and unrelated deployments that merely serve the
     same model, so a request naming a stored credential of its own has already
     said where its credentials come from and does not borrow that one's. A request
-    bringing its own ``api_key`` likewise describes its own connection and must not
-    pick up another deployment's stored auth settings. A blank name or key is no
-    name or key: ``load_credentials_from_list`` resolves nothing from it, so it must
-    not cost the request the credentials it would otherwise be probed with.
+    bringing its own ``api_key`` describes its own connection when matched only by
+    model name. A blank name or key is no name or key: ``load_credentials_from_list``
+    resolves nothing from it, so it must not cost the request the credentials it
+    would otherwise be probed with.
     """
     requested_credential: Final = request_params.get("litellm_credential_name")
     if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
         return False
-    if request_params.get("api_key"):
+    if not selected_by_id and request_params.get("api_key"):
         return False
     if allow_client_side_credentials:
         return True
@@ -163,22 +165,28 @@ def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool = False,
+    *,
+    selected_by_id: bool,
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
-    A request that sets its own connection fields or ``api_key``, or names its own
-    stored credential, describes a connection of its own, so the configuration's
-    credentials are not carried into it: they belong to the endpoint the
-    configuration names. Anything the request does not set still comes from the
-    configuration, which is what lets a request name a configured model and test
-    it as configured.
+    A request that sets its own connection fields, brings an ``api_key`` when
+    matched only by model name, or names its own stored credential describes a
+    connection of its own, so the configuration's credentials are not carried
+    into it. Anything the request does not set still comes from the configuration,
+    which is what lets a request name a configured model and test it as configured.
 
     ``litellm_credential_name`` is dropped alongside the literal credential
     fields: it names a stored credential that ``load_credentials_from_list``
     resolves into the same secrets further down the call, so leaving it in place
     would reintroduce them by reference.
     """
-    if _request_inherits_config_credentials(config_params, request_params, allow_client_side_credentials):
+    if _request_inherits_config_credentials(
+        config_params,
+        request_params,
+        allow_client_side_credentials,
+        selected_by_id=selected_by_id,
+    ):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
@@ -2082,6 +2090,7 @@ async def test_model_connection(
         "responses",
         "anthropic_messages",
         "ocr",
+        "evaluation",
     ]
     | None = fastapi.Body(
         None,
@@ -2183,6 +2192,7 @@ async def test_model_connection(
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
         loaded_model_info: dict | None = None
+        deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -2195,7 +2205,6 @@ async def test_model_connection(
             request_model_info: Final = model_info or {}
             request_model_id: Final = request_model_info.get("id")
             try:
-                deployment_by_id = None
                 if request_model_id:
                     deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
 
@@ -2229,6 +2238,7 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        selected_by_id: Final = deployment_by_id is not None
         reject_server_owned_wif_params(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
@@ -2236,6 +2246,7 @@ async def test_model_connection(
                 config_litellm_params,
                 request_litellm_params,
                 allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                selected_by_id=selected_by_id,
             ),
             **request_litellm_params,
         }
