@@ -4,7 +4,7 @@ import itertools
 import json
 import threading
 from datetime import datetime
-from typing import Coroutine, Final, Protocol, cast
+from typing import Callable, Coroutine, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -364,18 +364,10 @@ def test_aimage_generation_runs_vertex_requests_on_the_event_loop_not_the_execut
     arrivals: Final = itertools.count(1)
     released: Final = threading.Event()
 
-    class AImageGeneration(Protocol):
-        def __call__(
-            self,
-            *,
-            model: str,
-            prompt: str,
-            api_base: str,
-            vertex_location: str,
-            client: AsyncHTTPHandler,
-        ) -> Coroutine[object, object, litellm.ImageResponse]: ...
-
-    aimage_generation: Final[AImageGeneration] = cast(AImageGeneration, getattr(litellm, "aimage_generation"))
+    aimage_generation: Final = cast(
+        Callable[..., Coroutine[object, object, litellm.ImageResponse]],
+        getattr(litellm, "aimage_generation"),
+    )
 
     def held_sync(request: httpx.Request) -> httpx.Response:
         if next(arrivals) == 2:
@@ -424,7 +416,7 @@ def test_aimage_generation_runs_vertex_requests_on_the_event_loop_not_the_execut
     second: Final = results[1]
     assert isinstance(first, litellm.ImageResponse)
     assert first.data is not None
-    assert cast(str | None, getattr(first.data[0], "b64_json")) == "aW1n"
+    assert first.data[0].b64_json == "aW1n"
     assert isinstance(second, litellm.ImageResponse)
     assert second.data is not None
-    assert cast(str | None, getattr(second.data[0], "b64_json")) == "aW1n"
+    assert second.data[0].b64_json == "aW1n"

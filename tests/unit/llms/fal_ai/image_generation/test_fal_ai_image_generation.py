@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -35,7 +35,7 @@ async def test_fal_ai_image_generation_basic(model, expected_endpoint):
     captured_json_data = None
     captured_headers = None
 
-    def capture_post_call(*args, **kwargs):
+    async def capture_post_call(*args, **kwargs):
         nonlocal captured_url, captured_json_data, captured_headers
 
         captured_url = args[0] if args else kwargs.get("url")
@@ -60,7 +60,10 @@ async def test_fal_ai_image_generation_basic(model, expected_endpoint):
 
         return mock_response
 
-    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
         mock_post.side_effect = capture_post_call
 
         test_api_key = "test-fal-ai-key-12345"
