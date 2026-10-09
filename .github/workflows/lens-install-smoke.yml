@@ -81,10 +81,10 @@ jobs:
             gzip -dc "$archive" | docker load
             rm "$archive"
           done
-      - uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb
+      - uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
         with:
           cosign-release: v2.4.3
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ vars.LENS_READ_USER || github.actor }}

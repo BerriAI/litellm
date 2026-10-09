@@ -8,7 +8,16 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.lens.adapter import Connection, Identity, delegated_identity, forward, request_body, service_status
+from litellm.proxy.lens.adapter import (
+    Connection,
+    Identity,
+    delegated_identity,
+    forward,
+    lens_request,
+    request_body,
+    service_connection,
+    service_status,
+)
 from litellm.tracing.remote import LensConnection
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
@@ -30,6 +39,29 @@ def identity() -> Identity:
         models=("allowed-model",),
         log_team_ids=("permitted-team",),
     )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "available"),
+    (
+        ({}, True),
+        ({"LENS_GATEWAY_SECRET": "short"}, False),
+        ({"LENS_GATEWAY_SECRET": "x" * 513}, False),
+        ({"LITELLM_LENS_URL": "file:///tmp/lens"}, False),
+        ({"LITELLM_LENS_SERVICE_TOKEN": ""}, False),
+    ),
+    ids=("configured", "short_signing_secret", "long_signing_secret", "invalid_url", "missing_service_token"),
+)
+def test_connection_requires_valid_endpoint_and_both_secrets(overrides: Mapping[str, str], available: bool) -> None:
+    configured: Final = Connection.from_env(
+        {
+            "LITELLM_LENS_URL": "http://lens.test",
+            "LITELLM_LENS_SERVICE_TOKEN": SECRET,
+            "LENS_GATEWAY_SECRET": SECRET,
+            **overrides,
+        }
+    )
+    assert (configured is not None) == available
 
 
 def test_delegated_token_contains_only_authenticated_identity(connection: Connection, identity: Identity) -> None:
@@ -206,3 +238,70 @@ async def test_streamed_body_bound_is_enforced_without_content_length(limit: int
     with pytest.raises(HTTPException) as error:
         await request_body(request, limit)
     assert error.value.status_code == 413
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", (False, True), ids=("unconfigured", "missing_signing_secret"))
+async def test_missing_connection_keeps_setup_readable_and_rejects_lens_requests(
+    monkeypatch: pytest.MonkeyPatch, identity: Identity, configured: bool
+) -> None:
+    monkeypatch.delenv("LENS_GATEWAY_SECRET", raising=False)
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", SECRET)
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test" if configured else "")
+    monkeypatch.setenv("LITELLM_LENS_PUBLIC_URL", "https://lens.example.test/")
+    status: Final = await service_connection(identity)
+    assert status.configured == configured
+    assert not status.connected
+    assert not status.status.storage_ready
+    assert status.url == "https://lens.example.test"
+    request: Final = Request({"type": "http", "method": "GET", "headers": []})
+    with pytest.raises(HTTPException) as routed:
+        await lens_request(request, identity, "datasets")
+    assert routed.value.status_code == 503
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(HTTPException) as forwarded:
+            await forward(request, identity, "datasets", None, client, 1000)
+    assert forwarded.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_forwarding_requires_a_user_or_authenticated_key(connection: Connection, identity: Identity) -> None:
+    anonymous: Final = identity.model_copy(update={"user_id": None, "token": None})
+    request: Final = Request({"type": "http", "method": "GET", "headers": []})
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(HTTPException) as error:
+            await forward(request, anonymous, "datasets", connection, client, 1000)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ("malformed", "oversized", "transport"))
+async def test_failed_status_response_never_reports_a_ready_service(connection: Connection, failure: str) -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        if failure == "transport":
+            raise httpx.ConnectError("Fixture connection refused", request=request)
+        return httpx.Response(200, content=b"x" * (16 * 1024 + 1) if failure == "oversized" else b"invalid-json")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        result: Final = await service_status(connection, client)
+    assert not result.storage_ready
+    assert not result.credentials_ready
+    assert result.public_contract == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_forward_reports_service_unavailability(connection: Connection, identity: Identity) -> None:
+    async def receive() -> Mapping[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("Fixture response unavailable", request=request)
+
+    request: Final = Request(
+        {"type": "http", "method": "GET", "path": "/lens", "query_string": b"", "headers": []}, receive
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await forward(request, identity, "", connection, client, 1000)
+    assert error.value.status_code == 503
+    assert error.value.detail == "Lens service is unavailable"
