@@ -3170,7 +3170,7 @@ class _WebsocketRelay(Protocol):
         *,
         websocket: WebSocket,
         target: str,
-        custom_headers: dict[str, str],  # mutable-ok: the relay takes a plain dict of upstream headers
+        custom_headers: dict[str, str],
         user_api_key_dict: UserAPIKeyAuth,
         forward_headers: bool,
         endpoint: str,

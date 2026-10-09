@@ -60,9 +60,7 @@ def _hash_entry(root: str, dirpath: str, filename: str) -> tuple[str, str] | Non
 
 def _walk_entries(root: str) -> Iterator[tuple[str, str]]:
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = [  # mutable-ok: os.walk prunes only via in-place mutation of its dirnames list
-            d for d in dirnames if d not in HARNESS_SNAPSHOT_SKIP_DIRS
-        ]
+        dirnames[:] = [d for d in dirnames if d not in HARNESS_SNAPSHOT_SKIP_DIRS]
         for filename in filenames:
             entry = _hash_entry(root, dirpath, filename)
             if entry is not None:
@@ -94,9 +92,7 @@ def diff_snapshots(
 ) -> list[tuple[str, FileChangeKind]]:  # mutable-ok: public sandbox helper; callers compare against a list
     """Return (path, kind) for every changed file, sorted by path."""
     kinds = ((path, _change_kind(path, before, after)) for path in sorted(frozenset(before) | frozenset(after)))
-    return [  # mutable-ok: public sandbox helper returns a list
-        (path, kind) for path, kind in kinds if kind is not None
-    ]
+    return [(path, kind) for path, kind in kinds if kind is not None]
 
 
 def _as_text(data: bytes) -> str | None:
@@ -134,7 +130,7 @@ async def capture_text_contents(sandbox: Sandbox, paths_hashes: Mapping[str, str
     Each kept file is <= HARNESS_MAX_DIFF_BYTES; every byte read (kept or not) counts
     toward HARNESS_SNAPSHOT_MAX_TOTAL_BYTES, after which capture stops.
     """
-    captured: dict[str, bytes] = {}  # mutable-ok: async accumulator (awaits per read), frozen on return
+    captured: dict[str, bytes] = {}
     total = 0
     for path in sorted(paths_hashes):
         if total >= HARNESS_SNAPSHOT_MAX_TOTAL_BYTES:
@@ -178,6 +174,4 @@ async def build_file_changes(
 ) -> list[FileChange]:  # mutable-ok: feeds the public Result.files list
     """FileChange per changed path. diff is None when it cannot be built as text."""
     contents: Mapping[str, bytes] = before_contents or MappingProxyType({})
-    return [  # mutable-ok: feeds the public Result.files list
-        await _change_for(sandbox, path, kind, contents) for path, kind in diff_snapshots(before, after)
-    ]
+    return [await _change_for(sandbox, path, kind, contents) for path, kind in diff_snapshots(before, after)]

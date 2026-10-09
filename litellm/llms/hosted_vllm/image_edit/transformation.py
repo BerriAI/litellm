@@ -16,12 +16,12 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseImageEditConfig contract
+        headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,  # mutable-ok: BaseImageEditConfig contract
+        litellm_params: dict | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: BaseImageEditConfig contract
+    ) -> dict:
         resolved_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
@@ -29,7 +29,7 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: BaseImageEditConfig contract
+        litellm_params: dict,
     ) -> str:
         resolved_api_base: Final = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         if resolved_api_base is None:

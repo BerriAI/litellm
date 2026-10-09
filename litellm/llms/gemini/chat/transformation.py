@@ -177,6 +177,6 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         self,
         messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
         model: str | None = None,
-        litellm_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
+        litellm_params: dict[str, object] | None = None,
     ) -> list[ContentType]:  # mutable-ok: mirrors override contract
         return self._transform_messages(messages, model, litellm_params)

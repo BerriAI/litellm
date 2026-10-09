@@ -205,7 +205,7 @@ def _str_to_bool(value: str) -> bool:
 def _coerce_redis_kwargs_types(
     redis_kwargs: Mapping[str, object],
     client: type | tuple[type, ...] = redis.Redis,
-) -> dict[str, object]:  # mutable-ok: a caller mutates the returned kwargs before constructing its client
+) -> dict[str, object]:
     """Coerces string values to the numeric/boolean type ``client``'s constructor
     declares for that parameter. ``client`` may be a tuple of client classes; a
     parameter's type is taken from the first signature that declares it, which

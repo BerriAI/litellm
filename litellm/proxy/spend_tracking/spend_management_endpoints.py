@@ -3092,14 +3092,14 @@ async def _fetch_session_representatives(
             ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
         ) AS session_representatives
     """
-    rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
+    rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(
         prisma_client,
         rep_query,
         *sql_params,
         [session_key for session_key, _ in session_keys],
         [api_key for _, api_key in session_keys],
     )
-    rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(  # mutable-ok: same rows
+    rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(
         {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
     )
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]

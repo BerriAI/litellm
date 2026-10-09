@@ -753,7 +753,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             next_output_index = self._output_index_offset + self._round_output_width(  # rebind-ok: advances per item
                 self.collected_response
             )
-            call_items: Final[dict[str, tuple[str, int]]] = {}  # mutable-ok: filled per tool call as events queue
+            call_items: Final[dict[str, tuple[str, int]]] = {}
             for tool_call in tool_calls:
                 (
                     tool_name,

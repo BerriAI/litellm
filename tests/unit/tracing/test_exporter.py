@@ -298,7 +298,7 @@ async def test_invalid_callback_data_never_interrupts_model_requests(payload: ob
 
 
 def test_serialization_rejects_recursive_payloads() -> None:
-    cyclic: Final[dict[str, object]] = {}  # mutable-ok: deliberately constructs a cyclic callback payload
+    cyclic: Final[dict[str, object]] = {}
     cyclic["self"] = cyclic
     assert encode_record(cyclic) is ExportFailure.TOO_LARGE
 

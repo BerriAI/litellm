@@ -197,7 +197,7 @@ def _accepted(request: Request) -> Reply:
 class _Sink:
     wire: Wire
     api_key: str
-    # mutable-ok: drain() consumes, so batches accumulate across polls
+
     received: list[Request] = field(default_factory=list)
 
     def collect(self) -> tuple[Request, ...]:

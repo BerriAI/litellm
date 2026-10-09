@@ -371,7 +371,7 @@ _safe_set_request_parsed_body: Final = safe_set_request_parsed_body
 
 
 def rewrite_request_model(
-    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request_data: dict[str, object],
     request: Request | None,
     model: str,
 ) -> None:

@@ -19,7 +19,7 @@ class SailResponsesAPIConfig(create_responses_config_class(sail_provider_config(
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+    ) -> dict:
         params: Final = responses_params_with_completion_window(
             super().map_openai_params(
                 response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
@@ -33,10 +33,10 @@ class SailResponsesAPIConfig(create_responses_config_class(sail_provider_config(
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the base interface
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: signature fixed by the base interface
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+        headers: dict,
+    ) -> dict:
         request: Final[Mapping[str, object]] = super().transform_responses_api_request(
             model=model,
             input=input,

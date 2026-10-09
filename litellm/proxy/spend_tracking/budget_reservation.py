@@ -445,7 +445,7 @@ async def invalidate_budget_reservation_counters(
 
 
 async def release_or_invalidate_budget_reservation(
-    budget_reservation: dict | None,  # mutable-ok: stamps finalized on the caller's shared reservation dict
+    budget_reservation: dict | None,
 ) -> None:
     """Reconcile a still-open reservation on a terminal path that settles no cost.
 

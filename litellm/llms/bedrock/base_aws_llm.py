@@ -171,7 +171,7 @@ def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
 
 
 def pop_aws_auth_params(
-    optional_params: MutableMapping[str, object],  # mutable-ok: pops the aws_* keys out of the caller's mapping
+    optional_params: MutableMapping[str, object],
 ) -> AwsAuthParams:
     return AwsAuthParams.model_validate(
         MappingProxyType({key: optional_params.pop(key, None) for key in AWS_AUTH_PARAM_KEYS})
@@ -795,7 +795,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     def get_aws_region_name(
         self,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
         model: str | None = None,
         model_id: str | None = None,
     ) -> str:
@@ -1546,7 +1546,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     @overload
     def _get_boto_credentials_from_optional_params(
         self,
-        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        optional_params: dict,
         model: str | None = None,
         bearer_token: None = None,
     ) -> Boto3CredentialsInfo: ...
@@ -1554,7 +1554,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     @overload
     def _get_boto_credentials_from_optional_params(
         self,
-        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        optional_params: dict,
         model: str | None = None,
         *,
         bearer_token: str,

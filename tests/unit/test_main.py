@@ -2919,7 +2919,7 @@ async def test_async_mock_streaming_request_n_greater_than_1():
 _ADMISSION_INPUT_TOKENS: Final = 51234
 
 
-def _admission_metadata(input_tokens: int) -> dict[str, object]:  # mutable-ok: logging writes into metadata
+def _admission_metadata(input_tokens: int) -> dict[str, object]:
     return {"user_api_key_budget_reservation": {"reserved_cost": 1.0, "input_tokens": input_tokens}}
 
 

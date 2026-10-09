@@ -438,7 +438,7 @@ def _digest(value: object) -> str:
     ).hexdigest()
 
 
-def _json_object(value: object) -> dict[str, JsonValue]:  # mutable-ok: JSON serialization requires a dictionary
+def _json_object(value: object) -> dict[str, JsonValue]:
     return _JSON_OBJECT.validate_python(value)
 
 

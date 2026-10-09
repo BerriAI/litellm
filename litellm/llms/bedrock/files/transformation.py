@@ -1486,9 +1486,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         url: Final = f"{target.endpoint_url}/{bucket_name}/"
         listing_query: Final = _listing_query(configured_prefix, purpose)
         continuation_query: Final = (("continuation-token", continuation_token),) if continuation_token else ()
-        query: Final[dict[str, str]] = dict(  # mutable-ok: the base files contract returns the query as a dict
-            listing_query + continuation_query
-        )
+        query: Final[dict[str, str]] = dict(listing_query + continuation_query)
         signed_headers: Final = self._sign_s3_request_without_body(
             method="GET",
             api_base=f"{url}?{urlencode(query, quote_via=quote, safe='')}",

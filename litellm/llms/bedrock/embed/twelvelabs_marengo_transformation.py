@@ -275,7 +275,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     def transform_request(
         self,
         input: str,
-        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
@@ -390,7 +390,7 @@ class TwelveLabsMarengoEmbeddingConfig:
 
     def transform_async_invoke_response(
         self,
-        response: dict[str, object],  # mutable-ok: mirrors override contract
+        response: dict[str, object],
         model: str,
     ) -> EmbeddingResponse:
         return self._transform_async_invoke_response(response, model)

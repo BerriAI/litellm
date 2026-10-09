@@ -55,7 +55,7 @@ class AktoConfigModel(GuardrailConfigModel[AktoGuardrailConfigModelOptionalParam
         description="Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
     )
 
-    akto_metadata: dict | None = Field(  # mutable-ok: UI type derivation maps dict to "object"
+    akto_metadata: dict | None = Field(
         default=None,
         description=(
             "JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). "

@@ -1598,7 +1598,7 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
-            uncommitted: dict[str, Any] = {}  # mutable-ok: tracks popped categories still needing commit
+            uncommitted: dict[str, Any] = {}
             committed_spend_tables: Final[list[_SpendTableName]] = []  # mutable-ok: filled as each table lands
 
             try:

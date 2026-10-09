@@ -254,7 +254,7 @@ def _bedrock_model_supports(model: str, key: str) -> bool:
 
 def apply_bedrock_invoke_structured_output(
     model: str,
-    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    request_body: dict[str, object],
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -296,7 +296,7 @@ def apply_bedrock_invoke_structured_output(
 
 def strip_unsupported_bedrock_invoke_output_config_keys(
     model: str,
-    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    request_body: dict[str, object],
 ) -> None:
     """
     Drop ``output_config`` keys the Bedrock model does not accept.

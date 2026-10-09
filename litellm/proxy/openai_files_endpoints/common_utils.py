@@ -462,7 +462,7 @@ async def get_authorized_credentials_for_model(
     model_id: str,
     user_api_key_dict: "UserAPIKeyAuth",
     operation_context: str = "file operation",
-) -> dict:  # mutable-ok: same contract as get_credentials_for_model, callers merge it into request data
+) -> dict:
     """``get_credentials_for_model`` gated by ``authorize_model_for_key``."""
     await authorize_model_for_key(model_id=model_id, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
     return get_credentials_for_model(
@@ -593,7 +593,7 @@ def get_team_provider_credentials(
 
 
 def apply_team_provider_credentials(
-    data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
+    data: dict,
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,

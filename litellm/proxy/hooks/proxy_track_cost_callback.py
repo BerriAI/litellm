@@ -857,7 +857,7 @@ async def _update_database_and_spend_counters_in_batch(
 
 
 async def _reconcile_budget_reservation_before_db_update(
-    budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps applied_adjustment on the caller's shared reservation dict
+    budget_reservation: dict,
     response_cost: float,
 ) -> None:
     """Reseeds the reserved counters that were flushed since reservation; the adjustments themselves are written by ``increment_spend_counters`` in the same pipeline as its increments, or by

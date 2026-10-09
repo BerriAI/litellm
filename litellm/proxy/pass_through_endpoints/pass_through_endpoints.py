@@ -858,7 +858,7 @@ def _build_passthrough_failure_request_payload(
 class _TeamCallbackWiring:
     success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
     failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
-    logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
+    logging_kwargs: dict[str, str | dict[str, str]] | None = None
 
 
 def _resolve_team_callback_wiring(
@@ -1048,7 +1048,7 @@ async def _relay_reporting_failures(
     stream: AsyncGenerator[bytes, None],
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    request_payload: dict,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
 

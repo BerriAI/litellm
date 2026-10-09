@@ -195,7 +195,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def get_runtime_session_id(
         self,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
     ) -> str:
         return self._get_runtime_session_id(optional_params)
 
@@ -210,7 +210,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def get_runtime_user_id(
         self,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
     ) -> str | None:
         return self._get_runtime_user_id(optional_params)
 

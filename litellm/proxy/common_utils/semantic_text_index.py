@@ -55,7 +55,7 @@ class _EmbeddingRequest(LiteLLMBaseModel):
 
     model: str
     input: tuple[str, ...]
-    metadata: dict[str, object]  # mutable-ok: the router mutates the metadata dict it is handed
+    metadata: dict[str, object]
 
 
 def cosine_similarity(left: Vector, right: Vector) -> float:
@@ -64,7 +64,7 @@ def cosine_similarity(left: Vector, right: Vector) -> float:
     return dot / norms if norms else 0.0
 
 
-def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:  # mutable-ok: router mutates it
+def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
     return {

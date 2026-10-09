@@ -208,11 +208,11 @@ def _provider_hidden_params(
 
 class CustomStreamWrapper:
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
     def __init__(

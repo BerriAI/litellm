@@ -55,7 +55,7 @@ class FalAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers | None = None,  # mutable-ok: BaseLLMException header contract
+        headers: dict | httpx.Headers | None = None,
     ) -> None:
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -134,11 +134,11 @@ class FalAIChatConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: inherited contract
-        optional_params: dict,  # mutable-ok: inherited contract
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: inherited contract returns a dict
+    ) -> dict:
         mapped: Final = {
             translated[0]: translated[1]
             for param, value in non_default_params.items()
@@ -148,14 +148,14 @@ class FalAIChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: inherited contract
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict,  # mutable-ok: inherited contract
-        litellm_params: dict,  # mutable-ok: inherited contract
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: inherited contract returns a dict
+    ) -> dict:
         final_api_key: Final = self.get_api_key(api_key)
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
@@ -170,8 +170,8 @@ class FalAIChatConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: inherited contract
-        litellm_params: dict,  # mutable-ok: inherited contract
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         return f"{self.get_api_base(api_base)}/{model.removeprefix(PROVIDER_PREFIX)}"
@@ -180,10 +180,10 @@ class FalAIChatConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict,  # mutable-ok: inherited contract
-        litellm_params: dict,  # mutable-ok: inherited contract
-        headers: dict,  # mutable-ok: inherited contract
-    ) -> dict:  # mutable-ok: inherited contract returns a dict
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         if optional_params.get("stream"):
             raise FalAIError(status_code=400, message="fal_ai chat completions do not support streaming")
         prompt, image_url = _prompt_and_image(messages)
@@ -199,10 +199,10 @@ class FalAIChatConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,  # mutable-ok: inherited contract
+        request_data: dict,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict,  # mutable-ok: inherited contract
-        litellm_params: dict,  # mutable-ok: inherited contract
+        optional_params: dict,
+        litellm_params: dict,
         encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -238,6 +238,6 @@ class FalAIChatConfig(BaseConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         return FalAIError(status_code=status_code, message=error_message, headers=headers)

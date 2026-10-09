@@ -2270,7 +2270,7 @@ class LiteLLMCompletionResponsesConfig:
     def _web_search_calls_by_call_id(
         chat_completion_response: ModelResponse,
     ) -> Mapping[str, ResponseFunctionWebSearch]:
-        calls: Final[dict[str, ResponseFunctionWebSearch]] = {}  # mutable-ok: indexes provider-built calls
+        calls: Final[dict[str, ResponseFunctionWebSearch]] = {}
         for choice in chat_completion_response.choices:
             provider_fields = choice.message.provider_specific_fields
             if not isinstance(provider_fields, Mapping):

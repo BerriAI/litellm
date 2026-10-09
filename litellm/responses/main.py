@@ -569,7 +569,7 @@ def _will_bridge_to_chat_completions(
 
 
 def _stamp_injection_points_with_dialect(
-    kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
+    kwargs: dict[str, object],
     model: str,
     custom_llm_provider: str | None,
 ) -> None:
@@ -593,7 +593,7 @@ def _stamp_injection_points_with_dialect(
 
 @contextmanager
 def _prompt_management_sees_a_provisional_message_list(
-    kwargs: dict[str, object],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
+    kwargs: dict[str, object],
     bridged: bool,
 ) -> Generator[None, None]:
     """Tell the cache-control hook that this layer's messages are not the ones sent upstream.

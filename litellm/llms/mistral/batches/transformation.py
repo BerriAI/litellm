@@ -90,7 +90,7 @@ class MistralBatchJob(LiteLLMBaseModel):
     output_file: str | None = None
     error_file: str | None = None
     errors: tuple[MistralBatchError, ...] = ()
-    metadata: dict[str, str] | None = None  # mutable-ok: LiteLLMBatch.metadata is typed as dict
+    metadata: dict[str, str] | None = None
 
 
 def _to_batch_errors(errors: Sequence[MistralBatchError]) -> BatchErrors | None:
@@ -144,7 +144,7 @@ class MistralBatchesConfig(BaseBatchesConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseBatchesConfig signature
+    ) -> dict[str, str]:
         return get_mistral_auth_headers(headers, api_key)
 
     def get_complete_batch_url(
@@ -164,7 +164,7 @@ class MistralBatchesConfig(BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: BaseBatchesConfig signature
+    ) -> dict[str, object]:
         input_file_id: Final = create_batch_data.get("input_file_id")
         endpoint: Final = create_batch_data.get("endpoint")
         if input_file_id is None or endpoint is None:
@@ -193,7 +193,7 @@ class MistralBatchesConfig(BaseBatchesConfig):
         batch_id: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: BaseBatchesConfig signature
+    ) -> dict[str, object]:
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
         api_base: Final = litellm_params.get("api_base")
         api_key: Final = litellm_params.get("api_key")

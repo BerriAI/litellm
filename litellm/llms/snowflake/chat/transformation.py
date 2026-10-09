@@ -160,7 +160,7 @@ def _convert_tool_result_to_anthropic(
     and non-list shapes it does not model are handled here.
     """
     if not isinstance(content, list):
-        plain: Final[dict[str, object]] = {  # mutable-ok: JSON wire block
+        plain: Final[dict[str, object]] = {
             "type": "tool_result",
             "tool_use_id": tool_call_id,
             "content": content if isinstance(content, str) else json.dumps(content),
@@ -418,10 +418,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
-        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
-        headers: dict[str, object],  # mutable-ok: BaseConfig signature
-    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         inlined_messages: Final = await async_inline_remote_media(messages) if _is_claude_model(model) else messages
         return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
@@ -498,7 +498,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         model_name: Final = model.removeprefix("snowflake/")
 
-        body: Final[dict[str, object]] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire body
+        body: Final[dict[str, object]] = normalize_cache_control_in_anthropic_payload(
             {
                 "model": model_name,
                 "messages": conversation,

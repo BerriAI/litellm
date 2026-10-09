@@ -12,10 +12,10 @@ if TYPE_CHECKING:
 class OpenAIVideoGenerationHandler(BaseTranslation):
     async def process_input_messages(
         self,
-        data: dict[str, object],  # mutable-ok: BaseTranslation contract passes the proxy's request dict through
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> dict[str, object]:  # mutable-ok: BaseTranslation contract returns the proxy's request dict
+    ) -> dict[str, object]:
         prompt: Final = data.get("prompt")
         if not isinstance(prompt, str):
             return data
@@ -43,6 +43,6 @@ class OpenAIVideoGenerationHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict[str, object] | None = None,  # mutable-ok: BaseTranslation contract
+        request_data: dict[str, object] | None = None,
     ) -> object:
         return response

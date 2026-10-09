@@ -33,7 +33,7 @@ StreamStateT = TypeVar("StreamStateT")
 
 def event_list(*events: Event) -> Sequence[Event]:
     """A transform_stream_line result. One place builds it so every parser returns the same shape."""
-    return list(events)  # mutable-ok: stream-line results are list-shaped; callers and tests compare with list literals
+    return list(events)
 
 
 class HarnessTurnError(HarnessError):

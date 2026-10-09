@@ -394,7 +394,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def map_web_search_options(
         self,
-        value: dict[str, object],  # mutable-ok: mirrors override contract
+        value: dict[str, object],
     ) -> Tools:
         return self._map_web_search_options(value)
 
@@ -459,7 +459,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def drop_search_tools_mixed_with_functions(
         cls,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
@@ -802,7 +802,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def map_function(
         self,
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
         return self._map_function(value, optional_params)
 
@@ -1107,8 +1107,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def map_audio_params(
         self,
-        value: dict[str, object],  # mutable-ok: mirrors override contract
-    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        value: dict[str, object],
+    ) -> dict[str, object]:
         return self._map_audio_params(value)
 
     @staticmethod
@@ -2481,7 +2481,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         _candidates: list[Candidates],  # mutable-ok: mirrors override contract
         model_response: Union[ModelResponse, "ModelResponseStream"],
-        standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        standard_optional_params: dict[str, object],
         cumulative_tool_call_index: int = 0,
     ) -> tuple[  # mutable-ok: mirrors override contract
         list[dict[str, object]],
@@ -2637,7 +2637,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def transform_google_generate_content_to_openai_model_response(
         self,
-        completion_response: GenerateContentResponseBody | dict[str, object],  # mutable-ok: mirrors override contract
+        completion_response: GenerateContentResponseBody | dict[str, object],
         model_response: ModelResponse,
         model: str,
         logging_obj: LoggingClass,
@@ -2664,7 +2664,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
         model: str | None = None,
-        litellm_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
+        litellm_params: dict[str, object] | None = None,
     ) -> list[ContentType]:  # mutable-ok: mirrors override contract
         return self._transform_messages(messages, model, litellm_params)
 

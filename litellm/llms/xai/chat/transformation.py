@@ -422,7 +422,7 @@ class XAIChatConfig(OpenAIGPTConfig):
     @classmethod
     def normalize_openai_compatible_usage_totals(
         cls,
-        usage: Usage | dict[str, object] | None,  # mutable-ok: mirrors override contract
+        usage: Usage | dict[str, object] | None,
     ) -> None:
         return cls._normalize_openai_compatible_usage_totals(usage)
 

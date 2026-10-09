@@ -15,9 +15,7 @@ from litellm.harness.types import Approval, Harness, PermissionMode
 if TYPE_CHECKING:
     from litellm.harness.endpoint import ModelEndpoint
 
-ApprovalHandler: TypeAlias = Callable[
-    [Approval], bool | Awaitable[bool]  # mutable-ok: Callable parameter list in a type alias, not a runtime collection
-]
+ApprovalHandler: TypeAlias = Callable[[Approval], bool | Awaitable[bool]]
 
 
 @dataclass(frozen=True)

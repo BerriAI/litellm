@@ -350,7 +350,7 @@ class RejectingS3Sink:
     lock: threading.Lock = field(default_factory=threading.Lock)
     rejected_attempts: int = 0
     rejected_times: list[float] = field(default_factory=list)  # mutable-ok: appended under lock per rejected PUT
-    store: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: later PUTs must be visible to earlier polls
+    store: dict[str, bytes] = field(default_factory=dict)
 
     def respond(self, request: Request) -> Reply:
         assert request.method == "PUT", request.method

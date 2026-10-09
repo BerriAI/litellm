@@ -1158,7 +1158,7 @@ class ProxyExtrasDBManager:
 
                 if next_budget.attempts_left < budget.attempts_left:
                     time.sleep(random.randrange(5, 15))
-                budget = next_budget  # rebind-ok: the loop carries the budget from one migrate deploy pass to the next
+                budget = next_budget
 
             raise RuntimeError(
                 f"Database migration failed after {MAX_MIGRATE_DEPLOY_ATTEMPTS} "

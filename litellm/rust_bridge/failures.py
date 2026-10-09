@@ -44,8 +44,8 @@ class ExceptionMapper(Protocol):
         model: str,
         custom_llm_provider: str | None,
         original_exception: Exception,
-        completion_kwargs: dict[str, object],  # mutable-ok: the legacy public exception mapper mutates its kwargs
-        extra_kwargs: dict[str, object],  # mutable-ok: the legacy public exception mapper mutates its kwargs
+        completion_kwargs: dict[str, object],
+        extra_kwargs: dict[str, object],
     ) -> Exception: ...
 
 

@@ -47,7 +47,7 @@ def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok:
 
 def _is_object_dict(
     value: object,
-) -> TypeIs[dict[str, object]]:  # guard-ok: wire dicts have str keys  # mutable-ok: callers rewrite ids in place
+) -> TypeIs[dict[str, object]]:  # guard-ok: wire dicts have str keys
     return isinstance(value, dict)
 
 
@@ -602,7 +602,7 @@ class ResponsesAPIRequestUtils:
         )
         if not readable:
             return None
-        kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
+        kept: Final[dict[str, object]] = {
             key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
         }
         return kept

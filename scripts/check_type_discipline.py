@@ -3,15 +3,16 @@
 
 Rules
 -----
-LIT001  Mutable collection in a type annotation, anywhere it appears: function
+LIT001  Mutable sequence or set in a type annotation, anywhere it appears: function
         parameters, return types, class attributes, locals, and module globals.
-        Covers the builtins (dict/list/set, bare or parameterized), their typing
-        aliases (Dict/List/...), the collections concretes (deque/defaultdict/...),
-        and the mutable ABCs (MutableMapping/MutableSequence/MutableSet). A mutable
-        collection lets whoever holds it grow or rewrite it after the fact; annotate
-        a read-only view instead (Mapping/Sequence/AbstractSet/tuple[X, ...]/
-        frozenset[X], or a frozen dataclass / NamedTuple / ReadOnly TypedDict) and
-        build it functionally (comprehension / map, not append-in-a-loop).
+        Covers the builtins (list/set, bare or parameterized), their typing aliases
+        (List/Deque), the collections concretes (deque), and the mutable ABCs
+        (MutableSequence/MutableSet). Mappings (dict/Dict/MutableMapping/...) are
+        allowed: most of the Python ecosystem takes and returns dicts. A mutable
+        sequence lets whoever holds it grow or rewrite it after the fact; annotate
+        a read-only view instead (Sequence/AbstractSet/tuple[X, ...]/frozenset[X],
+        or a frozen dataclass / NamedTuple / ReadOnly TypedDict) and build it
+        functionally (comprehension / map, not append-in-a-loop).
         Suppress with `# mutable-ok: <reason>` on the offending line.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
@@ -128,27 +129,21 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NamedTuple
 
-# Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
-# `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
-# however they were imported. The read-only interfaces (Mapping, Sequence, the
-# immutable AbstractSet / `abc.Set`, Collection) and the immutable concretes (tuple,
-# frozenset) are the escape hatch and are deliberately absent -- as is the bare name
-# `Set`, which collides with the read-only `collections.abc.Set`.
+# Mutable sequence and set types, banned in *every* annotation. Name-based, so `list`,
+# `typing.List`, `collections.deque`, and `collections.abc.MutableSequence` all match
+# however they were imported. Mappings (`dict`, `Dict`, `MutableMapping`, ...) are
+# allowed: most of the Python ecosystem takes and returns dicts. The read-only
+# interfaces (Sequence, the immutable AbstractSet / `abc.Set`, Collection) and the
+# immutable concretes (tuple, frozenset) are the escape hatch and are deliberately
+# absent -- as is the bare name `Set`, which collides with the read-only
+# `collections.abc.Set`.
 MUTABLE_COLLECTIONS = frozenset(
     (
-        "dict",
         "list",
         "set",
-        "Dict",
         "List",
-        "DefaultDict",
-        "OrderedDict",
-        "Counter",
         "Deque",
-        "ChainMap",
         "deque",
-        "defaultdict",
-        "MutableMapping",
         "MutableSequence",
         "MutableSet",
     )
@@ -191,6 +186,7 @@ REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
 COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
 FROZEN_OK_RE: Final = re.compile(r"#\s*frozen-ok(?::\s*(?P<reason>.*))?")
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,9 +315,9 @@ def _is_literal_subscript(node: ast.AST) -> bool:
 def mutable_names_in(annotation: ast.AST) -> Iterator[str]:
     """Yield mutable-collection names anywhere inside an annotation expression.
 
-    Matches bare names (`dict`, `MutableMapping`) and dotted access (`typing.Dict`,
-    `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
-    (`Mapping[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
+    Matches bare names (`list`, `MutableSequence`) and dotted access (`typing.List`,
+    `collections.deque`, `collections.abc.MutableSequence`), descends through nesting
+    (`dict[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
     Skips `Literal[...]` subtrees: their string arguments are values, not forward
     references, so `Literal["list"]` is not the `list` type.
     """
@@ -349,7 +345,7 @@ def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
         line,
         "LIT001",
         f"mutable `{name}` in {where}: a mutable collection can be grown or rewritten "
-        f"by whoever holds it. Annotate a read-only view -- Mapping[...], Sequence[...], "
+        f"by whoever holds it. Annotate a read-only view -- Sequence[...], "
         f"AbstractSet[...], tuple[X, ...], frozenset[X], or a frozen dataclass / "
         f"NamedTuple / ReadOnly TypedDict -- and build it functionally, not by "
         f"append-in-a-loop (suppress: `# mutable-ok: <reason>`)",
@@ -1034,9 +1030,7 @@ def _comprehension_owners(tree: ast.AST, ok_lines: frozenset[int]) -> Mapping[in
     silences a multi-line enclosing one and a violation sharing its only line
     can still be suppressed.
     """
-    violating: Final = tuple(
-        n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n)
-    )
+    violating: Final = tuple(n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n))
 
     def nesting_key(node: ast.expr) -> tuple[int, int]:
         return (len(_span(node)), (node.end_col_offset or node.col_offset) - node.col_offset)
@@ -1092,18 +1086,14 @@ def apply_suppressions(
     kept = tuple(
         v
         for v in raw
-        if not any(
-            v.line in suppressions.get(ok.token, frozenset()) and v.code in ok.codes
-            for ok in OK_SUPPRESSIONS
-        )
+        if not any(v.line in suppressions.get(ok.token, frozenset()) and v.code in ok.codes for ok in OK_SUPPRESSIONS)
     )
     unused = (
         Violation(
             path,
             line,
             "LIT013",
-            f"`# {ok.token}` suppresses nothing: no "
-            f"{'/'.join(sorted(ok.codes))} violation on this line, so delete it",
+            f"`# {ok.token}` suppresses nothing: no {'/'.join(sorted(ok.codes))} violation on this line, so delete it",
         )
         for ok in OK_SUPPRESSIONS
         for line in sorted(suppressions.get(ok.token, frozenset()))
@@ -1130,9 +1120,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
     except SyntaxError as exc:
         return (*violations, Violation(path, exc.lineno or 0, "LIT000", f"syntax error: {exc.msg}"))
 
-    comprehension_violations: Final = tuple(
-        iter_comprehension_violations(path, tree, suppressions["comprehension-ok"])
-    )
+    comprehension_violations: Final = tuple(iter_comprehension_violations(path, tree, suppressions["comprehension-ok"]))
 
     return (
         *violations,

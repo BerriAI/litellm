@@ -881,7 +881,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         kwargs: dict[str, object],
         call_type: CallTypes | None,
-    ) -> dict[str, object] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+    ) -> dict[str, object] | None:
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
         effective: Final = base_result if base_result is not None else kwargs
         if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:

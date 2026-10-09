@@ -89,11 +89,11 @@ class NimbleSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment signature
+        headers: dict[str, str],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: the http handler passes this straight to httpx as headers
+    ) -> dict[str, str]:
         """
         Validate environment and return headers.
 
@@ -120,7 +120,7 @@ class NimbleSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig.get_complete_url signature
+        optional_params: dict[str, object],
         data: dict[str, object] | list[dict[str, object]] | None = None,  # mutable-ok: base signature
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url signature
     ) -> str:
@@ -132,9 +132,9 @@ class NimbleSearchConfig(BaseSearchConfig):
     def transform_search_request(
         self,
         query: str | list[str],  # mutable-ok: BaseSearchConfig.transform_search_request signature
-        optional_params: dict[str, object],  # mutable-ok: base signature
+        optional_params: dict[str, object],
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request signature
-    ) -> dict[str, object]:  # mutable-ok: the http handler passes this straight to httpx as the JSON body
+    ) -> dict[str, object]:
         """
         Transform Search request to Nimble API format.
 
@@ -211,7 +211,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.get_error_class signature
+        headers: dict[str, str],
     ) -> Exception:
         detail: Final = _unwrap_error_detail(error_message).rstrip(". ")
         return BaseLLMException(

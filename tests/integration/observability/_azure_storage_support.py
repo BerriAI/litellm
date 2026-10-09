@@ -72,13 +72,11 @@ class RecordingDataLakeSink:
     delay_seconds: float = 0.0
     lock: threading.Lock = field(default_factory=threading.Lock)
     directories: set[str] = field(default_factory=set)  # mutable-ok: the sink is the durable store for the run
-    pending: dict[str, bytearray] = field(default_factory=dict)  # mutable-ok: append lands before flush
-    files: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: flushed files must be readable later
-    flush_count: dict[str, int] = field(default_factory=dict)  # mutable-ok: re-flush of one path means double upload
+    pending: dict[str, bytearray] = field(default_factory=dict)
+    files: dict[str, bytes] = field(default_factory=dict)
+    flush_count: dict[str, int] = field(default_factory=dict)
     rejected: list[str] = field(default_factory=list)  # mutable-ok: rejected request methods seen while failing
-    unauthenticated: list[str] = field(
-        default_factory=list
-    )  # mutable-ok: targets whose SharedKey signature did not verify
+    unauthenticated: list[str] = field(default_factory=list)
     in_flight: int = 0
     peak: int = 0
     attempt_count: int = 0

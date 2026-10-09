@@ -419,10 +419,10 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _handle_audio_predict_response(
-        json_response: dict,  # mutable-ok: passthrough logging receives the decoded provider response dictionary
+        json_response: dict,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict,  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
+        kwargs: dict,
     ) -> PassThroughEndpointLoggingTypedDict:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response

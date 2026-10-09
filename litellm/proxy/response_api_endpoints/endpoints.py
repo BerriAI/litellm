@@ -109,9 +109,7 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
     return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}
 
 
-def _normalize_tool_dialect(
-    data: dict, *, to_chat: bool
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+def _normalize_tool_dialect(data: dict, *, to_chat: bool) -> dict:
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
@@ -159,9 +157,7 @@ def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     return bool(llm_router.pattern_router.get_pattern(model))
 
 
-def _resolve_cursor_model_variant(
-    data: dict, llm_router: "Router | None"
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+def _resolve_cursor_model_variant(data: dict, llm_router: "Router | None") -> dict:
     model: Final = data.get("model")
     if not isinstance(model, str) or _router_can_serve(model, llm_router):
         return data

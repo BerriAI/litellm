@@ -37,7 +37,7 @@ class _PageParams(TypedDict):
     pagination_token: NotRequired[ReadOnly[str]]
 
 
-def _results_params(after: str | None, limit: int | None) -> dict[str, object]:  # mutable-ok: httpx params
+def _results_params(after: str | None, limit: int | None) -> dict[str, object]:
     if after is None:
         return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE))
     return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE, pagination_token=after))

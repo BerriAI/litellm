@@ -1561,7 +1561,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
-        self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._tool_call_index_map: dict[int, int] = {}
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1582,7 +1582,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
     @staticmethod
     def _sequential_tool_call_index(
-        tool_call_index_map: dict[int, int] | None,  # mutable-ok: per-stream state, remapped in place
+        tool_call_index_map: dict[int, int] | None,
         output_index: int,
     ) -> int:
         """Chat-completions tool_call indices must be 0-based and sequential, but
@@ -1601,7 +1601,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     @staticmethod
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
-        tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        tool_call_index_map: dict[int, int] | None = None,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.

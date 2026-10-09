@@ -743,7 +743,7 @@ async def test_single_use_guard_peek_reads_the_key_under_the_namespace_claim_wro
 
     from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
 
-    stored: dict[str, int] = {}  # mutable-ok: the fake Redis store the test inspects
+    stored: dict[str, int] = {}
 
     def namespaced(key: str) -> str:
         return f"ns:{key}"
@@ -1914,7 +1914,9 @@ def _redis_that(async_increment, get=None):
     cache.redis_cache.async_increment = async_increment
     cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
     cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
-    cache.redis_cache.async_get_cache = AsyncMock(side_effect=AssertionError("peek must read the client, not the wrapper"))
+    cache.redis_cache.async_get_cache = AsyncMock(
+        side_effect=AssertionError("peek must read the client, not the wrapper")
+    )
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
 
@@ -2068,7 +2070,11 @@ async def test_refresh_of_a_rotated_token_answers_503_before_minting_while_redis
         (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
     )
     rotated = json.loads(
-        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))).body
+        (
+            await _refresh_native(
+                payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1))
+            )
+        ).body
     )["refresh_token"]
 
     minter = _Minter()

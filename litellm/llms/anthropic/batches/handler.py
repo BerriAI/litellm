@@ -42,7 +42,7 @@ class AnthropicBatchesHandler:
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
-        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
+        litellm_params: dict | None = None,
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
@@ -131,7 +131,7 @@ class AnthropicBatchesHandler:
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
-        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
+        litellm_params: dict | None = None,
     ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.

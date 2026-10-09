@@ -166,7 +166,7 @@ def _litellm_metadata_of(data: MutableMapping[str, object]) -> MutableMapping[st
     existing: Final = data.get("litellm_metadata")
     if isinstance(existing, MutableMapping):
         return existing
-    created: Final[dict[str, object]] = {}  # mutable-ok: the logging layer copies and extends this mapping
+    created: Final[dict[str, object]] = {}
     data["litellm_metadata"] = created  # rebind-ok: the success handler reads the request's own mapping
     return created
 

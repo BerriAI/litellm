@@ -378,7 +378,7 @@ async def _scan_record(
             url=url if isinstance(url, str) else None,
         )
 
-    scan_input: Final[dict[str, object]] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
+    scan_input: Final[dict[str, object]] = copy.deepcopy(body)
     own_injected: Final = MappingProxyType({key: body[key] for key in _INJECTED_KEYS if key in body})
     for injected in _INJECTED_KEYS:
         scan_input.pop(injected, None)
@@ -393,7 +393,7 @@ async def _scan_record(
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was
         # given rather than that same dict mutated, so this is what gets compared.
-        scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: the guardrails' own dict
+        scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=scan_input,
             call_type=call_type,

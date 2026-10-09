@@ -1355,7 +1355,7 @@ class TestTenantSampling:
         did not find, ending while it flushes with its root still open, is decided on the
         spot rather than held by a fan-out that will never forward again."""
         dest_exporter = InMemorySpanExporter()
-        stragglers = []  # mutable-ok: the span the first export ends, mid-shutdown
+        stragglers = []
 
         class _EndsAStragglerOnExport(SimpleSpanProcessor):
             def on_end(self, span):

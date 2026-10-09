@@ -80,7 +80,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,  # mutable-ok: matches BaseRerankConfig's request contract
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -92,7 +92,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:  # mutable-ok: LiteLLM provider transforms return mutable request dictionaries
+    ) -> dict:
         """
         Keep Cohere's top_n as-is instead of mapping it to top_k.
 
@@ -156,9 +156,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
-        optional_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
-        litellm_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
+        request_data: dict | None = None,
+        optional_params: dict | None = None,
+        litellm_params: dict | None = None,
     ) -> RerankResponse:
         """
         Convert the native ranking response, then apply top_n client-side.

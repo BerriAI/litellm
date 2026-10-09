@@ -493,7 +493,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def maybe_drop_speed_param(
         cls,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
         drop_params: bool,
         custom_llm_provider: str | None = None,
     ) -> None:
@@ -1949,10 +1949,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
-        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
-        headers: dict[str, object],  # mutable-ok: BaseConfig signature
-    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return self.transform_request(
             model=model,
             messages=await async_inline_remote_media(messages, should_inline=self.inlines_remote_media),

@@ -223,8 +223,8 @@ class CostOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ObservabilityOptions:
     id: str | None = None
-    metadata: MutableMapping[str, object] | None = None  # mutable-ok: the router and logging write keys into it
-    litellm_metadata: MutableMapping[str, object] | None = None  # mutable-ok: the proxy writes keys into it
+    metadata: MutableMapping[str, object] | None = None
+    litellm_metadata: MutableMapping[str, object] | None = None
     tags: Sequence[str] | None = None
     litellm_trace_id: str | None = None
     litellm_session_id: str | None = None

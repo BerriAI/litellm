@@ -63,9 +63,7 @@ def get_xai_api_base(api_base: str | None) -> str:
     return resolved.removesuffix("/v1")
 
 
-def get_xai_auth_headers(
-    headers: Mapping[str, str] = _EMPTY_HEADERS, api_key: str | None = None
-) -> dict[str, str]:  # mutable-ok: BaseConfig.validate_environment contract returns dict
+def get_xai_auth_headers(headers: Mapping[str, str] = _EMPTY_HEADERS, api_key: str | None = None) -> dict[str, str]:
     resolved_key: Final = XAIModelInfo.get_api_key(api_key)
     if resolved_key is None:
         raise xai_batches_error(

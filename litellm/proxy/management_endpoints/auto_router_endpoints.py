@@ -551,7 +551,7 @@ async def preview_auto_router_routing(
         if member_team is not None
         else user_api_key_dict
     )
-    request_data: Final[dict[str, object]] = {  # mutable-ok: auth and routing enrich this request in place
+    request_data: Final[dict[str, object]] = {
         **resolved.wire_body(),
         "metadata": {},
         "proxy_server_request": {"body": None},

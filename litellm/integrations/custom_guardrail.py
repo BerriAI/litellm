@@ -394,7 +394,7 @@ class CustomGuardrail(CustomLogger):
 
     def inject_advisory_message(
         self,
-        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        data: dict[str, Any],
         message: str,
     ) -> bool:
         """
@@ -928,7 +928,7 @@ class CustomGuardrail(CustomLogger):
         )
 
         target: Final = self._deployment_hook_target()
-        scan_request: Final[dict[str, object]] = {  # mutable-ok: async_pre_call_hook writes into the dict it is handed
+        scan_request: Final[dict[str, object]] = {
             **{key: value for key, value in request_data.items() if key not in _PRE_CALL_CONTENT_KEYS},
             "messages": list(messages),
             **({} if target is self else _unified_hook_fields(self, request_data)),
@@ -1000,10 +1000,10 @@ class CustomGuardrail(CustomLogger):
 
     async def async_logging_hook(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict,
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+    ) -> tuple[dict, object]:
         """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
         from litellm.llms import get_guardrail_translation_mapping
 
@@ -1075,11 +1075,11 @@ class CustomGuardrail(CustomLogger):
 
     async def _scan_logged_call(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict,
         response: object | None,
         translation: "BaseTranslation",
         output_translation: "BaseTranslation",
-        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+        scratch_metadata: dict,
     ) -> None:
         scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
         scratch_input, scratch_tools = scratch_fields or (None, None)
@@ -1672,7 +1672,7 @@ def _original_inputs_for(
     kwargs: Mapping[str, object],
     request_data: Mapping[str, object],
     event_type: GuardrailEventHooks | None,
-) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
+) -> dict | None:
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
     Hooks may edit their argument in place and return it, so the baseline is always a deep

@@ -1269,7 +1269,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(status_code=422, message="max retries must be an int")
 
-            auth_params: Final[dict[str, object]] = {**(litellm_params or {})}  # mutable-ok: SDK init takes a dict
+            auth_params: Final[dict[str, object]] = {**(litellm_params or {})}
             if azure_ad_token is not None:
                 auth_params["azure_ad_token"] = azure_ad_token
             if azure_ad_token_provider is not None:

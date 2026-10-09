@@ -5323,7 +5323,7 @@ def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, obj
         raise ValueError(f"config.yaml model_list: {' '.join(violations)} {AUTO_ROUTER_LICENSE_REMEDY}")
 
 
-def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
+def pin_complexity_router_model_id(model: dict) -> None:
     """
     Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
     dotted-path strings for live instances. `_delete_deployment` re-reads the raw config
@@ -5610,11 +5610,11 @@ class ProxyConfig:
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
-        self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._last_cyberark_config: dict[str, object] | None = None
         self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
         self._cleanup_reschedule_failed: bool = False
         self._warned_db_mcp_stdio_flag_ignored: bool = False
-        self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
+        self._cyberark_boot_env: dict[str, str | None] | None = None
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
         self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None

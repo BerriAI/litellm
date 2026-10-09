@@ -303,7 +303,7 @@ class _RawTeamRow(_TeamIdRow, _ModelDumpRow, _ObjectPermissionRow, _TeamBudgetRo
     @property
     def members_with_roles(
         self,
-    ) -> Sequence[dict[str, object]] | None: ...  # mutable-ok: prisma deserializes this JSON column into plain dicts
+    ) -> Sequence[dict[str, object]] | None: ...
 
     @property
     def organization_id(self) -> str | None: ...
@@ -6549,7 +6549,7 @@ def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
 class _TeamDailyActivityScope(NamedTuple):
     team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
     exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
-    team_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field shape
+    team_alias_metadata: dict[str, dict[str, object]]
     api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
 

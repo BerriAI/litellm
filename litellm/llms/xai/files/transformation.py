@@ -35,7 +35,7 @@ from ..batches.transformation import (
     xai_batches_error,
 )
 
-_NO_QUERY_PARAMS: Final[dict[str, str]] = {}  # mutable-ok: BaseFilesConfig request transforms return tuple[str, dict]
+_NO_QUERY_PARAMS: Final[dict[str, str]] = {}
 _DEFAULT_PURPOSE: Final[OpenAIFilesPurpose] = "batch"
 
 
@@ -121,7 +121,7 @@ class XAIFilesConfig(BaseFilesConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseFilesConfig signature
+    ) -> dict[str, str]:
         return get_xai_auth_headers(headers, api_key)
 
     def get_supported_openai_params(
@@ -132,10 +132,10 @@ class XAIFilesConfig(BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature, returned as-is
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:
         return optional_params
 
     def transform_create_file_request(
@@ -144,7 +144,7 @@ class XAIFilesConfig(BaseFilesConfig):
         create_file_data: CreateFileRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: BaseFilesConfig signature
+    ) -> dict[str, object]:
         if "file" not in create_file_data:
             raise ValueError("File data is required")
         extracted: Final = extract_file_data(create_file_data["file"])
@@ -170,7 +170,7 @@ class XAIFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         return self._file_url(file_id, litellm_params), _NO_QUERY_PARAMS
 
     def transform_retrieve_file_response(
@@ -186,7 +186,7 @@ class XAIFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         return self._file_url(file_id, litellm_params), _NO_QUERY_PARAMS
 
     def transform_delete_file_response(
@@ -203,7 +203,7 @@ class XAIFilesConfig(BaseFilesConfig):
         purpose: str | None,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         return f"{_api_base_from(litellm_params)}/v1/files", _NO_QUERY_PARAMS
 
     def transform_list_files_next_request(
@@ -211,7 +211,7 @@ class XAIFilesConfig(BaseFilesConfig):
         raw_response: httpx.Response,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]] | None:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]] | None:
         page: Final = XAIFileList.model_validate(raw_response.json())
         if not page.pagination_token or not page.data:
             return None
@@ -233,7 +233,7 @@ class XAIFilesConfig(BaseFilesConfig):
         file_content_request: FileContentRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         file_id: Final = file_content_request.get("file_id")
         if file_id is None:
             raise ValueError("file_id is required to download file content")

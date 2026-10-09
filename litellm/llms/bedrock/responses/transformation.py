@@ -157,7 +157,7 @@ def inline_remote_image_urls(
 
 def _without_disabled_reasoning_effort(
     params: Mapping[str, object], model: str, drop_params: bool
-) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
+) -> dict[str, object]:
     reasoning: Final = params.get("reasoning")
     effort: Final = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
     if not isinstance(reasoning, Mapping) or not isinstance(effort, str):
@@ -220,7 +220,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+        litellm_params: dict,
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
         override: Final = (
@@ -244,10 +244,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+        headers: dict,
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+    ) -> dict:
         api_key: Final = litellm_params.api_key if litellm_params is not None else None
         bearer: Final = resolve_bedrock_bearer_token(api_key)
         if not bearer:
@@ -256,15 +256,15 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
-        optional_params: dict,  # mutable-ok: same
-        request_data: dict,  # mutable-ok: same
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> "tuple[dict, bytes | None]":  # mutable-ok: signature fixed by the override contract
+    ) -> "tuple[dict, bytes | None]":
         if resolve_bedrock_bearer_token(api_key):
             # Bedrock API keys are Bearer credentials; SigV4 on top would be wrong.
             return headers, None
@@ -284,7 +284,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: signature fixed by the override contract
+    ) -> dict:
         mapped: Final = super().map_openai_params(
             response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
         )
@@ -316,10 +316,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: same
-    ) -> dict:  # mutable-ok: same
+        headers: dict,
+    ) -> dict:
         inlined: Final = MappingProxyType({url: self.fetch_image(url) for url in collect_remote_image_urls(input)})
         return self._transform_inlined_request(
             model=model,
@@ -333,10 +333,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: same
-    ) -> dict:  # mutable-ok: same
+        headers: dict,
+    ) -> dict:
         remote_urls: Final = collect_remote_image_urls(input)
         data_uris: Final = await asyncio.gather(*(self.async_fetch_image(url) for url in remote_urls))
         return self._transform_inlined_request(
@@ -351,10 +351,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: same
-    ) -> dict:  # mutable-ok: same
+        headers: dict,
+    ) -> dict:
         normalized_input, rewritten_types = normalize_codex_input_items(input)
         if rewritten_types:
             verbose_logger.warning(

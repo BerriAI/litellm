@@ -158,7 +158,7 @@ HASHICORP_SENSITIVE_FIELDS: Final[set[str]] = {
 
 # --- CyberArk Conjur constants ---
 
-CYBERARK_ENV_VAR_MAPPING: Final[dict[str, str]] = {  # mutable-ok: module-level env mapping
+CYBERARK_ENV_VAR_MAPPING: Final[dict[str, str]] = {
     "cyberark_api_base": "CYBERARK_API_BASE",
     "cyberark_account": "CYBERARK_ACCOUNT",
     "cyberark_username": "CYBERARK_USERNAME",
@@ -698,13 +698,13 @@ async def update_cyberark_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    config_data: dict[str, object] = config.model_dump(exclude_none=True)  # mutable-ok: merged  # rebind-ok: stripped
+    config_data: dict[str, object] = config.model_dump(exclude_none=True)  # rebind-ok: stripped
 
     # Merge ALL fields the user didn't send: try DB first, fall back to env vars.
     # Omitted field = keep existing; empty string = clear/remove the field.
     existing_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
-    existing_decrypted: dict[str, object] | None = None  # mutable-ok: DB payload  # rebind-ok: set when record exists
-    env_values: dict[str, str | None] = {}  # mutable-ok: env snapshot  # rebind-ok: populated when no DB record exists
+    existing_decrypted: dict[str, object] | None = None  # rebind-ok: set when record exists
+    env_values: dict[str, str | None] = {}  # rebind-ok: populated when no DB record exists
     if existing_record is not None and existing_record.config_value is not None:
         existing_data: Final = parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)  # pyright: ignore[reportPrivateUsage]  # rebind-ok: populated when a prior record decrypts
@@ -863,7 +863,7 @@ async def delete_cyberark_config(
         )
 
     existing_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
-    before_config: dict[str, object] | None = None  # mutable-ok: audit snapshot  # rebind-ok: set when decrypts
+    before_config: dict[str, object] | None = None  # rebind-ok: set when decrypts
     if existing_record is not None and existing_record.config_value is not None:
         try:
             before_config = proxy_config._decrypt_db_variables(parse_config_value(existing_record.config_value))  # pyright: ignore[reportPrivateUsage]  # rebind-ok: populated when the prior record decrypts

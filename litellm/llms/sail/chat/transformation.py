@@ -26,11 +26,11 @@ class SailChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: signature fixed by the base interface
-        optional_params: dict,  # mutable-ok: signature fixed by the base interface
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+    ) -> dict:
         completion_window_for_service_tier(non_default_params.get("service_tier"), model=model, drop_params=drop_params)
         return super().map_openai_params(
             non_default_params=non_default_params,
@@ -43,10 +43,10 @@ class SailChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: signature fixed by the base interface
-        optional_params: dict,  # mutable-ok: signature fixed by the base interface
-        litellm_params: dict,  # mutable-ok: signature fixed by the base interface
-        headers: dict,  # mutable-ok: signature fixed by the base interface
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         request: Final = chat_request_for_sail(
             super().transform_request(
                 model=model,

@@ -781,8 +781,8 @@ class AWSEventStreamDecoder:
 
     def chunk_parser(
         self,
-        chunk_data: dict[str, object],  # mutable-ok: mirrors override contract
-    ) -> GChunk | ModelResponseStream | dict[str, object]:  # mutable-ok: mirrors override contract
+        chunk_data: dict[str, object],
+    ) -> GChunk | ModelResponseStream | dict[str, object]:
         return self._chunk_parser(chunk_data)
 
     def iter_bytes(

@@ -73,7 +73,7 @@ def sandbox_path(private_dir: str, path: str) -> str:
 
 async def persist_dir(sandbox: Sandbox, link_path: str, cache_subpath: str) -> None:
     script_args: Final = ("-c", PERSIST_DIR_SCRIPT, "sh", link_path, cache_subpath)
-    cmd: Final = ["sh", *script_args]  # mutable-ok: Sandbox.run takes list[str]
+    cmd: Final = ["sh", *script_args]
     run = await sandbox.run(cmd)
     if run.exit_code != 0:
         verbose_logger.debug(
@@ -120,7 +120,7 @@ class CLIHarnessHandler(BaseHarnessHandler):
         if self._setup is None or self._private_dir is None:
             raise RuntimeError("CLIHarnessHandler.turn() called before start()")
         request = self.config.transform_turn_request(ctx, self._setup, self._private_dir, prompt, self._native_id)
-        argv: Final = list(request.argv)  # mutable-ok: Sandbox.exec takes list[str]
+        argv: Final = list(request.argv)
         proc = await ctx.sandbox.exec(argv, env=request.env, cwd=request.cwd)
         self._proc = proc
         tail: Final[deque[str]] = deque(maxlen=HARNESS_STDERR_TAIL_LINES)  # mutable-ok: bounded stderr ring buffer

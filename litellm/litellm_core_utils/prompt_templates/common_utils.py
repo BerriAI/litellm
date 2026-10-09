@@ -1239,7 +1239,7 @@ def _mergeable_branch(
     branch: object,
     seen_refs: frozenset[str],
     depth: int,
-    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+    expanded_refs: dict[str, Mapping[str, object] | None],
 ) -> Mapping[str, object] | None:
     if not isinstance(branch, dict) or depth > _MAX_SCHEMA_FLATTEN_DEPTH:
         return None
@@ -1272,7 +1272,7 @@ def _flatten_schema_against_root(
     root: Mapping[str, object],
     seen_refs: frozenset[str],
     depth: int,
-    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+    expanded_refs: dict[str, Mapping[str, object] | None],
 ) -> Mapping[str, object]:
     raw_branch_groups: Final = tuple(
         (
@@ -1404,7 +1404,7 @@ def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
 def _schema_without_rejected_regex(
     schema: Mapping[str, object], rejected: Callable[[str], bool]
 ) -> Mapping[str, object]:
-    rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
+    rebuilt: dict[int, Mapping[str, object]] = {}
     for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
         rebuilt.update(
             (id(node), rewritten)

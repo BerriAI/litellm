@@ -55,7 +55,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def transform_request(
         self,
         input: str,
-        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],
     ) -> AmazonTitanMultimodalEmbeddingRequest:
         return self._transform_request(input, inference_params)
 

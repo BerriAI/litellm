@@ -702,7 +702,7 @@ def _guardrails_run_standalone_pre_call(data: Mapping[str, object]) -> frozenset
 
 
 def _without_names(
-    bucket: dict[str, object],  # mutable-ok: the applied_* header slots live in the request-state dict hooks write
+    bucket: dict[str, object],
     slot: str,
     names: frozenset[str],
 ) -> None:
@@ -717,7 +717,7 @@ def _without_names(
 
 
 def _withdraw_deferred_claims(
-    data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    data: dict[str, object],
     deferred: Sequence[tuple[str, "GuardrailPipeline"]],
 ) -> None:
     outside_by_policy: Final = MappingProxyType(
@@ -742,7 +742,7 @@ def _withdraw_deferred_claims(
 
 
 def _defer_post_call_pipelines(
-    data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    data: dict[str, object],
     response: ResponsesAPIResponse,
 ) -> None:
     deferred: Final = _post_call_pipelines(data)
@@ -1515,7 +1515,7 @@ class ProxyLogging:
 
         synthetic_message: Final = ChatCompletionUserMessage(role="user", content=tool_call_content)
 
-        synthetic_metadata: Final[dict[str, object]] = {  # mutable-ok: existing guardrail hooks mutate request metadata
+        synthetic_metadata: Final[dict[str, object]] = {
             **MappingProxyType({key: value for key, value in parent_metadata.items() if key != "guardrails"}),
             "headers": kwargs.get("headers") or {},
             "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
@@ -2045,11 +2045,11 @@ class ProxyLogging:
     async def _run_sequential_guardrail_callback(
         self,
         callback: CustomGuardrail,
-        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        data: dict,
+        raw_request_snapshot: dict | None,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
+    ) -> dict:
         """
         Run one guardrail from the sequential pre_call loop and return what the
         rest of the loop should carry forward.
@@ -2079,9 +2079,7 @@ class ProxyLogging:
         # raw_request_snapshot itself) so the comparison isolates the guardrail's
         # own content mutation from this bookkeeping noise without risking a
         # premature marker write into shared state.
-        expected_if_unmutated: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-            independent_snapshot(input_data) if scans_raw_request else None
-        )
+        expected_if_unmutated: Final[dict | None] = independent_snapshot(input_data) if scans_raw_request else None
         if expected_if_unmutated is not None:
             callback.mark_pre_call_hook_ran(expected_if_unmutated)
         try:
@@ -2233,9 +2231,9 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict | None = None,
         response: LLMResponseTypes | None = None,
-    ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
+    ) -> tuple[dict, LLMResponseTypes | None]:
         """
         Execute guardrail pipelines if any are configured for this request.
 
@@ -2479,9 +2477,7 @@ class ProxyLogging:
             isinstance(cb, CustomGuardrail) and cb.scan_raw_request
             for cb in ProxyLogging.callback_capabilities().resolved_callbacks
         )
-        raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-            independent_snapshot(data) if needs_raw_request_snapshot else None
-        )
+        raw_request_snapshot: Final[dict | None] = independent_snapshot(data) if needs_raw_request_snapshot else None
 
         try:
             if not skip_guardrails:
@@ -2631,7 +2627,7 @@ class ProxyLogging:
         self,
         guardrails: tuple[CustomGuardrail, ...],
         data: dict,
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict | None,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> None:
@@ -2656,7 +2652,7 @@ class ProxyLogging:
         sequential guardrail already masked or rewrote.
         """
 
-        def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
+        def _input_for(callback: CustomGuardrail) -> dict:
             if not callback.scan_raw_request or raw_request_snapshot is None:
                 return data
             return independent_snapshot(raw_request_snapshot)
@@ -3058,7 +3054,7 @@ class ProxyLogging:
     async def _run_during_call_guardrail(
         self,
         callback: CustomGuardrail,
-        data: dict[str, object],  # mutable-ok: request payload dict, guardrail_to_apply is written in place
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         user_api_key_auth_dict: UserAPIKeyAuth | dict[str, object] | None,
         call_type: CallTypesLiteral,
@@ -3541,7 +3537,7 @@ class ProxyLogging:
 
     async def _run_post_call_pipelines(
         self,
-        data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes | None:
@@ -4094,7 +4090,7 @@ class ProxyLogging:
         self,
         response: "AsyncGenerator[object, None]",
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
+        request_data: dict,
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
         translation: "tuple[str, BaseTranslation]",
     ) -> "AsyncGenerator[object, None]":

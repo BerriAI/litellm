@@ -168,16 +168,12 @@ def models_json_path(env: Mapping[str, str]) -> Path:
     return root / "models.json"
 
 
-def _model_entry(
-    model_id: str, limits: Mapping[str, ModelLimits]
-) -> dict[str, JsonValue]:  # mutable-ok: JSON object is serialized
+def _model_entry(model_id: str, limits: Mapping[str, ModelLimits]) -> dict[str, JsonValue]:
     limit: Final = limits.get(model_id)
-    context: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
+    context: Final[dict[str, JsonValue]] = (
         {"contextWindow": limit.context_window} if limit and limit.context_window else {}
     )
-    output: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
-        {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
-    )
+    output: Final[dict[str, JsonValue]] = {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
     return {"id": model_id, **context, **output}
 
 
@@ -185,7 +181,7 @@ def provider_block(
     base_url: str,
     model_ids: tuple[str, ...],
     limits: Mapping[str, ModelLimits] = _NO_LIMITS,
-) -> dict[str, JsonValue]:  # mutable-ok: JSON object is serialized
+) -> dict[str, JsonValue]:
     """openai-completions is the one API shape every LiteLLM model serves.
 
     Real contextWindow/maxTokens matter: pi otherwise assumes 128k/16384, which

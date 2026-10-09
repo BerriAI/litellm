@@ -107,7 +107,7 @@ class AnthropicCountTokensConfig:
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
-    ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
+    ) -> dict[str, JsonValue]:
         """
         Transform request to Anthropic CountTokens format.
 

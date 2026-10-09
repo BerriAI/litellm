@@ -194,9 +194,7 @@ def mask_credentials_in_payload(data: object) -> object:
 
 @dataclass(frozen=True, slots=True)
 class _PayloadWalker:
-    _memo: dict[tuple[int, bool], tuple[object, object]] = field(  # mutable-ok: memo of one walk, pins each keyed node
-        default_factory=dict
-    )
+    _memo: dict[tuple[int, bool], tuple[object, object]] = field(default_factory=dict)
 
     def walk(self, node: object, key_is_sensitive: bool, depth: int) -> object:
         if not isinstance(node, (Mapping, list, tuple, BaseModel)):

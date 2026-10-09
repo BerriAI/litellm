@@ -508,11 +508,11 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,  # mutable-ok: inherited provider interface accepts a concrete parameter dictionary
+        optional_params: dict,
         voice: _LyriaVoice = None,
         drop_params: bool = False,
-        kwargs: dict | None = None,  # mutable-ok: inherited provider interface accepts a concrete keyword dictionary
-    ) -> tuple[str | None, dict]:  # mutable-ok: inherited provider interface returns concrete mapped parameters
+        kwargs: dict | None = None,
+    ) -> tuple[str | None, dict]:
         mapped_params: Final = dict(optional_params)
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
@@ -552,7 +552,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: inherited provider interface accepts concrete LiteLLM parameters
+        litellm_params: dict,
     ) -> str:
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
@@ -601,9 +601,9 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,  # mutable-ok: inherited provider interface accepts concrete mapped parameters
-        litellm_params: dict,  # mutable-ok: inherited provider interface accepts concrete LiteLLM parameters
-        headers: dict,  # mutable-ok: inherited provider interface accepts and updates concrete HTTP headers
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
     ) -> TextToSpeechRequestData:
         access_token, project = self._ensure_access_token(
             credentials=self.safe_get_vertex_ai_credentials(litellm_params),
@@ -619,7 +619,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         )
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
-        request_body: Final[dict[str, object]] = (  # mutable-ok: HTTP dispatch requires a concrete provider payload
+        request_body: Final[dict[str, object]] = (
             {
                 "instances": [{"prompt": input}],
                 "parameters": {"sample_count": 1},

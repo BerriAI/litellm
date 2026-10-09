@@ -150,12 +150,12 @@ def test_reasonless_ok_on_a_clean_line_is_lit005_not_lit013(tmp_path):
 
 
 def test_mutable_annotation_is_flagged(tmp_path):
-    assert "LIT001" in _codes(tmp_path, "x: dict[str, int]\n")
+    assert "LIT001" in _codes(tmp_path, "x: list[int]\n")
 
 
 def test_typing_alias_and_forward_ref_annotations_are_flagged(tmp_path):
     assert "LIT001" in _codes(tmp_path, "from typing import List\nx: List[int]\n")
-    assert "LIT001" in _codes(tmp_path, 'x: "dict[str, int]"\n')
+    assert "LIT001" in _codes(tmp_path, 'x: "list[int]"\n')
 
 
 def test_literal_string_args_are_values_not_forward_refs(tmp_path):
@@ -165,13 +165,33 @@ def test_literal_string_args_are_values_not_forward_refs(tmp_path):
         'from typing import Literal\ndef f(op: Literal["create", "list"] = "create") -> None:\n    return None\n',
     )
     assert "LIT001" not in _codes(tmp_path, 'import typing\nx: typing.Literal["dict"] = "dict"\n')
-    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: dict[str, Literal["a"]]\n')
+    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: set[Literal["a"]]\n')
     assert "LIT001" in _codes(tmp_path, "x: \"Literal['x'] | list[int]\"\n")
 
 
 def test_readonly_annotations_are_clean(tmp_path):
     for ann in ("Mapping[str, int]", "Sequence[int]", "tuple[int, ...]", "frozenset[int]"):
         assert "LIT001" not in _codes(tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n")
+
+
+def test_mapping_annotations_are_allowed(tmp_path):
+    for ann in (
+        "dict[str, int]",
+        "Dict[str, int]",
+        "DefaultDict[str, int]",
+        "MutableMapping[str, int]",
+        "defaultdict[str, int]",
+        "OrderedDict[str, int]",
+    ):
+        source = (
+            "from collections import OrderedDict, defaultdict\n"
+            "from collections.abc import MutableMapping\n"
+            "from typing import DefaultDict, Dict\n"
+            f"x: {ann}\n"
+        )
+        assert "LIT001" not in _codes(tmp_path, source), ann
+    assert "LIT001" not in _codes(tmp_path, 'x: "dict[str, int]"\n')
+    assert "LIT001" in _codes(tmp_path, "x: dict[str, list[int]]\n")
 
 
 # --------------------------------------------------------------------------- #

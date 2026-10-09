@@ -88,11 +88,11 @@ class RerankResponse(LiteLLMBaseModel):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
     def __getitem__(self, key):

@@ -635,8 +635,8 @@ if MCP_AVAILABLE:
     # still reading the shared object.
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
-    _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
-    _admin_terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: admin-closed id -> last replay
+    _stateful_session_client_info: Final[dict[str, Implementation]] = {}
+    _admin_terminated_session_ids: Final[dict[str, float]] = {}
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...

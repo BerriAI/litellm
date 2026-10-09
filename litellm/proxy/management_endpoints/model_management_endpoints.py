@@ -3077,7 +3077,7 @@ async def update_useful_links(
 
 
 def _validated_labeled_tiers(
-    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
+    tier_labels: dict[ComplexityTier, str],
 ) -> tuple[tuple[ComplexityTier, str], ...]:
     """Validate tier labels once for both prompt-preview transports."""
     try:
@@ -3112,7 +3112,7 @@ class AutoRouterClassifierPromptPreviewRequest(LiteLLMBaseModel):
     which must not reach access logs through a URL."""
 
     tier_definitions: tuple[TierDefinition, ...] | None = None
-    tier_labels: dict[ComplexityTier, str] | None = None  # mutable-ok: FastAPI parses JSON object fields into dicts
+    tier_labels: dict[ComplexityTier, str] | None = None
     classification_rubric: ClassificationRubric | None = None
     context_window_size: Annotated[int, Field(ge=0)] = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
     classification_prompt: str | None = None

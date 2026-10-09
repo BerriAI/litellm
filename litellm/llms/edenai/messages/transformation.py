@@ -24,7 +24,7 @@ from ..common_utils import EDENAI_API_BASE, EdenAIException, reported_cost, requ
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_EDENAI_PROVIDER_SPEC: Final[dict[str, str]] = {  # mutable-ok: SimpleProviderConfig takes a plain dict
+_EDENAI_PROVIDER_SPEC: Final[dict[str, str]] = {
     "base_url": EDENAI_API_BASE,
     "api_key_env": "EDENAI_API_KEY",
     "api_base_env": "EDENAI_API_BASE",
@@ -38,14 +38,14 @@ class EdenAIAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: inherited contract
+        headers: dict[str, str],
         model: str,
         messages: list[object],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: inherited contract
+    ) -> tuple[dict[str, str], str | None]:
         return super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,
@@ -74,6 +74,6 @@ class EdenAIAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)

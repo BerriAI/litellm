@@ -2597,7 +2597,7 @@ class Router:
     @staticmethod
     def _deployment_params_with_request_reasoning_override(
         deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
-    ) -> dict[str, object]:  # mutable-ok: litellm's request pipeline consumes a mutable kwargs mapping
+    ) -> dict[str, object]:
         """Return deployment params whose equivalent effort controls cannot outrank a request override.
 
         Providers expose the same setting through several native carriers. A request-level
@@ -2640,7 +2640,7 @@ class Router:
         self,
         deployment: DeploymentTypedDict,
         model: str,
-        kwargs: dict[str, object],  # mutable-ok: fallback must update the active request and its log body together
+        kwargs: dict[str, object],
     ) -> None:
         """Let a classifier fallback without reasoning support remain a usable fallback.
 
@@ -3571,8 +3571,8 @@ class Router:
         self,
         e: "MidStreamFallbackError",
         source_iterator: "BaseResponsesAPIStreamingIterator",
-        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
-        adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],  # mutable-ok: hidden params
+        initial_kwargs: dict[str, Any],
+        adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],
         held_lifecycle_events: tuple[object, ...],
     ) -> AsyncGenerator[object, None]:
         """
@@ -5567,7 +5567,7 @@ class Router:
     async def _aanthropic_messages_streaming_iterator(
         self,
         response: AsyncIterator[bytes],
-        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        initial_kwargs: dict[str, Any],
     ) -> AsyncIterator[bytes]:
         """
         Wrap an anthropic_messages (/v1/messages) streaming response so a
@@ -5731,7 +5731,7 @@ class Router:
         has_generated_content: bool,
         buffered_lifecycle_chunks: tuple[bytes, ...],
         model: str,
-        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        initial_kwargs: dict[str, Any],
         wrapper: "FallbackAwareAnthropicMessagesStream",
     ) -> AsyncGenerator[bytes, None]:
         """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
@@ -5994,7 +5994,7 @@ class Router:
     async def _aanthropic_messages_fallback_attempt(
         self,
         e: "MidStreamFallbackError",
-        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        initial_kwargs: dict[str, Any],
         wrapper: "FallbackAwareAnthropicMessagesStream",
     ) -> AsyncGenerator[bytes, None]:
         """
@@ -9096,7 +9096,7 @@ class Router:
         return f"{type(value).__module__}.{type(value).__qualname__}"
 
     @staticmethod
-    def generate_model_id(model_group: str, litellm_params: dict) -> str:  # mutable-ok: hashed read-only
+    def generate_model_id(model_group: str, litellm_params: dict) -> str:
         """
         Helper function to consistently generate the same id for a deployment
 
@@ -9168,7 +9168,7 @@ class Router:
 
     @staticmethod
     def _inherit_builtin_service_tier_pricing(
-        model_info: dict,  # mutable-ok: deployment cost-map entry filled in place
+        model_info: dict,
         backend_model: str,
         custom_llm_provider: str | None,
     ) -> None:
@@ -9193,7 +9193,7 @@ class Router:
 
     @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(
-        model_info: dict,  # mutable-ok: cost-map entry filled in place
+        model_info: dict,
         backend_model: str,
         custom_llm_provider: str | None,
     ) -> None:
@@ -10370,7 +10370,7 @@ class Router:
         return (backend_key,)
 
     @staticmethod
-    def _deployment_model_cost_payload(deployment: Deployment) -> dict:  # mutable-ok: cost-map entry
+    def _deployment_model_cost_payload(deployment: Deployment) -> dict:
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
         Custom pricing lives on ``litellm_params`` rather than ``model_info``, and
@@ -10378,7 +10378,7 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
+        model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)
         for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
@@ -10425,7 +10425,7 @@ class Router:
     def _register_deployment_in_model_cost(
         *,
         model_id: str | None,
-        model_info: dict,  # mutable-ok: cost-map entry
+        model_info: dict,
         model: str,
         custom_llm_provider: str | None,
     ) -> None:

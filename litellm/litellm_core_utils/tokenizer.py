@@ -275,13 +275,13 @@ class HuggingFaceTokenizer:
     def id_to_token(self, id: int) -> str | None:
         return self._native.id_to_token(id)
 
-    def get_vocab(self, with_added_tokens: bool = True) -> dict[str, int]:  # mutable-ok: [LIT001] SDK return type
+    def get_vocab(self, with_added_tokens: bool = True) -> dict[str, int]:
         return self._native.get_vocab(with_added_tokens)
 
     def get_vocab_size(self, with_added_tokens: bool = True) -> int:
         return self._native.get_vocab_size(with_added_tokens)
 
-    def get_added_tokens_decoder(self) -> dict[int, _AddedToken]:  # mutable-ok: [LIT001] SDK return type
+    def get_added_tokens_decoder(self) -> dict[int, _AddedToken]:
         try:
             from tokenizers import AddedToken
         except ModuleNotFoundError as error:
@@ -307,11 +307,11 @@ class HuggingFaceTokenizer:
         return self._native.num_special_tokens_to_add(is_pair)
 
     @property
-    def padding(self) -> dict[str, object] | None:  # mutable-ok: [LIT001] SDK return type
+    def padding(self) -> dict[str, object] | None:
         return self._native.padding()
 
     @property
-    def truncation(self) -> dict[str, object] | None:  # mutable-ok: [LIT001] SDK return type
+    def truncation(self) -> dict[str, object] | None:
         return self._native.truncation()
 
     @property

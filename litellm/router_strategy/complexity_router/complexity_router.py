@@ -2028,7 +2028,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, object] | None,
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier call when the scorer did not confidently
@@ -2061,7 +2061,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, object] | None,
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier when the score sits near a tier boundary.
@@ -2190,7 +2190,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, object] | None,
         messages: Sequence[Mapping[str, object]] | None,
         scored: ClassificationOutcome | None = None,
     ) -> ClassificationOutcome:
@@ -2412,7 +2412,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        request_kwargs: dict[str, object] | None,
         raw_messages: list[dict[str, object]] | None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
@@ -2974,7 +2974,7 @@ class ComplexityRouter(CustomLogger):
         tier: ComplexityTier | str,
         model: str,
         candidates: tuple[str, ...],
-        request_kwargs: dict[str, object],  # mutable-ok: adaptive feedback metadata must follow the selected model
+        request_kwargs: dict[str, object],
         retained_pin: _SessionAffinityPin | None = None,
     ) -> str:
         if not self._uses_deployment_pin or model not in candidates:
@@ -3692,7 +3692,7 @@ class ComplexityRouter(CustomLogger):
         response: PreRoutingHookResponse,
         messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict,
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
@@ -3828,7 +3828,7 @@ class ComplexityRouter(CustomLogger):
         model_name: str,
         messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict,
     ) -> bool:
         """Whether the router would find a deployment for this group ON THIS REQUEST.
 
@@ -3886,7 +3886,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict,
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:

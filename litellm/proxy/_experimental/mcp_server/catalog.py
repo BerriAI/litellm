@@ -395,9 +395,7 @@ class CatalogSnapshots:
             closed.set()
             self._staged_routing.reset(routing_token)
 
-    async def _stage_servers(
-        self, rows: Sequence[BaseModel], *, reuse_unchanged: bool
-    ) -> dict[str, MCPServer]:  # mutable-ok: assign_unique_short_prefix requires a dict registry
+    async def _stage_servers(self, rows: Sequence[BaseModel], *, reuse_unchanged: bool) -> dict[str, MCPServer]:
         from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             carry_forward_resolved_oauth_endpoints,
@@ -1309,7 +1307,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         self._adapter = adapter
         self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
         self._pending: dict[_DiscoveryKey, asyncio.Task[_DiscoveryPage]] = {}
-        self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
+        self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}
 
     def invalidate(self, server_id: str) -> None:
         prefix: Final = f"[{json.dumps(server_id)},"

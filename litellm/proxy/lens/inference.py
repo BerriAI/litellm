@@ -436,7 +436,7 @@ async def analyze(
             now,
         )
 
-    data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
+    data: Final[dict[str, object]] = {
         "model": job.settings.model,
         "messages": list(request_messages(body)),
         **({"cache_control_injection_points": list(cache_injection_points(body))} if body.messages else {}),

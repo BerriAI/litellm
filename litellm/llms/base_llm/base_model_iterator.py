@@ -112,7 +112,7 @@ class BaseModelResponseIterator:
     def string_to_dict_parser(
         cls,
         str_line: str,
-    ) -> dict[str, object] | None:  # mutable-ok: mirrors override contract
+    ) -> dict[str, object] | None:
         return cls._string_to_dict_parser(str_line)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:

@@ -126,9 +126,7 @@ class InMemoryBackgroundSettlementStore:
     registration relies on.
     """
 
-    _rows: dict[str, PendingBackgroundInteraction | None] = field(  # mutable-ok: the registry every settler shares
-        default_factory=dict
-    )
+    _rows: dict[str, PendingBackgroundInteraction | None] = field(default_factory=dict)
 
     async def register(self, pending: PendingBackgroundInteraction) -> None:
         self._rows[pending.interaction_id] = pending
@@ -470,7 +468,7 @@ class _ActiveBackgroundPoll:
     context: BackgroundInteractionPollContext
 
 
-_ACTIVE_POLLS: Final[dict[str, _ActiveBackgroundPoll]] = {}  # mutable-ok: asyncio needs strong refs to poll tasks
+_ACTIVE_POLLS: Final[dict[str, _ActiveBackgroundPoll]] = {}
 
 
 def _discard_poll(interaction_id: str, task: "asyncio.Task[SettlementOutcome | None]") -> None:

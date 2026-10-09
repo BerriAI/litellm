@@ -199,7 +199,7 @@ class Session:
 
     @property
     def results(self) -> list[Result]:  # mutable-ok: public property; returns a detached copy of the session's results
-        return list(self._inner.results)  # mutable-ok: detached copy so callers cannot mutate the session's accumulator
+        return list(self._inner.results)
 
     @property
     def session_id(self) -> str:

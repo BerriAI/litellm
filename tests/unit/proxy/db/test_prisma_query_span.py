@@ -147,7 +147,7 @@ class _Module:
         return tuple(chain[1:])
 
 
-_PARENTS: Final[dict[int, Mapping[int, ast.AST]]] = {}  # mutable-ok: per-tree parent map memo
+_PARENTS: Final[dict[int, Mapping[int, ast.AST]]] = {}
 
 
 def _parent_map(tree: ast.Module) -> Mapping[int, ast.AST]:

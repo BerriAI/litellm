@@ -401,7 +401,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_anthropic(gateway: G
             http_client=httpx.Client(trust_env=False, timeout=15),
         )
         sdk.messages.create(model=rig.model_name, max_tokens=16, messages=[{"role": "user", "content": text}])
-        raised: bool = False  # mutable-ok: a flag set inside the except block cannot be Final
+        raised: bool = False
         try:
             sdk.messages.create(
                 model=rig.model_name,

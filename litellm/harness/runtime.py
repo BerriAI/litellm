@@ -461,9 +461,7 @@ class _Turn:
         sandbox = self.ctx.sandbox
         after = await sandbox.snapshot()
         files = await build_file_changes(sandbox, self.before, after, self.before_contents)
-        seen = {  # mutable-ok: dedupe set grown while merging streamed FileChange events
-            change.path for change in files
-        }
+        seen = {change.path for change in files}
         for event in self.events:
             if isinstance(event, FileChange) and event.path not in seen:
                 files.append(event)
@@ -496,9 +494,7 @@ class _Turn:
             text=self._text(),
             output=output,
             files=files,
-            events=list(  # mutable-ok: Result.events is a public list field; copy detaches it from the accumulator
-                self.events
-            ),
+            events=list(self.events),
             usage=usage,
             cost=cost,
             stop_reason=self.stop_reason,

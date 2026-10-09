@@ -97,7 +97,7 @@ async def _browser_follow_authorize(
     code/state are read off the query string."""
     from playwright.async_api import async_playwright
 
-    captured: dict[str, str] = {}  # mutable-ok: hand-off from the request listener
+    captured: dict[str, str] = {}
     trail: list[str] = []  # mutable-ok: navigation diagnostics for a failed dance
 
     def _note_request(request: object) -> None:
@@ -182,7 +182,7 @@ def _oauth_provider(
     """The SDK's real OAuth machinery (RFC 9728/8414 discovery, RFC 7591 DCR,
     PKCE, token exchange) with the browser leg driven by Playwright against the
     upstream's consent screen."""
-    code_holder: dict[str, str | None] = {}  # mutable-ok: hand-off between the two SDK callbacks
+    code_holder: dict[str, str | None] = {}
 
     async def _reject_redirect(_: str) -> None:
         raise AssertionError("gateway demanded a fresh upstream consent; stored per-user token was not reused")

@@ -1098,13 +1098,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if owner_filter is None:
             return MappingProxyType({})
 
-        provider_file_ids_list: Final = [  # mutable-ok: Prisma hasSome requires a list
+        provider_file_ids_list: Final = [
             provider_file_id for provider_file_id in unique_provider_file_ids
         ]
         rows: Final = await _managed_file_table(self.prisma_client).find_many(
-            where={  # mutable-ok: Prisma requires a plain dictionary for where
+            where={
                 **owner_filter,
-                "flat_model_file_ids": {  # mutable-ok: Prisma requires a plain filter dictionary
+                "flat_model_file_ids": {
                     "hasSome": provider_file_ids_list,
                 },
             }

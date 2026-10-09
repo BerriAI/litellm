@@ -43,10 +43,10 @@ class NadirConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: object,
-        request_data: dict,  # mutable-ok: signature fixed by the base interface
+        request_data: dict,
         messages: list[AllMessageValues],  # mutable-ok: signature fixed by the base interface
-        optional_params: dict,  # mutable-ok: signature fixed by the base interface
-        litellm_params: dict,  # mutable-ok: signature fixed by the base interface
+        optional_params: dict,
+        litellm_params: dict,
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,

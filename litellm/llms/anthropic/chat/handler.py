@@ -369,7 +369,7 @@ class AnthropicChatCompletion(BaseLLM):
 
         transform_params: Final = {**optional_params, "is_vertex_request": is_vertex_request}
 
-        def finish_request(request_data: dict) -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
+        def finish_request(request_data: dict) -> tuple[dict, dict]:
             """Filter beta headers and emit pre_call, returning `(headers, data)`.
 
             The pair stays mutable because the streaming path rewrites it in
@@ -586,7 +586,7 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: list[dict[str, object]] = []
-        self._web_search_calls: dict[str, object] = {}  # mutable-ok: provider call state by id
+        self._web_search_calls: dict[str, object] = {}
 
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: list[dict[str, object]] = []

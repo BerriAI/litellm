@@ -111,14 +111,14 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     async def avalidate_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        headers: dict,
         model: str,
         messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    ) -> dict:
         """Async counterpart of validate_environment: the WIF tier can block on a token
         exchange POST, so async callers await it off the event loop."""
         params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
@@ -136,7 +136,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return params_mapping, resolved_api_base
 
     @staticmethod
-    def _finalize_headers(headers: dict, auth_header: Mapping[str, str] | None) -> dict:  # mutable-ok: out-param
+    def _finalize_headers(headers: dict, auth_header: Mapping[str, str] | None) -> dict:
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."

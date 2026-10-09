@@ -1107,7 +1107,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_management_logger: CustomLogger | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
-        request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        request_kwargs: dict[str, object] | None = None,
         injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -1158,7 +1158,7 @@ class Logging(LiteLLMLoggingBaseClass):
         tools: list[dict] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
-        request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        request_kwargs: dict[str, object] | None = None,
         injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook

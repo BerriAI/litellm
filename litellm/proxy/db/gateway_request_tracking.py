@@ -64,7 +64,7 @@ class GatewayRequestAccumulator:
 
     def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime) -> None:
         self._clock: Final = clock
-        self._counts: dict[GatewayRequestKey, GatewayRequestCounts] = {}  # mutable-ok: bounded fold, drained per flush
+        self._counts: dict[GatewayRequestKey, GatewayRequestCounts] = {}
 
     def record(self, *, category: BillableCategory, route: str, status_code: int) -> None:
         key: Final = GatewayRequestKey(date=self._clock().strftime("%Y-%m-%d"), category=category.value, route=route)
@@ -98,7 +98,7 @@ class GatewayRequestAccumulator:
 
 def fold_counts(items: Iterable[tuple[GatewayRequestKey, GatewayRequestCounts]]) -> GatewayRequestSnapshot:
     """Sum counts key-wise; the result stays bounded by (date x category x route)."""
-    folded: Final[dict[GatewayRequestKey, GatewayRequestCounts]] = {}  # mutable-ok: local fold returned once
+    folded: Final[dict[GatewayRequestKey, GatewayRequestCounts]] = {}
     for key, counts in items:
         existing = folded.get(key, _EMPTY)
         folded[key] = GatewayRequestCounts(

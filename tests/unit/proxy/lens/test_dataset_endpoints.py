@@ -47,7 +47,7 @@ ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="a
 
 class MemoryStore:
     def __init__(self) -> None:
-        self.rows: Final[dict[tuple[str, int], Dataset]] = {}  # mutable-ok: stands in for the table
+        self.rows: Final[dict[tuple[str, int], Dataset]] = {}
 
     async def summaries(self) -> tuple[StoredSummary, ...]:
         latest: Final = {i: d for (i, _), d in sorted(self.rows.items(), key=lambda item: item[0][1])}

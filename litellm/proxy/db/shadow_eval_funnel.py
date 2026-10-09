@@ -20,7 +20,7 @@ ShadowEvalFunnelStage = Literal["not_sampled", "unjudgeable", "shed", "withheld"
 
 FUNNEL_STAGES: Final[tuple[ShadowEvalFunnelStage, ...]] = ("not_sampled", "unjudgeable", "shed", "withheld")
 
-_pending: dict[str, dict[ShadowEvalFunnelStage, int]] = {}  # mutable-ok: module-level queue, single event loop
+_pending: dict[str, dict[ShadowEvalFunnelStage, int]] = {}
 
 _FUNNEL_PLACEHOLDERS: Final = ", ".join(f"${n + 2}" for n in range(len(FUNNEL_STAGES)))
 

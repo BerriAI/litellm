@@ -339,7 +339,7 @@ def mid_stream_fallback_snapshot_kwargs(
     model: str,
     controls: object,
     kwargs: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+) -> dict[str, object]:
     """
     The kwargs a completion attempt's stream re-enters the fallback chain with if it fails.
 
@@ -362,7 +362,7 @@ def mid_stream_fallback_hop_kwargs(
     original_generic_function: Callable[..., object],
     controls: object,
     kwargs: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+) -> dict[str, object]:
     """
     The kwargs one generic-endpoint streaming attempt re-enters the fallback chain with if its stream fails.
 
@@ -387,7 +387,7 @@ _MID_STREAM_RETRY_BUDGET_KEY: Final = "max_retries"
 
 def mid_stream_retry_kwargs(
     hop_kwargs: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: unpacked as **kwargs into the attempt function, which pops its controls carrier
+) -> dict[str, object]:
     """
     The kwargs a same-group retry re-enters the attempt function with. async_function_with_retries
     pops the per-request controls and the chain's original_function before any attempt runs, and

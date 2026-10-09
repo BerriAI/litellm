@@ -579,14 +579,14 @@ async def handle_mcp_tool_search(
 
 async def handle_mcp_proxy_tool(
     name: str,
-    arguments: dict[str, JsonValue],  # mutable-ok: MCP dispatcher passes mutable JSON call arguments
+    arguments: dict[str, JsonValue],
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: str | None = None,
     mcp_servers: list[str] | None = None,  # mutable-ok: preserve MCP scope container for existing resolver
     mcp_auth_header: str | None = None,
-    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,  # mutable-ok: preserve forwarded headers
-    oauth2_headers: dict[str, str] | None = None,  # mutable-ok: preserve forwarded headers
-    raw_headers: dict[str, str] | None = None,  # mutable-ok: preserve request headers
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
 ) -> CallToolResult:
     from fastapi import HTTPException

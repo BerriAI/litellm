@@ -650,7 +650,7 @@ class LiteLLMExecutedBatchRunner:
             raise TypeError(f"the router has no callable for {endpoint}")
         return method
 
-    def _row_metadata(self, run: _BatchRun) -> dict[str, object]:  # mutable-ok: router updates metadata in place
+    def _row_metadata(self, run: _BatchRun) -> dict[str, object]:
         return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(run.user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),

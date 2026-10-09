@@ -663,7 +663,7 @@ async def upsert_budget_and_membership(
     )
     source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
-    create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
+    create_data: Final[dict[str, object]] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
         **MappingProxyType(

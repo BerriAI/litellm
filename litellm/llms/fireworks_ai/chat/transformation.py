@@ -350,9 +350,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return optional_params
 
-    def map_extra_body_params(
-        self, optional_params: Mapping[str, object], model: str
-    ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
+    def map_extra_body_params(self, optional_params: Mapping[str, object], model: str) -> dict:
         extra_body: Final = optional_params.get("extra_body")
         if not isinstance(extra_body, dict):
             return dict(optional_params)

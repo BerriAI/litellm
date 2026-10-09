@@ -123,7 +123,7 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: inherited config contract returns a dict
+    ) -> dict[str, object]:
         if not self.is_flux2_model(model):
             return super().map_openai_params(
                 non_default_params=dict(non_default_params),

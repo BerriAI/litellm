@@ -187,7 +187,7 @@ class State:
 
     def dumps(self) -> bytes:
         return json.dumps(
-            {  # mutable-ok: JSON payload serialized immediately by json.dumps
+            {
                 "harness": self.harness.value,
                 "native_session_id": self.native_session_id,
                 "workdir": self.workdir,

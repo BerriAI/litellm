@@ -647,7 +647,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict[str, object] | None,  # mutable-ok: same request-payload shape the hooks take
+        request_data: dict[str, object] | None,
         deliver_ended_stream_rewrites: bool,
     ) -> None:
         """Ended-stream path: rebuild the full response, run the non-streaming

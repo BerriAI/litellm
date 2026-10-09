@@ -673,7 +673,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @classmethod
     def apply_sampling_param(
         cls,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
         model: str,
         param: str,
         value: object,
@@ -898,7 +898,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def maybe_drop_disabled_thinking(
         model: str,
-        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
+        optional_params: MutableMapping[str, object],
         custom_llm_provider: str,
     ) -> None:
         """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
@@ -918,7 +918,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def translate_legacy_thinking_for_adaptive_model(
         model: str,
-        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        optional_params: MutableMapping[str, object],
         custom_llm_provider: str,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
@@ -1640,7 +1640,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) ->
     return out
 
 
-def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:
     if not isinstance(message, Mapping):
         return message
     content: Final = message.get("content")
@@ -1655,7 +1655,7 @@ def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutabl
 
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
-    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+    messages: Sequence[dict],
 ) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking / redacted_thinking blocks that carry another provider's encrypted
@@ -2005,14 +2005,14 @@ def strip_provider_specific_fields_from_anthropic_messages(
     return [_strip_provider_specific_fields_in_message(m) for m in messages]
 
 
-def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
+def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:
     if not isinstance(cache_control, Mapping):
         return None
     cache_type: Final = cache_control.get("type")
     return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}
 
 
-def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire format
+def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:
     if "cache_control" not in block:
         return dict(block)
     normalized: Final = _normalized_cache_control(block["cache_control"])
@@ -2068,7 +2068,7 @@ def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> obj
 
 def normalize_cache_control_in_anthropic_payload(
     payload: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: JSON wire format
+) -> dict[str, object]:
     """
     Return a copy of an Anthropic /v1/messages payload with every
     ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``

@@ -215,10 +215,10 @@ async def get_model_insights(
     )
     date_rows: Final = _DATE_ROWS.validate_python(
         await table.group_by(
-            by=["date"],  # mutable-ok: prisma group_by requires a list of fields
+            by=["date"],
             sum=_SUM_FIELDS,
             where=date_window,
-            order={"date": "asc"},  # mutable-ok: prisma order clause must be a dict
+            order={"date": "asc"},
         )
     )
     return ModelInsightsResponse(

@@ -361,11 +361,11 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -383,11 +383,11 @@ class AgentDeleteResult(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -405,11 +405,11 @@ class AgentListResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -427,11 +427,11 @@ class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -501,11 +501,11 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
     @classmethod

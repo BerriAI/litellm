@@ -70,8 +70,8 @@ _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
-    headers: dict[str, str] | None,  # mutable-ok: returned as-is when there is nothing to add
-) -> dict[str, str] | None:  # mutable-ok: becomes the request's outbound headers
+    headers: dict[str, str] | None,
+) -> dict[str, str] | None:
     """
     `headers` plus any attribution header the caller didn't already set (names
     compared case-insensitively). Builds a new dict; `headers` is never mutated.
@@ -177,9 +177,9 @@ class BaseConfig(ABC):
 
     def add_tools_to_optional_params(
         self,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
         tools: list[ChatCompletionToolParam],  # mutable-ok: mirrors override contract
-    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:
         return self._add_tools_to_optional_params(optional_params, tools)
 
     def translate_developer_role_to_system_role(

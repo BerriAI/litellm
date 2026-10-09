@@ -315,7 +315,7 @@ class _TurnState:
 
 class MuseEventTransformer:
     def __init__(self, *, turn_limit: int = 128) -> None:
-        self._turns: dict[str, _TurnState] = {}  # mutable-ok: bounded, insertion-ordered per-turn emit state
+        self._turns: dict[str, _TurnState] = {}
         self._turn_limit: Final = turn_limit
         self._active_turn_id: str | None = None
         self._mode: MuseMode = "ENDPOINTING"
@@ -454,10 +454,10 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseRealtimeConfig contract
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseRealtimeConfig contract
+    ) -> dict[str, str]:
         token: Final = api_key or get_secret_str("META_API_KEY")
         if token is None:
             raise ValueError("api_key is required for Meta API calls")

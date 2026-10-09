@@ -342,10 +342,10 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseRealtimeConfig contract
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseRealtimeConfig contract
+    ) -> dict[str, str]:
         return headers
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
