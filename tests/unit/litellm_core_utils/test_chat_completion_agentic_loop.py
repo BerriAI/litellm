@@ -21,7 +21,7 @@ they stay out of the body even without it.
 """
 
 import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -261,13 +261,13 @@ class _RecordingGateLogger(_GateOnlyLogger):
 
     def __init__(self, plan: AgenticLoopPlan, tool_calls: Dict[str, Any]) -> None:
         super().__init__(plan=plan, tool_calls=tool_calls)
-        self.followups: List[ModelResponse] = []
+        self.followups: tuple[ModelResponse, ...] = ()
 
     async def async_post_agentic_loop_response_hook(
         self, response: object, plan: AgenticLoopPlan, kwargs: Dict[str, Any]
     ) -> object:
         assert isinstance(response, ModelResponse)
-        self.followups.append(response)
+        self.followups = (*self.followups, response)
         return response
 
 
@@ -475,7 +475,7 @@ async def test_websearch_converted_stream_replays_the_final_answer_with_the_requ
         run_agentic_loop=True,
         request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
     )
-    gate = _RecordingGateLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
+    gate: Final = _RecordingGateLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
     logging_obj = Logging(
         model="gpt-4o",
         messages=[{"role": "user", "content": "what is 6*7?"}],
@@ -488,7 +488,7 @@ async def test_websearch_converted_stream_replays_the_final_answer_with_the_requ
     )
     stash = {"_websearch_interception_stream_options": {"include_usage": True}} if include_usage else {}
 
-    result = await maybe_run_chat_completion_agentic_loop(
+    result: Final = await maybe_run_chat_completion_agentic_loop(
         response=_tool_call_model_response(),
         model="gpt-4o",
         messages=[{"role": "user", "content": "what is 6*7?"}],
