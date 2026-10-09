@@ -57,12 +57,12 @@ def test_cache_key_differs_by_ssl_verify():
     Verify cache keys differ when ssl_verify differs to prevent client poisoning across CAs.
     """
     params_ca1 = {
-        "api_key": "sk-1234",
+        "api_key": "sk-test-key",
         "is_async": True,
         "ssl_verify": "/path/ca1.pem",
     }
     params_ca2 = {
-        "api_key": "sk-1234",
+        "api_key": "sk-test-key",
         "is_async": True,
         "ssl_verify": "/path/ca2.pem",
     }
