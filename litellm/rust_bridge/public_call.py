@@ -84,17 +84,35 @@ def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, o
     return None
 
 
+_BAGS: Final = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
+
+
 @dataclass(frozen=True, slots=True)
 class NativeCall:
+    """A public call as Python bound it.
+
+    ``base`` is the positional arguments by name plus the signature defaults, with no caller
+    keyword in it. ``kwargs`` is the caller's keyword dict, which callbacks may rewrite before
+    the request is decoded. The call the public function sees is ``kwargs`` laid over ``base``.
+    """
+
     args: tuple[object, ...]
     kwargs: Mapping[str, object]
-    bound: Mapping[str, object]
+    base: Mapping[str, object]
+
+    @property
+    def resolved(self) -> Mapping[str, object]:
+        return MappingProxyType({**self.base, **self.kwargs})
 
 
-def native_call(args: tuple[object, ...], kwargs: Mapping[str, object], fields: Mapping[str, object]) -> NativeCall:
-    extra: Final = optional_mapping(fields.get("kwargs")) or MappingProxyType({})
-    named: Final = {name: value for name, value in fields.items() if name != "kwargs"}
-    return NativeCall(args=args, kwargs=kwargs, bound=MappingProxyType({**named, **extra}))
+def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
+
+
+def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
+    positional: Final = legacy.bind_partial(*args)
+    positional.apply_defaults()
+    return NativeCall(args=args, kwargs=kwargs, base=_without_bags(legacy, positional.arguments))
 
 
 NativeResultT: Final = TypeVar("NativeResultT")

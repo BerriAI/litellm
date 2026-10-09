@@ -101,7 +101,7 @@ def load_native(native_path: Path) -> object:
 
 def route_call(route: str, api_base: str, outcome: str) -> SimpleNamespace:
     fields: Final = route_kwargs(route, api_base, outcome)
-    return SimpleNamespace(args=(), kwargs=fields, bound=fields)
+    return SimpleNamespace(args=(), kwargs=fields, base={})
 
 
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:

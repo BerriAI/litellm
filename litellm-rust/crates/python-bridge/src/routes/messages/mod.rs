@@ -44,7 +44,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                 },
             ))
         },
-        MessagesPythonHost::new(call.bound.unbind(), asynchronous),
+        MessagesPythonHost::new(call.resolved()?.unbind(), asynchronous),
         hooks,
         asynchronous,
     )

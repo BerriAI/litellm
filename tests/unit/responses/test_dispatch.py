@@ -165,13 +165,13 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
 
     request, call_args, call_kwargs = captured[0]
     assert result is response
-    assert request.bound["model"] == "anthropic/claude-sonnet-4-5"
-    assert request.bound["input"] is INPUT
-    assert request.bound["stream"] is True
-    assert request.bound["api_key"] == "sk-test"
-    assert request.bound["base_url"] == "https://example.invalid"
-    assert request.bound["custom_llm_provider"] == "anthropic"
-    assert request.bound["extra_headers"] is extra_headers
+    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["input"] is INPUT
+    assert request.resolved["stream"] is True
+    assert request.resolved["api_key"] == "sk-test"
+    assert request.resolved["base_url"] == "https://example.invalid"
+    assert request.resolved["custom_llm_provider"] == "anthropic"
+    assert request.resolved["extra_headers"] is extra_headers
     assert request.kwargs == kwargs
     assert request.kwargs["litellm_metadata"] is metadata
     assert call_args == args
@@ -262,7 +262,7 @@ def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
     finally:
         NATIVE_RESPONSES.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 @pytest.mark.asyncio
@@ -284,7 +284,7 @@ async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.Mon
     finally:
         NATIVE_ARESPONSES.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,6 +307,6 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
     include: Final = ["reasoning.encrypted_content"]
     request: Final = _DISPATCH.request((INPUT, "openai/test-model", include, "Be brief", 16), {})
     assert request is not None
-    assert request.bound["include"] is include
-    assert request.bound["instructions"] == "Be brief"
-    assert request.bound["max_output_tokens"] == 16
+    assert request.resolved["include"] is include
+    assert request.resolved["instructions"] == "Be brief"
+    assert request.resolved["max_output_tokens"] == 16
