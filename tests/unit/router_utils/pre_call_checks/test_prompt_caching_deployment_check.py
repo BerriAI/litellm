@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import os
 import functools
 import uuid
 from typing import Final, cast
@@ -972,3 +973,105 @@ async def test_claude_code_style_session_stays_on_one_deployment_across_turns(lo
         history = [*history, {"role": "user", "content": [_text(text)]}, {"role": "assistant", "content": "ok"}]
 
     assert served == [served[0]] * len(user_turns)
+
+
+@pytest.fixture
+def anthropic_messages():
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 500,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_router_with_prompt_caching(anthropic_messages):
+    """
+    if prompt caching supported model called with prompt caching valid prompt,
+    then 2nd call should go to the same model.
+    """
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
+                    "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+                    "mock_response": "The sky is blue.",
+                },
+            },
+            {
+                "model_name": "claude-model",
+                "litellm_params": {
+                    "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "mock_response": "The sky is green.",
+                },
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+
+    response = await router.acompletion(
+        messages=anthropic_messages,
+        model="claude-model",
+        mock_response="The sky is blue.",
+    )
+    print("response=", response)
+
+    initial_model_id = response._hidden_params["model_id"]
+
+    cache = PromptCachingCache(
+        cache=router.cache,
+    )
+
+    cached_model_id = await _eventually(lambda: cache.get_model_id(messages=anthropic_messages, tools=None))
+
+    assert cached_model_id is not None
+    prompt_caching_cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages=anthropic_messages, tools=None)
+    print(f"prompt_caching_cache_key: {prompt_caching_cache_key}")
+    assert cached_model_id["model_id"] == initial_model_id
+
+    new_messages = anthropic_messages + [{"role": "user", "content": "What is the weather in SF?"}]
+
+    for _ in range(20):
+        response = await router.acompletion(
+            messages=new_messages,
+            model="claude-model",
+            mock_response="The sky is blue.",
+        )
+        print("response=", response)
+
+        assert response._hidden_params["model_id"] == initial_model_id

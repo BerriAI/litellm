@@ -10,27 +10,30 @@ pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
+use litellm_host_python::{
+    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
 };
 
+/// The public call as Python bound it: `base` holds the positional arguments by name plus
+/// the signature defaults, `kwargs` the caller's keyword dict.
+#[derive(FromPyObject)]
 pub(crate) struct NativeCall<'py> {
+    #[pyo3(attribute)]
     args: Bound<'py, PyTuple>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
     kwargs: Bound<'py, PyDict>,
-    bound: Bound<'py, PyDict>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
+    base: Bound<'py, PyDict>,
 }
 
-impl<'py> FromPyObject<'_, 'py> for NativeCall<'py> {
-    type Error = PyErr;
-
-    fn extract(call: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            args: call.getattr("args")?.cast_into()?,
-            kwargs: mapping_dict(&call.getattr("kwargs")?)?,
-            bound: mapping_dict(&call.getattr("bound")?)?,
-        })
+impl<'py> NativeCall<'py> {
+    /// The call before any hook ran, for the reads that admit or decline it.
+    fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
+        effective_py_args(&self.base, &self.kwargs)
     }
 }
 
@@ -50,7 +53,7 @@ fn call_hooks(
     call: &NativeCall<'_>,
     asynchronous: bool,
 ) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
-    let call = PublicCall::capture(&call.bound, &call.args, &call.kwargs)?;
+    let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     Ok((
         arguments,
@@ -117,7 +120,7 @@ mod tests {
             .set_item("args", pyo3::types::PyTuple::empty(py))
             .unwrap();
         attributes.set_item("kwargs", &fields).unwrap();
-        attributes.set_item("bound", &fields).unwrap();
+        attributes.set_item("base", PyDict::new(py)).unwrap();
         py.import("types")
             .unwrap()
             .getattr("SimpleNamespace")

@@ -53,7 +53,7 @@ def _native_request() -> NativeCall:
     return NativeCall(
         args=(),
         kwargs=supplied,
-        bound={
+        base={
             "model": MESSAGES_MODEL,
             "messages": MESSAGES,
             "max_tokens": 8,

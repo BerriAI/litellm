@@ -7025,3 +7025,20 @@ def test_has_tool_with_name_anthropic_shape_without_type_field():
 def test_has_tool_with_name_not_a_list():
     assert not has_tool_with_name(None, "my_tool")
     assert not has_tool_with_name("not a list", "my_tool")
+
+
+def test_completion_bedrock_invalid_role_exception(monkeypatch):
+    """
+    Test if litellm raises a BadRequestError for an invalid role on Bedrock
+    """
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "very-bad-role", "content": "hello"}],
+        )
+
+    assert (
+        str(exc_info.value)
+        == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
+    )

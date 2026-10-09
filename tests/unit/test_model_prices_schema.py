@@ -10,8 +10,10 @@ from typing import Final
 
 import jsonschema
 import pytest
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
@@ -43,6 +45,127 @@ def committed_schema() -> dict:
 @pytest.fixture(scope="module")
 def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
+
+
+class _CopilotEndpointRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    mode: str
+    max_input_tokens: int
+    max_output_tokens: int
+    max_tokens: int
+    supported_endpoints: tuple[str, ...]
+
+
+class _CopilotThinkingCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    supports_reasoning: bool | None = None
+    supports_adaptive_thinking: bool | None = None
+    supports_legacy_thinking: bool | None = None
+    thinking_always_on: bool | None = None
+
+
+def _copilot_endpoint_rows(path: Path) -> Mapping[str, _CopilotEndpointRow]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType(
+        {
+            key: _CopilotEndpointRow.model_validate(value)
+            for key, value in prices.items()
+            if key.startswith("github_copilot/") and isinstance(value, dict) and "supported_endpoints" in value
+        }
+    )
+
+
+def _thinking_capabilities(prices: Mapping[str, JsonValue], key: str) -> _CopilotThinkingCapabilities:
+    return _CopilotThinkingCapabilities.model_validate(prices[key])
+
+
+def _github_copilot_catalog_rows(path: Path) -> Mapping[str, JsonValue]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType({key: value for key, value in prices.items() if key.startswith("github_copilot/")})
+
+
+_THINKING_KEYS: Final[tuple[str, ...]] = (
+    "supports_reasoning",
+    "supports_adaptive_thinking",
+    "supports_legacy_thinking",
+    "thinking_always_on",
+)
+
+
+def _anthropic_counterpart(key: str) -> str:
+    return key.removeprefix("github_copilot/").removesuffix("-fast").replace(".", "-")
+
+
+@pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
+def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
+    assert rows, f"No GitHub Copilot endpoint rows found in {path}"
+    assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
+        key: (
+            "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
+            row.max_output_tokens,
+        )
+        for key, row in rows.items()
+    }
+
+
+def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
+    assert _github_copilot_catalog_rows(PRICES_PATH) == _github_copilot_catalog_rows(BACKUP_PRICES_PATH)
+
+
+def test_github_copilot_rows_resolve_through_get_model_info() -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
+    assert {
+        key: (litellm.get_model_info(key)["mode"], litellm.get_model_info(key)["max_input_tokens"]) for key in rows
+    } == {key: (row.mode, row.max_input_tokens) for key, row in rows.items()}
+
+
+def test_github_copilot_rows_keep_the_reasoning_flag_their_family_fallback_supplies() -> None:
+    reasoning_rows: Final = tuple(
+        key
+        for key in _copilot_endpoint_rows(PRICES_PATH)
+        if (match_capability_generalizations(key) or {}).get("supports_reasoning") is True
+    )
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    assert reasoning_rows
+    assert {key: _thinking_capabilities(prices, key).supports_reasoning for key in reasoning_rows} == dict.fromkeys(
+        reasoning_rows, True
+    )
+    assert {key: litellm.get_model_info(key).get("supports_reasoning") for key in reasoning_rows} == dict.fromkeys(
+        reasoning_rows, True
+    )
+    assert {
+        key: resolve_supported_reasoning_efforts(
+            litellm.get_model_info(key),
+            deployment_is_mapped=True,
+        )
+        != ()
+        for key in reasoning_rows
+    } == dict.fromkeys(reasoning_rows, True)
+
+
+def test_github_copilot_messages_claude_rows_keep_their_anthropic_thinking_capabilities() -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    claude_rows: Final = tuple(
+        key
+        for key, row in _copilot_endpoint_rows(PRICES_PATH).items()
+        if key.startswith("github_copilot/claude-") and "/v1/messages" in row.supported_endpoints
+    )
+    assert claude_rows
+    assert {key: _thinking_capabilities(prices, key) for key in claude_rows} == {
+        key: _thinking_capabilities(prices, _anthropic_counterpart(key)) for key in claude_rows
+    }
+    assert {
+        key: tuple(litellm.get_model_info(key).get(thinking_key) for thinking_key in _THINKING_KEYS)
+        for key in claude_rows
+    } == {
+        key: tuple(
+            litellm.get_model_info(_anthropic_counterpart(key)).get(thinking_key) for thinking_key in _THINKING_KEYS
+        )
+        for key in claude_rows
+    }
 
 
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):

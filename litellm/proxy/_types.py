@@ -3210,7 +3210,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
         None,
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
-        "Modern protocol serving and Apps/Tasks remain disabled.",
+        "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
@@ -4933,6 +4933,7 @@ class TeamEditUnrestricted(LiteLLMBaseModel):
 class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
+    may_raise_max_budget: bool = False
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):

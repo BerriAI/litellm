@@ -25,7 +25,7 @@ from litellm.rust_bridge.trace.generated.types import Trace, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.types import SpendLogRecord
-from scripts.seed_tracing_fixtures import (
+from seed_tracing_fixtures import (
     TRACE,
     TRACE_FIXTURES,
     Copies,
@@ -499,7 +499,7 @@ class SeededTraceAPI:
 
 @pytest.fixture
 def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
-    from scripts.seed_tracing_fixtures import (
+    from seed_tracing_fixtures import (
         TRACE_FIXTURES,
         fixture_replays,
         rebase_spend,

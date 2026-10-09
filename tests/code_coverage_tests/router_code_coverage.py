@@ -110,6 +110,8 @@ ignored_function_names = [
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
+    "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
+    "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
 ]
 
 
