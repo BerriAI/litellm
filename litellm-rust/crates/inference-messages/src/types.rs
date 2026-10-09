@@ -136,6 +136,7 @@ mod tests {
                 supports_output_config: true,
                 supports_sampling_params: false,
                 supports_speed: true,
+                supports_mid_conversation_system: false,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,

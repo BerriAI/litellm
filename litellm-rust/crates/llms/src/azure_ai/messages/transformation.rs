@@ -18,7 +18,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::MessagesTransformContext,
-            normalization::{fold_system_role_messages, strip_cache_control_scope},
+            normalization::{normalize_system_role_messages, strip_cache_control_scope},
             transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
         },
     },
@@ -58,7 +58,13 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         transform_messages_request(
-            strip_cache_control_scope(fold_system_role_messages(request)),
+            strip_cache_control_scope(normalize_system_role_messages(
+                request,
+                context
+                    .thinking
+                    .capabilities
+                    .supports_mid_conversation_system,
+            )),
             context,
         )
     }
@@ -127,7 +133,9 @@ mod tests {
     use litellm_auth::CredentialPlacement;
 
     use super::*;
-    use crate::base_llm::messages::context::MessagesModelCapabilities;
+    use crate::base_llm::messages::{
+        context::MessagesModelCapabilities, mid_conversation_system::CONVERTED_SYSTEM_NOTE,
+    };
 
     fn request_from(value: serde_json::Value) -> MessagesRequest {
         serde_json::from_value(value).expect("valid request")
@@ -386,62 +394,101 @@ mod tests {
         assert_eq!(transformed, body);
     }
 
-    #[test]
-    fn transform_request_folds_system_role_message_into_top_level_system() {
-        let request = request_from(json!({
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 256,
-            "system": [{"type": "text", "text": "base system"}],
-            "messages": [
-                {"role": "user", "content": "fix the bug"},
-                {"role": "system", "content": "Available agent types: claude"}
-            ]
-        }));
-
-        let transformed = to_value(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
-                .expect("request transforms"),
-        );
-
-        assert_eq!(
-            transformed["messages"],
-            json!([{"role": "user", "content": "fix the bug"}])
-        );
-        assert_eq!(
-            transformed["system"],
-            json!([
-                {"type": "text", "text": "base system"},
-                {"type": "text", "text": "Available agent types: claude"}
-            ])
-        );
+    fn context_with(supports_mid_conversation_system: bool) -> MessagesTransformContext {
+        MessagesTransformContext::new(
+            MessagesModelCapabilities {
+                supports_mid_conversation_system,
+                ..MessagesModelCapabilities::default()
+            },
+            false,
+        )
     }
 
-    #[test]
-    fn transform_request_folds_system_role_when_no_top_level_system() {
-        let request = request_from(json!({
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 256,
+    #[rstest]
+    #[case::leading_turn_joins_the_top_level_system(
+        json!({
+            "system": [{"type": "text", "text": "base system"}],
             "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
-                {"role": "system", "content": [{"type": "text", "text": "sys block"}]}
+                {"role": "system", "content": "Available agent types: claude"},
+                {"role": "user", "content": "fix the bug"}
             ]
-        }));
+        }),
+        false,
+        json!([{"type": "text", "text": "base system"}, {"type": "text", "text": "Available agent types: claude"}]),
+        json!([{"role": "user", "content": "fix the bug"}]),
+    )]
+    #[case::leading_turn_becomes_the_system_when_there_is_none(
+        json!({"messages": [
+            {"role": "system", "content": [{"type": "text", "text": "sys block"}]},
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+        ]}),
+        false,
+        json!([{"type": "text", "text": "sys block"}]),
+        json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]),
+    )]
+    #[case::billing_block_in_a_leading_turn_is_dropped(
+        json!({"messages": [
+            {"role": "system", "content": [{"type": "text", "text": "x-anthropic-billing-header: cc_version=1"}, {"type": "text", "text": "keep"}]},
+            {"role": "user", "content": "hi"}
+        ]}),
+        false,
+        json!([{"type": "text", "text": "keep"}]),
+        json!([{"role": "user", "content": "hi"}]),
+    )]
+    #[case::later_turn_is_converted_in_place_for_a_model_without_the_capability(
+        json!({
+            "system": "be terse",
+            "messages": [
+                {"role": "user", "content": "fix the bug"},
+                {"role": "system", "content": "reminder"}
+            ]
+        }),
+        false,
+        json!("be terse"),
+        json!([
+            {"role": "user", "content": "fix the bug"},
+            {"role": "user", "content": [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "text", "text": "reminder"}
+            ]}
+        ]),
+    )]
+    #[case::later_turn_stays_for_a_model_with_the_capability(
+        json!({
+            "system": "be terse",
+            "messages": [
+                {"role": "user", "content": "fix the bug"},
+                {"role": "system", "content": "reminder"}
+            ]
+        }),
+        true,
+        json!("be terse"),
+        json!([
+            {"role": "user", "content": "fix the bug"},
+            {"role": "system", "content": "reminder"}
+        ]),
+    )]
+    fn transform_request_normalizes_system_role_messages_like_python(
+        #[case] body: serde_json::Value,
+        #[case] supports_mid_conversation_system: bool,
+        #[case] system: serde_json::Value,
+        #[case] messages: serde_json::Value,
+    ) {
+        let mut body = body;
+        body["model"] = json!("claude-sonnet-4-5");
+        body["max_tokens"] = json!(256);
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
+                .transform_anthropic_messages_request(
+                    request_from(body),
+                    &context_with(supports_mid_conversation_system),
+                )
                 .expect("request transforms"),
         );
 
-        assert_eq!(
-            transformed["messages"],
-            json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-        );
-        assert_eq!(
-            transformed["system"],
-            json!([{"type": "text", "text": "sys block"}])
-        );
+        assert_eq!(transformed["system"], system);
+        assert_eq!(transformed["messages"], messages);
     }
 
     #[test]
