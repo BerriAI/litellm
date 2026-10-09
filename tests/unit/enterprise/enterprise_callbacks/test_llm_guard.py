@@ -171,7 +171,7 @@ async def test_llm_guard_skips_unsupported_call_types(
 @pytest.mark.asyncio
 async def test_llm_guard_sanitizes_multimodal_and_input(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "llm_guard_mode", "all")
-    llm_guard = _ENTERPRISE_LLMGuard(
+    llm_guard: Final = _ENTERPRISE_LLMGuard(
         mock_testing=True,
         mock_redacted_text={
             "sanitized_prompt": "email: [REDACTED]",
@@ -179,10 +179,10 @@ async def test_llm_guard_sanitizes_multimodal_and_input(monkeypatch: pytest.Monk
             "scanners": {"Regex": 0.0},
         },
     )
-    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
 
-    image_part = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
-    data = {
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+    data: Final = {
         "messages": [
             {
                 "role": "user",
@@ -193,14 +193,14 @@ async def test_llm_guard_sanitizes_multimodal_and_input(monkeypatch: pytest.Monk
             }
         ]
     }
-    result = await llm_guard.async_moderation_hook(
+    result: Final = await llm_guard.async_moderation_hook(
         data=data, user_api_key_dict=user_api_key_dict, call_type="completion"
     )
     assert result["messages"][0]["content"][0]["text"] == "email: [REDACTED]"
     assert result["messages"][0]["content"][1] == image_part
 
-    input_data = {"input": ["email: person@example.com", "another prompt"]}
-    input_result = await llm_guard.async_moderation_hook(
+    input_data: Final = {"input": ["email: person@example.com", "another prompt"]}
+    input_result: Final = await llm_guard.async_moderation_hook(
         data=input_data, user_api_key_dict=user_api_key_dict, call_type="embeddings"
     )
     assert input_result["input"] == ["email: [REDACTED]", "email: [REDACTED]"]
@@ -209,47 +209,31 @@ async def test_llm_guard_sanitizes_multimodal_and_input(monkeypatch: pytest.Monk
 def test_llm_guard_key_specific_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "llm_guard_mode", "key-specific")
 
-    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
+    llm_guard: Final = _ENTERPRISE_LLMGuard(mock_testing=True)
 
-    _api_key = "sk-98765"
-    user_api_key_dict = UserAPIKeyAuth(
+    _api_key: Final = "sk-98765"
+    user_api_key_dict: Final = UserAPIKeyAuth(
         api_key=_api_key,
     )
 
-    request_data = {}
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
+    assert llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data={}) == False
 
-    assert should_proceed == False
-
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
-
-    request_data = {}
-
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
-
-    assert should_proceed == True
+    permitted_key: Final = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
+    assert llm_guard.should_proceed(user_api_key_dict=permitted_key, data={}) == True
 
 
 def test_llm_guard_request_specific_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "llm_guard_mode", "request-specific")
 
-    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
+    llm_guard: Final = _ENTERPRISE_LLMGuard(mock_testing=True)
 
-    _api_key = "sk-98765"
-    user_api_key_dict = UserAPIKeyAuth(
+    _api_key: Final = "sk-98765"
+    user_api_key_dict: Final = UserAPIKeyAuth(
         api_key=_api_key,
     )
 
-    request_data = {}
+    assert llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data={}) == False
 
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
-
-    assert should_proceed == False
-
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
-
-    request_data = {"metadata": {"permissions": {"enable_llm_guard_check": True}}}
-
-    should_proceed = llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data=request_data)
-
-    assert should_proceed == True
+    permitted_key: Final = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
+    permitted_request: Final = {"metadata": {"permissions": {"enable_llm_guard_check": True}}}
+    assert llm_guard.should_proceed(user_api_key_dict=permitted_key, data=permitted_request) == True

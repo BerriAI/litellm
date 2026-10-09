@@ -1,3 +1,4 @@
+from typing import Final
 import asyncio
 import collections
 import datetime
@@ -7638,7 +7639,7 @@ async def test_calculate_spend_unpriced_model_returns_400():
 
 @pytest.mark.asyncio
 async def test_spend_calc_model_messages():
-    cost_obj = await spend_management_endpoints.calculate_spend(
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
         request=SpendCalculateRequest(
             model="gpt-3.5-turbo",
             messages=[
@@ -7647,13 +7648,13 @@ async def test_spend_calc_model_messages():
         )
     )
 
-    cost = cost_obj["cost"]
+    cost: Final = cost_obj["cost"]
     assert cost > 0.0
 
 
 @pytest.mark.asyncio
 async def test_spend_calc_model_on_router_messages(monkeypatch):
-    temp_llm_router = Router(
+    temp_llm_router: Final = Router(
         model_list=[
             {
                 "model_name": "special-llama-model",
@@ -7666,7 +7667,7 @@ async def test_spend_calc_model_on_router_messages(monkeypatch):
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
 
-    cost_obj = await spend_management_endpoints.calculate_spend(
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
         request=SpendCalculateRequest(
             model="special-llama-model",
             messages=[
@@ -7675,14 +7676,14 @@ async def test_spend_calc_model_on_router_messages(monkeypatch):
         )
     )
 
-    _cost = cost_obj["cost"]
+    _cost: Final = cost_obj["cost"]
 
     assert _cost > 0.0
 
 
 @pytest.mark.asyncio
 async def test_spend_calc_using_response():
-    cost_obj = await spend_management_endpoints.calculate_spend(
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
         request=SpendCalculateRequest(
             completion_response={
                 "id": "chatcmpl-3bc7abcd-f70b-48ab-a16c-dfba0b286c86",
@@ -7709,13 +7710,13 @@ async def test_spend_calc_using_response():
         )
     )
 
-    cost = cost_obj["cost"]
+    cost: Final = cost_obj["cost"]
     assert cost > 0.0
 
 
 @pytest.mark.asyncio
 async def test_spend_calc_model_alias_on_router_messages(monkeypatch):
-    temp_llm_router = Router(
+    temp_llm_router: Final = Router(
         model_list=[
             {
                 "model_name": "gpt-4o",
@@ -7731,7 +7732,7 @@ async def test_spend_calc_model_alias_on_router_messages(monkeypatch):
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
 
-    cost_obj = await spend_management_endpoints.calculate_spend(
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
         request=SpendCalculateRequest(
             model="gpt4o",
             messages=[
@@ -7740,7 +7741,7 @@ async def test_spend_calc_model_alias_on_router_messages(monkeypatch):
         )
     )
 
-    _cost = cost_obj["cost"]
+    _cost: Final = cost_obj["cost"]
 
     assert _cost > 0.0
 

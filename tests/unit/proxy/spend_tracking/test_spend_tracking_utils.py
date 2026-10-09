@@ -6145,7 +6145,7 @@ class TestGetLoggingPayloadOCR:
 )
 def test_spend_logs_payload(model_id: str | None):
 
-    kwargs: Final[dict[str, object]] = {
+    kwargs: Final = {
         "model": "chatgpt-v-3",
         "messages": [
             {"role": "system", "content": "you are a helpful assistant.\n"},
@@ -6317,7 +6317,7 @@ def test_spend_logs_payload(model_id: str | None):
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)
-    metadata: Final[dict[str, object]] = json.loads(payload["metadata"])
+    metadata: Final[Mapping[str, object]] = json.loads(payload["metadata"])
     assert set(metadata.keys()) == set(expected_metadata_keys)
 
     assert payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
@@ -6331,7 +6331,7 @@ def test_spend_logs_payload(model_id: str | None):
 
 def test_spend_logs_payload_whisper():
 
-    kwargs: Final[dict[str, object]] = {
+    kwargs: Final = {
         "model": "whisper-1",
         "messages": [{"role": "user", "content": "audio_file"}],
         "optional_params": {},
@@ -6416,7 +6416,7 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
 
-    kwargs: Final[dict[str, object]] = {
+    kwargs: Final = {
         "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "Hello!"}],
         "litellm_params": {

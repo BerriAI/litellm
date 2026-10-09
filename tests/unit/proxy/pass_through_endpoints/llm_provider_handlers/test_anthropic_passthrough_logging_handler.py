@@ -2875,7 +2875,7 @@ def test_get_user_from_metadata(end_user_id):
         PassthroughStandardLoggingPayload,
     )
 
-    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+    passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
         url="https://api.anthropic.com/v1/messages",
         request_body={**end_user_id},
         response_body={
@@ -2901,7 +2901,7 @@ def test_get_user_from_metadata(end_user_id):
         },
     )
 
-    response = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
+    response: Final = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
         passthrough_logging_payload=passthrough_logging_payload
     )
 

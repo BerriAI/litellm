@@ -994,11 +994,11 @@ async def test_legacy_nameless_instance_records_nothing():
 
 @pytest.mark.asyncio
 async def test_basic_secret_detection_chat():
-    secret_instance = _ENTERPRISE_SecretDetection()
-    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
-    local_cache = DualCache()
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
 
-    test_data = {
+    test_data: Final = {
         "messages": [
             {
                 "role": "user",
@@ -1048,11 +1048,11 @@ async def test_basic_secret_detection_chat():
 
 @pytest.mark.asyncio
 async def test_basic_secret_detection_text_completion():
-    secret_instance = _ENTERPRISE_SecretDetection()
-    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
-    local_cache = DualCache()
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
 
-    test_data = {
+    test_data: Final = {
         "prompt": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef', my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
         "model": "gpt-3.5-turbo",
     }
@@ -1072,11 +1072,11 @@ async def test_basic_secret_detection_text_completion():
 
 @pytest.mark.asyncio
 async def test_basic_secret_detection_embeddings():
-    secret_instance = _ENTERPRISE_SecretDetection()
-    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
-    local_cache = DualCache()
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
 
-    test_data = {
+    test_data: Final = {
         "input": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef', my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
         "model": "gpt-3.5-turbo",
     }
@@ -1096,11 +1096,11 @@ async def test_basic_secret_detection_embeddings():
 
 @pytest.mark.asyncio
 async def test_basic_secret_detection_embeddings_list():
-    secret_instance = _ENTERPRISE_SecretDetection()
-    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
-    local_cache = DualCache()
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
 
-    test_data = {
+    test_data: Final = {
         "input": [
             "hey",
             "how's it going, API_KEY = 'sk_1234567890abcdef'",

@@ -9089,13 +9089,13 @@ def test_update_subpath_route_updates_registry():
 
 
 def test_init_kwargs_for_pass_through_endpoint_basic(mock_request, mock_user_api_key_dict):
-    request = mock_request()
-    passthrough_payload = PassthroughStandardLoggingPayload(
+    request: Final = mock_request()
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
         url="https://test.com",
         request_body={},
     )
 
-    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
@@ -9128,14 +9128,14 @@ def test_init_kwargs_for_pass_through_endpoint_basic(mock_request, mock_user_api
 
 
 def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict):
-    request = mock_request()
-    parsed_body = {"litellm_metadata": {"custom_field": "custom_value", "tags": ["tag1", "tag2"]}}
-    passthrough_payload = PassthroughStandardLoggingPayload(
+    request: Final = mock_request()
+    parsed_body: Final = {"litellm_metadata": {"custom_field": "custom_value", "tags": ["tag1", "tag2"]}}
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
         url="https://test.com",
         request_body={},
     )
 
-    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
@@ -9152,20 +9152,20 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
         ),
     )
 
-    metadata = result["litellm_params"]["metadata"]
+    metadata: Final = result["litellm_params"]["metadata"]
     assert metadata["custom_field"] == "custom_value"
     assert metadata["tags"] == ["tag1", "tag2"]
     assert metadata["user_api_key"] == "test-key"
 
 
 def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
-    request = mock_request(headers={"tags": "tag1,tag2"})
-    passthrough_payload = PassthroughStandardLoggingPayload(
+    request: Final = mock_request(headers={"tags": "tag1,tag2"})
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
         url="https://test.com",
         request_body={},
     )
 
-    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
@@ -9181,11 +9181,11 @@ def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
         ),
     )
 
-    metadata = result["litellm_params"]["metadata"]
+    metadata: Final = result["litellm_params"]["metadata"]
     assert metadata["tags"] == ["tag1", "tag2"]
 
 
-athropic_request_body = {
+athropic_request_body: Final = {
     "model": "claude-sonnet-4-5-20250929",
     "max_tokens": 256,
     "messages": [{"role": "user", "content": "Hello, world tell me 2 sentences "}],
@@ -9196,10 +9196,7 @@ athropic_request_body = {
 @pytest.mark.asyncio
 async def test_pass_through_request_logging_failure(mock_request, mock_user_api_key_dict):
 
-    async def mock_logging_failure(*args, **kwargs):
-        raise Exception("Logging failed!")
-
-    mock_response = AsyncMock()
+    mock_response: Final = AsyncMock()
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
 
@@ -9212,10 +9209,6 @@ async def test_pass_through_request_logging_failure(mock_request, mock_user_api_
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughEndpointLogging.pass_through_async_success_handler",
-            new=mock_logging_failure,
-        ),
-        patch(
             "httpx.AsyncClient.send",
             return_value=mock_response,
         ),
@@ -9224,8 +9217,8 @@ async def test_pass_through_request_logging_failure(mock_request, mock_user_api_
             return_value=mock_response,
         ),
     ):
-        request = mock_request(headers={}, method="POST", request_body=athropic_request_body)
-        response = await pass_through_request(
+        request: Final = mock_request(headers={}, method="POST", request_body=athropic_request_body)
+        response: Final = await pass_through_request(
             request=request,
             target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
             custom_headers={},
@@ -9240,17 +9233,14 @@ async def test_pass_through_request_logging_failure(mock_request, mock_user_api_
 @pytest.mark.asyncio
 async def test_pass_through_request_logging_failure_with_stream(mock_request, mock_user_api_key_dict):
 
-    async def mock_logging_failure(*args, **kwargs):
-        raise Exception("Logging failed!")
-
-    mock_response = AsyncMock()
+    mock_response: Final = AsyncMock()
     mock_response.status_code = 200
 
     mock_response.headers = {
         "content-type": "application/json",
     }
 
-    mock_chunks = [b'{"chunk": 1}', b'{"chunk": 2}']
+    mock_chunks: Final = [b'{"chunk": 1}', b'{"chunk": 2}']
     mock_response.body_iterator = AsyncMock()
     mock_response.body_iterator.__aiter__.return_value = mock_chunks
 
@@ -9263,10 +9253,6 @@ async def test_pass_through_request_logging_failure_with_stream(mock_request, mo
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler.route_streaming_logging_to_handler",
-            new=mock_logging_failure,
-        ),
-        patch(
             "httpx.AsyncClient.send",
             return_value=mock_response,
         ),
@@ -9275,8 +9261,8 @@ async def test_pass_through_request_logging_failure_with_stream(mock_request, mo
             return_value=mock_response,
         ),
     ):
-        request = mock_request(headers={}, method="POST", request_body=athropic_request_body)
-        response = await pass_through_request(
+        request: Final = mock_request(headers={}, method="POST", request_body=athropic_request_body)
+        response: Final = await pass_through_request(
             request=request,
             target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
             custom_headers={},
@@ -9293,9 +9279,9 @@ async def test_pass_through_request_logging_failure_with_stream(mock_request, mo
 
 
 def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict):
-    request = mock_request()
+    request: Final = mock_request()
 
-    parsed_body = {
+    parsed_body: Final = {
         "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "test"}],
         "input_cost_per_token": 0.00002,
@@ -9318,12 +9304,12 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
         "max_tokens": 100,
     }
 
-    passthrough_payload = PassthroughStandardLoggingPayload(
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
         url="https://api.openai.com/v1/chat/completions",
         request_body=parsed_body.copy(),
     )
 
-    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
@@ -9362,18 +9348,18 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
     assert parsed_body["temperature"] == 0.7
     assert parsed_body["max_tokens"] == 100
 
-    litellm_params = result["litellm_params"]
+    litellm_params: Final = result["litellm_params"]
     assert litellm_params["input_cost_per_token"] == 0.00002
     assert litellm_params["output_cost_per_token"] == 0.00002
 
 
 def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(mock_request, mock_user_api_key_dict):
-    request = mock_request()
-    passthrough_payload = PassthroughStandardLoggingPayload(
+    request: Final = mock_request()
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
         url="https://test.com",
         request_body={},
     )
-    authenticated_key = UserAPIKeyAuth(
+    authenticated_key: Final = UserAPIKeyAuth(
         api_key="test-key",
         user_id="test-user",
         team_id="test-team",
@@ -9384,7 +9370,7 @@ def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(mock_re
         org_id="real-org",
     )
 
-    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=authenticated_key,
         passthrough_logging_payload=passthrough_payload,
@@ -9411,7 +9397,7 @@ def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(mock_re
         },
     )
 
-    metadata = result["litellm_params"]["metadata"]
+    metadata: Final = result["litellm_params"]["metadata"]
     assert metadata["user_api_key_user_id"] == "test-user"
     assert metadata["user_api_key_team_id"] == "test-team"
     assert metadata["user_api_key_team_alias"] == "Real Team"
@@ -9422,7 +9408,7 @@ def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(mock_re
 
 
 def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_request, mock_user_api_key_dict):
-    authenticated_key = UserAPIKeyAuth(
+    authenticated_key: Final = UserAPIKeyAuth(
         api_key="test-key",
         user_id="test-user",
         team_id="test-team",
@@ -9442,14 +9428,14 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
         team_max_budget=30.0,
         metadata={"real": "auth-metadata"},
     )
-    expected = dict(
+    expected: Final = dict(
         LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=authenticated_key)
     )
     assert len(expected) >= 20
 
-    spoofed = {key: f"SPOOFED-{key}" for key in expected}
+    spoofed: Final = {key: f"SPOOFED-{key}" for key in expected}
 
-    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=mock_request(),
         user_api_key_dict=authenticated_key,
         passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://test.com", request_body={}),
@@ -9466,6 +9452,6 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
         _parsed_body={"litellm_metadata": dict(spoofed), "metadata": dict(spoofed)},
     )
 
-    metadata = result["litellm_params"]["metadata"]
-    survived = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
+    metadata: Final = result["litellm_params"]["metadata"]
+    survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"

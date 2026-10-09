@@ -2,7 +2,7 @@ import asyncio
 import json
 import sys
 import types
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Any, Dict, Final, List, Optional
@@ -3984,9 +3984,9 @@ async def _await_tasks_spawned_by(operation: Awaitable[None]) -> None:
 
 @pytest.mark.asyncio
 async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(frozen_reset_clock):
-    endusers = [_attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"}) for i in range(1, 7)]
+    endusers: Final = [_attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"}) for i in range(1, 7)]
 
-    budget1 = LiteLLM_BudgetTableFull(
+    budget1: Final = LiteLLM_BudgetTableFull(
         **{
             "budget_id": "budget1",
             "max_budget": 65.0,
@@ -3995,9 +3995,11 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(f
         }
     )
 
-    prisma_client = MagicMock()
+    prisma_client: Final = MagicMock()
 
-    async def get_data_mock(table_name, *args, **kwargs):
+    async def get_data_mock(
+        *, table_name: str, query_type: str, reset_at: datetime, limit: int, expires: datetime | None = None
+    ) -> Sequence[object]:
         if table_name == "budget":
             return [budget1]
         elif table_name == "enduser":
@@ -4007,25 +4009,25 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(f
     prisma_client.get_data = AsyncMock()
     prisma_client.get_data.side_effect = get_data_mock
     prisma_client.update_data = AsyncMock()
-    batch_calls = _wire_batcher_for_test(prisma_client)
+    batch_calls: Final = _wire_batcher_for_test(prisma_client)
 
-    proxy_logging_obj = MagicMock()
+    proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
     proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
 
-    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+    job: Final = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
     await _await_tasks_spawned_by(job.reset_budget_for_litellm_budget_table())
 
     assert prisma_client.db.batch_.call_count == 1, "the cascade must be one transaction"
 
-    enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes: Final = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
-    budget_writes = [c for c in batch_calls if c["table"] == "budget"]
+    budget_writes: Final = [c for c in batch_calls if c["table"] == "budget"]
     assert len(budget_writes) == 1
     assert budget_writes[0]["where"] == {"budget_id": "budget1"}
     assert budget_writes[0]["data"]["budget_reset_at"] > frozen_reset_clock
@@ -4035,14 +4037,14 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(f
 
 @pytest.mark.asyncio
 async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_clock):
-    key1 = {"id": "key1", "spend": 10.0, "budget_duration": "60s"}
-    key2 = {"id": "key2", "spend": 15.0, "budget_duration": "60s"}
-    user1 = {"id": "user1", "spend": 20.0, "budget_duration": 120}
-    user2 = {"id": "user2", "spend": 25.0, "budget_duration": "120s"}
-    team1 = {"id": "team1", "spend": 30.0, "budget_duration": "180s"}
-    team2 = {"id": "team2", "spend": 35.0, "budget_duration": "180s"}
-    enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"}
-    budget1 = LiteLLM_BudgetTableFull(
+    key1: Final = _attrify({"id": "key1", "token": "key1", "spend": 10.0, "budget_duration": "60s"})
+    key2: Final = _attrify({"id": "key2", "token": "key2", "spend": 15.0, "budget_duration": "60s"})
+    user1: Final = _attrify({"id": "user1", "user_id": "user1", "spend": 20.0, "budget_duration": 120})
+    user2: Final = _attrify({"id": "user2", "user_id": "user2", "spend": 25.0, "budget_duration": "120s"})
+    team1: Final = _attrify({"id": "team1", "team_id": "team1", "spend": 30.0, "budget_duration": "180s"})
+    team2: Final = _attrify({"id": "team2", "team_id": "team2", "spend": 35.0, "budget_duration": "180s"})
+    enduser1: Final = _attrify({"user_id": "user1", "spend": 25.0, "budget_id": "budget1"})
+    budget1: Final = LiteLLM_BudgetTableFull(
         **{
             "budget_id": "budget1",
             "max_budget": 65.0,
@@ -4051,9 +4053,11 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
         }
     )
 
-    prisma_client = MagicMock()
+    prisma_client: Final = MagicMock()
 
-    async def fake_get_data(*, table_name, query_type, **kwargs):
+    async def fake_get_data(
+        *, table_name: str, query_type: str, reset_at: datetime, limit: int, expires: datetime | None = None
+    ) -> Sequence[object]:
         if table_name == "key":
             return [key1, key2]
         elif table_name == "user":
@@ -4068,48 +4072,38 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
 
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
-    batch_calls = _wire_batcher_for_test(prisma_client)
-    for k in [key1, key2]:
-        k.setdefault("token", k["id"])
-    for u in [user1, user2]:
-        u.setdefault("user_id", u["id"])
-    for t in [team1, team2]:
-        t.setdefault("team_id", t["id"])
-    key1, key2 = _attrify(key1), _attrify(key2)
-    user1, user2 = _attrify(user1), _attrify(user2)
-    team1, team2 = _attrify(team1), _attrify(team2)
-    enduser1 = _attrify(enduser1)
-    pre_reset_spend = {
+    batch_calls: Final = _wire_batcher_for_test(prisma_client)
+    pre_reset_spend: Final = {
         **{k["token"]: k["spend"] for k in [key1, key2]},
         **{u["user_id"]: u["spend"] for u in [user2]},
         **{t["team_id"]: t["spend"] for t in [team1, team2]},
     }
     _wire_cascade_reads_for_test(prisma_client, endusers=[enduser1])
 
-    proxy_logging_obj = MagicMock()
+    proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
     proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
 
-    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+    job: Final = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
     await _await_tasks_spawned_by(job.reset_budget())
 
-    called_tables = {call.kwargs.get("table_name") for call in prisma_client.get_data.await_args_list}
+    called_tables: Final = {call.kwargs.get("table_name") for call in prisma_client.get_data.await_args_list}
     assert called_tables == {"key", "user", "team", "budget"}
     prisma_client.db.litellm_endusertable.find_many.assert_awaited()
 
     prisma_client.update_data.assert_not_awaited()
 
     assert len([c for c in batch_calls if c["table"] == "team_membership"]) == 1
-    enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes: Final = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
-    key_writes = [c for c in batch_calls if c["table"] == "key" and c["op"] == "update"]
-    user_writes = [c for c in batch_calls if c["table"] == "user"]
-    team_writes = [c for c in batch_calls if c["table"] == "team"]
+    key_writes: Final = [c for c in batch_calls if c["table"] == "key" and c["op"] == "update"]
+    user_writes: Final = [c for c in batch_calls if c["table"] == "user"]
+    team_writes: Final = [c for c in batch_calls if c["table"] == "team"]
     assert len(key_writes) == 2
     assert len(user_writes) == 1
     assert user_writes[0]["where"] == {"user_id": "user2"}
