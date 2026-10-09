@@ -38,7 +38,6 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
-    bedrock_runtime_chat_completions_numbers_tool_calls,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
 )
@@ -204,6 +203,15 @@ def mint_tool_call_id() -> str:
 
 
 def _mint_unique_tool_call_ids(response: ModelResponse) -> None:
+    """Replace AWS's positional tool call ids with unique ones.
+
+    bedrock-runtime's native Chat Completions numbers the tool calls of a response from zero (``call_0``,
+    ``call_1``), seen live on Grok 4.6, Grok 4.7 and GPT 5.6 (2026-10-09; GPT 5.6 returned unique ids
+    earlier the same day, so the format is not fixed per model). A multi-turn history then holds the same
+    id for different calls, and clients that match ``tool_result`` ids against it, Claude Code among them,
+    pair results with the wrong call. Ids that are already unique (``call_<32 hex>``, ``chatcmpl-tool-...``)
+    do not match ``POSITIONAL_TOOL_CALL_ID`` and pass through.
+    """
     for choice in response.choices:
         for tool_call in choice.message.tool_calls or ():
             if is_positional_tool_call_id(tool_call.id):
@@ -264,8 +272,7 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
         parsed: Final = super().chunk_parser(chunk)
-        if bedrock_runtime_chat_completions_numbers_tool_calls(parsed.model or ""):
-            self._mint_streamed_tool_call_ids(parsed)
+        self._mint_streamed_tool_call_ids(parsed)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
             return parsed
         for choice in parsed.choices:
@@ -517,8 +524,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
         set_provider_response_headers_in_hidden_params(response, raw_response.headers)
-        if bedrock_runtime_chat_completions_numbers_tool_calls(model):
-            _mint_unique_tool_call_ids(response)
+        _mint_unique_tool_call_ids(response)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(model):
             return response
         for choice in response.choices:

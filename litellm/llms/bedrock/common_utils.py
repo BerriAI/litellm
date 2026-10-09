@@ -916,18 +916,6 @@ def bedrock_model_is_openai_gpt(model: str) -> bool:
     return _openai_gpt_version(model) is not None
 
 
-def bedrock_runtime_chat_completions_numbers_tool_calls(model: str) -> bool:
-    """Whether AWS's native Chat Completions hands back positional tool call ids for this model.
-
-    Grok on Bedrock (``xai.grok-*``) numbers the tool calls of every response from zero (``call_0``,
-    ``call_1``), so a multi-turn history holds the same id for different calls and clients that match
-    ``tool_result`` ids against it, Claude Code among them, pair results with the wrong call. GPT 5.6,
-    GPT 6.1 and gpt-oss return unique ids (``call_<32 hex>``, ``chatcmpl-tool-...``; checked live on
-    2026-10-09), so only Grok's ids are reminted by the Chat Completions transformation.
-    """
-    return _XAI_GROK_MODEL_RE.search(model) is not None
-
-
 def bedrock_runtime_chat_completions_serves_reasoning_inline(model: str) -> bool:
     """Whether AWS's native Chat Completions writes this model's reasoning inline in the answer text.
 

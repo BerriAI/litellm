@@ -1639,19 +1639,24 @@ def test_streamed_provider_unique_tool_call_ids_pass_through(local_cost_map):
     ) == ["chatcmpl-tool-8c9232df5019ff4f"]
 
 
-def test_streamed_tool_call_ids_of_models_other_than_grok_pass_through(local_cost_map):
+def test_streamed_positional_tool_call_ids_are_minted_for_gpt_too(local_cost_map):
     deltas = [{"index": 0, **_tool_call("call_0", "read_a")}, {"index": 1, **_tool_call("call_1", "read_b")}]
 
-    assert _streamed_tool_call_ids(deltas, model="global.openai.gpt-6.1-sol") == ["call_0", "call_1"]
+    ids = _streamed_tool_call_ids(deltas, model="global.openai.gpt-5.6-sol")
+
+    assert len(set(ids)) == 2
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
 
 
-def test_tool_call_ids_of_models_other_than_grok_pass_through(local_cost_map, fake_aws_env):
+def test_positional_tool_call_ids_are_minted_for_gpt_too(local_cost_map, fake_aws_env):
     reply = _chat_completion_json(
-        None, "global.openai.gpt-6.1-sol", tool_calls=[_tool_call("call_0", "read_a"), _tool_call("call_1", "read_b")]
+        None, "global.openai.gpt-5.6-sol", tool_calls=[_tool_call("call_0", "read_a"), _tool_call("call_1", "read_b")]
     )
     _, client = _recording_client(json=reply)
     response = litellm.completion(
-        model="bedrock/global.openai.gpt-6.1-sol", messages=[{"role": "user", "content": "hello"}], client=client
+        model="bedrock/global.openai.gpt-5.6-sol", messages=[{"role": "user", "content": "hello"}], client=client
     )
 
-    assert [tool_call.id for tool_call in response.choices[0].message.tool_calls] == ["call_0", "call_1"]
+    ids = [tool_call.id for tool_call in response.choices[0].message.tool_calls]
+    assert len(set(ids)) == 2
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
