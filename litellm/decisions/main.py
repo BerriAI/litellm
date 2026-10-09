@@ -109,7 +109,7 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
 def _unknown_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
     if _drops_params(kwargs):
         return ()
-    return tuple(name for name in kwargs if not _is_gateway_kwarg(name))
+    return tuple(name for name, value in kwargs.items() if value is not None and not _is_gateway_kwarg(name))
 
 
 def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:

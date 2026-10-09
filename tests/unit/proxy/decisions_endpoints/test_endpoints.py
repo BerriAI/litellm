@@ -449,6 +449,32 @@ def test_unknown_fields_are_dropped_when_drop_params_is_set(
     assert "drop_params" not in json.loads(upstream.calls[0].request.content)
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "upstream_response"),
+    (
+        ("/v1/systemone", _REQUEST, _RESPONSE),
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST, _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST),
+    ),
+    ids=("systemone", "openai_format"),
+)
+def test_null_valued_fields_are_ignored_without_drop_params(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    upstream_response: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+
+    response: Final = client.post(endpoint, json={**request_body, "stream": None, "temperature": None})
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert not {"stream", "temperature"} & set(json.loads(upstream.calls[0].request.content))
+
+
 @pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
 def test_proxy_chat_defaults_do_not_reach_the_decisions_gate(
     client: TestClient,

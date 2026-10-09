@@ -238,6 +238,22 @@ async def test_unknown_kwargs_are_dropped_when_drop_params_is_set(
     assert isinstance(response, DecisionsResponse)
 
 
+@pytest.mark.asyncio
+async def test_null_valued_kwargs_are_ignored_like_chat_completions(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="typesafe/jev-1.13", api_key="caller-key", stream=None, temperature=None, **_SYSTEMONE_FORMAT_FIELDS
+    )
+
+    assert route.called
+    assert set(json.loads(route.calls[0].request.content)) == {"model", "state", "questions"}
+    assert isinstance(response, DecisionsResponse)
+
+
 def test_sync_decisions_refuse_unknown_kwargs_the_same_way(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
