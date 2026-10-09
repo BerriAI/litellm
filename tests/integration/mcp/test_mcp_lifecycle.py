@@ -257,7 +257,7 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
     gateway: Gateway, authenticated: bool
 ) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
-        aliases: Final = tuple("scope" + uuid.uuid4().hex for _ in range(2))
+        aliases: Final = tuple(f"scope{uuid.uuid4().int % 10**32:032d}" for _ in range(2))
         servers: Final = tuple(
             register_mcp(
                 scenario,
