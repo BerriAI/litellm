@@ -55,11 +55,13 @@ class WorkflowJob(BaseModel):
     steps: tuple[Mapping[str, object], ...] = ()
     timeout_minutes: object = Field(default=None, alias="timeout-minutes")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "frozen": True}
 
 
 class WorkflowFile(BaseModel):
     jobs: Mapping[str, WorkflowJob] = Field(default_factory=dict)
+
+    model_config = {"frozen": True}
 
 
 def parse_workflow(text: str) -> WorkflowFile | str:
