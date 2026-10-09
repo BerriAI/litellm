@@ -9510,6 +9510,73 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"] == {}
 
     @pytest.mark.asyncio
+    async def test_auto_router_deployment_loads_every_per_user_connection(self, monkeypatch):
+        """An auto-router deployment can pick a Copilot group at request time, so
+        discovery must fall back to every per-user credential the caller has."""
+        from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+        table: Final = self._env(monkeypatch)
+        ciphertext: Final = upc._encode(
+            upc.GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+        )
+        table.find_many = AsyncMock(
+            return_value=[SimpleNamespace(user_id="user-a", credential_name="copilot-cred", credential_b64=ciphertext)]
+        )
+        router: Final = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            return_value=[
+                {
+                    "model_name": "auto-chat",
+                    "litellm_params": {"model": "auto_router/copilot-picker"},
+                }
+            ]
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data: Final = {"model": "auto-chat", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        call_where: Final = table.find_many.await_args.kwargs["where"]
+        assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
+
+    @pytest.mark.asyncio
+    async def test_non_per_user_group_loads_no_credentials(self, monkeypatch):
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table: Final = self._env(monkeypatch)
+        router: Final = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            return_value=[
+                {
+                    "model_name": "shared-chat",
+                    "litellm_params": {"model": "github_copilot/gpt-4o", "litellm_credential_name": "shared-cred"},
+                }
+            ]
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data: Final = {"model": "shared-chat", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_not_awaited()
+        assert data["secret_fields"] == {}
+
+    @pytest.mark.asyncio
     async def test_wildcard_targets_expand_once_not_per_group(self, monkeypatch):
         """An admin ``{"*": [5000 targets]}`` chain must expand the entry once:
         without fired-entry tracking each discovered group would re-expand the

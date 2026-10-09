@@ -217,6 +217,30 @@ async def drop_user_provider_credential_cache(
 
 
 @with_service_target("user_provider_connections")
+async def set_user_provider_credential_cache(
+    cache: DualCache,
+    user_id: str,
+    credential_name: str,
+    payload: GithubCopilotUserConnectionPayload,
+) -> None:
+    """Connect path: overwrite the key with the new connection's ciphertext so a
+    stale set-if-absent fill from a pre-connect read cannot resurrect a
+    not-connected marker. Falls back to a plain delete when the write raises."""
+    token_cache: Final = cache.redis_cache
+    if token_cache is None:
+        return
+    try:
+        await token_cache.async_set_cache(
+            _cache_key(user_id, credential_name),
+            _encode(payload),
+            ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
+        )
+    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
+        verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis set failed; falling back to delete")
+        await drop_user_provider_credential_cache(cache, user_id, credential_name)
+
+
+@with_service_target("user_provider_connections")
 async def aget_user_provider_tokens(
     prisma_client: "PrismaClient",
     cache: DualCache,

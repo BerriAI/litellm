@@ -2716,6 +2716,24 @@ def _per_user_oauth_configured() -> bool:
     )
 
 
+def _all_per_user_credential_names() -> tuple[str, ...]:
+    """Every credential name configured for per-user GitHub OAuth, so one DB
+    query can prefetch all of the caller's connections when an auto-router
+    deployment may route to a Copilot group at request time."""
+    from litellm.constants import (
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+    )
+
+    return tuple(
+        credential.credential_name
+        for credential in (litellm.credential_list or ())
+        if getattr(credential, "credential_name", None)
+        and isinstance(values := getattr(credential, "credential_values", None), Mapping)
+        and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+    )
+
+
 def _fallback_entry_target_count(entry: object) -> int:
     """Work units one fallback entry carries, floored so nothing counts as zero:
     a bare string or any non-dict counts 1; a dict entry counts one unit per
@@ -2870,6 +2888,7 @@ def _per_user_credential_names_for_groups(
         GITHUB_COPILOT_AUTH_TYPE_KEY,
         GITHUB_COPILOT_PER_USER_AUTH_TYPE,
     )
+    from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
@@ -2885,6 +2904,13 @@ def _per_user_credential_names_for_groups(
                 if isinstance(deployment, Mapping)
                 else getattr(deployment, "litellm_params", None)
             )
+            deployment_model: object = (
+                litellm_params.get("model")
+                if isinstance(litellm_params, Mapping)
+                else getattr(litellm_params, "model", None)
+            )
+            if isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) == "semantic":
+                return _all_per_user_credential_names()
             credential_name_obj: object = (
                 litellm_params.get("litellm_credential_name")
                 if isinstance(litellm_params, Mapping)
