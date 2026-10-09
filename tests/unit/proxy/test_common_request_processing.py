@@ -2,8 +2,9 @@ import asyncio
 import copy
 import datetime
 import json
+import logging
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
+from typing import AsyncGenerator, Callable, Coroutine, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,6 +67,13 @@ from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from litellm.types.decisions import (
+    DecisionsResponse,
+    NoulAnswer,
+    OpenAIDecisionResponse,
+    OpenAIDecisionUsage,
+    OpenAIPredicateAnswer,
+)
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -2994,6 +3002,17 @@ class TestExtractErrorFromSSEChunk:
         # Other fields should be obtained from the original error object (if exists)
 
 
+@pytest.fixture(params=("systemone", "openai"))
+def frozen_decisions_response(request: pytest.FixtureRequest) -> DecisionsResponse | OpenAIDecisionResponse:
+    if request.param == "systemone":
+        return DecisionsResponse(model="jev-1.13.0", answers={"defect": NoulAnswer(type="noul", noul=0.5)})
+    return OpenAIDecisionResponse(
+        model="gpt-6-luna",
+        answers=(OpenAIPredicateAnswer(name="defect", probability=0.5),),
+        usage=OpenAIDecisionUsage(input_tokens=1, output_tokens=0, total_tokens=1),
+    )
+
+
 class TestOverrideOpenAIResponseModel:
     """Tests for _override_openai_response_model function"""
 
@@ -3450,21 +3469,64 @@ class TestOverrideOpenAIResponseModel:
 
         assert "model" not in response_obj
 
-    def test_override_model_swallows_setattr_failure(self):
+    def test_override_model_warns_on_setattr_failure_and_returns_the_same_response(
+        self, caplog: pytest.LogCaptureFixture
+    ):
         class ReadOnlyModelResponse:
             @property
             def model(self) -> str:
                 return "downstream-model"
 
-        response_obj = ReadOnlyModelResponse()
+        response_obj: Final = ReadOnlyModelResponse()
 
-        _override_openai_response_model(
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            overridden: Final = _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model="my-model",
+                log_context="test_context",
+            )
+
+        assert overridden is response_obj
+        assert response_obj.model == "downstream-model"
+        failure_levels: Final = [
+            record.levelno for record in caplog.records if "failed to override" in record.getMessage()
+        ]
+        assert failure_levels == [logging.WARNING]
+
+    def test_mutable_response_is_restamped_in_place(self):
+        response_obj: Final = litellm.ModelResponse(model="gpt-4o-2024-08-06")
+
+        overridden: Final = _override_openai_response_model(
             response_obj=response_obj,
-            requested_model="my-model",
+            requested_model="gpt-4o",
             log_context="test_context",
         )
 
-        assert response_obj.model == "downstream-model"
+        assert overridden is response_obj
+        assert response_obj.model == "gpt-4o"
+
+    def test_frozen_response_comes_back_as_an_aliased_copy_without_a_failure_log(
+        self, frozen_decisions_response: DecisionsResponse | OpenAIDecisionResponse, caplog: pytest.LogCaptureFixture
+    ):
+        frozen_decisions_response.set_hidden_params({"model_id": "deployment-1"})
+        downstream_model: Final = frozen_decisions_response.model
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            overridden: Final = _override_openai_response_model(
+                response_obj=frozen_decisions_response,
+                requested_model="my-decider",
+                log_context="test_context",
+            )
+
+        assert isinstance(overridden, type(frozen_decisions_response))
+        assert overridden.model == "my-decider"
+        assert overridden.model_dump(mode="json")["model"] == "my-decider"
+        assert overridden.model_dump(mode="json", exclude={"model"}) == frozen_decisions_response.model_dump(
+            mode="json", exclude={"model"}
+        )
+        assert overridden.hidden_params == {"model_id": "deployment-1"}
+        assert frozen_decisions_response.model == downstream_model
+        assert "failed to override" not in caplog.text
 
 
 class TestIsAzureModelRouterRequest:
@@ -5131,6 +5193,58 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
     )
 
     assert response.model == expected
+
+
+@pytest.mark.asyncio
+async def test_decisions_response_echoes_the_alias_the_client_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    frozen_decisions_response: DecisionsResponse | OpenAIDecisionResponse,
+):
+    """The decisions response types are frozen, so restamping `model` in place fails: the proxy must send
+    back an aliased copy, the way chat completions already echo the requested model group."""
+    import litellm.proxy.common_request_processing as cpr
+
+    async def llm() -> DecisionsResponse | OpenAIDecisionResponse:
+        return frozen_decisions_response
+
+    async def fake_route_request(
+        **_kwargs: object,
+    ) -> Coroutine[object, object, DecisionsResponse | OpenAIDecisionResponse]:
+        return llm()
+
+    logging_obj: Final = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
+    proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    proxy_logging.during_call_hook = AsyncMock(return_value=None)
+    proxy_logging.post_call_success_hook = AsyncMock(side_effect=lambda data, user_api_key_dict, response: response)
+    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    proxy_logging._callback_capabilities_cache = {}
+    monkeypatch.setattr(cpr, "route_request", fake_route_request)
+
+    processor: Final = ProxyBaseLLMRequestProcessing(data={"model": "my-decider", "state": "ticket", "questions": {}})
+    monkeypatch.setattr(
+        processor, "common_processing_pre_call_logic", AsyncMock(return_value=({"model": "my-decider"}, logging_obj))
+    )
+    monkeypatch.setattr(processor, "_has_post_call_guardrails", MagicMock(return_value=False))
+    scope: Final = {"type": "http", "method": "POST", "path": "/v1/decisions", "headers": [], "query_string": b""}
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        response: Final = await processor.base_process_llm_request(
+            request=Request(scope),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=proxy_logging,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="adecisions",
+            version=None,
+        )
+
+    assert response.model == "my-decider"
+    assert response.model_dump(mode="json", exclude={"model"}) == frozen_decisions_response.model_dump(
+        mode="json", exclude={"model"}
+    )
+    assert "failed to override" not in caplog.text
 
 
 class TestStreamingClientDisconnectLogging:
