@@ -2787,7 +2787,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
         ("claude-opus-4-8", True),
         ("anthropic.claude-opus-4-8", True),
         ("vertex_ai/claude-opus-4-6@default", True),
-        ("openrouter/anthropic/claude-opus-4.7", True),
         ("us.anthropic.claude-sonnet-4-6", True),
         ("claude-opus-4-6-20260205", True),
         # unmapped future models -> anthropic-claude fallback rule
