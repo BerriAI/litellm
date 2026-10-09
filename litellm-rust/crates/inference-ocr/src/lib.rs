@@ -45,8 +45,8 @@ impl OcrRoute {
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
         route = "ocr",
         model = %call.model,
-        provider,
-        resolved_model,
+        resolved_model = %call.model,
+        provider = <&str>::from(call.config.provider()),
         stream = false,
         outcome
     ))]
@@ -63,10 +63,6 @@ impl OcrRoute {
             let call = document::resolve_document(call).await?;
             let (provider, config) =
                 resolve_provider_config(&original_model, custom_llm_provider.as_deref())?;
-            litellm_inference::diagnostic::provider(
-                provider.model,
-                <&'static str>::from(provider.provider),
-            );
             let secrets = self
                 .client
                 .secret_source()
