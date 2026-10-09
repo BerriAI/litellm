@@ -33,6 +33,23 @@ FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 
 
 @pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        pytest.param("https://api.anthropic.com/v1/messages", True, id="anthropic-host"),
+        pytest.param("http://127.0.0.1:8190/v1/messages", True, id="local-messages-route"),
+        pytest.param("https://gateway.example.com/anthropic/v1/messages/", True, id="alternate-host-messages-route"),
+        pytest.param("https://gateway.example.com/v1/messages/batches", False, id="generic-batches-route"),
+        pytest.param("https://gateway.example.com/v1/messages/count_tokens", False, id="generic-count-tokens-route"),
+        pytest.param("https://gateway.example.com/v1/other", False, id="generic-route"),
+    ],
+)
+def test_is_anthropic_messages_url(url: str, expected: bool) -> None:
+    from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
+
+    assert is_anthropic_messages_url(url) is expected
+
+
+@pytest.mark.parametrize(
     "messages,system,expected",
     [
         ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_is_subagent=true;", True),
