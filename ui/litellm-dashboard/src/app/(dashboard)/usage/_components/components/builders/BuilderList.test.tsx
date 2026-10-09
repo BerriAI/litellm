@@ -12,7 +12,6 @@ vi.mock("../overview/Primitives", () => ({
     </section>
   ),
   Segmented: () => null,
-  Sparkline: () => null,
 }));
 
 vi.mock("../overview/TopAgents", () => ({
@@ -23,6 +22,9 @@ const builder: BuilderInsightBuilder = {
   id: "sample-builder",
   name: "Sample Builder",
   email: "sample@example.test",
+  verdict: "productive",
+  verdictLabel: "Productive",
+  verdictLine: "Ships work productively",
   archetype: "Routing Architect",
   tagline: "Routes requests through `codex` workflows",
   uses: "",
@@ -61,7 +63,7 @@ describe("BuilderList", () => {
     );
 
     expect(screen.getByText("Sample Builder")).toBeInTheDocument();
-    expect(screen.getByText("Routing Architect")).toBeInTheDocument();
+    expect(screen.getByText("Productive")).toBeInTheDocument();
     expect(screen.queryByText(/Routes requests through/)).not.toBeInTheDocument();
     expect(screen.getByRole("button")).toHaveAttribute(
       "title",

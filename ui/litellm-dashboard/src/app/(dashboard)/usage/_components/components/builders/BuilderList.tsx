@@ -4,23 +4,21 @@ import { useMemo } from "react";
 import { AgentMark } from "../overview/TopAgents";
 import { agentRowFor } from "../overview/agentCatalog";
 import { formatCompactUsd } from "../overview/overviewData";
-import { Panel, Segmented, Sparkline } from "../overview/Primitives";
+import { Panel, Segmented } from "../overview/Primitives";
 import {
+  builderCostPerPr,
   builderInitials,
-  dailySeries,
   sortBuilders,
   type BuilderInsightBuilder,
   type BuilderSort,
 } from "./builderInsightsData";
+import { BuilderVerdictBadge } from "./BuilderVerdictBadge";
 
 const SORT_OPTIONS = [
   { value: "spend", label: "Spend" },
   { value: "prs", label: "PRs" },
   { value: "efficiency", label: "Cost per PR" },
 ] as const satisfies readonly { value: BuilderSort; label: string }[];
-
-const perPr = (builder: BuilderInsightBuilder) =>
-  builder.spendPerPr ?? (builder.prs > 0 ? builder.spend / builder.prs : null);
 
 export function BuilderList({
   builders,
@@ -40,12 +38,12 @@ export function BuilderList({
   return (
     <Panel
       title="Builders"
-      subtitle="Last 30 days. Select a builder to open their profile"
+      subtitle="Last 30 days. Select a builder to see their verdict"
       action={<Segmented label="Builder sort" value={sort} options={SORT_OPTIONS} onChange={onSortChange} />}
     >
       <div className="divide-y divide-border/60">
         {sortedBuilders.map((builder, index) => {
-          const costPerPr = perPr(builder);
+          const costPerPr = builderCostPerPr(builder);
           const agents = builder.agents
             .filter((agent) => agent.spend > 0 && agent.id !== "unlabeled" && agent.id !== "browser")
             .sort((left, right) => right.spend - left.spend)
@@ -57,7 +55,7 @@ export function BuilderList({
               type="button"
               onClick={() => onSelect(builder.id)}
               title={builder.tagline.replace(/`/g, "")}
-              className={`grid w-full grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-lg py-2.5 text-left transition-colors sm:grid-cols-[1.5rem_minmax(0,1fr)_6rem_6rem_auto] ${
+              className={`grid w-full grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-2 rounded-lg py-2.5 text-left transition-colors sm:grid-cols-[1.5rem_minmax(0,1fr)_3rem_auto] sm:gap-3 ${
                 selected ? "bg-muted/60" : "hover:bg-muted/40"
               }`}
             >
@@ -68,7 +66,7 @@ export function BuilderList({
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-foreground">{builder.name}</span>
-                  <span className="block text-xs text-muted-foreground">{builder.archetype}</span>
+                  <BuilderVerdictBadge verdict={builder.verdict} label={builder.verdictLabel} />
                 </span>
               </span>
               <span className="hidden items-center justify-start -space-x-1.5 sm:flex">
@@ -76,18 +74,12 @@ export function BuilderList({
                   <AgentMark key={agent.id} agent={agentRowFor(agent.id)} size="sm" />
                 ))}
               </span>
-              <Sparkline
-                data={dailySeries(builder)}
-                dataKey="spend"
-                color="var(--chart-1)"
-                className="hidden h-8 w-24 sm:block"
-              />
               <span className="text-right">
-                <span className="block text-sm tabular-nums text-foreground">{formatCompactUsd(builder.spend)}</span>
+                <span className="block text-sm tabular-nums text-foreground">
+                  {costPerPr === null ? "—" : formatCompactUsd(costPerPr)}
+                </span>
                 <span className="block text-xs tabular-nums text-muted-foreground">
-                  {builder.prs > 0 && costPerPr !== null
-                    ? `${builder.prs.toLocaleString()} PRs · ${formatCompactUsd(costPerPr)}/PR`
-                    : "no PRs"}
+                  {builder.prs.toLocaleString()} PRs · {formatCompactUsd(builder.spend)}
                 </span>
               </span>
             </button>

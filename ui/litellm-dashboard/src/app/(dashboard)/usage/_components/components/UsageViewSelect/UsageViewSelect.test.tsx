@@ -41,6 +41,15 @@ describe("UsageViewSelect", () => {
     expect(mockOnChange.mock.calls[0][0]).toBe("team");
   });
 
+  it("marks Builder Insights as beta in the option list", async () => {
+    const user = userEvent.setup();
+    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
+
+    await openMenu(user);
+    const option = screen.getByRole("option", { name: /Builder Insights/ });
+    expect(within(option).getByText("Beta")).toBeInTheDocument();
+  });
+
   it("should show Tag Usage for non-admin users with tag usage permission", async () => {
     const user = userEvent.setup();
     const { container } = render(

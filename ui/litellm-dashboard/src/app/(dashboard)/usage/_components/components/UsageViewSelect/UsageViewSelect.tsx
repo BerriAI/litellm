@@ -100,9 +100,10 @@ const OPTIONS: OptionConfig[] = [
   {
     value: "builders",
     label: "Builder Insights",
-    description: "Profiles, agents and spend per builder",
+    description: "Spend, PR output and AI productivity verdicts",
     icon: <Sparkles className="size-4" />,
     adminOnly: true,
+    badgeText: "Beta",
   },
   {
     value: "user-agent-activity",
