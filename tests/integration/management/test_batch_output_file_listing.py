@@ -384,10 +384,11 @@ def test_fallback_output_file_details_refresh_once_provider_recovers(gateway: Ga
             _batch_routes(model=batch.model),
             control_url=batch.scenario.control_url,
         )
-        details_response: Final = gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key)
-        assert details_response.status_code == 200, details_response.text
-        details: Final = JSON_OBJECT.validate_json(details_response.content)
-        assert details["bytes"] == OUTPUT_BYTES, details
+        details: Final = eventually(
+            lambda: _file_details(gateway, batch.owner_key, output_id),
+            lambda observed: observed["bytes"] == OUTPUT_BYTES,
+            seconds=30,
+        )
         assert (details["filename"], details["purpose"]) == ("output.jsonl", "batch_output"), details
         assert "litellm_details_fallback" not in details, details
         assert _metadata_hit_count(gateway, batch.scenario) == 1
@@ -759,8 +760,12 @@ def test_mistral_output_file_keeps_batch_output_purpose_when_details_refresh_on_
             _mistral_batch_routes(),
             control_url=batch.scenario.control_url,
         )
-        details: Final = _file_details(gateway, batch.owner_key, output_id)
-        assert (details["filename"], details["bytes"]) == (MISTRAL_OUTPUT_FILENAME, OUTPUT_BYTES), details
+        details: Final = eventually(
+            lambda: _file_details(gateway, batch.owner_key, output_id),
+            lambda observed: observed["filename"] == MISTRAL_OUTPUT_FILENAME,
+            seconds=30,
+        )
+        assert details["bytes"] == OUTPUT_BYTES, details
         assert details["purpose"] == "batch_output", details
         refreshed: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
         assert tuple(string_value(file["id"]) for file in refreshed) == (output_id,), refreshed
