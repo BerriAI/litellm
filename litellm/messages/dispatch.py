@@ -2,11 +2,10 @@ import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.host.provider import resolve_provider
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -64,12 +63,13 @@ def _public_request(
 
 
 def _resolved_provider(request: NativeCall) -> str | None:
-    try:
-        return get_llm_provider(
-            str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider"))
-        )[1]
-    except BadRequestError:
-        return optional_str(request.resolved.get("custom_llm_provider"))
+    effective: Final = request.resolved
+    target: Final = resolve_provider(
+        str(effective["model"]),
+        optional_str(effective.get("custom_llm_provider")),
+        optional_str(effective.get("api_base")),
+    )
+    return target[1] if target is not None else None
 
 
 def _context(request: NativeCall) -> RouteContext:
