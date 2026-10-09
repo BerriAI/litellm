@@ -19,10 +19,12 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry._logs import LogRecord
 from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.sdk._logs import LogData, LogRecord
+from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
-from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogExportResult, SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogRecordExportResult, SimpleLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -2225,9 +2227,13 @@ def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPat
             severity_number=SeverityNumber.INFO,
             body="tls-export-test",
         )
-        log_data: Final = LogData(log_record=record, instrumentation_scope=InstrumentationScope("tls-export-test"))
+        log_data: Final = ReadableLogRecord(
+            log_record=record,
+            resource=Resource.create({}),
+            instrumentation_scope=InstrumentationScope("tls-export-test"),
+        )
         result: Final = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
@@ -6366,7 +6372,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[ReadableLogRecord, ...]:
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
@@ -6440,7 +6446,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
     until pods were OOMKilled)."""
 
-    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+    BSP_THREAD_NAME = "OtelBatchSpanRecordProcessor"
 
     def _logger(self, cap=3, exporter="console"):
         logger = OpenTelemetry(
