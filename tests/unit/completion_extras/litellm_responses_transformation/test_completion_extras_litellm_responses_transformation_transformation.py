@@ -4247,6 +4247,50 @@ def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
     assert request["prompt_cache_options"] == cache_breakpoint
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "keep_marker"),
+    [
+        ("openai.gpt-5.6-sol", "bedrock_mantle", True),
+        ("openai.gpt-5.4", "bedrock_mantle", False),
+        ("openai.gpt-5.6-sol", "azure_ai", False),
+    ],
+    ids=("flagged-hosted-deployment", "unflagged-hosted-deployment", "provider-without-flag"),
+)
+def test_transform_request_uses_provider_keyed_prompt_cache_breakpoint_flag(
+    model: str, custom_llm_provider: str, keep_marker: bool
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+        {"role": "user", "content": "Hi"},
+    ]
+
+    request: Final = handler.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Stable prefix",
+                **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+            }
+        ],
+    }
+
+
 def test_prompt_cache_breakpoint_read_tolerates_non_string_content_block_keys() -> None:
     handler: Final = LiteLLMResponsesTransformationHandler()
     # Non-string keys are not JSON-representable but are accepted by chat completion
@@ -4531,6 +4575,81 @@ def test_prompt_cache_breakpoint_supports_model_alias_with_base_model(
             "role": "user",
             "content": [expected_content],
         }
+    ]
+
+
+_MANTLE_GPT_ROW: Final = {
+    "litellm_provider": "bedrock_mantle",
+    "mode": "responses",
+    "supports_prompt_cache_breakpoint": True,
+}
+_MARKED_SYSTEM_PART: Final = {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+
+def _bridged_input_for_served_provider(
+    model: str, custom_llm_provider: str, **litellm_params: object
+) -> list[dict[str, object]]:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(
+            List[AllMessageValues],
+            [{"role": "system", "content": [_MARKED_SYSTEM_PART]}, {"role": "user", "content": "hi"}],
+        ),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider, **litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-sol", "us-east-1/openai.gpt-5.6-sol"])
+def test_transform_request_keeps_the_breakpoint_for_a_hosted_openai_model_by_its_served_provider(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """The bridge is handed the provider-stripped deployment name, which has no cost-map row and no
+    ``gpt-`` version of its own: the row keyed for the serving provider states the dialect."""
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider(model, "bedrock_mantle") == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{**_MARKED_SYSTEM_PART, "type": "input_text"}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+def test_transform_request_keeps_the_breakpoint_when_the_served_providers_row_is_the_base_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider("my-alias", "bedrock_mantle", base_model="openai.gpt-5.6-sol")[0][
+        "content"
+    ] == [{**_MARKED_SYSTEM_PART, "type": "input_text"}]
+
+
+def test_transform_request_strips_the_breakpoint_when_the_served_providers_row_opts_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "bedrock_mantle/gpt-6-luna", {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": False}
+    )
+
+    assert _bridged_input_for_served_provider("gpt-6-luna", "bedrock_mantle")[0]["content"] == [
+        {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
+def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a_row_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    assert _bridged_input_for_served_provider("openai.gpt-5.6-sol", "azure")[0]["content"] == [
+        {"type": "input_text", "text": "Stable prefix"}
     ]
 
 
