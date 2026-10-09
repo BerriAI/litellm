@@ -95,6 +95,9 @@ _PROVIDERS: Final = (
         "strands_decider", "strands_decider/systemone-decider", "/v1/systemone", "systemone-decider", None, False, None
     ),
     _Provider(
+        "hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None
+    ),
+    _Provider(
         "cloudflare",
         "cloudflare/clef",
         "/ai/run/@cf/cloudflare/clef",
