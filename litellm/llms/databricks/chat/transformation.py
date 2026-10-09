@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -190,6 +191,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @classmethod
     def get_config(cls, *, model: str | None = None):
         return super().get_config()
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: type[BaseModel] | dict | None
+    ) -> dict | None:
+        return type_to_response_format_param(response_format=response_format)
 
     def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""

@@ -2088,3 +2088,66 @@ def mock_chat_streaming_response_chunks() -> List[str]:
             }
         ),
     ]
+
+
+def test_databricks_get_json_schema_from_pydantic_object_preserves_defs_pointer():
+    """
+    Test that DatabricksConfig produces standard OpenAI JSON pointer refs ('#/$defs/{model}')
+    for nested Pydantic models in response_format, rather than inheriting Anthropic's
+    ref_template ('/$defs/{model}') which breaks Databricks schema validation.
+
+    Fixes https://github.com/BerriAI/litellm/issues/45617
+    """
+    from pydantic import BaseModel
+
+    class Address(BaseModel):
+        city: str
+        zip_code: str
+
+    class UserProfile(BaseModel):
+        name: str
+        address: Address
+
+    config = DatabricksConfig()
+    schema_param = config.get_json_schema_from_pydantic_object(UserProfile)
+
+    assert schema_param is not None
+    assert schema_param["type"] == "json_schema"
+    json_schema = schema_param["json_schema"]["schema"]
+
+    # Verify that $ref contains '#/$defs/Address' with the leading '#'
+    assert "$defs" in json_schema
+    assert "Address" in json_schema["$defs"]
+    ref = json_schema["properties"]["address"]["$ref"]
+    assert ref == "#/$defs/Address"
+
+
+def test_databricks_get_optional_params_nested_pydantic_response_format():
+    """
+    Test end-to-end get_optional_params for databricks custom_llm_provider preserves
+    standard JSON pointer references in response_format.
+
+    Fixes https://github.com/BerriAI/litellm/issues/45617
+    """
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        item_name: str
+        quantity: int
+
+    class Order(BaseModel):
+        order_id: str
+        items: list[Item]
+
+    optional_params = litellm.get_optional_params(
+        model="databricks/dbrx-instruct",
+        custom_llm_provider="databricks",
+        response_format=Order,
+    )
+
+    assert "response_format" in optional_params
+    schema = optional_params["response_format"]["json_schema"]["schema"]
+    assert "$defs" in schema
+    assert "Item" in schema["$defs"]
+    items_ref = schema["properties"]["items"]["items"]["$ref"]
+    assert items_ref == "#/$defs/Item"
