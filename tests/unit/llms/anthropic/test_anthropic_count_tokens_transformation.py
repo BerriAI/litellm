@@ -329,3 +329,115 @@ async def test_remote_image_fetch_keeps_counting_handler_event_loop_responsive(
         ]}],
     }
     assert messages == original
+
+
+@pytest.mark.parametrize(
+    "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
+)
+def test_count_lifts_the_leading_system_run_into_system(
+    config_type: type[AnthropicCountTokensConfig],
+) -> None:
+    """A Responses ``instructions`` arrives as a leading system-role message. count_tokens answers 400
+    on that role at the head of ``messages`` and only takes the initial prompt in ``system``, so the
+    leading run moves there with its cache_control, empty text dropped, and a later reminder stays."""
+    cache_control: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "system", "content": "Be terse", "cache_control": cache_control},
+        {"role": "system", "content": [{"type": "text", "text": "Answer in French"}, {"type": "text", "text": ""}]},
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "system", "content": "later reminder"},
+        {"role": "assistant", "content": "Bonjour."},
+    ]
+    original: Final = deepcopy(messages)
+    result: Final = config_type().transform_request_to_count_tokens(model="claude-opus-5-5", messages=messages)
+
+    assert result == {
+        "model": "claude-opus-5-5",
+        "system": [
+            {"type": "text", "text": "Be terse", "cache_control": cache_control},
+            {"type": "text", "text": "Answer in French"},
+        ],
+        "messages": [
+            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "system", "content": "later reminder"},
+            {"role": "assistant", "content": "Bonjour."},
+        ],
+    }
+    assert messages == original
+
+
+@pytest.mark.parametrize(
+    ("system", "expected_system"),
+    (
+        (None, [{"type": "text", "text": "Be terse"}]),
+        ("", [{"type": "text", "text": "Be terse"}]),
+        ("Answer in French", [{"type": "text", "text": "Answer in French"}, {"type": "text", "text": "Be terse"}]),
+        (
+            [{"type": "text", "text": "Answer in French", "cache_control": {"type": "ephemeral"}}],
+            [
+                {"type": "text", "text": "Answer in French", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "Be terse"},
+            ],
+        ),
+    ),
+    ids=["absent", "empty", "string", "blocks"],
+)
+def test_count_keeps_the_callers_system_ahead_of_the_lifted_run(
+    system: JsonValue, expected_system: list[dict[str, JsonValue]]
+) -> None:
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model="claude-opus-5-5",
+        messages=[{"role": "system", "content": "Be terse"}, {"role": "user", "content": "hi"}],
+        system=system,
+    )
+
+    assert result == {
+        "model": "claude-opus-5-5",
+        "system": expected_system,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+
+def test_count_leaves_a_non_text_system_and_its_messages_as_sent() -> None:
+    """A malformed ``system`` is the provider's to reject, so nothing is rearranged around it."""
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "system", "content": "Be terse"},
+        {"role": "user", "content": "hi"},
+    ]
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model="claude-opus-5-5", messages=messages, system=5
+    )
+
+    assert result == {"model": "claude-opus-5-5", "system": 5, "messages": messages}
+
+
+def test_count_drops_a_leading_system_message_without_text() -> None:
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model="claude-opus-5-5",
+        messages=[{"role": "system", "content": ""}, {"role": "user", "content": "hi"}],
+    )
+
+    assert result == {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]}
+
+
+@pytest.mark.asyncio
+async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(httpx_transport_clients):
+    """The wire body is what the provider judges: ``system`` carries the prompt and no message has
+    ``role: "system"``, so a Responses ``instructions`` is counted by Anthropic instead of 400ing."""
+    with respx.mock:
+        route = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 21})
+        )
+        result = await AnthropicCountTokensHandler().handle_count_tokens_request(
+            model="claude-opus-5-5",
+            messages=[{"role": "system", "content": "Be terse"}, {"role": "user", "content": "Hello, how are you?"}],
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
+            api_base="https://gateway.example",
+        )
+
+    assert result == {"input_tokens": 21}
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content) == {
+        "model": "claude-opus-5-5",
+        "system": [{"type": "text", "text": "Be terse"}],
+        "messages": [{"role": "user", "content": "Hello, how are you?"}],
+    }
