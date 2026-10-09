@@ -76,10 +76,8 @@ class TestProxyInitializationHelpers:
         mock_dumps.assert_called_once_with({"status": "healthy"}, indent=4)
 
     @patch("openai.OpenAI")
-    @patch("click.echo")
-    @patch("builtins.print")
     def test_run_test_chat_completion(
-        self, mock_print: MagicMock, mock_echo: MagicMock, mock_openai: MagicMock
+        self, mock_openai: MagicMock, capsys: pytest.CaptureFixture[str]
     ) -> None:
         mock_client: Final = MagicMock()
         mock_openai.return_value = mock_client
@@ -104,8 +102,9 @@ class TestProxyInitializationHelpers:
             request.kwargs.get("stream", False) for request in mock_client.chat.completions.create.call_args_list
         ] == [False, True, False, True]
         assert mock_client.completions.create.call_count == 2
+        output: Final = capsys.readouterr().out
         for chunk in stream_chunks:
-            assert mock_echo.call_args_list.count(call(f"LiteLLM: streaming response from proxy {chunk}")) == 2
+            assert output.count(f"LiteLLM: streaming response from proxy {chunk}\n") == 2
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config
