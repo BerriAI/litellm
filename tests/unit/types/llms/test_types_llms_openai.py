@@ -552,6 +552,17 @@ class TestOpenAIFileObjectBatchGuardrailSerialization:
         original = self._file_object(litellm_batch_guardrail=self._report())
         assert OpenAIFileObject(**original.model_dump()) == original
 
+    def test_details_fallback_marker_is_omitted_when_unset_and_round_trips_when_set(self):
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        without_marker = self._file_object()
+        assert "litellm_details_fallback" not in without_marker.model_dump()
+        assert "litellm_details_fallback" not in without_marker.model_dump_json()
+
+        with_marker = self._file_object(litellm_details_fallback=True)
+        assert with_marker.model_dump()["litellm_details_fallback"] is True
+        assert OpenAIFileObject.model_validate_json(with_marker.model_dump_json()) == with_marker
+
     def test_serialization_json_schema_still_describes_the_model(self):
         """A return annotation on the wrap serializer would collapse this to a bare object."""
         from litellm.types.llms.openai import OpenAIFileObject

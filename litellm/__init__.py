@@ -1421,7 +1421,6 @@ from .exceptions import (
     ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
@@ -1666,6 +1665,24 @@ if TYPE_CHECKING:
     )
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
+    )
+    from .llms.perplexity.decisions.transformation import (
+        PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.typesafe.decisions.transformation import (
+        TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
+    )
+    from .llms.openrouter.decisions.transformation import (
+        OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.cloudflare.decisions.transformation import (
+        CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.strands_decider.decisions.transformation import (
+        StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
+    )
+    from .llms.openai.decisions.transformation import (
+        OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

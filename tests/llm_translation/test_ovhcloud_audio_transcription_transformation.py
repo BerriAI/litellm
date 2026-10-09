@@ -12,7 +12,6 @@ from tests.llm_translation.base_audio_transcription_unit_tests import (
     BaseLLMAudioTranscriptionTest,
 )
 
-
 @pytest.mark.skipif(
     not os.getenv("OVHCLOUD_API_KEY"),
     reason="OVHCLOUD_API_KEY not set, skipping OVHCloud audio transcription tests",
@@ -29,12 +28,6 @@ class TestOVHCloudAudioTranscription(BaseLLMAudioTranscriptionTest):
     # Override the async base test with a sync no-op to avoid
     # 'async def functions are not natively supported' failures when
     # running this file in isolation without pytest-asyncio.
-    def test_audio_transcription_async(self):  # type: ignore[override]
-        pytest.skip(
-            "Async audio transcription test for OVHCloud is skipped in this suite; "
-            "async test plugins (e.g. pytest-asyncio/anyio) are not configured here."
-        )
-
 
 @pytest.mark.skipif(
     not os.getenv("OVHCLOUD_API_KEY"),

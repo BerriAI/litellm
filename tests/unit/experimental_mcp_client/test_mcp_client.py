@@ -6,6 +6,7 @@ import os
 import selectors
 import sys
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -42,6 +43,7 @@ from litellm.experimental_mcp_client.client import (
     MCPClient,
     _first_non_cancelled_cause,
     _TransportContext,
+    _TransportStreams,
     as_mcp_read_timeout,
     strip_auth_scheme,
 )
@@ -59,6 +61,199 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
 
 
+@pytest.mark.asyncio
+async def test_tool_continuation_reaches_modern_upstream() -> None:
+    from mcp.types import ElicitResult, TextContent
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        if payload.method == "server/discover":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "supportedVersions": ["2026-07-28"],
+                        "capabilities": {"tools": {}},
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                    },
+                },
+            )
+        if payload.method == "tools/list":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                    },
+                },
+            )
+        assert payload.method == "tools/call"
+        assert payload.params is not None
+        assert payload.params.get("requestState") == "opaque-upstream-state"
+        assert payload.params.get("inputResponses") == {"confirmation": {"action": "accept"}}
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "resultType": "complete",
+                    "content": [{"type": "text", "text": "confirmed"}],
+                    "isError": False,
+                },
+            },
+        )
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
+    result: Final = await client.call_tool(
+        CallToolRequestParams(
+            name="confirm",
+            request_state="opaque-upstream-state",
+            input_responses={"confirmation": ElicitResult(action="accept")},
+        ),
+        raise_on_error=True,
+    )
+    assert isinstance(result, CallToolResult)
+    assert result.content == [TextContent(type="text", text="confirmed")]
+    assert result.is_error is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("modern_caller", [False, True])
+@pytest.mark.parametrize(
+    "elicitation_mode,sampling", [("form", False), ("form", True), ("url", False), ("url", True), ("none", True)]
+)
+async def test_modern_input_request_uses_existing_elicitation_callback(
+    modern_caller: bool, sampling: bool, elicitation_mode: str
+) -> None:
+    from queue import SimpleQueue
+    from mcp.types import (
+        ElicitResult,
+        ElicitRequestParams,
+        TextContent,
+        CreateMessageRequestParams,
+        CreateMessageResult,
+    )
+    from litellm.proxy._experimental.mcp_server.interactions import BoundInputRequiredResult
+
+    observed: Final[SimpleQueue[str]] = SimpleQueue()
+    sampled: Final = CreateMessageResult(
+        role="assistant", content=TextContent(type="text", text="sampled"), model="test"
+    )
+    expected_responses: Final = {
+        **({"consent": {"action": "accept"}} if elicitation_mode != "none" else {}),
+        **({"sample": sampled.model_dump(by_alias=True, exclude_none=True)} if sampling else {}),
+    }
+
+    async def elicit(context: object, params: ElicitRequestParams) -> ElicitResult:
+        if params.mode == "url":
+            assert params.elicitation_id, "Legacy URL input must carry its required elicitation ID"
+        observed.put(params.message)
+        return ElicitResult(action="accept")
+
+    async def sample(context: object, params: CreateMessageRequestParams) -> CreateMessageResult:
+        assert params.max_tokens == 10
+        observed.put("sample")
+        return sampled
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        if payload.method == "server/discover":
+            result = {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"tools": {}},
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+            }
+        elif payload.method == "tools/list":
+            result = {
+                "tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+            }
+        elif not (payload.params or {}).get("requestState"):
+            result = {
+                "resultType": "input_required",
+                "requestState": "pending",
+                "inputRequests": {
+                    **(
+                        {
+                            "consent": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "message": "Confirm operation",
+                                    **(
+                                        {"mode": "form", "requestedSchema": {"type": "object", "properties": {}}}
+                                        if elicitation_mode == "form"
+                                        else {"mode": "url", "url": "https://example.com/confirm"}
+                                    ),
+                                },
+                            }
+                        }
+                        if elicitation_mode != "none"
+                        else {}
+                    ),
+                    **(
+                        {"sample": {"method": "sampling/createMessage", "params": {"messages": [], "maxTokens": 10}}}
+                        if sampling
+                        else {}
+                    ),
+                },
+            }
+        else:
+            assert (payload.params or {}).get("requestState") == "pending"
+            assert (payload.params or {}).get("inputResponses") == expected_responses
+            result = {"resultType": "complete", "content": [{"type": "text", "text": "confirmed"}], "isError": False}
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    client: Final = _MockTransportClient(
+        respond,
+        server_url="https://example.com/mcp",
+        protocol_version="2026-07-28",
+        elicitation_callback=elicit,
+        sampling_callback=sample,
+    )
+    result: Final = await client.call_tool(
+        CallToolRequestParams(name="confirm", arguments={}), raise_on_error=True, allow_input_required=modern_caller
+    )
+    if modern_caller and elicitation_mode != "none":
+        assert isinstance(result, BoundInputRequiredResult)
+        assert tuple(result.input_requests or {}) == ("consent",)
+        assert result.gateway_responses == ({"sample": sampled} if sampling else None)
+        resumed: Final = await client.call_tool(
+            CallToolRequestParams(
+                name="confirm",
+                arguments={},
+                request_state=result.request_state,
+                input_responses={"consent": ElicitResult(action="accept"), **(result.gateway_responses or {})},
+            ),
+            raise_on_error=True,
+            allow_input_required=True,
+        )
+        assert isinstance(resumed, CallToolResult)
+        assert resumed.content == [TextContent(type="text", text="confirmed")]
+    else:
+        assert isinstance(result, CallToolResult)
+        assert result.content == [TextContent(type="text", text="confirmed")]
+    assert sorted(observed.get_nowait() for _ in range(observed.qsize())) == sorted(
+        ([] if modern_caller or elicitation_mode == "none" else ["Confirm operation"])
+        + (["sample"] if sampling else [])
+    )
+
+
 def _initialized(instructions: str | None = None) -> InitializeResult:
     return InitializeResult(
         protocol_version=LATEST_HANDSHAKE_VERSION,
@@ -71,14 +266,26 @@ def _initialized(instructions: str | None = None) -> InitializeResult:
 class _MockTransportClient(MCPClient):
     """An MCPClient whose streamable-HTTP transport runs on an httpx2 MockTransport."""
 
-    def __init__(self, respond, **kwargs):
+    def __init__(
+        self,
+        respond,
+        *,
+        http_transport: httpx2.AsyncBaseTransport | None = None,
+        transport_context: Callable[[str, httpx2.AsyncClient], _TransportContext] | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._respond = respond
+        self._http_transport = http_transport
+        self._transport_context = transport_context
 
     def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
-        http_client: Final = self._create_httpx_client_factory(transport=httpx2.MockTransport(self._respond))(
+        transport: Final = self._http_transport or httpx2.MockTransport(self._respond)
+        http_client: Final = self._create_httpx_client_factory(transport=transport)(
             headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
         )
+        if self._transport_context is not None:
+            return self._transport_context(self.server_url, http_client), http_client
         return streamable_http_client(self.server_url, http_client=http_client), http_client
 
 
@@ -2922,8 +3129,11 @@ async def test_cancellation_delivers_termination_over_tcp(
 
     listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port: Final = listener.sockets[0].getsockname()[1]
+    client_timeout: Final = 2 if cancel_mode == "read_timeout" else 30
     client: Final = MCPClient(
-        server_url=f"http://127.0.0.1:{port}/mcp", protocol_version=protocol_version, timeout=2 if cancel_mode == "read_timeout" else 30
+        server_url=f"http://127.0.0.1:{port}/mcp",
+        protocol_version=protocol_version,
+        timeout=client_timeout,
     )
 
     async def calls():
@@ -3520,3 +3730,157 @@ async def test_optional_catalog_distinguishes_absent_capability_from_failed_cont
         assert result.next_cursor is None
     if failure == "unadvertised":
         assert method not in methods
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,field,entry",
+    [
+        ("prompts", "prompts", {"name": "example"}),
+        ("resources", "resources", {"name": "example", "uri": "test://example"}),
+        ("resource_templates", "resourceTemplates", {"name": "example", "uriTemplate": "test://{name}"}),
+    ],
+)
+@pytest.mark.parametrize("ttl", [0, 5000])
+@pytest.mark.parametrize("cleanup_phase", ["transport", "http_client"])
+@pytest.mark.parametrize("cleanup_seconds", [0, 2, 6])
+async def test_optional_discovery_retains_freshness_across_pages(
+    kind: str, field: str, entry: dict[str, str], ttl: int, cleanup_phase: str, cleanup_seconds: int
+) -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        if payload.method == "server/discover":
+            discovery_result: Final = {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"prompts": {}, "resources": {}},
+                "ttlMs": 0,
+                "cacheScope": "private",
+                "resultType": "complete",
+            }
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": discovery_result})
+        following: Final = bool((payload.params or {}).get("cursor"))
+        listing_result: Final = {
+            field: [entry],
+            "ttlMs": ttl if following else 9000,
+            "cacheScope": "private" if following else "public",
+            "resultType": "complete",
+            **({} if following else {"nextCursor": "next"}),
+        }
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": listing_result})
+
+    clock: Final = _ManualClockLoop()
+
+    class CleanupTransport(httpx2.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self._transport = httpx2.MockTransport(respond)
+
+        async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+            return await self._transport.handle_async_request(request)
+
+        async def aclose(self) -> None:
+            await self._transport.aclose()
+            if cleanup_phase == "http_client":
+                clock.advance(cleanup_seconds)
+
+    @asynccontextmanager
+    async def transport_with_cleanup(url: str, http_client: httpx2.AsyncClient) -> AsyncIterator[_TransportStreams]:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            yield streams
+        if cleanup_phase == "transport":
+            clock.advance(cleanup_seconds)
+
+    client: Final = _MockTransportClient(
+        respond,
+        http_transport=CleanupTransport(),
+        transport_context=transport_with_cleanup,
+        server_url="https://example.com/mcp",
+        protocol_version="2026-07-28",
+    )
+
+    try:
+        with patch.object(mcp_client_module, "time", Mock(monotonic=clock.time)):
+            result: Final = await getattr(client, "list_" + kind + "_result")(raise_on_error=True)
+    finally:
+        clock.close()
+    assert len(getattr(result, kind)) == 2
+    assert result.cache_scope == "private"
+    assert result.next_cursor is None
+    assert result.ttl_ms == max(0, ttl - cleanup_seconds * 1000)
+    assert len(await getattr(client, "list_" + kind)(raise_on_error=True)) == 2
+
+
+def test_prompt_continuation_polling_respects_the_original_deadline() -> None:
+    from mcp.types import GetPromptRequestParams
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        result: Final = (
+            {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"prompts": {}},
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+            }
+            if payload.method == "server/discover"
+            else {"resultType": "input_required", "requestState": "pending"}
+        )
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    loop: Final = _AutojumpClockLoop()
+    client: Final = _MockTransportClient(
+        respond, server_url="https://example.com/mcp", protocol_version="2026-07-28", timeout=0.12
+    )
+    try:
+        with pytest.raises(TimeoutError):
+            loop.run_until_complete(client.get_prompt(GetPromptRequestParams(name="pending")))
+        assert loop.time() == pytest.approx(0.12)
+    finally:
+        loop.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("form", "url"))
+@pytest.mark.parametrize("enabled", (False, True))
+async def test_modern_elicitation_honors_server_permission(mode: str, enabled: bool) -> None:
+    import anyio
+    from mcp import ClientSession, MCPError
+    from mcp.shared.message import SessionMessage
+    from mcp.types import (
+        ElicitRequest,
+        ElicitRequestFormParams,
+        ElicitRequestParams,
+        ElicitRequestURLParams,
+        ElicitResult,
+        InputRequiredResult,
+    )
+
+    async def elicit(context: object, params: ElicitRequestParams) -> ElicitResult:
+        return ElicitResult(action="accept")
+
+    client: Final = MCPClient(server_url="https://example.com/mcp", elicitation_callback=elicit if enabled else None)
+    request: Final = AsyncMock(
+        return_value=InputRequiredResult(
+            request_state="pending",
+            input_requests={
+                "consent": ElicitRequest(
+                    params=ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object"})
+                    if mode == "form"
+                    else ElicitRequestURLParams(message="Confirm", url="https://example.com/confirm")
+                )
+            },
+        )
+    )
+    send, receive = anyio.create_memory_object_stream[SessionMessage](1)
+    async with send, receive:
+        session: Final = ClientSession(receive, send)
+        if enabled:
+            result: Final = await client._request_with_interaction(session, request, None, None, True)
+            assert isinstance(result, InputRequiredResult)
+            assert result.input_requests["consent"].params.mode == mode
+        else:
+            with pytest.raises(MCPError, match="Elicitation is disabled"):
+                await client._request_with_interaction(session, request, None, None, True)
+        request.assert_awaited_once_with(None, None)

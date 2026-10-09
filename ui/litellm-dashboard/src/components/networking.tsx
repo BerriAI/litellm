@@ -318,6 +318,8 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
+  display_name?: string | null;
+  source?: "db" | "config";
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
@@ -553,9 +555,10 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (catalogOnly = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
+    const path = catalogOnly ? "/public/litellm_model_cost_map?catalog_only=true" : "/public/litellm_model_cost_map";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}${path}` : path;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1091,6 +1094,8 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
@@ -7047,6 +7052,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
 };
 
 export type UserBannerSeverity = "info" | "warning" | "error";
