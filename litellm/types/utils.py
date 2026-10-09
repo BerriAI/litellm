@@ -4261,6 +4261,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    BITDEER_AI = "bitdeer-ai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORTECS = "cortecs"
