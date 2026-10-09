@@ -677,7 +677,7 @@ class TestGetFallback:
         router.content_policy_fallbacks = []
 
         with patch("litellm.proxy.proxy_server.llm_router", router):
-            response = await get_fallback("gpt-5.4-mini", "general", mock_user_api_key_dict)
+            response: Final = await get_fallback("gpt-5.4-mini", "general", mock_user_api_key_dict)
 
         assert response.fallback_models == ["team-fallback"]
 

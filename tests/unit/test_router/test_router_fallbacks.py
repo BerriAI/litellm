@@ -447,7 +447,7 @@ async def test_a_string_valued_rule_falls_over_to_that_one_model(fallback_kind: 
         **{fallback_kind: [{"primary": "backup"}]},
     )
 
-    response = await router.acompletion(
+    response: Final = await router.acompletion(
         model="primary", messages=[{"role": "user", "content": "hi"}], **{mock_trigger: True}
     )
 

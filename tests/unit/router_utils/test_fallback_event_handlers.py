@@ -1401,9 +1401,18 @@ class TestOrderedFallbackLookupGroups:
             get_fallback_model_group_for_lookup_groups,
         )
 
-        fallbacks = [{"smart-router": "backup-b"}, {"*": "backup-c"}]
+        fallbacks: Final = [{"smart-router": "backup-b"}, {"*": "backup-c"}]
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 1)
+
+    def test_two_catch_all_rules_never_shadow_a_later_groups_own_chain(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks: Final = [{"*": ["backup-a"]}, {"*": ["backup-b"]}, {"primary": ["backup-c"]}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("missing", "primary")) == (["backup-c"], 1)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("missing", "no-such")) == (["backup-b"], 1)
 
 
 class TestHasUnattemptedFallbackTarget:

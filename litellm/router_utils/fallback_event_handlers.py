@@ -503,13 +503,14 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
     return tuple(dict.fromkeys(group for group in ordered if group))
 
 
-def _resolved_a_specific_chain(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
-    lookup_group: str,
-    generic_idx: int | None,
-) -> bool:
-    specific_rules: Final = fallbacks if generic_idx is None else fallbacks[:generic_idx] + fallbacks[generic_idx + 1 :]
-    return get_fallback_model_group(fallbacks=specific_rules, model_group=lookup_group)[0] is not None
+def _is_catch_all_rule(rule: object) -> bool:
+    return isinstance(rule, Mapping) and "*" in rule
+
+
+def _without_catch_all_rules(
+    fallbacks: Sequence[object],
+) -> list[object]:  # mutable-ok: mirrors get_fallback_model_group's contract
+    return [rule for rule in fallbacks if not _is_catch_all_rule(rule)]
 
 
 def get_fallback_model_group_for_lookup_groups(
@@ -520,12 +521,13 @@ def get_fallback_model_group_for_lookup_groups(
     First lookup group with a specifically-keyed chain wins; the generic "*" chain applies
     only after every group missed, so a catch-all cannot shadow a later group's own chain.
     """
+    specific_rules: Final = _without_catch_all_rules(fallbacks)
     results: Final = tuple(get_fallback_model_group(fallbacks=fallbacks, model_group=group) for group in lookup_groups)
     specific: Final = next(
         (
             result
             for group, result in zip(lookup_groups, results)
-            if _resolved_a_specific_chain(fallbacks, group, result[1])
+            if get_fallback_model_group(fallbacks=specific_rules, model_group=group)[0] is not None
         ),
         None,
     )
