@@ -47231,6 +47231,7 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.04e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -47387,6 +47388,7 @@
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 3e-08,
+        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -81942,5 +81944,43 @@
         "mode": "evaluation",
         "output_cost_per_token": 4.2e-08,
         "source": "https://prices.azure.com/api/retail/prices?$filter=productName eq 'Microsoft Decision Models'"
+    },
+    "gpt-rosalind-discovery": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://developers.openai.com/api/docs/pricing"
+    },
+    "chatgpt/gpt-rosalind-discovery": {
+        "litellm_provider": "chatgpt",
+        "mode": "responses",
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
+    },
+    "github_copilot/claude-haiku-5.5": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
     }
 }
