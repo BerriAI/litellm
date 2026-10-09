@@ -5,13 +5,17 @@ import { fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test
 
 import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
 
-const renderForm = (editableFields: ReadonlySet<string>, overrides: { isSaving?: boolean } = {}) => {
+const renderForm = (
+  editableFields: ReadonlySet<string>,
+  overrides: { isSaving?: boolean; mayRaiseMaxBudget?: boolean } = {},
+) => {
   const onSave = vi.fn().mockResolvedValue(undefined);
   const onCancel = vi.fn();
   renderWithProviders(
     <TeamAdminSettingsForm
       initialValues={{ tpm_limit: 1000, rpm_limit: 50, max_budget: 20 }}
       editableFields={editableFields}
+      mayRaiseMaxBudget={overrides.mayRaiseMaxBudget ?? false}
       isSaving={overrides.isSaving ?? false}
       onCancel={onCancel}
       onSave={onSave}
@@ -96,5 +100,21 @@ describe("TeamAdminSettingsForm", () => {
 
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+  });
+
+  it.each([
+    [false, "You can keep or lower this budget. Ask a proxy admin to raise it."],
+    [true, "You can raise this budget. Raises are capped by your organization's budget when the team belongs to one."],
+  ])("when mayRaiseMaxBudget is %s, describes only the Max Budget input with: %s", (mayRaiseMaxBudget, hint) => {
+    renderForm(new Set(["tpm_limit", "max_budget"]), { mayRaiseMaxBudget });
+
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveAccessibleDescription(hint);
+    expect(screen.getByLabelText("Tokens per minute Limit (TPM)")).not.toHaveAccessibleDescription();
+  });
+
+  it("shows no budget hint when the proxy has not enabled Max Budget for team admins", () => {
+    renderForm(new Set(["tpm_limit"]), { mayRaiseMaxBudget: true });
+
+    expect(screen.queryByText(/this budget/)).not.toBeInTheDocument();
   });
 });
