@@ -26,3 +26,47 @@ Python consumers continue using `litellm._logging` and its existing loggers, fil
 A future Node bridge can implement the same sink with runtime-specific delivery and expose the same processor through N-API. Node callback scheduling, queue limits, and shutdown belong in that bridge; this crate has no interpreter handles or output queue
 
 This is diagnostic logging. Request lifecycle hooks and `CustomLogger` dispatch remain separate
+
+## Configured diagnostic export
+
+`DiagnosticsConfig` describes export intent, service identity, a default diagnostic policy, and named destination wiring. `Diagnostics` constructs the official SDK adapters and owns reconfiguration, flush, and shutdown. These types have no Python dependency and are usable directly by Rust hosts
+
+```rust
+use litellm_tracing::{Diagnostics, DiagnosticsConfig};
+
+let configuration = DiagnosticsConfig::from_sources(None, |name| std::env::var(name).ok())?;
+let diagnostics = Diagnostics::default();
+diagnostics.configure(configuration)?;
+diagnostics.force_flush()?;
+diagnostics.shutdown()?;
+```
+
+`from_sources` accepts an optional settings object and a caller-supplied environment lookup. `LITELLM_DIAGNOSTICS` accepts a JSON diagnostics object and replaces the complete settings object. Endpoint, project key, service name, and header values support `os.environ/NAME` references. Load and resolve configuration before passing it to the runtime; `configure` validates resolved values without reading process environment
+
+Policy has `minimum_level` (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`), `target_prefixes`, and finite `sample_rate` between zero and one. A destination may provide a complete policy override. Errors bypass sampling while retaining severity and target admission. Correlated routine logs use a stable trace-ID decision, and uncorrelated records use random per-record sampling. Export admission leaves the compatibility sink's own filter authoritative
+
+Calling `configure` replaces the complete destination set. Disabled configuration and `shutdown` remove all destinations. Shutdown is idempotent. Validation happens before replacement, and SDK work runs outside destination locks
+
+The `posthog` Cargo feature compiles SDK support by default but starts no worker or network traffic by itself. PostHog captures personless `litellm diagnostic` events; OTLP sends HTTP/protobuf logs to a full logs endpoint. Official SDKs own batching, queues, retries, and HTTP transport
+
+The subscriber remains the upstream `tracing_subscriber::Registry` with composable layers and filters. `Sink` is the existing normalized-record adapter used by those layers. Rust hosts may compose `sink_layer(diagnostics.clone())` with standard `fmt` or other layers
+
+Normalized `source.target` and `source.timestamp` fields let exporters consume records without interpreting host-specific attributes. Both adapters redact before enqueueing. Delivery is best effort; flush completion does not prove remote receipt. Queue limits bound records rather than bytes, and per-destination drop counters and distributed span export are not implemented
+
+## Built-in analytics
+
+Built-in analytics defaults on for OSS use and off when a license is configured, including an empty, invalid, expired, or unresolved license declaration. It never uses license verification to decide reporting. `DO_NOT_TRACK=1` or `true` always disables it. Valid `LITELLM_TELEMETRY=true` or `false` overrides the license default; invalid control settings fail closed with a local warning. These controls affect built-in analytics only, preserving user-configured diagnostics and Python handlers. Boolean controls use the shared `litellm-serde-compat` decoder, matching the Python SDK’s trimmed `TypeAdapter(bool)` token set (`1/true/t/yes/y/on`, `0/false/f/no/n/off`, case-insensitive). A present empty control is invalid and disables built-in analytics
+
+Release builders can supply `LITELLM_ANALYTICS_PROJECT_TOKEN` and optionally `LITELLM_ANALYTICS_ENDPOINT` as compile-time environment variables. Missing or blank tokens and feature-disabled builds start no analytics client and send nothing. Runtime environment variables do not select the built-in project. PostHog remains internal transport wiring
+
+Python SDK analytics initializes lazily when an API call runs. The proxy blocks SDK initialization during bootstrap and freezes its decision after configuration and secrets load. License keys declared in YAML count even when their secret cannot resolve. Rust gateway applies the same policy after its YAML environment overlay. Host lifetimes own shutdown, and libraries keep scoped dispatch instead of installing a global subscriber
+
+Schema version 1 contains `litellm.runtime.started` and `litellm.api.used`, with the surface, public package version and a closed API route enum. Unknown routes become `other`. Python counts API entry once across nested wrappers; Rust hosts count native route summaries when they close, including abandoned streams. These events do not measure success or latency. No messages, model names, provider names, correlation IDs, credentials, payload values or field paths enter the built-in projection. An ephemeral session ID groups events without persistent user identity. A PostHog before-send allowlist removes automatic OS and SDK fields, disables person creation and disables GeoIP enrichment
+
+For a Rust SDK host, create the scoped logger first, call `diagnostics.analytics().initialize(...)` inside `logger.scope(...)` with `AnalyticsSurface::RustSdk`, the resolved `AnalyticsInputs` decision, your public package version and `AnalyticsProject::builtin()`, then drain with `diagnostics.analytics().shutdown()`. Customer exporters have independent configuration and shutdown. `LoggerRule(Rollout.RUST_OPT_IN)` still controls only the legacy logging backend
+
+Payload shape extraction
+
+`PayloadShape::extract` walks a borrowed JSON value and returns sorted, unique JSONPath expressions containing object keys and array wildcards, with no scalar values or array positions. `ShapeLimits` bounds visited nodes, depth, path count, and path bytes. Exceeding a limit discards partial paths and marks the shape truncated
+
+Children of `metadata`, `properties`, `$defs`, `definitions`, and `headers` use wildcards for dynamic key names. Strings containing JSON remain opaque. The shared synthetic fixture covers Python/Rust parity; capture policy and provider boundary wiring belong to the payload-shape feature above this PR

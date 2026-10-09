@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "service_name": "diagnostic-contract",
+  "policy": {
+    "minimum_level": "WARN",
+    "target_prefixes": ["LiteLLM", "litellm_"],
+    "sample_rate": 0.25
+  },
+  "destinations": [
+    {
+      "transport": "otlp",
+      "name": "logs",
+      "endpoint": "os.environ/TEST_LOGS_ENDPOINT",
+      "headers": {"Authorization": "os.environ/TEST_LOGS_AUTH"},
+      "policy": null
+    }
+  ]
+}

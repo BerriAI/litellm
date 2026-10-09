@@ -9,6 +9,56 @@ use litellm_tracing::{ByteChunk, Level, Logger, Metadata, Record, Sink, info, wa
 use rstest::rstest;
 use serde_json::{Value, json};
 
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_dispatch_keeps_captured_context_isolated_across_future_polls() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Output {
+        enabled: Arc::new(AtomicBool::new(true)),
+        sender,
+    });
+    let tasks = ["a", "b"].map(|trace| {
+        let scoped = logger.with_fields(json!({"trace_id": trace}).as_object().unwrap().clone());
+        tokio::spawn(scoped.instrument(async move {
+            tokio::task::yield_now().await;
+            Logger::current()
+                .instrument(async move {
+                    tokio::task::yield_now().await;
+                    info!(trace, "captured");
+                })
+                .await;
+        }))
+    });
+    for task in tasks {
+        task.await.unwrap();
+    }
+    logger.scope(|| info!("outside"));
+    let records = receiver.try_iter().collect::<Vec<_>>();
+    assert_eq!(records.len(), 3);
+    for (message, fields, _, _, _) in &records[..2] {
+        assert_eq!(message, "captured");
+        assert_eq!(fields["trace_id"], fields["trace"]);
+    }
+    assert_eq!(records[2].0, "outside");
+    assert_eq!(records[2].1, json!({}));
+}
+
+#[rstest]
+fn span_close_retains_creation_context_after_scope_returns() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Output {
+        enabled: Arc::new(AtomicBool::new(true)),
+        sender,
+    });
+    let span = logger
+        .with_fields(json!({"trace_id": "origin"}).as_object().unwrap().clone())
+        .scope(|| tracing::info_span!("operation"));
+    drop(span);
+    let (message, fields, _, _, _) = receiver.try_recv().unwrap();
+    assert_eq!(message, "span closed");
+    assert_eq!(fields["trace_id"], "origin");
+}
+
 struct Output {
     enabled: Arc<AtomicBool>,
     sender: mpsc::Sender<(String, Value, Level, &'static str, Option<u32>)>,
