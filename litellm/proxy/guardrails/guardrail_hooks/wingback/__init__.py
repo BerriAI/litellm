@@ -33,10 +33,10 @@ def initialize_guardrail(
     return _wingback_callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: module registry merged at import by guardrail_registry
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.WINGBACK.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {  # mutable-ok: module registry merged at import by guardrail_registry
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.WINGBACK.value: WingbackGuardrail,
 }

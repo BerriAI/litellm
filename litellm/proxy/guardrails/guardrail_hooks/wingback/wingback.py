@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.integrations.custom_guardrail import log_guardrail_information
@@ -26,12 +29,12 @@ class WingbackGuardrail(GenericGuardrailAPI):
         api_base: str | None = None,
         api_key: str | None = None,
         wingback_app_id: str | None = None,
-        additional_provider_specific_params: dict[str, object] | None = None,
+        additional_provider_specific_params: Mapping[str, object] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
-        extra_headers: list[str] | None = None,
+        extra_headers: Sequence[str] | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
+        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
     ) -> None:
         resolved_api_base: Final = api_base or os.environ.get("WINGBACK_API_BASE") or DEFAULT_WINGBACK_API_BASE
@@ -39,13 +42,13 @@ class WingbackGuardrail(GenericGuardrailAPI):
 
         existing_params: Final = additional_provider_specific_params
         additional_params: Final = (
-            {  # mutable-ok: one-shot merge for guardrail API payload
+            {
                 **existing_params,
                 "wingback_app_id": wingback_app_id,
             }
             if wingback_app_id and existing_params is not None and "wingback_app_id" not in existing_params
             else (
-                {  # mutable-ok: default provider params when only app id is configured
+                {
                     "wingback_app_id": wingback_app_id
                 }
                 if wingback_app_id and existing_params is None
@@ -59,7 +62,7 @@ class WingbackGuardrail(GenericGuardrailAPI):
             additional_provider_specific_params=additional_params,
             unreachable_fallback=unreachable_fallback,
             fail_on_error=fail_on_error,
-            extra_headers=extra_headers,
+            extra_headers=list(extra_headers) if extra_headers is not None else None,
             guardrail_name=guardrail_name or GUARDRAIL_NAME,
             event_hook=event_hook,
             default_on=default_on,
@@ -69,13 +72,13 @@ class WingbackGuardrail(GenericGuardrailAPI):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: "LiteLLMLoggingObj | None" = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         return await super().apply_guardrail(
             inputs=inputs,
-            request_data=request_data,
+            request_data=dict(request_data),
             input_type=input_type,
             logging_obj=logging_obj,
         )
