@@ -3,40 +3,45 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
-_NO_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
-_NO_ENV: Final[Mapping[str, str]] = MappingProxyType({})
+
+def _no_config() -> Mapping[str, object]:
+    return MappingProxyType({})
+
+
+def _no_env() -> Mapping[str, str]:
+    return MappingProxyType({})
 
 
 @dataclass(frozen=True)
 class ClaudeCodeOptions:
-    config: Mapping[str, object] = _NO_CONFIG
-    env: Mapping[str, str] = _NO_ENV
+    config: Mapping[str, object] = field(default_factory=_no_config)
+    env: Mapping[str, str] = field(default_factory=_no_env)
 
 
 @dataclass(frozen=True)
 class CodexOptions:
     reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
     web_search: bool = False
-    config: Mapping[str, object] = _NO_CONFIG
-    env: Mapping[str, str] = _NO_ENV
+    config: Mapping[str, object] = field(default_factory=_no_config)
+    env: Mapping[str, str] = field(default_factory=_no_env)
 
 
 @dataclass(frozen=True)
 class OpenCodeOptions:
     agent: str = "build"
-    config: Mapping[str, object] = _NO_CONFIG
-    env: Mapping[str, str] = _NO_ENV
+    config: Mapping[str, object] = field(default_factory=_no_config)
+    env: Mapping[str, str] = field(default_factory=_no_env)
 
 
 @dataclass(frozen=True)
 class PiOptions:
     thinking: Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
-    config: Mapping[str, object] = _NO_CONFIG
-    env: Mapping[str, str] = _NO_ENV
+    config: Mapping[str, object] = field(default_factory=_no_config)
+    env: Mapping[str, str] = field(default_factory=_no_env)
 
 
 @dataclass(frozen=True)
@@ -47,7 +52,7 @@ class DeepAgentsOptions:
 
 @dataclass(frozen=True)
 class ToolLoopOptions:
-    completion_kwargs: Mapping[str, object] = _NO_CONFIG
+    completion_kwargs: Mapping[str, object] = field(default_factory=_no_config)
 
 
 HarnessOptions: TypeAlias = (
