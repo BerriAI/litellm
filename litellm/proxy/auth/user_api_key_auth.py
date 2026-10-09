@@ -1680,11 +1680,12 @@ async def user_api_key_auth_builder(
         # OAuth2 applies for:
         # 1) when global OAuth2 auth is enabled on LLM + info routes
         # 2) JWT tokens that explicitly match routing_overrides on LLM + info routes
+        route_is_lens: Final = route == "/lens" or route.startswith("/lens/")
         should_apply_override_oauth2: Final = route_jwt_to_oauth2 and (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route)
+            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route) or route_is_lens
         )
         should_apply_global_oauth2: Final = enable_oauth2_auth and (
-            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route)
+            RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route) or route_is_lens
         )
         if (should_apply_global_oauth2 and not is_jwt) or should_apply_override_oauth2:
             from litellm.proxy.proxy_server import premium_user

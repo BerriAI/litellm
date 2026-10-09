@@ -10,6 +10,7 @@ import hashlib
 import random
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
@@ -39,9 +40,9 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta, datetime
-from typing import Final
+from typing import Final, cast
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm._logging import verbose_logger
@@ -52,6 +53,7 @@ import respx
 from fastapi.testclient import TestClient
 from litellm._internal_context import current_service_target, in_post_response_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def setup_cache():
@@ -59,6 +61,143 @@ def setup_cache():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     litellm.cache = cache
     return cache
+
+
+@pytest.fixture
+def copilot_response_cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    return cache
+
+
+class _CopilotCacheAsyncTransport(httpx.AsyncBaseTransport):
+    def __init__(self, responder: Callable[[httpx.Request], httpx.Response]) -> None:
+        self._responder = responder
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return self._responder(request)
+
+
+def _copilot_cache_responder(requests: list[httpx.Request]) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/beta/copilot/conversations":
+            return httpx.Response(status_code=201, json={"id": "cache-conversation"}, request=request)
+        if request.url.path.endswith("/chat"):
+            return httpx.Response(
+                status_code=200,
+                json={"messages": [{"text": "cache reply"}]},
+                request=request,
+            )
+        return httpx.Response(status_code=404, json={}, request=request)
+
+    return respond
+
+
+def _sync_copilot_cache_client(
+    requests: list[httpx.Request],
+) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_copilot_cache_responder(requests))))
+
+
+def _async_copilot_cache_client(
+    requests: list[httpx.Request],
+) -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=_CopilotCacheAsyncTransport(_copilot_cache_responder(requests)))
+
+
+def _assert_copilot_cache_empty(cache: Cache) -> None:
+    cache_backend: Final = cache.cache
+    assert isinstance(cache_backend, InMemoryCache)
+    cache_contents: Final[Mapping[str, object]] = cast(  # cast-ok: in-memory cache exposes an untyped mapping
+        Mapping[str, object],
+        cache_backend.cache_dict,
+    )
+    assert cache_contents == {}
+
+
+def _sync_copilot_cache_call(client: HTTPHandler, stream: bool) -> None:
+    response: Final = litellm.completion(
+        model="microsoft_365_copilot/chat",
+        messages=[{"role": "user", "content": "cache isolation prompt"}],
+        api_key="delegated-cache-token",
+        client=client,
+        stream=stream,
+        caching=True,
+    )
+    if stream:
+        assert isinstance(response, CustomStreamWrapper)
+        tuple(response)
+
+
+async def _async_copilot_cache_call(client: AsyncHTTPHandler, stream: bool) -> None:
+    response: Final = await litellm.acompletion(
+        model="microsoft_365_copilot/chat",
+        messages=[{"role": "user", "content": "cache isolation prompt"}],
+        api_key="delegated-cache-token",
+        client=client,
+        stream=stream,
+        caching=True,
+    )
+    if stream:
+        assert isinstance(response, CustomStreamWrapper)
+        tuple([chunk async for chunk in response])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_sync_copilot_requests_bypass_response_cache(copilot_response_cache: Cache, stream: bool) -> None:
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _sync_copilot_cache_client(requests)
+    for _ in range(2):
+        _sync_copilot_cache_call(client=client, stream=stream)
+
+    graph_chat_requests: Final = tuple(request for request in requests if request.url.path.endswith("/chat"))
+    assert len(graph_chat_requests) == 2
+    _assert_copilot_cache_empty(copilot_response_cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_async_copilot_requests_bypass_response_cache(copilot_response_cache: Cache, stream: bool) -> None:
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _async_copilot_cache_client(requests)
+    async with client.client:
+        for _ in range(2):
+            await _async_copilot_cache_call(client=client, stream=stream)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    graph_chat_requests: Final = tuple(request for request in requests if request.url.path.endswith("/chat"))
+    assert len(graph_chat_requests) == 2
+    _assert_copilot_cache_empty(copilot_response_cache)
+
+
+@pytest.mark.asyncio
+async def test_existing_provider_response_cache_still_hits(copilot_response_cache: Cache) -> None:
+    messages: Final = [{"role": "user", "content": "cached provider control"}]
+    first: Final = await litellm.acompletion(
+        model="gpt-4o",
+        messages=messages,
+        mock_response="first cached response",
+        caching=True,
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    second: Final = await litellm.acompletion(
+        model="gpt-4o",
+        messages=messages,
+        mock_response="second response should not be used",
+        caching=True,
+    )
+
+    assert isinstance(first, ModelResponse)
+    assert isinstance(second, ModelResponse)
+    hidden_params_value: Final[object] = cast(  # cast-ok: validate the response's dynamic metadata
+        object,
+        second.hidden_params,
+    )
+    hidden_params: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(hidden_params_value)
+    assert second.choices[0].message.content == first.choices[0].message.content
+    assert hidden_params.get("cache_hit") is True
 
 
 chat_completion_response = litellm.ModelResponse(

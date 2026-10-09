@@ -9,6 +9,18 @@ import {
 } from "./provider_info_helpers";
 
 describe("provider_info_helpers", () => {
+  it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
+    expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
+    expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");
+  });
+
+  it("shows the Microsoft 365 Copilot logo rather than the Azure one", () => {
+    const { logo, displayName } = getProviderLogoAndName("microsoft_365_copilot");
+    expect(displayName).toBe("Microsoft 365 Copilot");
+    expect(logo).toContain("microsoft_365_copilot");
+    expect(logo).not.toBe(providerLogoMap[Providers.Azure]);
+  });
+
   describe("getProviderLogoAndName", () => {
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");

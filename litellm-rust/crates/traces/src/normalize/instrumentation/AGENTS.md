@@ -1,7 +1,0 @@
-- Interpret extracted facts using known behavior of the SDK or instrumentor that emitted the span
-- Own SDK detection, integration identity, agent naming, role adjustments, input previews, and call-evidence guarantees
-- Require positive SDK evidence before applying a rule. Preserve detection precedence when scopes overlap
-- Mark call evidence complete only when the emitting contract guarantees which calls the span represents, never from the number of IDs found
-- Keep attribute conventions and payload decoding in `../format/`. Reuse `../messages.rs` for message and state conversion
-- Emit role and call evidence for `resolve/`. Do not infer wrappers, ownership, or spend from spans outside the current context
-- Add regression cases to the existing public normalization tests for SDK behavior and ambiguous or unmatched input
