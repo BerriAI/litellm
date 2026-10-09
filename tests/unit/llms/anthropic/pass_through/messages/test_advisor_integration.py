@@ -282,7 +282,7 @@ async def test_named_params_forwarded_into_advisor_executor_subcall():
 @pytest.mark.asyncio
 async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs():
     """
-    ``_execute_pre_request_hooks`` may return any subset of params. After
+    ``execute_pre_request_hooks`` may return any subset of params. After
     extraction those values are also propagated as named kwargs into the
     interceptor, so the same key must not also appear in ``**kwargs`` (or the
     splat raises ``TypeError: got multiple values for keyword argument``).
@@ -326,7 +326,7 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
 
     with (
         patch(
-            "litellm.llms.anthropic.pass_through.messages.handler._execute_pre_request_hooks",
+            "litellm.llms.anthropic.pass_through.messages.handler.execute_pre_request_hooks",
             side_effect=fake_pre_request_hooks,
         ),
         patch(

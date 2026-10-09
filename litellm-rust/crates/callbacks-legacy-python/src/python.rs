@@ -17,6 +17,7 @@ pub(crate) enum LegacyPython {
     Logging(Logging),
     DeploymentHooks(DeploymentHooks),
     Streaming(Streaming),
+    Body(Body),
 }
 
 /// The `@client` wrapper around the call: `function_setup`, response metadata and the
@@ -83,6 +84,16 @@ pub(crate) enum Streaming {
     Failure,
 }
 
+/// The Messages body the Python handler runs around the provider call: the pre-request
+/// fan-out and the agentic loop.
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
+pub(crate) enum Body {
+    #[strum(serialize = "prepare_messages_request")]
+    PrepareRequest,
+    #[strum(serialize = "transform_messages_response")]
+    TransformResponse,
+}
+
 impl LegacyPython {
     fn name(self) -> &'static str {
         match self {
@@ -90,6 +101,7 @@ impl LegacyPython {
             Self::Logging(function) => function.into(),
             Self::DeploymentHooks(function) => function.into(),
             Self::Streaming(function) => function.into(),
+            Self::Body(function) => function.into(),
         }
     }
 
@@ -137,13 +149,22 @@ impl DeploymentHooks {
     }
 }
 
+impl Body {
+    pub(crate) fn call<'py, A>(self, py: Python<'py>, args: A) -> PyResult<Bound<'py, PyAny>>
+    where
+        A: pyo3::call::PyCallArgs<'py>,
+    {
+        LegacyPython::Body(self).call(py, args)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use strum::VariantArray;
 
-    use super::{DeploymentHooks, LegacyPython, Logging, Streaming, Wrapper};
+    use super::{Body, DeploymentHooks, LegacyPython, Logging, Streaming, Wrapper};
     use crate::test_support::PYTHON_CONTRACT;
 
     #[test]
@@ -168,6 +189,11 @@ mod tests {
                 Streaming::VARIANTS
                     .iter()
                     .map(|&function| LegacyPython::Streaming(function)),
+            )
+            .chain(
+                Body::VARIANTS
+                    .iter()
+                    .map(|&function| LegacyPython::Body(function)),
             )
             .map(LegacyPython::name)
             .collect();

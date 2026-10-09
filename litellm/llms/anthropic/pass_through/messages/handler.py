@@ -108,7 +108,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
-async def _execute_pre_request_hooks(
+async def execute_pre_request_hooks(
     model: str,
     messages: list[dict],
     tools: list[dict] | None,
@@ -257,7 +257,7 @@ async def anthropic_messages(
     # tool_choice is forwarded explicitly (it is a named param, not in kwargs)
     # so hooks that rename tools — e.g. websearch_interception converting
     # web_search -> litellm_web_search — can keep a forced tool_choice in sync.
-    request_kwargs: Final = await _execute_pre_request_hooks(
+    request_kwargs: Final = await execute_pre_request_hooks(
         model=model,
         messages=messages,
         tools=tools,
@@ -283,7 +283,7 @@ async def anthropic_messages(
     top_p = request_kwargs.pop("top_p", top_p)
     # Propagate the provider derived inside pre-request hooks, if not already set.
     # The litellm_params dict may have been overwritten by **kwargs in
-    # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
+    # execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
     if not custom_llm_provider:
         custom_llm_provider = request_kwargs.get("litellm_params", {}).get("custom_llm_provider")
         if not custom_llm_provider:

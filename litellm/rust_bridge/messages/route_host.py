@@ -11,7 +11,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import optional_str
+from litellm.rust_bridge.public_call import optional_sequence, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -22,6 +22,26 @@ class MessagesSettings:
     drop_params: bool
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
+
+
+def _listed(value: object) -> tuple[object, ...]:
+    return tuple(optional_sequence(value) or ())
+
+
+def decline_reason(request: Mapping[str, object]) -> str | None:
+    """A streaming call whose callbacks run the agentic loop stays on the Python handler, which runs it at end of stream."""
+    if not request.get("stream"):
+        return None
+    from litellm.llms.custom_httpx.llm_http_handler import overrides_agentic_loop_gate, resolve_custom_loggers
+
+    registered: Final = (
+        *litellm.callbacks,
+        *_listed(request.get("callbacks")),
+        *_listed(request.get("success_callback")),
+    )
+    if overrides_agentic_loop_gate(resolve_custom_loggers(registered)):
+        return "native Messages streaming with an agentic loop hook"
+    return None
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:

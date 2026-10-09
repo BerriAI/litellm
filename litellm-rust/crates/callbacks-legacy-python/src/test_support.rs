@@ -1,4 +1,5 @@
 use std::ffi::CStr;
+use std::sync::{Mutex, MutexGuard};
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -9,6 +10,7 @@ use crate::{LegacyLogging, PublicCall};
 /// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
+pub(crate) const CUSTOM_LOGGER_CONTRACT: &str = include_str!("../custom_logger_contract.json");
 
 /// Stand-ins for `callbacks_legacy_python`, the only Python module the crate calls. Tests
 /// share one interpreter and run concurrently, so each fake is installed idempotently and
@@ -89,6 +91,8 @@ FAKES = {
         'stream_success', list(chunks)
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
+    'prepare_messages_request': lambda request: request['body'].prepare(request),
+    'transform_messages_response': lambda response, request: request['body'].transform(response, request),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
 for name, fake in FAKES.items():
@@ -192,4 +196,40 @@ pub(crate) fn legacy_call(
     };
     let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
     LegacyLogging::new(py, litellm_host::call::Operation::Ocr, call, asynchronous)
+}
+
+/// Tests share one interpreter, and the preflight stub module is global state, so the
+/// tests that install it run one at a time. Take the guard before attaching to Python: a
+/// thread that blocks on it while attached deadlocks the thread holding it as soon as the
+/// interpreter switches threads.
+static PREFLIGHT_MODULE: Mutex<()> = Mutex::new(());
+
+pub(crate) fn preflight_lock() -> MutexGuard<'static, ()> {
+    PREFLIGHT_MODULE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// A fresh stand-in for `litellm.rust_bridge.preflight` that records every call, bound in
+/// `locals` as `preflight`, then `script` run against it. Callers hold [`preflight_lock`].
+pub(crate) fn preflight_stubs(py: Python<'_>, locals: &Bound<'_, PyDict>, script: &CStr) {
+    run(
+        py,
+        locals,
+        c"
+import sys
+import types
+
+for name in ('litellm', 'litellm.rust_bridge'):
+    sys.modules.setdefault(name, types.ModuleType(name))
+preflight = types.ModuleType('litellm.rust_bridge.preflight')
+preflight.warnings = []
+preflight.checked = []
+preflight.credential_list = lambda: []
+preflight.warn_unknown_credential = lambda name, loaded: preflight.warnings.append((name, loaded))
+preflight.check_limits = lambda kwargs: preflight.checked.append(kwargs)
+sys.modules['litellm.rust_bridge.preflight'] = preflight
+",
+    );
+    run(py, locals, script);
 }

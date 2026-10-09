@@ -1,28 +1,18 @@
-use litellm_host::{
-    hooks::CallHooks,
-    interceptors::{RawResponse, RequestContext, WireRequest},
-    lifecycle::{ExecutionEvent, FailureOrigin, Timing},
-};
-use litellm_host_python::{HookStep, PythonCallEvent, PythonRuntime};
-use pyo3::{prelude::*, types::PyDict};
+use litellm_host::{call::Operation, hooks::CallBoundary};
 
-use crate::LegacyLogging;
-
+/// The operations a boundary runs a callback on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CallBoundary {
-    PrepareArguments,
-    BeforeProviderRequest,
-    AfterProviderResponse,
-    TransformResponse,
-    Succeeded,
-    Failed,
-    StreamOpened,
-    StreamChunk,
+pub enum Operations {
+    All,
+    Only(&'static [Operation]),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dispatch {
-    Call(CallBoundary),
+    Call {
+        boundary: CallBoundary,
+        operations: Operations,
+    },
     Python(&'static str),
     DeclarationOnly,
 }
@@ -33,170 +23,105 @@ pub struct CallbackMapping {
     pub dispatch: Dispatch,
 }
 
-struct Binding<H> {
+struct Binding {
     boundary: CallBoundary,
-    invoke: H,
+    operations: Operations,
     callbacks: &'static [&'static str],
 }
 
-impl<H> Binding<H> {
+impl Binding {
     fn mappings(&self) -> impl Iterator<Item = CallbackMapping> {
         self.callbacks.iter().map(|callback| CallbackMapping {
             callback,
-            dispatch: Dispatch::Call(self.boundary),
+            dispatch: Dispatch::Call {
+                boundary: self.boundary,
+                operations: self.operations,
+            },
         })
     }
 }
 
-type Step<T> = PyResult<HookStep<LegacyLogging, T>>;
-type Prepare = fn(&mut LegacyLogging, Python<'_>, Py<PyDict>, f64) -> Step<Py<PyDict>>;
-type Before =
-    fn(&mut LegacyLogging, Python<'_>, Box<WireRequest>, &RequestContext) -> Step<Box<WireRequest>>;
-type After = fn(&mut LegacyLogging, Python<'_>, &RawResponse) -> Step<()>;
-type Transform = fn(&mut LegacyLogging, Python<'_>, Py<PyAny>, Timing) -> Step<Py<PyAny>>;
-type Success = fn(&mut LegacyLogging, Python<'_>, Timing, &Py<PyAny>) -> Step<()>;
-type Failure = fn(&mut LegacyLogging, Python<'_>, Timing, FailureOrigin, &PyErr) -> Step<()>;
-type Open = fn(&mut LegacyLogging, Python<'_>, &Py<PyAny>) -> PyResult<()>;
-type Chunk = fn(&mut LegacyLogging, Python<'_>, &Py<PyAny>) -> PyResult<()>;
+const MESSAGES: Operations = Operations::Only(&[Operation::Messages]);
 
-const PREPARE: Binding<Prepare> = Binding {
-    boundary: CallBoundary::PrepareArguments,
-    invoke: LegacyLogging::prepare_call,
-    callbacks: &["async_pre_call_deployment_hook"],
-};
-
-const BEFORE: Binding<Before> = Binding {
-    boundary: CallBoundary::BeforeProviderRequest,
-    invoke: LegacyLogging::pre_call,
-    callbacks: &["log_pre_api_call", "log_input_event"],
-};
-
-const AFTER: Binding<After> = Binding {
-    boundary: CallBoundary::AfterProviderResponse,
-    invoke: LegacyLogging::post_call,
-    callbacks: &["log_post_api_call"],
-};
-
-const TRANSFORM: Binding<Transform> = Binding {
-    boundary: CallBoundary::TransformResponse,
-    invoke: LegacyLogging::transform_public_response,
-    callbacks: &["async_post_call_success_deployment_hook"],
-};
-
-const SUCCESS: Binding<Success> = Binding {
-    boundary: CallBoundary::Succeeded,
-    invoke: LegacyLogging::succeeded,
-    callbacks: &[
-        "log_success_event",
-        "async_log_success_event",
-        "logging_hook",
-        "async_logging_hook",
-        "redact_standard_logging_payload_from_model_call_details",
-        "log_event",
-        "async_log_event",
-    ],
-};
-
-const FAILURE: Binding<Failure> = Binding {
-    boundary: CallBoundary::Failed,
-    invoke: LegacyLogging::failed,
-    callbacks: &[
-        "async_post_call_failure_deployment_hook",
-        "log_failure_event",
-        "async_log_failure_event",
-        "log_model_group_rate_limit_error",
-        "log_event",
-        "async_log_event",
-    ],
-};
-
-const OPEN: Binding<Open> = Binding {
-    boundary: CallBoundary::StreamOpened,
-    invoke: LegacyLogging::stream_opened,
-    callbacks: &[],
-};
-
-const CHUNK: Binding<Chunk> = Binding {
-    boundary: CallBoundary::StreamChunk,
-    invoke: LegacyLogging::stream_chunk,
-    callbacks: &[],
-};
+/// Every `CustomLogger` callback a native call runs itself, by the boundary that runs it.
+const BINDINGS: &[Binding] = &[
+    Binding {
+        boundary: CallBoundary::PrepareArguments,
+        operations: Operations::All,
+        callbacks: &["async_pre_call_deployment_hook"],
+    },
+    Binding {
+        boundary: CallBoundary::PrepareRequest,
+        operations: MESSAGES,
+        callbacks: &["async_pre_request_hook"],
+    },
+    Binding {
+        boundary: CallBoundary::BeforeProviderRequest,
+        operations: Operations::All,
+        callbacks: &["log_pre_api_call", "log_input_event"],
+    },
+    Binding {
+        boundary: CallBoundary::AfterProviderResponse,
+        operations: Operations::All,
+        callbacks: &["log_post_api_call"],
+    },
+    Binding {
+        boundary: CallBoundary::TransformResponse,
+        operations: Operations::All,
+        callbacks: &["async_post_call_success_deployment_hook"],
+    },
+    Binding {
+        boundary: CallBoundary::TransformResponse,
+        operations: MESSAGES,
+        callbacks: &[
+            "async_should_run_agentic_loop",
+            "async_run_agentic_loop",
+            "async_build_agentic_loop_plan",
+            "async_post_agentic_loop_response_hook",
+        ],
+    },
+    Binding {
+        boundary: CallBoundary::Succeeded,
+        operations: Operations::All,
+        callbacks: &[
+            "log_success_event",
+            "async_log_success_event",
+            "logging_hook",
+            "async_logging_hook",
+            "redact_standard_logging_payload_from_model_call_details",
+            "log_event",
+            "async_log_event",
+        ],
+    },
+    Binding {
+        boundary: CallBoundary::Failed,
+        operations: Operations::All,
+        callbacks: &[
+            "async_post_call_failure_deployment_hook",
+            "log_failure_event",
+            "async_log_failure_event",
+            "log_model_group_rate_limit_error",
+            "log_event",
+            "async_log_event",
+        ],
+    },
+    Binding {
+        boundary: CallBoundary::StreamOpened,
+        operations: Operations::All,
+        callbacks: &[],
+    },
+    Binding {
+        boundary: CallBoundary::StreamChunk,
+        operations: Operations::All,
+        callbacks: &[],
+    },
+];
 
 pub fn callback_mappings() -> impl Iterator<Item = CallbackMapping> {
-    PREPARE
-        .mappings()
-        .chain(BEFORE.mappings())
-        .chain(AFTER.mappings())
-        .chain(TRANSFORM.mappings())
-        .chain(SUCCESS.mappings())
-        .chain(FAILURE.mappings())
-        .chain(OPEN.mappings())
-        .chain(CHUNK.mappings())
+    BINDINGS
+        .iter()
+        .flat_map(Binding::mappings)
         .chain(PYTHON_CALLBACKS.iter().copied())
-}
-
-impl CallHooks<PythonRuntime> for LegacyLogging {
-    fn prepare_arguments(
-        &mut self,
-        py: Python<'_>,
-        arguments: Py<PyDict>,
-        started_at: f64,
-    ) -> Step<Py<PyDict>> {
-        (PREPARE.invoke)(self, py, arguments, started_at)
-    }
-
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        self.adopt_arguments(py, arguments);
-        Ok(())
-    }
-
-    fn before_provider_request(
-        &mut self,
-        py: Python<'_>,
-        wire: Box<WireRequest>,
-        context: &RequestContext,
-    ) -> Step<Box<WireRequest>> {
-        (BEFORE.invoke)(self, py, wire, context)
-    }
-
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
-        response: Py<PyAny>,
-        timing: Timing,
-    ) -> Step<Py<PyAny>> {
-        (TRANSFORM.invoke)(self, py, response, timing)
-    }
-
-    fn on_event(&mut self, py: Python<'_>, event: PythonCallEvent<'_>) -> Step<()> {
-        match event {
-            PythonCallEvent::Started { .. } | PythonCallEvent::Cancelled { .. } => {
-                Ok(HookStep::Ready(()))
-            }
-            PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts }) => {
-                self.result_ready(py, &facts)
-            }
-            PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
-                (AFTER.invoke)(self, py, raw)
-            }
-            PythonCallEvent::Succeeded { timing, response } => {
-                (SUCCESS.invoke)(self, py, timing, response)
-            }
-            PythonCallEvent::Failed {
-                timing,
-                origin,
-                error,
-            } => (FAILURE.invoke)(self, py, timing, origin, error),
-        }
-    }
-
-    fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
-        (OPEN.invoke)(self, py, head)
-    }
-
-    fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
-        (CHUNK.invoke)(self, py, chunk)
-    }
 }
 
 macro_rules! python_callbacks {
@@ -235,9 +160,6 @@ python_callbacks! {
         "async_log_stream_event",
         "async_post_mcp_tool_call_hook",
     ],
-    Dispatch::Python("litellm.llms.anthropic.pass_through.messages.handler") => [
-        "async_pre_request_hook",
-    ],
     Dispatch::Python("litellm.litellm_core_utils.streaming_handler") => [
         "async_post_call_streaming_deployment_hook",
     ],
@@ -252,10 +174,6 @@ python_callbacks! {
     Dispatch::Python("litellm.integrations.argilla") => ["async_dataset_hook"],
     Dispatch::Python("litellm.proxy.management_helpers.audit_logs") => ["async_log_audit_log_event"],
     Dispatch::Python("litellm.llms.custom_httpx.llm_http_handler") => [
-        "async_should_run_agentic_loop",
-        "async_run_agentic_loop",
-        "async_build_agentic_loop_plan",
-        "async_post_agentic_loop_response_hook",
         "async_agentic_loop_cleanup_hook",
         "async_should_run_chat_completion_agentic_loop",
         "async_run_chat_completion_agentic_loop",
@@ -285,4 +203,59 @@ python_callbacks! {
         "async_log_pre_api_call",
         "async_log_input_event",
     ],
+}
+
+#[cfg(test)]
+impl Dispatch {
+    fn contract_entry(self) -> String {
+        match self {
+            Self::Call {
+                boundary,
+                operations: Operations::All,
+            } => format!("call:{boundary:?}"),
+            Self::Call {
+                boundary,
+                operations: Operations::Only(operations),
+            } => {
+                let names: Vec<String> = operations
+                    .iter()
+                    .map(|operation| format!("{operation:?}"))
+                    .collect();
+                format!("call:{boundary:?}[{}]", names.join(","))
+            }
+            Self::Python(module) => format!("python:{module}"),
+            Self::DeclarationOnly => "declaration-only".to_owned(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::callback_mappings;
+    use crate::test_support::CUSTOM_LOGGER_CONTRACT;
+
+    /// `custom_logger_contract.json` is the table as Python reads it: the unit test in
+    /// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` keeps its keys equal to the
+    /// public methods of `CustomLogger`, so a new callback fails there until a row names
+    /// where it runs.
+    #[test]
+    fn the_table_is_the_custom_logger_contract() {
+        let mut table: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for mapping in callback_mappings() {
+            table
+                .entry(mapping.callback)
+                .or_default()
+                .insert(mapping.dispatch.contract_entry());
+        }
+        let contract: BTreeMap<&str, BTreeSet<String>> =
+            serde_json::from_str(CUSTOM_LOGGER_CONTRACT).unwrap();
+        assert_eq!(
+            contract,
+            table,
+            "custom_logger_contract.json must be:\n{}",
+            serde_json::to_string_pretty(&table).unwrap()
+        );
+    }
 }
