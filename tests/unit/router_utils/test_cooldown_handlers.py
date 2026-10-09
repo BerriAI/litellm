@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import random
 import time
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -576,6 +577,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -596,8 +598,10 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
+
 def _make_router(model_list: list, **kwargs) -> Router:
     return Router(model_list=model_list, **kwargs)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFails:
@@ -670,6 +674,7 @@ class TestDeploymentLevelAllowedFails:
         assert should_cooldown is False, (
             "secondary has no deployment-level policy; with allowed_fails=10 it should not cool down on first failure"
         )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
@@ -745,6 +750,7 @@ class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
         )
         assert should_cooldown is True, "Should cooldown after exceeding InternalServerErrorAllowedFails=5"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestExceptionTypeCountersTrackedIndependently:
     def test_cache_key_suffix_separates_exception_type_counters(self):
@@ -794,6 +800,7 @@ class TestExceptionTypeCountersTrackedIndependently:
 
         assert generic_counter_after == 1, "generic counter should now be 1"
         assert rl_counter_after == 3, "RateLimitError counter must remain unchanged after InternalServerError"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCooldownCacheTTLCorrection:
@@ -895,6 +902,7 @@ class TestCooldownCacheTTLCorrection:
 
         assert active == [], "Expired entry must not appear in async active cooldowns"
         assert cc.in_memory_cache.get_cache(key) is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestFallbackDeploymentCooldown:
@@ -1086,6 +1094,7 @@ class TestFallbackDeploymentCooldown:
             call_kwargs = mock_set_cooldown.call_args[1]
             assert call_kwargs["time_to_cooldown"] == 15.0, "model_info.cooldown_time must take priority"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestSingleDeploymentModelGroupProtection:
     def test_generic_allowed_fails_does_not_bypass_single_deployment_protection(self):
@@ -1145,6 +1154,7 @@ class TestSingleDeploymentModelGroupProtection:
         )
         assert should_cooldown is True, "explicit per-exception-type policy must still cool down a solo deployment"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:
     def test_router_level_policy_of_zero_is_not_swallowed_by_allowed_fails(self):
@@ -1173,6 +1183,7 @@ class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:
         )
         assert should_cooldown is True, "RateLimitErrorAllowedFails=0 must cool down after the first failure"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestResolveAllowedFailsFromPolicyFallsThrough:
     def test_none_value_on_first_match_falls_through_to_next_type(self):
@@ -1189,6 +1200,7 @@ class TestResolveAllowedFailsFromPolicyFallsThrough:
         exc = litellm.ContentPolicyViolationError("flagged", "openai", "gpt-4")
         result = _resolve_allowed_fails_from_policy(policy=policy, exception=exc)
         assert result == 3, "must fall through to BadRequestErrorAllowedFails when the more specific field is unset"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
@@ -1282,11 +1294,7 @@ class TestCallerScopedOAuthAuthFailureCooldown:
                     },
                     "model_info": {
                         "id": model_id,
-                        **(
-                            {"allowed_fails_policy": allowed_fails_policy}
-                            if allowed_fails_policy is not None
-                            else {}
-                        ),
+                        **({"allowed_fails_policy": allowed_fails_policy} if allowed_fails_policy is not None else {}),
                     },
                 }
             ]
@@ -1409,6 +1417,85 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         assert get_deployment_failures_for_current_minute(router, model_id) == 1
         assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestPerUserCopilotAuthFailureCooldown:
+    @staticmethod
+    def _router(model_id: str, litellm_params: dict[str, object]) -> Router:
+        return _make_router(
+            model_list=[
+                {
+                    "model_name": "copilot",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        **litellm_params,
+                    },
+                    "model_info": {"id": model_id},
+                }
+            ]
+        )
+
+    @staticmethod
+    def _callback(router: Router, model_id: str, exception: Exception) -> bool:
+        return router.deployment_callback_on_failure(
+            kwargs={
+                "exception": exception,
+                "litellm_params": {"model_info": {"id": model_id}},
+            },
+            completion_response=None,
+            start_time=0,
+            end_time=1,
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_user_oauth_caller_auth_failure_does_not_cooldown(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.constants import GITHUB_COPILOT_AUTH_TYPE_KEY, GITHUB_COPILOT_PER_USER_AUTH_TYPE
+
+        model_id: Final = "per-user-oauth"
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-per-user",
+                    credential_values={GITHUB_COPILOT_AUTH_TYPE_KEY: GITHUB_COPILOT_PER_USER_AUTH_TYPE},
+                    credential_info={"custom_llm_provider": "github_copilot"},
+                )
+            ],
+        )
+        router: Final = self._router(model_id, {"litellm_credential_name": "copilot-per-user"})
+        exception: Final = litellm.CallerCredentialAuthenticationError(
+            message="reconnect", llm_provider="github_copilot", model=""
+        )
+
+        result: Final = self._callback(router, model_id, exception)
+
+        assert result is False
+        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_shared_mode_copilot_auth_failure_still_cools_down(self) -> None:
+        from litellm.llms.github_copilot.authenticator import Authenticator
+
+        model_id: Final = "shared-mode"
+        with (
+            patch.object(Authenticator, "get_api_key", return_value="shared-copilot-token"),
+            patch.object(Authenticator, "get_api_base", return_value="https://api.githubcopilot.com"),
+        ):
+            router: Final = self._router(model_id, {"api_key": "sk-shared"})
+            self._callback(
+                router,
+                model_id,
+                litellm.AuthenticationError("upstream rejected the shared token", "github_copilot", "gpt-4o"),
+            )
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 1
+        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestNewAllowedFailsPolicyFields:
     def test_service_unavailable_error_matched_by_policy(self):
@@ -1460,6 +1547,7 @@ class TestNewAllowedFailsPolicyFields:
         assert policy.BadGatewayErrorAllowedFails == 2
         assert policy.NotFoundErrorAllowedFails == 1
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestRouterLevelGetAllowedFailsFromPolicy:
     """Router.get_allowed_fails_from_policy must handle all AllowedFailsPolicy fields."""
@@ -1495,6 +1583,7 @@ class TestRouterLevelGetAllowedFailsFromPolicy:
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         assert router.get_allowed_fails_from_policy(exc) is None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_deployment():
@@ -1519,6 +1608,7 @@ async def test_router_cooldown_event_callback_no_deployment():
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
 
+
 @pytest.fixture
 def testing_litellm_router():
     return Router(
@@ -1541,6 +1631,7 @@ def testing_litellm_router():
         ]
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic(testing_litellm_router):
     testing_litellm_router.disable_cooldowns = True
@@ -1554,6 +1645,7 @@ def test_should_run_cooldown_logic(testing_litellm_router):
     # don't cooldown if it's a provider default deployment
     testing_litellm_router.provider_default_deployment_ids = ["test_deployment"]
     assert _should_run_cooldown_logic(testing_litellm_router, "test_deployment", 500, Exception("Test")) is False
+
 
 @pytest.fixture
 def single_deployment_router():
@@ -1571,6 +1663,7 @@ def single_deployment_router():
         ]
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
     single_deployment_router,
@@ -1581,6 +1674,7 @@ def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
     default: a client error is usually not the deployment's fault."""
     exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_request_exclusion(
@@ -1595,6 +1689,7 @@ def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_req
     single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(BadRequestErrorAllowedFails=5)
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_content_policy_exclusion(
     single_deployment_router,
@@ -1605,6 +1700,7 @@ def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_co
     deployment_dict = single_deployment_router.get_model_info(id="dep-1")
     deployment_dict["model_info"]["allowed_fails_policy"] = {"ContentPolicyViolationErrorAllowedFails": 0}
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestHasExplicitAllowedFailsPolicyForException:
@@ -1636,6 +1732,7 @@ class TestHasExplicitAllowedFailsPolicyForException:
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(RateLimitErrorAllowedFails=3)
         assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, None, exc) is False
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     """
@@ -1645,6 +1742,7 @@ def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     _exception = litellm.exceptions.RateLimitError("Rate limit", "openai", "gpt-5-mini")
     assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 429, _exception) is True
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     """
@@ -1653,6 +1751,7 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     # Test 401 error (auth limit) -> always cooldown a deployment returning 401s
     _exception = litellm.exceptions.AuthenticationError("Unauthorized", "openai", "gpt-5-mini")
     assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 401, _exception) is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("exception_status", (401, 402))
@@ -1665,6 +1764,7 @@ def test_is_cooldown_required_for_account_errors(testing_litellm_router, excepti
         )
         is True
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("allowed_fails", (None, 0))
@@ -1694,6 +1794,7 @@ def test_single_deployment_402_does_not_cooldown(
         is False
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_single_deployment_402_respects_router_allowed_fails_policy() -> None:
     assert (
@@ -1718,6 +1819,7 @@ def test_single_deployment_402_respects_router_allowed_fails_policy() -> None:
         )
         is True
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_single_deployment_402_respects_deployment_allowed_fails_policy() -> None:
@@ -1746,6 +1848,7 @@ def test_single_deployment_402_respects_deployment_allowed_fails_policy() -> Non
         is True
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_multi_deployment_402_cools_down(testing_litellm_router: Router) -> None:
     assert (
@@ -1761,6 +1864,7 @@ def test_multi_deployment_402_cools_down(testing_litellm_router: Router) -> None
         )
         is True
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1812,6 +1916,7 @@ async def test_should_cooldown_deployment(testing_litellm_router):
     # expect this to fail since it's now 51% of requests are failing
     assert _should_cooldown_deployment(testing_litellm_router, deployment_id, 500, Exception("Test")) is True
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_should_cooldown_deployment_allowed_fails_set_on_router():
@@ -1837,6 +1942,7 @@ async def test_should_cooldown_deployment_allowed_fails_set_on_router():
         assert _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test")) is False
 
     assert _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test")) is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_increment_deployment_successes_for_current_minute_does_not_write_to_redis(
@@ -1879,11 +1985,13 @@ def test_increment_deployment_successes_for_current_minute_does_not_write_to_red
     )
     assert testing_litellm_router.cache.in_memory_cache.get_cache("test_deployment:successes") is not None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_cast_exception_status_to_int():
     assert cast_exception_status_to_int(200) == 200
     assert cast_exception_status_to_int("404") == 404
     assert cast_exception_status_to_int("invalid") == 500
+
 
 @pytest.fixture
 def router():
@@ -1898,6 +2006,7 @@ def router():
             }
         ]
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
@@ -1918,6 +2027,7 @@ def test_should_cooldown_high_traffic_all_fails(mock_failures, mock_successes, r
 
     assert should_cooldown is True, "Should cooldown when all requests fail with sufficient traffic"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute")
@@ -1934,6 +2044,7 @@ def test_no_cooldown_low_traffic(mock_failures, mock_successes, router):
     )
 
     assert should_cooldown is False, "Should not cooldown when traffic is below threshold"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
@@ -1954,6 +2065,7 @@ def test_cooldown_rate_limit(mock_failures, mock_successes, router):
 
     assert should_cooldown is False, "Should not cooldown on rate limit error for single deployment models"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute")
 @patch("litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute")
@@ -1971,6 +2083,7 @@ def test_mixed_success_failure(mock_failures, mock_successes, router):
 
     assert should_cooldown is False, "Should not cooldown when failure rate is below threshold"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_is_cooldown_required_empty_string_exception_status(testing_litellm_router):
     """
@@ -1983,6 +2096,7 @@ def test_is_cooldown_required_empty_string_exception_status(testing_litellm_rout
     )
 
     assert result is False, "Should not require cooldown when exception_status is empty string"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_router):
@@ -2031,6 +2145,7 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
         f"Should cooldown when we have {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS} failed requests (100% failure rate)"
     )
 
+
 @pytest.mark.asyncio
 async def test_dynamic_cooldowns():
     """
@@ -2071,6 +2186,7 @@ async def test_dynamic_cooldowns():
 
     assert "cooldown_time" in tmp_mock.call_args[0][0]["litellm_params"]
     assert tmp_mock.call_args[0][0]["litellm_params"]["cooldown_time"] == 0
+
 
 @pytest.mark.asyncio
 async def test_cooldown_time_zero_uses_zero_not_default():
@@ -2115,6 +2231,7 @@ async def test_cooldown_time_zero_uses_zero_not_default():
 
     healthy_deployments, _ = await router._async_get_healthy_deployments(model="gpt-3.5-turbo", parent_otel_span=None)
     assert len(healthy_deployments) == 1
+
 
 def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
     """
@@ -2170,6 +2287,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
         time_to_cooldown=60.0,
     )
     assert result is True, "Should run cooldown logic when time_to_cooldown is positive"
+
 
 @pytest.mark.parametrize("num_deployments", [1, 2])
 def test_single_deployment_no_cooldowns(num_deployments: int):
@@ -2236,9 +2354,7 @@ async def test_single_deployment_no_cooldowns_test_prod():
         num_retries=0,
     )
 
-    with patch.object(
-        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
-    ) as mock_client:
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
         try:
             await router.acompletion(
                 model="gpt-3.5-turbo",
@@ -2339,10 +2455,9 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 0
+
 
 @pytest.mark.asyncio()
 async def test_high_traffic_cooldowns_one_bad_deployment():
@@ -2407,7 +2522,6 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
-
                     mock_response = "litellm.InternalServerError"
 
             elif num_failures / total_requests <= 0.25:
@@ -2435,10 +2549,9 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 1
+
 
 @pytest.mark.asyncio()
 async def test_high_traffic_cooldowns_one_rate_limited_deployment():
@@ -2503,7 +2616,6 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
-
                     mock_response = "litellm.RateLimitError"
 
             elif num_failures / total_requests <= 0.25:
@@ -2534,10 +2646,9 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
-    )
+    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooldown_list) == 1
+
 
 def test_router_fallbacks_with_cooldowns_and_model_id():
     """
@@ -2573,6 +2684,7 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
         mock_response="hello",
     )
     assert response is not None
+
 
 @pytest.mark.asyncio()
 async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
@@ -2617,7 +2729,10 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
 @pytest.mark.parametrize(
     "exception,status",
     [
-        (litellm.CallerCredentialAuthenticationError(message="reconnect", llm_provider="github_copilot", model=""), 401),
+        (
+            litellm.CallerCredentialAuthenticationError(message="reconnect", llm_provider="github_copilot", model=""),
+            401,
+        ),
         (litellm.CallerCredentialRateLimitError(message="slow down", llm_provider="github_copilot", model=""), 429),
     ],
 )
@@ -2643,9 +2758,7 @@ def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(
         (litellm.InternalServerError("copilot 500", "github_copilot", "gpt-4o"), 500),
     ):
         assert (
-            _should_run_cooldown_logic(
-                single_deployment_router, "dep-1", status, exc, request_kwargs=session_kwargs
-            )
+            _should_run_cooldown_logic(single_deployment_router, "dep-1", status, exc, request_kwargs=session_kwargs)
             is False
         )
 
@@ -2654,7 +2767,10 @@ def test_shared_mode_upstream_429_still_cools_down_the_deployment(single_deploym
     """Regression: without the session marker the same 429 is a deployment-health
     signal and cools down exactly as before."""
     exc = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
-    assert _should_run_cooldown_logic(
-        single_deployment_router, "dep-1", 429, exc, request_kwargs={"model": "github_copilot/gpt-4o"}
-    ) is True
+    assert (
+        _should_run_cooldown_logic(
+            single_deployment_router, "dep-1", 429, exc, request_kwargs={"model": "github_copilot/gpt-4o"}
+        )
+        is True
+    )
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 429, exc) is True
