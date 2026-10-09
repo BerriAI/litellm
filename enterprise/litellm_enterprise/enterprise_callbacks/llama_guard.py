@@ -52,12 +52,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
         )
 
     def print_verbose(self, print_statement):
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa
-        except Exception:
-            pass
+        verbose_proxy_logger.debug(print_statement)
 
     def set_custom_prompt_template(self, messages: list):
         if self.unsafe_content_categories is not None and self.model is not None:

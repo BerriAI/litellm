@@ -78,12 +78,7 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
             )
 
     def print_verbose(self, print_statement):
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa
-        except Exception:
-            pass
+        verbose_proxy_logger.debug(print_statement)
 
     async def async_moderation_hook(
         self,

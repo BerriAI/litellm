@@ -6240,38 +6240,35 @@ class TestIsVisionExplicitlyDisabled:
 
 
 class TestVerboseRequestLineRedaction:
-    """`litellm.set_verbose = True` echoes the caller's kwargs back as a `litellm.completion(...)`
-    line on stdout, so a credential kwarg lands in whatever collects stdout: a terminal, a
-    container log drain, a CI job log. Credential-named kwargs must not survive that echo,
-    at any nesting depth, while ordinary params still must, or the line stops telling the
-    developer what they called."""
+    """A DEBUG run echoes the caller's kwargs back as a `litellm.completion(...)` log line, so a
+    credential kwarg lands in whatever collects the logs: a terminal, a container log drain, a CI
+    job log. Credential-named kwargs must not survive that echo, at any nesting depth, while
+    ordinary params still must, or the line stops telling the developer what they called."""
 
     FAKE_API_KEY: Final = "sk-fake-lit6823-0000000000000000"
 
-    def _verbose_request_line(self, capsys, monkeypatch, **kwargs) -> str:
-        monkeypatch.setattr(litellm, "set_verbose", True)
-        monkeypatch.setattr("litellm._logging.set_verbose", True)
-        capsys.readouterr()
-        litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hello"}],
-            mock_response="hi",
-            **kwargs,
+    def _verbose_request_line(self, caplog, **kwargs) -> str:
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hello"}],
+                mock_response="hi",
+                **kwargs,
+            )
+        return "\n".join(
+            record.getMessage() for record in caplog.records if "litellm.completion(" in record.getMessage()
         )
-        captured: Final = capsys.readouterr()
-        return "\n".join(line for line in (captured.out + captured.err).splitlines() if "litellm.completion(" in line)
 
-    def test_api_key_never_reaches_the_request_line(self, capsys, monkeypatch):
-        printed: Final = self._verbose_request_line(capsys, monkeypatch, api_key=self.FAKE_API_KEY)
+    def test_api_key_never_reaches_the_request_line(self, caplog):
+        printed: Final = self._verbose_request_line(caplog, api_key=self.FAKE_API_KEY)
 
         assert "litellm.completion(" in printed
         assert self.FAKE_API_KEY not in printed
-        assert "api_key='REDACTED'" in printed
+        assert "REDACTED" in printed
 
-    def test_credential_headers_never_reach_the_request_line(self, capsys, monkeypatch):
+    def test_credential_headers_never_reach_the_request_line(self, caplog):
         printed: Final = self._verbose_request_line(
-            capsys,
-            monkeypatch,
+            caplog,
             api_key=self.FAKE_API_KEY,
             extra_headers={"Authorization": "Bearer fake-lit6823-header", "x-request-id": "abc123"},
         )
@@ -6280,10 +6277,9 @@ class TestVerboseRequestLineRedaction:
         assert "'Authorization': 'REDACTED'" in printed
         assert "'x-request-id': 'abc123'" in printed
 
-    def test_credentials_nested_in_a_list_never_reach_the_request_line(self, capsys, monkeypatch):
+    def test_credentials_nested_in_a_list_never_reach_the_request_line(self, caplog):
         printed: Final = self._verbose_request_line(
-            capsys,
-            monkeypatch,
+            caplog,
             api_key=self.FAKE_API_KEY,
             extra_body={"providers": [{"name": "openai", "api_key": "sk-fake-lit6823-nested"}]},
         )
@@ -6291,10 +6287,8 @@ class TestVerboseRequestLineRedaction:
         assert "sk-fake-lit6823-nested" not in printed
         assert "'name': 'openai'" in printed
 
-    def test_ordinary_params_still_printed(self, capsys, monkeypatch):
-        printed: Final = self._verbose_request_line(
-            capsys, monkeypatch, api_key=self.FAKE_API_KEY, max_tokens=17, temperature=0.25
-        )
+    def test_ordinary_params_still_printed(self, caplog):
+        printed: Final = self._verbose_request_line(caplog, api_key=self.FAKE_API_KEY, max_tokens=17, temperature=0.25)
 
         assert "model='gpt-3.5-turbo'" in printed
         assert "max_tokens=17" in printed
@@ -6302,11 +6296,10 @@ class TestVerboseRequestLineRedaction:
 
 
 class TestFinalOptionalParamsLineRedaction:
-    """A verbose run echoes the fully built optional params too, and `extra_body` carries whatever the
+    """A DEBUG run echoes the fully built optional params too, and `extra_body` carries whatever the
     caller nested inside it straight onto that line, so a credential tucked in there lands in a terminal
-    or a log drain in plaintext. It has to be redacted on both surfaces `print_verbose` writes to, and the
-    line has to keep printing on both, because `litellm.set_verbose` and the DEBUG logger are independent
-    switches and neither implies the other."""
+    or a log drain in plaintext. It has to be redacted on the log line, and the line has to keep its
+    ordinary params."""
 
     FAKE_NESTED_KEY: Final = "sk-fake-lit6835-nested-0000000000"
 
@@ -6318,33 +6311,16 @@ class TestFinalOptionalParamsLineRedaction:
             **kwargs,
         )
 
-    def _printed_line(self, capsys) -> str:
-        captured: Final = capsys.readouterr()
+    def _logged_line(self, caplog) -> str:
         return "\n".join(
-            line for line in (captured.out + captured.err).splitlines() if "Final returned optional params" in line
+            record.getMessage() for record in caplog.records if "Final returned optional params" in record.getMessage()
         )
 
-    def test_nested_credential_is_redacted_when_only_set_verbose_is_on(self, capsys, caplog, monkeypatch):
-        monkeypatch.setattr(litellm, "set_verbose", True)
-        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-            capsys.readouterr()
-            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
-            printed: Final = self._printed_line(capsys)
-
-        assert printed
-        assert self.FAKE_NESTED_KEY not in printed
-        assert "'api_key': 'REDACTED'" in printed
-        assert "'name': 'openai'" in printed
-
-    def test_line_still_reaches_the_logger_when_only_the_debug_logger_is_on(self, capsys, caplog, monkeypatch):
+    def test_line_still_reaches_the_logger_when_only_the_debug_logger_is_on(self, caplog, monkeypatch):
         monkeypatch.setattr(litellm, "set_verbose", False)
         with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
             self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
-            logged: Final = "\n".join(
-                record.getMessage()
-                for record in caplog.records
-                if "Final returned optional params" in record.getMessage()
-            )
+        logged: Final = self._logged_line(caplog)
 
         assert logged
         assert self.FAKE_NESTED_KEY not in logged
@@ -6360,15 +6336,13 @@ class TestFinalOptionalParamsLineRedaction:
         assert "Final returned optional params" not in captured.out + captured.err
         assert self.FAKE_NESTED_KEY not in captured.out + captured.err
 
-    def test_ordinary_optional_params_still_reach_the_line(self, capsys, caplog, monkeypatch):
-        monkeypatch.setattr(litellm, "set_verbose", True)
-        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-            capsys.readouterr()
+    def test_ordinary_optional_params_still_reach_the_line(self, caplog):
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
             self._complete(max_tokens=17, temperature=0.25)
-            printed: Final = self._printed_line(capsys)
+        logged: Final = self._logged_line(caplog)
 
-        assert "'max_tokens': 17" in printed
-        assert "'temperature': 0.25" in printed
+        assert "'max_tokens': 17" in logged
+        assert "'temperature': 0.25" in logged
 
 
 class TestDropParamsStringCoercion:

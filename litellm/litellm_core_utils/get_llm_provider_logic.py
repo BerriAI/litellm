@@ -2,6 +2,7 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
@@ -534,11 +535,7 @@ def get_llm_provider(
 
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
-                print()  # noqa: T201
-                print(  # noqa: T201
-                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
-                )
-                print()  # noqa: T201
+                verbose_logger.info("Provider List: https://docs.litellm.ai/docs/providers")
             error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
             # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
             raise litellm.exceptions.BadRequestError(

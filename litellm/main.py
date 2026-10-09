@@ -8864,14 +8864,8 @@ async def ahealth_check(
 
 
 ####### HELPER FUNCTIONS ################
-## Set verbose to true -> ```litellm.set_verbose = True```
-def print_verbose(print_statement):
-    try:
-        verbose_logger.debug(print_statement)
-        if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
-    except Exception:
-        pass
+def print_verbose(print_statement: object) -> None:
+    verbose_logger.debug(print_statement)
 
 
 def config_completion(**kwargs):

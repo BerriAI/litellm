@@ -883,6 +883,10 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+if "LITELLM_LOG" in os.environ and numeric_level < logging.WARNING:
+    verbose_router_logger.setLevel(numeric_level)
+    verbose_logger.setLevel(numeric_level)
+
 # Filters attached to the logger, not the handler, survive callers swapping in their own
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
 verbose_router_logger.addFilter(_diagnostic_filter)
@@ -1096,12 +1100,8 @@ def _enable_debugging():
     verbose_proxy_stdout_logger.disabled = False
 
 
-def print_verbose(print_statement):
-    try:
-        if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
-    except Exception:
-        pass
+def print_verbose(print_statement: object) -> None:
+    verbose_logger.debug(print_statement)
 
 
 def is_debugging_on() -> bool:

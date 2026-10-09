@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from typing import Final
 
 from litellm import harness
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
@@ -76,7 +78,8 @@ def test_errors_share_base_class():
 
 
 def test_litellm_harness_attribute_is_lazy():
-    out = run_child_interpreter(LAZY_IMPORT_CHECK, timeout=120)
+    env: Final = {k: v for k, v in os.environ.items() if k != "LITELLM_LOG"}
+    out: Final = run_child_interpreter(LAZY_IMPORT_CHECK, env=env, timeout=120)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "ok"
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 import packaging
+from litellm._logging import verbose_logger
 
 
 # convert to {completion: xx, tokens: xx}
@@ -83,16 +84,14 @@ class LunaryLogger:
             version: Final = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
             if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
-                print(  # noqa: T201
+                verbose_logger.error(
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
                 raise ImportError
 
             self.lunary_client = lunary
         except ImportError:
-            print(  # noqa: T201
-                "Lunary not installed. Please install it using 'pip install lunary'"
-            )
+            verbose_logger.error("Lunary not installed. Please install it using 'pip install lunary'")
             raise ImportError
 
     def log_event(

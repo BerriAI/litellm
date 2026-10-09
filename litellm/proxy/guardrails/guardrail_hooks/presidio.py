@@ -1708,12 +1708,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return None
 
     def print_verbose(self, print_statement) -> None:
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa: T201
-        except Exception:
-            pass
+        verbose_proxy_logger.debug(print_statement)
 
     @log_guardrail_information
     async def apply_guardrail(

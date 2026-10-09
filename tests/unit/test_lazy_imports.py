@@ -43,6 +43,7 @@ from tests.test_litellm_rust.support.child_interpreter import run_child_interpre
 
 
 def test_import_litellm_does_not_load_fastapi_or_bpe_table():
+    env: Final = {k: v for k, v in os.environ.items() if k != "LITELLM_LOG"}
     result: Final = subprocess.run(
         [
             sys.executable,
@@ -52,7 +53,7 @@ def test_import_litellm_does_not_load_fastapi_or_bpe_table():
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+        env={**env, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
     )
 
     assert result.stdout.strip() == ""
