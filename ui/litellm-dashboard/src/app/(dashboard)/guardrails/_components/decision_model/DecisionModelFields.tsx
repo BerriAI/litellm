@@ -68,7 +68,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   const selectAll = () => {
     const missing = presets.filter((preset) => !selectedNames.has(preset.name));
     onChecksChange([
-      ...checks,
+      ...checks.map((check) => (check.custom ? { ...check, enabled: true } : check)),
       ...missing.map((preset) => ({
         name: preset.name,
         label: preset.label,
@@ -87,7 +87,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
       return;
     }
     setCustomNameTaken(false);
-    onChecksChange([...checks, { name, instructions, action: "block", threshold: 0.5, custom: true }]);
+    onChecksChange([...checks, { name, instructions, action: "block", threshold: 0.5, custom: true, enabled: true }]);
     setCustomName("");
     setCustomInstructions("");
   };
@@ -147,7 +147,13 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           <Button variant="outline" size="sm" onClick={selectAll}>
             Select all
           </Button>
-          <Button variant="outline" size="sm" onClick={() => onChecksChange(checks.filter((c) => c.custom))}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              onChecksChange(checks.filter((c) => c.custom).map((c) => ({ ...c, enabled: false })))
+            }
+          >
             Unselect all
           </Button>
         </div>
@@ -225,64 +231,80 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           })}
           {checks
             .filter((check) => check.custom)
-            .map((check) => (
-              <div
-                key={check.name}
-                className="flex items-center justify-between border-b border-border bg-accent px-5 py-3 hover:bg-muted/40"
-              >
-                <div className="flex flex-1 items-start">
-                  <div>
-                    <span className="font-medium text-foreground">{check.name}</span>
-                    <Badge variant="secondary" className="ml-2">
-                      custom
-                    </Badge>
-                    <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
+            .map((check) => {
+              const enabled = check.enabled !== false;
+              return (
+                <div
+                  key={check.name}
+                  className={`flex items-center justify-between border-b border-border px-5 py-3 hover:bg-muted/40 ${
+                    enabled ? "bg-accent" : ""
+                  }`}
+                >
+                  <div className="flex flex-1 items-start">
+                    <Checkbox
+                      className="mr-3 mt-0.5"
+                      checked={enabled}
+                      onCheckedChange={(next) => setCheck(check.name, { enabled: next === true })}
+                      aria-label={check.name}
+                    />
+                    <div>
+                      <span className={enabled ? "font-medium text-foreground" : "text-muted-foreground"}>
+                        {check.name}
+                      </span>
+                      <Badge variant="secondary" className="ml-2">
+                        custom
+                      </Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove ${check.name}`}
+                        className="ml-1 size-6 text-destructive hover:text-destructive/80"
+                        onClick={() => removeCheck(check.name)}
+                      >
+                        <X className="size-4" />
+                      </Button>
+                      <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
+                    </div>
+                  </div>
+                  <div className="w-28">
+                    <Select
+                      items={ACTION_ITEMS}
+                      value={check.action}
+                      onValueChange={(next: string | null) =>
+                        next && setCheck(check.name, { action: next as "block" | "log" })
+                      }
+                      disabled={!enabled}
+                    >
+                      <SelectTrigger
+                        className={`w-full ${enabled ? "" : "opacity-50"}`}
+                        aria-label={`${check.name} action`}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ACTION_ITEMS.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="w-28 pl-4">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      disabled={!enabled}
+                      aria-label={`${check.name} threshold`}
+                      value={check.threshold}
+                      onChange={(event) => setCheck(check.name, { threshold: Number(event.target.value) || 0 })}
+                    />
                   </div>
                 </div>
-                <div className="w-28">
-                  <Select
-                    items={ACTION_ITEMS}
-                    value={check.action}
-                    onValueChange={(next: string | null) =>
-                      next && setCheck(check.name, { action: next as "block" | "log" })
-                    }
-                  >
-                    <SelectTrigger className="w-full" aria-label={`${check.name} action`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ACTION_ITEMS.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-28 pl-4">
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    aria-label={`${check.name} threshold`}
-                    value={check.threshold}
-                    onChange={(event) => setCheck(check.name, { threshold: Number(event.target.value) || 0 })}
-                  />
-                </div>
-                <div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Remove ${check.name}`}
-                    className="text-destructive hover:text-destructive/80"
-                    onClick={() => removeCheck(check.name)}
-                  >
-                    <X className="size-4" />
-                  </Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
         </div>
       </div>
 

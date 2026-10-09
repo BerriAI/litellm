@@ -32,6 +32,31 @@ describe("buildDecisionModelParams", () => {
     expect(params.checks[0].instructions).toBe("Is this about invoices?");
   });
 
+  it("leaves out custom checks that are disabled", () => {
+    const params = buildDecisionModelParams("jev-latest", [
+      {
+        name: "invoice_policy",
+        instructions: "Is this about invoices?",
+        action: "block",
+        threshold: 0.5,
+        custom: true,
+        enabled: false,
+      },
+      {
+        name: "refund_policy",
+        instructions: "Is this about refunds?",
+        action: "log",
+        threshold: 0.7,
+        custom: true,
+        enabled: true,
+      },
+    ]);
+
+    expect(params.checks).toEqual([
+      { name: "refund_policy", instructions: "Is this about refunds?", action: "log", threshold: 0.7 },
+    ]);
+  });
+
   it("clamps thresholds into [0, 1]", () => {
     const params = buildDecisionModelParams("jev-latest", [
       { name: "prompt_injection", action: "block", threshold: 1.4 },

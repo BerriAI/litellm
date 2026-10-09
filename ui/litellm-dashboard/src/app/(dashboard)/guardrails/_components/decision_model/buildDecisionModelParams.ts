@@ -5,6 +5,7 @@ export interface DecisionModelCheckDraft {
   action: "block" | "log";
   threshold: number;
   custom?: boolean;
+  enabled?: boolean;
 }
 
 export interface DecisionModelLitellmParams {
@@ -25,7 +26,7 @@ export function buildDecisionModelParams(
 ): DecisionModelLitellmParams {
   return {
     decision_model: decisionModel,
-    checks: checks.map((check) => ({
+    checks: checks.filter((check) => check.enabled !== false).map((check) => ({
       name: check.name,
       ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
       action: check.action,
