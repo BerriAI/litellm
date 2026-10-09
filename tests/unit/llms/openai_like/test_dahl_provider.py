@@ -44,9 +44,9 @@ def test_dahl_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPatc
 
 
 def test_dahl_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    dahl = next(provider for provider in providers if provider["litellm_provider"] == "dahl")
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    dahl: Final = next(provider for provider in providers if provider["litellm_provider"] == "dahl")
 
     assert dahl["provider"] == "DAHL"
     assert dahl["provider_display_name"] == "Gonka DAHL"
@@ -58,8 +58,8 @@ def test_dahl_is_available_in_add_model_form():
 
 
 def test_dahl_supported_endpoints():
-    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    providers = json.loads(matrix_path.read_text())["providers"]
+    matrix_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    providers: Final = json.loads(matrix_path.read_text())["providers"]
 
     assert providers["dahl"]["endpoints"] == {
         "chat_completions": True,
