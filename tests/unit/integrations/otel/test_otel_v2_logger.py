@@ -310,6 +310,78 @@ def test_streaming_span_carries_time_to_first_chunk():
     assert span.attributes[GenAI.RESPONSE_TIME_TO_FIRST_CHUNK] == pytest.approx(0.75)
 
 
+def test_streaming_span_carries_time_to_first_chunk_from_top_level_stream_flag():
+    """optional_params={} but top-level stream=True still stamps the span."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {},
+        "stream": True,
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 0, 750000, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.RESPONSE_TIME_TO_FIRST_CHUNK] == pytest.approx(0.75)
+
+
+def test_streaming_span_carries_time_to_first_chunk_from_optional_params_when_top_level_absent():
+    """No top-level stream key: optional_params["stream"]=True still stamps the span."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {"stream": True},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 0, 750000, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.RESPONSE_TIME_TO_FIRST_CHUNK] == pytest.approx(0.75)
+
+
+def test_streaming_span_omits_time_to_first_chunk_when_top_level_false_overrides_optional_params_true():
+    """Resolved top-level stream=False wins over a contradictory optional_params["stream"]=True."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=False)),
+        "optional_params": {"stream": True},
+        "stream": False,
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 0, 750000, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
+def test_streaming_span_string_false_stream_is_not_truthy():
+    """A string "false" optional_params["stream"] value is not streaming."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=False)),
+        "optional_params": {"stream": "false"},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": datetime(2026, 5, 26, 12, 0, 0, 750000, tzinfo=timezone.utc),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
+def test_streaming_span_omits_time_to_first_chunk_when_elapsed_is_non_finite():
+    """inf/NaN elapsed must not stamp the span."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(stream=True)),
+        "optional_params": {"stream": True},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+        "completion_start_time": float("nan"),
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.RESPONSE_TIME_TO_FIRST_CHUNK not in span.attributes
+
+
 def test_llm_call_span_reports_the_server_spans_route():
     """``litellm.request.route`` is the anchored server span's own ``http.route``,
     so an operator can group LLM spans by endpoint without joining to the parent."""
