@@ -903,10 +903,10 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
     )
 
 
-def _passthrough_provider_config(backend_event: dict) -> MagicMock:
+def _passthrough_provider_config(backend_frame: bytes) -> MagicMock:
     provider_config: Final = MagicMock()
     provider_config.transform_realtime_response.return_value = {
-        "response": [backend_event],
+        "response": [json.loads(backend_frame)],
         "current_output_item_id": None,
         "current_response_id": None,
         "current_delta_chunks": None,
@@ -950,7 +950,7 @@ async def test_transcript_triggers_response_create_only_when_a_transcript_guardr
         client_ws,
         backend_ws,
         MagicMock(async_success_handler=AsyncMock()),
-        provider_config=_passthrough_provider_config(json.loads(completed)) if through_provider_config else None,
+        provider_config=_passthrough_provider_config(completed) if through_provider_config else None,
     )
 
     await streaming.backend_to_client_send_messages()
