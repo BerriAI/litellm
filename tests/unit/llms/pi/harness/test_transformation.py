@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import (
@@ -50,14 +50,14 @@ from litellm.llms.pi.harness.transformation import (
 )
 from litellm.utils import ProviderConfigManager
 
-FIXTURES = Path(__file__).parent / "fixtures"
-TOKEN = "tok-secret-123"
-SESSION = "01a11cb0-87cf-752e-a3e3-365c7a169871"
-PRIVATE = "/tmp/pi-1"
-MODEL = "claude-haiku-4-5-20251001"
-FULL_TOOLS = "read,bash,edit,write,grep,find,ls"
-MOYAI = {"command": "/path/to/mcp-server", "args": [], "env": {}, "exposure": "direct"}
-CONFIG = PiHarnessConfig()
+FIXTURES: Final = Path(__file__).parent / "fixtures"
+TOKEN: Final = "tok-secret-123"
+SESSION: Final = "01a11cb0-87cf-752e-a3e3-365c7a169871"
+PRIVATE: Final = "/tmp/pi-1"
+MODEL: Final = "claude-haiku-4-5-20251001"
+FULL_TOOLS: Final = "read,bash,edit,write,grep,find,ls"
+MOYAI: Final = {"command": "/path/to/mcp-server", "args": [], "env": {}, "exposure": "direct"}
+CONFIG: Final = PiHarnessConfig()
 
 
 def load_fixture(name: str) -> list[dict[str, object]]:
@@ -69,8 +69,8 @@ def parse(obj: Mapping[str, object], state: PiStreamState) -> Sequence[Event]:
 
 
 def parse_all(name: str, state: PiStreamState | None = None) -> tuple[list[Event], PiStreamState]:
-    run_state = state or CONFIG.create_stream_state()
-    events = list(itertools.chain.from_iterable(parse(obj, run_state) for obj in load_fixture(name)))
+    run_state: Final = state or CONFIG.create_stream_state()
+    events: Final = list(itertools.chain.from_iterable(parse(obj, run_state) for obj in load_fixture(name)))
     return events, run_state
 
 
@@ -185,6 +185,8 @@ DEFAULT_ENDPOINT: Final = FakeEndpoint()
 
 
 class Answer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     city: str
     country: str
 
@@ -224,15 +226,15 @@ async def collect(handler: CLIHarnessHandler, ctx: SessionContext, prompt: str) 
 async def started(
     sandbox: FakeSandbox | None = None, **kwargs: object
 ) -> tuple[CLIHarnessHandler, SessionContext, FakeSandbox]:
-    box = sandbox or FakeSandbox()
-    handler = CLIHarnessHandler(PiHarnessConfig())
-    ctx = make_ctx(box, **kwargs)
+    box: Final = sandbox or FakeSandbox()
+    handler: Final = CLIHarnessHandler(PiHarnessConfig())
+    ctx: Final = make_ctx(box, **kwargs)
     await handler.start(ctx)
     return handler, ctx, box
 
 
 def flag(argv: Sequence[str], name: str) -> str:
-    args = list(argv)
+    args: Final = list(argv)
     return args[args.index(name) + 1]
 
 
@@ -277,8 +279,8 @@ def test_parse_continued_session():
 
 def test_parse_denied_tool_is_error_result():
     events, state = parse_all("readonly_denied_bash.jsonl")
-    call = next(e for e in events if isinstance(e, ToolCall))
-    result = next(e for e in events if isinstance(e, ToolResult))
+    call: Final = next(e for e in events if isinstance(e, ToolCall))
+    result: Final = next(e for e in events if isinstance(e, ToolResult))
     assert call.native_name == "bash" and call.input == {"command": "echo x > blocked.txt"}
     assert result == ToolResult(id="call_b1", output="Tool bash not found", is_error=True)
     assert state.final_text.startswith("FAILED")
@@ -286,8 +288,8 @@ def test_parse_denied_tool_is_error_result():
 
 def test_parse_mcp_tool_turn():
     events, state = parse_all("mcp_tool.jsonl")
-    call = next(e for e in events if isinstance(e, ToolCall))
-    result = next(e for e in events if isinstance(e, ToolResult))
+    call: Final = next(e for e in events if isinstance(e, ToolCall))
+    result: Final = next(e for e in events if isinstance(e, ToolResult))
     assert call == ToolCall(
         id="call_m1",
         name="mcp__moyai__echo",
@@ -307,8 +309,8 @@ def test_parse_api_error_records_error():
 
 
 def test_parse_reasoning_and_tool_error_and_name_mapping():
-    state = PiStreamState()
-    reasoning = parse(
+    state: Final = PiStreamState()
+    reasoning: Final = parse(
         {
             "type": "message_update",
             "assistantMessageEvent": {"type": "thinking_delta", "delta": "thinking hard"},
@@ -316,7 +318,7 @@ def test_parse_reasoning_and_tool_error_and_name_mapping():
         state,
     )
     assert reasoning == [Reasoning(delta="thinking hard")]
-    failed = parse(
+    failed: Final = parse(
         {
             "type": "tool_execution_end",
             "toolCallId": "c1",
@@ -327,34 +329,33 @@ def test_parse_reasoning_and_tool_error_and_name_mapping():
         state,
     )
     assert failed == [ToolResult(id="c1", output="boom", is_error=True)]
-    for native, normalized in [
-        ("find", "glob"),
-        ("powershell", "bash"),
-        ("grep", "grep"),
-        ("ls", "ls"),
-        ("edit", "edit"),
-    ]:
-        call = parse(
-            {"type": "tool_execution_start", "toolCallId": "x", "toolName": native, "args": {}},
-            state,
-        )[0]
-        assert call.name == normalized and call.builtin is True
-    mcp = parse(
+    calls: Final = [
+        parse({"type": "tool_execution_start", "toolCallId": "x", "toolName": native, "args": {}}, state)[0]
+        for native in ("find", "powershell", "grep", "ls", "edit")
+    ]
+    assert [(call.name, call.builtin) for call in calls] == [
+        ("glob", True),
+        ("bash", True),
+        ("grep", True),
+        ("ls", True),
+        ("edit", True),
+    ]
+    mcp: Final = parse(
         {"type": "tool_execution_start", "toolCallId": "m", "toolName": "mcp__gh__search", "args": {"q": 1}},
         state,
     )
     assert mcp[0].builtin is False and mcp[0].input == {"q": 1}
-    plain = parse(
+    plain: Final = parse(
         {"type": "tool_execution_end", "toolCallId": "m", "toolName": "mcp__gh__search", "result": "raw"},
         state,
     )
     assert plain == [ToolResult(id="m", output="raw", is_error=False)]
-    no_result = parse({"type": "tool_execution_end", "toolCallId": "e", "toolName": "bash"}, state)
+    no_result: Final = parse({"type": "tool_execution_end", "toolCallId": "e", "toolName": "bash"}, state)
     assert no_result == [ToolResult(id="e", output="", is_error=False)]
 
 
 def test_final_text_is_last_assistant_message():
-    state = PiStreamState()
+    state: Final = PiStreamState()
     parse(assistant_end("working", "toolUse"), state)
     parse(assistant_end("answer", "stop"), state)
     parse(
@@ -383,7 +384,7 @@ def test_final_text_is_last_assistant_message():
 
 
 def test_message_update_ignores_non_delta_events():
-    state = PiStreamState()
+    state: Final = PiStreamState()
     for update in [
         {"type": "text_start", "contentIndex": 0},
         {"type": "text_end", "content": "full"},
@@ -395,7 +396,7 @@ def test_message_update_ignores_non_delta_events():
 
 
 def test_retried_error_then_success_is_not_an_error():
-    state = PiStreamState()
+    state: Final = PiStreamState()
     parse(assistant_end("", "error", "529 overloaded"), state)
     parse(assistant_end("recovered", "stop"), state)
     assert state.stop_reason == "stop" and state.error is None
@@ -403,7 +404,7 @@ def test_retried_error_then_success_is_not_an_error():
 
 
 def test_aborted_run_is_an_error():
-    state = PiStreamState()
+    state: Final = PiStreamState()
     parse(assistant_end("partial", "stop"), state)
     parse({"type": "agent_settled", "aborted": False}, state)
     assert state.stop_reason == "stop"
@@ -420,7 +421,7 @@ def test_permission_mapping():
 
 
 def test_disable_tools_map_to_native_excludes():
-    args = tool_args("full", ["bash", "glob", "write", "mcp__x"])
+    args: Final = tool_args("full", ["bash", "glob", "write", "mcp__x"])
     assert flag(args, "--tools") == FULL_TOOLS
     assert flag(args, "--exclude-tools") == "bash,powershell,find,write,mcp__x"
 
@@ -437,13 +438,13 @@ def test_mcp_servers_keep_tools_reachable():
     assert mcp_tool_entries(
         {"mcpServers": {"s": {"command": "x", "exposure": "hidden", "toolExposure": {"a": "direct", "b": "deferred"}}}}
     ) == ("mcp__*", "tool_search")
-    args = tool_args("read-only", ["mcp__moyai__drop"], mcp_tool_entries({"mcpServers": {"moyai": MOYAI}}))
+    args: Final = tool_args("read-only", ["mcp__moyai__drop"], mcp_tool_entries({"mcpServers": {"moyai": MOYAI}}))
     assert flag(args, "--tools") == "read,grep,find,ls,mcp__*"
     assert flag(args, "--exclude-tools") == "mcp__moyai__drop"
 
 
 def test_config_files_split_settings_and_mcp():
-    files = dict(config_files({"mcpServers": {"moyai": MOYAI}, "compaction": {"enabled": False}}))
+    files: Final = dict(config_files({"mcpServers": {"moyai": MOYAI}, "compaction": {"enabled": False}}))
     assert json.loads(files[MCP_FILENAME]) == {"mcpServers": {"moyai": MOYAI}}
     assert json.loads(files[SETTINGS_FILENAME]) == {"compaction": {"enabled": False}}
     assert dict(config_files({"mcpServers": {"moyai": MOYAI}})).keys() == {MCP_FILENAME}
@@ -477,7 +478,7 @@ def test_options_config_cannot_load_code_or_reroute_model():
 
 
 def test_build_models_json():
-    models = json.loads(build_models_json("m1", "http://h:1/v1"))
+    models: Final = json.loads(build_models_json("m1", "http://h:1/v1"))
     assert models == {
         "providers": {
             "litellm": {
@@ -520,21 +521,21 @@ def test_managed_env_keys_rejected_instead_of_silently_ignored(key: str) -> None
 
 
 def test_session_setup_token_only_in_env():
-    setup = setup_for(make_ctx())
+    setup: Final = setup_for(make_ctx())
     assert set(setup.files) == {MODELS_FILENAME}
     assert all(TOKEN.encode() not in data for data in setup.files.values())
     assert setup.env[PI_TOKEN_ENV] == TOKEN
-    provider = setup_models(setup)["providers"]["litellm"]
+    provider: Final = setup_models(setup)["providers"]["litellm"]
     assert provider["baseUrl"] == "http://host.docker.internal:4555/v1"
     assert provider["apiKey"] == f"${PI_TOKEN_ENV}"
 
 
 def test_session_setup_env_and_persisted_sessions():
-    options = PiOptions(env={"FOO": "1", PI_TOKEN_ENV: "evil", PI_CONFIG_DIR_ENV: "/home/u/.pi/agent"})
-    setup = setup_for(make_ctx(options=options))
+    options: Final = PiOptions(env={"FOO": "1", PI_TOKEN_ENV: "evil", PI_CONFIG_DIR_ENV: "/home/u/.pi/agent"})
+    setup: Final = setup_for(make_ctx(options=options))
     assert list(setup.persisted_dirs) == [("sessions", "pi/sessions")]
     assert setup.skills_dir == "skills"
-    env = setup.env
+    env: Final = setup.env
     assert env[PI_CONFIG_DIR_ENV] == f"{PRIVATE}/agent", "managed keys must win over PiOptions.env"
     assert env[PI_TOKEN_ENV] == TOKEN, "managed keys must win over PiOptions.env"
     for key, value in PI_ISOLATION_ENV.items():
@@ -543,8 +544,8 @@ def test_session_setup_env_and_persisted_sessions():
 
 
 def test_session_setup_writes_user_config_next_to_managed_models():
-    options = PiOptions(config={"mcpServers": {"moyai": MOYAI}, "compaction": {"enabled": False}})
-    setup = setup_for(make_ctx(options=options))
+    options: Final = PiOptions(config={"mcpServers": {"moyai": MOYAI}, "compaction": {"enabled": False}})
+    setup: Final = setup_for(make_ctx(options=options))
     assert set(setup.files) == {MODELS_FILENAME, MCP_FILENAME, SETTINGS_FILENAME}
     assert json.loads(setup.files[MCP_FILENAME]) == {"mcpServers": {"moyai": MOYAI}}
     assert setup_models(setup)["providers"]["litellm"]["apiKey"] == f"${PI_TOKEN_ENV}"
@@ -558,31 +559,31 @@ def test_session_setup_errors():
 
 
 def test_turn_request_without_a_model_raises_instead_of_passing_none():
-    ctx = make_ctx(model=None, endpoint=FakeEndpoint(model=None))
+    ctx: Final = make_ctx(model=None, endpoint=FakeEndpoint(model=None))
     with pytest.raises(ValueError, match="needs model="):
         CONFIG.transform_turn_request(ctx, HarnessSessionSetup(), PRIVATE, "hi", None)
 
 
 def test_session_setup_instructions_and_skills():
-    ctx = make_ctx(instructions="Be terse.", output=Answer, skills=["/s/greeter"])
-    setup = setup_for(ctx)
-    written = setup.files[INSTRUCTIONS_FILENAME].decode()
+    ctx: Final = make_ctx(instructions="Be terse.", output=Answer, skills=["/s/greeter"])
+    setup: Final = setup_for(ctx)
+    written: Final = setup.files[INSTRUCTIONS_FILENAME].decode()
     assert written.startswith("Be terse.")
     assert '"city"' in written and "single JSON object" in written
-    argv = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hi", None).argv
+    argv: Final = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hi", None).argv
     assert flag(argv, "--append-system-prompt") == f"{PRIVATE}/instructions.md"
     assert flag(argv, "--skill") == f"{PRIVATE}/skills"
-    plain = make_ctx()
-    plain_setup = setup_for(plain)
-    plain_argv = CONFIG.transform_turn_request(plain, plain_setup, PRIVATE, "hi", None).argv
+    plain: Final = make_ctx()
+    plain_setup: Final = setup_for(plain)
+    plain_argv: Final = CONFIG.transform_turn_request(plain, plain_setup, PRIVATE, "hi", None).argv
     assert INSTRUCTIONS_FILENAME not in plain_setup.files
     assert "--append-system-prompt" not in plain_argv and "--skill" not in plain_argv
 
 
 def test_turn_request_argv_and_session_continuation():
-    ctx = make_ctx(options=PiOptions(thinking="high"))
-    setup = setup_for(ctx)
-    first = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hello", None)
+    ctx: Final = make_ctx(options=PiOptions(thinking="high"))
+    setup: Final = setup_for(ctx)
+    first: Final = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hello", None)
     assert list(first.argv) == [
         "pi",
         "--mode",
@@ -603,22 +604,22 @@ def test_turn_request_argv_and_session_continuation():
     assert first.cwd == "/work"
     assert first.stdin == "hello"
     assert first.env == setup.env
-    second = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "again", SESSION)
+    second: Final = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "again", SESSION)
     assert flag(second.argv, "--session") == SESSION
     assert "again" not in " ".join(second.argv)
 
 
 def test_turn_prompt_repeats_schema_when_output_set():
-    ctx = make_ctx(output=Answer)
-    request = CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None)
+    ctx: Final = make_ctx(output=Answer)
+    request: Final = CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None)
     assert request.stdin.startswith("hi\n\n") and '"city"' in request.stdin
 
 
 def test_turn_response_paths():
     _, state = parse_all("structured_output.jsonl")
-    ok = CONFIG.transform_turn_response(make_ctx(output=Answer), state, 0, [])
+    ok: Final = CONFIG.transform_turn_response(make_ctx(output=Answer), state, 0, [])
     assert json.loads(ok.output_json) == {"city": "Paris", "country": "France"}
-    plain = CONFIG.transform_turn_response(make_ctx(), state, 0, [])
+    plain: Final = CONFIG.transform_turn_response(make_ctx(), state, 0, [])
     assert plain.output_json is None and plain.final_text == state.final_text
     with pytest.raises(HarnessTurnError, match="boom"):
         CONFIG.transform_turn_response(make_ctx(), PiStreamState(stop_reason="error", error="boom"), 0, [])
@@ -634,13 +635,13 @@ async def test_start_writes_token_only_in_env():
     assert all(TOKEN.encode() not in data for data in sandbox.files.values())
     sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
     await collect(handler, ctx, "create hello.txt containing hi then read it")
-    call = sandbox.execs[0]
+    call: Final = sandbox.execs[0]
     assert TOKEN not in json.dumps(call["cmd"])
     assert call["env"][PI_TOKEN_ENV] == TOKEN
 
 
 async def test_start_persists_sessions_dir():
-    _, _, sandbox = await started()
+    sandbox: Final = (await started())[2]
     assert sandbox.runs == [["sh", "-c", PERSIST_DIR_SCRIPT, "sh", "/tmp/pi-1/sessions", "pi/sessions"]]
 
 
@@ -654,8 +655,8 @@ async def test_persist_failure_still_uses_private_sessions():
 async def test_turn_argv_env_and_session_continuation():
     handler, ctx, sandbox = await started(options=PiOptions(env={"FOO": "1"}))
     sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
-    events = await collect(handler, ctx, "create hello.txt containing hi then read it")
-    first = sandbox.execs[0]
+    events: Final = await collect(handler, ctx, "create hello.txt containing hi then read it")
+    first: Final = sandbox.execs[0]
     assert first["cmd"] == [
         "pi",
         "--mode",
@@ -672,7 +673,7 @@ async def test_turn_argv_env_and_session_continuation():
         FULL_TOOLS,
     ]
     assert first["cwd"] == "/work"
-    env = first["env"]
+    env: Final = first["env"]
     assert env["PI_CODING_AGENT_DIR"] == "/tmp/pi-1/agent"
     assert env["PI_OFFLINE"] == "1" and env["PI_TELEMETRY"] == "0"
     assert env["FOO"] == "1"
@@ -682,7 +683,7 @@ async def test_turn_argv_env_and_session_continuation():
 
     sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
     await collect(handler, ctx, "what file did you create?")
-    second = sandbox.execs[1]["cmd"]
+    second: Final = sandbox.execs[1]["cmd"]
     assert flag(second, "--session") == SESSION
     assert "what file" not in " ".join(second)
     assert ctx.final_text == "You asked me to create hello.txt."
@@ -690,7 +691,7 @@ async def test_turn_argv_env_and_session_continuation():
 
 async def test_prompt_is_sent_on_stdin_not_argv():
     handler, ctx, sandbox = await started()
-    proc = fixture_proc("turn1_write_read.jsonl")
+    proc: Final = fixture_proc("turn1_write_read.jsonl")
     sandbox.outputs.append(proc)
     await collect(handler, ctx, "secret prompt text")
     assert proc.stdin.data == b"secret prompt text" and proc.stdin.closed
@@ -708,8 +709,8 @@ async def test_resume_sets_session():
 async def test_read_only_and_disable_tools_argv():
     handler, ctx, sandbox = await started(permissions="read-only", disable_tools=["grep"])
     sandbox.outputs.append(fixture_proc("readonly_denied_bash.jsonl"))
-    events = await collect(handler, ctx, "x")
-    cmd = sandbox.execs[0]["cmd"]
+    events: Final = await collect(handler, ctx, "x")
+    cmd: Final = sandbox.execs[0]["cmd"]
     assert flag(cmd, "--tools") == "read,grep,find,ls"
     assert flag(cmd, "--exclude-tools") == "grep"
     assert ToolResult(id="call_b1", output="Tool bash not found", is_error=True) in events
@@ -717,10 +718,10 @@ async def test_read_only_and_disable_tools_argv():
 
 async def test_instructions_and_structured_output():
     handler, ctx, sandbox = await started(instructions="Be terse.", output=Answer)
-    written = sandbox.files["/tmp/pi-1/instructions.md"].decode()
+    written: Final = sandbox.files["/tmp/pi-1/instructions.md"].decode()
     assert written.startswith("Be terse.")
     assert '"city"' in written and "single JSON object" in written
-    proc = fixture_proc("structured_output.jsonl")
+    proc: Final = fixture_proc("structured_output.jsonl")
     sandbox.outputs.append(proc)
     await collect(handler, ctx, "x")
     assert flag(sandbox.execs[0]["cmd"], "--append-system-prompt") == "/tmp/pi-1/instructions.md"
@@ -729,7 +730,7 @@ async def test_instructions_and_structured_output():
 
 
 async def test_skills_copied_to_private_skills_path(tmp_path: Path) -> None:
-    skill = tmp_path / "greeter"
+    skill: Final = tmp_path / "greeter"
     (skill / "ref").mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: greeter\ndescription: d\n---\nbody")
     (skill / "ref" / "notes.txt").write_text("n")
@@ -738,7 +739,7 @@ async def test_skills_copied_to_private_skills_path(tmp_path: Path) -> None:
     assert sandbox.files["/tmp/pi-1/skills/greeter/ref/notes.txt"] == b"n"
     sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
     await collect(handler, ctx, "x")
-    cmd = sandbox.execs[0]["cmd"]
+    cmd: Final = sandbox.execs[0]["cmd"]
     assert flag(cmd, "--skill") == "/tmp/pi-1/skills"
     assert "--no-skills" in cmd
 
@@ -762,7 +763,7 @@ async def test_mcp_servers_written_and_reachable():
     handler, ctx, sandbox = await started(options=PiOptions(config={"mcpServers": {"moyai": MOYAI}}))
     assert json.loads(sandbox.files["/tmp/pi-1/agent/mcp.json"]) == {"mcpServers": {"moyai": MOYAI}}
     sandbox.outputs.append(fixture_proc("mcp_tool.jsonl"))
-    events = await collect(handler, ctx, "call the moyai echo tool")
+    events: Final = await collect(handler, ctx, "call the moyai echo tool")
     assert flag(sandbox.execs[0]["cmd"], "--tools") == f"{FULL_TOOLS},mcp__*"
     assert ToolResult(id="call_m1", output="moyai says: hello", is_error=False) in events
 
@@ -777,7 +778,7 @@ async def test_wrong_options_and_ask_mode_rejected():
 
 
 async def test_turn_before_start_raises():
-    handler = CLIHarnessHandler(PiHarnessConfig())
+    handler: Final = CLIHarnessHandler(PiHarnessConfig())
     with pytest.raises(RuntimeError, match="before start"):
         await collect(handler, make_ctx(), "x")
 
@@ -798,9 +799,9 @@ async def test_nonzero_exit_raises_with_stderr_tail():
 
 async def test_early_close_kills_process_and_stop_is_idempotent():
     handler, ctx, sandbox = await started()
-    proc = fixture_proc("turn1_write_read.jsonl")
+    proc: Final = fixture_proc("turn1_write_read.jsonl")
     sandbox.outputs.append(proc)
-    gen = handler.turn(ctx, "x")
+    gen: Final = handler.turn(ctx, "x")
     await gen.__anext__()
     await gen.aclose()
     assert proc.killed
@@ -810,14 +811,14 @@ async def test_early_close_kills_process_and_stop_is_idempotent():
 
 async def test_long_jsonl_line_is_parsed():
     handler, ctx, sandbox = await started()
-    text = "x" * 200_000
-    lines = [
+    text: Final = "x" * 200_000
+    lines: Final = [
         {"type": "session", "version": 3, "id": "s"},
         {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}},
         assistant_end(text, "stop"),
     ]
     sandbox.outputs.append(FakeProcess("\n".join(json.dumps(line) for line in lines).encode()))
-    events = await collect(handler, ctx, "x")
+    events: Final = await collect(handler, ctx, "x")
     assert events == [Text(delta=text)]
     assert ctx.final_text == text
 
@@ -831,8 +832,8 @@ async def test_model_falls_back_to_endpoint_model():
 
 
 def test_turn_request_never_trusts_project_files():
-    ctx = make_ctx()
-    argv = list(CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None).argv)
+    ctx: Final = make_ctx()
+    argv: Final = list(CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None).argv)
     assert argv[:4] == ["pi", "--mode", "json", "--no-approve"], (
         "without --no-approve a repo's .pi/extensions run as the host user at startup"
     )
