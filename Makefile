@@ -120,7 +120,7 @@ install-helm-unittest:
 		helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2; \
 	}
 
-# Install git hooks that enforce Conventional Commits and Conventional Branches.
+# Install git hooks that enforce Conventional Commits.
 # Opt-in: not chained into install-dev.
 install-hooks:
 	./scripts/install_git_hooks.sh
