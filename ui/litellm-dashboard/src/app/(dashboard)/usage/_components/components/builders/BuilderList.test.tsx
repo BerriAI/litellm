@@ -67,4 +67,20 @@ describe("BuilderList", () => {
     expect(screen.queryByText(/Routes requests through/)).not.toBeInTheDocument();
     expect(screen.getByRole("button")).toHaveAttribute("title", "Routes requests through codex workflows");
   });
+
+  it("shows N/A for builders without merged PRs", () => {
+    const noPrsBuilder = { ...builder, id: "no-prs", prs: 0, spendPerPr: null };
+
+    render(
+      <BuilderList
+        builders={[noPrsBuilder]}
+        selectedId={noPrsBuilder.id}
+        sort="spend"
+        onSelect={() => {}}
+        onSortChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("N/A")).toBeInTheDocument();
+  });
 });

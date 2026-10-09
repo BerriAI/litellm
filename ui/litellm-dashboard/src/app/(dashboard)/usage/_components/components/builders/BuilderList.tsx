@@ -6,7 +6,7 @@ import { agentRowFor } from "../overview/agentCatalog";
 import { formatCompactUsd } from "../overview/overviewData";
 import { Panel, Segmented } from "../overview/Primitives";
 import {
-  builderCostPerPr,
+  builderCostPerPrLabel,
   builderInitials,
   sortBuilders,
   type BuilderInsightBuilder,
@@ -43,7 +43,7 @@ export function BuilderList({
     >
       <div className="divide-y divide-border/60">
         {sortedBuilders.map((builder, index) => {
-          const costPerPr = builderCostPerPr(builder);
+          const costPerPrLabel = builderCostPerPrLabel(builder);
           const agents = builder.agents
             .filter((agent) => agent.spend > 0 && agent.id !== "unlabeled" && agent.id !== "browser")
             .sort((left, right) => right.spend - left.spend)
@@ -75,9 +75,7 @@ export function BuilderList({
                 ))}
               </span>
               <span className="text-right">
-                <span className="block text-sm tabular-nums text-foreground">
-                  {costPerPr === null ? "—" : formatCompactUsd(costPerPr)}
-                </span>
+                <span className="block text-sm tabular-nums text-foreground">{costPerPrLabel}</span>
                 <span className="block text-xs tabular-nums text-muted-foreground">
                   {builder.prs.toLocaleString()} PRs · {formatCompactUsd(builder.spend)}
                 </span>

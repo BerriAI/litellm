@@ -1,3 +1,5 @@
+import { formatCompactUsd } from "../overview/overviewData";
+
 export interface BuilderInsightsWindow {
   start: string;
   end: string;
@@ -168,6 +170,11 @@ export const agentSpendShares = (agents: readonly BuilderAgentEntry[]): BuilderA
 export const builderCostPerPr = (
   builder: Pick<BuilderInsightBuilder, "spend" | "prs" | "spendPerPr">,
 ): number | null => (builder.prs > 0 ? builder.spendPerPr ?? builder.spend / builder.prs : null);
+
+export const builderCostPerPrLabel = (builder: Pick<BuilderInsightBuilder, "spend" | "prs" | "spendPerPr">): string => {
+  const costPerPr = builderCostPerPr(builder);
+  return costPerPr === null ? "N/A" : formatCompactUsd(costPerPr);
+};
 
 export const builderInitials = (name: string): string => {
   const parts = name.trim().split(/\s+/).filter(Boolean);

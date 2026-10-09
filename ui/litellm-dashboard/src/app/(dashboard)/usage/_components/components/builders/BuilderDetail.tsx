@@ -8,7 +8,7 @@ import { formatCompactUsd } from "../overview/overviewData";
 import { Panel } from "../overview/Primitives";
 import {
   aggregateModels,
-  builderCostPerPr,
+  builderCostPerPrLabel,
   builderVerdictDotClass,
   sortBuilders,
   type BuilderInsightBuilder,
@@ -71,7 +71,7 @@ function BuilderSidebar({
       <h2 className="px-2 pb-2 text-sm font-semibold">Builders</h2>
       <div className="grid max-h-56 gap-1 overflow-y-auto md:max-h-[calc(100vh-14rem)]">
         {sortBuilders(builders, sort).map((builder) => {
-          const cost = builderCostPerPr(builder);
+          const costPerPrLabel = builderCostPerPrLabel(builder);
           const selected = builder.id === selectedId;
           return (
             <button
@@ -88,7 +88,7 @@ function BuilderSidebar({
                 <span className={`size-1.5 shrink-0 rounded-full ${builderVerdictDotClass(builder.verdict)}`} />
                 <span className="truncate">{builder.verdictLabel}</span>
                 <span aria-hidden="true">·</span>
-                <span className="shrink-0 tabular-nums">{cost === null ? "—" : formatCompactUsd(cost)}</span>
+                <span className="shrink-0 tabular-nums">{costPerPrLabel}</span>
               </span>
             </button>
           );
@@ -107,7 +107,6 @@ function BuilderDocument({
   median: number;
   teamSpend: number;
 }) {
-  const cost = builderCostPerPr(builder);
   const mostlyDevin = builder.prs > 0 && builder.prsDevin / builder.prs > 0.5;
   const share = teamSpend > 0 ? (builder.spend / teamSpend) * 100 : 0;
 
@@ -125,7 +124,7 @@ function BuilderDocument({
         <div className="sm:pr-4">
           <DetailStat
             label="Cost / PR"
-            value={cost === null ? "—" : formatCompactUsd(cost)}
+            value={builderCostPerPrLabel(builder)}
             hint={
               mostlyDevin ? "Devin billed elsewhere, real cost higher" : `vs ${formatCompactUsd(median)} team median`
             }

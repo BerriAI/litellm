@@ -4,6 +4,7 @@ import {
   aggregateModels,
   agentSpendShares,
   builderCostPerPr,
+  builderCostPerPrLabel,
   builderInitials,
   builderVerdictDotClass,
   sortBuilders,
@@ -56,6 +57,10 @@ describe("sortBuilders", () => {
 describe("builderCostPerPr", () => {
   it("does not calculate a cost per PR when there are no merged PRs", () => {
     expect(builderCostPerPr({ spend: 100, prs: 0, spendPerPr: 25 })).toBeNull();
+  });
+
+  it("uses N/A as the label when there are no merged PRs", () => {
+    expect(builderCostPerPrLabel({ spend: 100, prs: 0, spendPerPr: null })).toBe("N/A");
   });
 });
 
