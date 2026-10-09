@@ -270,7 +270,7 @@ async def set_user_provider_credential_cache(
             _encode(payload),
             ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
         )
-        readback: object = await _try_cache_get(token_cache, key)
+        readback: Final = await _try_cache_get(token_cache, key)
         if isinstance(readback, str) and decode_user_provider_credential(readback) == payload:
             return True
         verbose_proxy_logger.warning(
@@ -282,7 +282,7 @@ async def set_user_provider_credential_cache(
         await _string_cache(token_cache).async_delete_cache(key)
     except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
         verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis delete failed")
-    after_delete: object = await _try_cache_get(token_cache, key)
+    after_delete: Final = await _try_cache_get(token_cache, key)
     if after_delete is None:
         return True
     if isinstance(after_delete, str) and decode_user_provider_credential(after_delete) == payload:

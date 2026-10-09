@@ -2760,7 +2760,7 @@ def _fallback_entry_target_count(entry: object) -> int:
     key plus one per target in its value lists, so empty lists and scalar
     values still cost what the router scan costs."""
     if isinstance(entry, dict):
-        entry_dict = cast("dict[object, object]", entry)  # cast-ok: fallback entries are plain dicts at runtime
+        entry_dict: Final = cast("dict[object, object]", entry)  # cast-ok: fallback entries are plain dicts at runtime
         return sum(
             max(1, len(cast("Sequence[object]", value)))  # cast-ok: fallback values are scalar or list entries
             if isinstance(value, list)
@@ -2810,8 +2810,8 @@ def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
     bare keys (duplicate keys union their targets, a superset of the router's
     first-wins resolution), plus the entries only the router matcher can score
     ("*" keys, provider-prefixed keys, bare-string generic targets)."""
-    exact: dict[str, tuple[str, ...]] = {}  # mutable-ok: one entry per bare source key
-    fuzzy: list[object] = []  # mutable-ok: accumulates matcher-only entries
+    exact: Final[dict[str, tuple[str, ...]]] = {}  # mutable-ok: one entry per bare source key
+    fuzzy: Final[list[object]] = []  # mutable-ok: accumulates matcher-only entries
     for entry in fallback_list:
         if isinstance(entry, dict) and entry:
             entry_dict = cast("dict[object, object]", entry)  # cast-ok: fallback entries are plain dicts at runtime

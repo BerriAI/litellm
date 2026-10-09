@@ -808,7 +808,9 @@ def _get_openai_compatible_provider_info(
             api_base = user_session.api_base  # rebind-ok: resolves provider args in place
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
         elif (
-            github_copilot_per_user_credential_name(cast("dict[str, object]", litellm_params))  # cast-ok: untyped params dict
+            github_copilot_per_user_credential_name(
+                cast("dict[str, object]", litellm_params)  # cast-ok: untyped params dict
+            )
             is not None
         ):
             # per-user deployments resolve no token at provider-info time; the

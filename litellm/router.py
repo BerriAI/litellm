@@ -8687,7 +8687,9 @@ class Router:
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
                     requested_model_group=(
-                        get_litellm_metadata_from_kwargs(cast("dict[str, object]", kwargs))  # cast-ok: untyped kwargs dict
+                        get_litellm_metadata_from_kwargs(
+                            cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+                        )
                         or {}
                     ).get("model_group"),
                     request_kwargs=cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict

@@ -7765,8 +7765,8 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if _model is not None and (
-        custom_llm_provider == "openai"
+    if (
+        _model is not None and (custom_llm_provider == "openai")
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
         if _model not in litellm.open_ai_chat_completion_models:
             model = "text-completion-openai/" + _model
