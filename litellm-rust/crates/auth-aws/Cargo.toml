@@ -10,7 +10,8 @@ litellm-auth-types.workspace = true
 litellm-http.workspace = true
 
 moka = { workspace = true, features = ["sync"] }
-serde_json.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 thiserror.workspace = true
 

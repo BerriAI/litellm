@@ -145,6 +145,27 @@ async fn analyze_document_asks_for_layout_and_tables_and_returns_markdown() {
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_missing_region_is_the_callers_error_and_names_every_way_to_set_it() {
+    let upstream = upstream([textract_response()]).await;
+    let request = ocr_request_with_document(
+        DETECT,
+        &format!("{}/", upstream.uri()),
+        json!({"type": "image_url", "image_url": "data:image/png;base64,b3JpZ2luYWw="}),
+        json!({"aws_access_key_id": ACCESS_KEY_ID, "aws_secret_access_key": SECRET_ACCESS_KEY}),
+    );
+
+    let error = perform_with(LocalOcrHost::new(request)).await.unwrap_err();
+
+    assert!(error.is_request(), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
 #[case::detect(DETECT)]
 #[case::analyze(ANALYZE)]
 #[tokio::test]
