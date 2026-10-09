@@ -1457,6 +1457,26 @@ async def test_redirect_from_openid_rejects_graph_error_payload_before_db_and_ke
     generate_key.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_redirect_from_openid_rejects_the_empty_provider_result_before_db_and_key_mint() -> None:
+    user_info_from_db: Final = AsyncMock(return_value=None)
+    generate_key: Final = AsyncMock(return_value={"token": "sk-ui-key", "user_id": ""})
+    mock_request, stack = _empty_identity_redirect_patches(None, user_info_from_db, generate_key)
+
+    with stack, pytest.raises(HTTPException) as exc_info:
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result={},
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+        )
+
+    assert exc_info.value.status_code == 401
+    user_info_from_db.assert_not_awaited()
+    generate_key.assert_not_awaited()
+
+
 def _custom_sso_returning_user_id(custom_user_id: object) -> Callable[[CustomOpenID], Awaitable[Mapping[str, object]]]:
     async def custom_sso(result: CustomOpenID) -> Mapping[str, object]:
         return {
