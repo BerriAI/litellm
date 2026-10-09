@@ -1,5 +1,6 @@
 import base64
 import json
+from typing import Final
 
 import pytest
 
@@ -471,3 +472,13 @@ def test_text_that_isnt_valid_utf8_is_still_sent(block):
 
     [attachment] = request_attachments(request_data).attachments
     assert base64.b64decode(attachment.content or "") == "a\ud800".encode(errors="surrogatepass")
+
+
+def test_request_attachments_reads_a_list_shared_by_messages_and_input_once() -> None:
+    shared: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}]}
+    ]
+
+    assert request_attachments({"messages": shared, "input": shared}).attachments == (
+        Attachment("a.png", "image", url="https://example.com/a.png"),
+    )

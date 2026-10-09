@@ -243,8 +243,12 @@ def first_value(request_data: Mapping[str, object], key: str) -> object:
 
 INPUT_HOOKS: Final = MappingProxyType(
     {
-        "request": frozenset((GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call)),
-        "response": frozenset((GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call)),
+        "request": frozenset(
+            (GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.logging_only)
+        ),
+        "response": frozenset(
+            (GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call, GuardrailEventHooks.logging_only)
+        ),
     }
 )
 
@@ -265,6 +269,7 @@ class AktoGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.post_mcp_call,
+            GuardrailEventHooks.logging_only,
         ]
 
     def __init__(
