@@ -147,6 +147,53 @@ def test_map_graph_response_uses_last_message_and_estimates_usage() -> None:
 
 
 @pytest.mark.parametrize(
+    ("reply", "expected_reply"),
+    [
+        ("pongpong", "pong"),
+        ("1 + 1 = **2**.1 + 1 = **2**.", "1 + 1 = **2**."),
+        ("pong", "pong"),
+        ("pongpon", "pongpon"),
+        ("pongPONG", "pongPONG"),
+        ("", ""),
+        ("aaaa", "aa"),
+    ],
+)
+def test_map_graph_response_collapses_only_exact_duplicate_halves(reply: str, expected_reply: str) -> None:
+    messages: Final = TypeAdapter(tuple[AllMessageValues, ...]).validate_python(
+        [{"role": "user", "content": "known Copilot prompt"}]
+    )
+
+    response: Final = map_graph_response(
+        graph_response={"messages": [{"text": reply}]},
+        model="microsoft_365_copilot/chat",
+        messages=messages,
+    )
+
+    assert response.choices[0].message.content == expected_reply
+
+
+def test_map_graph_response_counts_tokens_for_collapsed_reply() -> None:
+    messages: Final = TypeAdapter(tuple[AllMessageValues, ...]).validate_python(
+        [{"role": "user", "content": "known Copilot prompt"}]
+    )
+    doubled_reply_response: Final = map_graph_response(
+        graph_response={"messages": [{"text": "pongpong"}]},
+        model="microsoft_365_copilot/chat",
+        messages=messages,
+    )
+    single_reply_response: Final = map_graph_response(
+        graph_response={"messages": [{"text": "pong"}]},
+        model="microsoft_365_copilot/chat",
+        messages=messages,
+    )
+
+    doubled_reply_with_usage: Final = cast(_ModelResponseWithUsage, doubled_reply_response)
+    single_reply_with_usage: Final = cast(_ModelResponseWithUsage, single_reply_response)
+
+    assert doubled_reply_with_usage.usage.completion_tokens == single_reply_with_usage.usage.completion_tokens
+
+
+@pytest.mark.parametrize(
     "graph_response",
     [
         {},

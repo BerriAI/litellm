@@ -228,6 +228,13 @@ def build_chat_request(
         raise Microsoft365CopilotError(status_code=400, message="only text content is supported") from None
 
 
+def _collapse_doubled_reply(text: str) -> str:
+    if not text or len(text) % 2 != 0:
+        return text
+    half: Final = len(text) // 2
+    return text[:half] if text[:half] == text[half:] else text
+
+
 def map_graph_response(
     graph_response: object,
     model: str,
@@ -251,10 +258,11 @@ def map_graph_response(
             status_code=502,
             message="Microsoft Graph returned a Copilot response without reply text",
         )
+    normalized_reply: Final = _collapse_doubled_reply(reply)
     prompt_tokens: Final = _TOKEN_COUNTER(model=model, messages=messages)
     completion_tokens: Final = _TOKEN_COUNTER(
         model=model,
-        text=reply,
+        text=normalized_reply,
         count_response_tokens=True,
     )
     return ModelResponse(
@@ -262,7 +270,7 @@ def map_graph_response(
         choices=[
             Choices(
                 index=0,
-                message=Message(content=reply, role="assistant"),
+                message=Message(content=normalized_reply, role="assistant"),
                 finish_reason="stop",
             )
         ],
