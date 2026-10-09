@@ -1,8 +1,8 @@
 - Read a span's recorded convention into `Extraction`: facts, an optional display name, and consumed attributes
 - Own convention detection, attribute aliases, payload shapes, model and token fields, tool-call IDs, and explicitly recorded roles
-- Preserve first-match format precedence in `mod.rs`, with GenAI as the fallback; use shared alias and token helpers from the parent module
+- Preserve first-match format precedence in `mod.rs`, with GenAI as the fallback. Use shared alias and token helpers from the parent module
 - Track the source attributes selected for payload extraction so normalization retains unconsumed data
-- Reuse `../messages.rs` for canonical messages, indexed attributes, and event payloads; keep SDK behavior in `../instrumentation/`
+- Reuse `../messages.rs` for canonical messages, indexed attributes, and event payloads. Keep SDK behavior in `../instrumentation/`
 - Leave cross-span wrapper resolution, ownership, and spend attribution to `resolve/`
 - Extend `tests/normalization_formats.rs` for parsing changes, including mixed conventions, fallbacks, and malformed payloads
 - Consult the convention specifications when changing mappings:

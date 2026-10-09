@@ -1,7 +1,7 @@
 - Python owns tracing endpoints, authenticated tenant scope, framework normalization and API response shaping
-- Trace ingestion awaits `ClickHouseStorage.insert_rows` before returning success; propagate storage failures so OTLP exporters can retry
+- Trace ingestion awaits `ClickHouseStorage.insert_rows` before returning success. Propagate storage failures so OTLP exporters can retry
 - Spend logging keeps its separate batch queue in `litellm/integrations/clickhouse`
-- Use `litellm.rust_bridge.trace.storage.ClickHouseStorage` for ClickHouse; keep trace schema, SQL and encoding in `litellm-traces`, and generic transport in `litellm-storage-clickhouse`
+- Use `litellm.rust_bridge.trace.storage.ClickHouseStorage` for ClickHouse. Keep trace schema, SQL and encoding in `litellm-traces`, and generic transport in `litellm-storage-clickhouse`
 - Derive tenant fields from authentication and overwrite matching fields supplied by the exporter
 - Test confirmed writes, failures, tenant isolation and read behavior through public functions
-- Trace routes in `litellm/proxy/tracing_endpoints.py` bind query parameters with `Annotated[<generated request model>, Query()]` and bodies with the generated model; never redeclare field constraints in `Query(...)` or a local model
+- Trace routes in `litellm/proxy/tracing_endpoints.py` bind query parameters with `Annotated[<generated request model>, Query()]` and bodies with the generated model. Never redeclare field constraints in `Query(...)` or a local model

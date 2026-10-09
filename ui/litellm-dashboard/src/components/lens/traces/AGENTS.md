@@ -1,3 +1,3 @@
-- Derive trace request and response types from `paths` and `components` in `@/lib/http/schema` (see `types.ts`); never hand-write a trace request or response shape
+- Derive trace request and response types from `paths` and `components` in `@/lib/http/schema` (see `types.ts`). Never hand-write a trace request or response shape
 - Check every trace request `query` or body literal with `satisfies` against those types
-- `requestTypes.test-d.ts` pins the generated request shapes; a failure there means the backend contract changed
+- `requestTypes.test-d.ts` pins the generated request shapes. A failure there means the backend contract changed
