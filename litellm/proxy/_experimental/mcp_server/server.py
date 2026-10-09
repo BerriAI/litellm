@@ -131,12 +131,7 @@ def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
 
 
 def unsupported_protocol_version(scope: Scope) -> str | None:
-    """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
-
-    SDK 2's ``StreamableHTTPSessionManager`` routes any version outside
-    ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
-    bypasses litellm's session/auth model, so the ASGI entry rejects it.
-    """
+    """Admit configured HTTP revisions while keeping SSE on the legacy protocol."""
     from litellm.proxy._experimental.mcp_server.capabilities import configured_versions
 
     headers: Final[Iterable[tuple[bytes, bytes]]] = scope.get("headers") or ()
@@ -144,6 +139,8 @@ def unsupported_protocol_version(scope: Scope) -> str | None:
         raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
     )
     for value in values:
+        if value == "2026-07-28" and scope.get("path", "").rstrip("/").endswith("/sse"):
+            return value
         if value and value not in configured_versions():
             return value
     return None
@@ -507,9 +504,11 @@ if MCP_AVAILABLE:
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.models import InitializationOptions
     from mcp.shared.exceptions import MCPError
+    from mcp.shared.inbound import InboundLadderRejection, classify_inbound_request, find_duplicated_routing_header
     from mcp.types import (
         CallToolRequest,
         GetPromptRequest,
+        JSONRPCRequest,
         ListPromptsRequest,
         ListResourcesRequest,
         ListResourceTemplatesRequest,
@@ -519,6 +518,7 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server import operations
     from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.interactions import InteractionOperation
     from litellm.proxy._experimental.mcp_server.operations import (
         _invalidate_byok_cred_cache,
         _mcp_session_id_from_headers,
@@ -926,7 +926,9 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_prompts endpoint: %s", exc)
             return ListPromptsResult(prompts=[])
 
-    async def get_prompt(ctx: ServerRequestContext, params: GetPromptRequestParams) -> GetPromptResult:
+    async def get_prompt(
+        ctx: ServerRequestContext, params: GetPromptRequestParams
+    ) -> GetPromptResult | InputRequiredResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
         async with _legacy_operation_context(ctx, trace=False) as context:
@@ -964,7 +966,9 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", exc)
             return ListResourceTemplatesResult(resource_templates=[])
 
-    async def read_resource(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
+    async def read_resource(
+        ctx: ServerRequestContext, params: ReadResourceRequestParams
+    ) -> ReadResourceResult | InputRequiredResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
         async with _legacy_operation_context(ctx, trace=False) as context:
@@ -1389,6 +1393,8 @@ if MCP_AVAILABLE:
 
     async def _read_request_body_for_routing(
         receive: Receive,
+        *,
+        full_body: bool = False,
     ) -> tuple[list[Message], bytes]:
         """
         Read just enough of the request body to decide whether this is a
@@ -1401,7 +1407,8 @@ if MCP_AVAILABLE:
         The remainder of an oversized body is streamed lazily through
         ``wrapped_receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
-        routing decision.
+        routing decision. Modern interaction preflight requests the full body,
+        which the SDK's single-exchange transport also requires.
         """
         consumed_messages: Final[list[Message]] = []
         body_chunks: Final[list[bytes]] = []
@@ -1409,6 +1416,12 @@ if MCP_AVAILABLE:
 
         while True:
             message = await receive()
+            if (
+                full_body
+                and peeked_bytes + len(message.get("body", b"") or b"")
+                > session_manager_stateless.max_request_body_size
+            ):
+                raise HTTPException(status_code=413, detail="Request body too large")
             consumed_messages.append(message)
 
             if message.get("type") != "http.request":
@@ -1422,7 +1435,7 @@ if MCP_AVAILABLE:
                 # handler via ``consumed_messages``, but ``body_chunks`` is
                 # purely for the JSON-RPC method check — there is no reason
                 # to copy a large body frame into a second buffer.
-                remaining = _MCP_ROUTING_PEEK_MAX_BYTES - peeked_bytes
+                remaining = len(body) if full_body else _MCP_ROUTING_PEEK_MAX_BYTES - peeked_bytes
                 if remaining > 0:
                     body_chunks.append(body[:remaining])
                     peeked_bytes += min(len(body), remaining)
@@ -1430,7 +1443,7 @@ if MCP_AVAILABLE:
             if not message.get("more_body", False):
                 break
 
-            if peeked_bytes >= _MCP_ROUTING_PEEK_MAX_BYTES:
+            if not full_body and peeked_bytes >= _MCP_ROUTING_PEEK_MAX_BYTES:
                 # Stop draining; downstream replay will pull remaining chunks
                 # directly from the original `receive` via wrapped_receive.
                 break
@@ -1997,6 +2010,59 @@ if MCP_AVAILABLE:
                     detail="Forbidden",
                 )
 
+    _INTERACTION_REQUEST: Final[TypeAdapter[InteractionOperation]] = TypeAdapter(InteractionOperation)
+
+    @catalog_operation(lambda: operations.global_mcp_server_manager)
+    async def _preflight_modern_interaction(
+        scope: Scope, body: bytes, context: OperationContext
+    ) -> JSONResponse | None:
+        try:
+            envelope: Final = JSONRPCRequest.model_validate_json(body)
+            operation: Final = _INTERACTION_REQUEST.validate_json(body)
+        except ValidationError:
+            return None
+        headers: Final = StarletteRequest(scope).headers
+        if find_duplicated_routing_header(headers.items()) is not None or isinstance(
+            classify_inbound_request(envelope.model_dump(by_alias=True), headers=dict(headers)), InboundLadderRejection
+        ):
+            return None
+        try:
+            state: Final = operations.validate_continuation(operation, context)
+        except MCPError as error:
+            return JSONResponse(
+                status_code=400,
+                content={"jsonrpc": "2.0", "id": envelope.id, "error": error.error.model_dump(exclude_none=True)},
+            )
+        if state is None and context.mcp_servers is None:
+            return None
+        targets: Final = (
+            [state.target_id]
+            if state is not None
+            else list(context.mcp_servers)
+            if context.mcp_servers is not None
+            else None
+        )
+        allowed: Final = await operations._get_allowed_mcp_servers(
+            user_api_key_auth=context.user_api_key_auth, mcp_servers=targets, client_ip=context.client_ip
+        )
+        if state is not None and not any(target.server_id == state.target_id for target in allowed):
+            raise HTTPException(status_code=403, detail="MCP continuation target is no longer authorized")
+        authorized_names: Final = [target.alias or target.name for target in allowed]
+        await _raise_preemptive_401_for_unauthenticated_servers(
+            scope=scope,
+            mcp_servers=list(context.mcp_servers) if context.mcp_servers is not None else authorized_names,
+            oauth2_headers=dict(context.oauth2_headers) if context.oauth2_headers is not None else None,
+            mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
+            if context.mcp_server_auth_headers is not None
+            else None,
+            user_api_key_auth=context.user_api_key_auth,
+            client_ip=context.client_ip,
+            allowed_server_ids={target.server_id for target in allowed},
+            raw_headers=context.raw_headers,
+        )
+        await _check_passthrough_upstream_auth(scope, context.user_api_key_auth, authorized_names, context.client_ip)
+        return None
+
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
@@ -2027,6 +2093,10 @@ if MCP_AVAILABLE:
             ) = await extract_mcp_auth_context(scope, path)
             reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
+            request_headers: Final = StarletteRequest(scope).headers
+            defer_upstream_probes: Final = request_headers.get(
+                "mcp-protocol-version"
+            ) == "2026-07-28" and request_headers.get("mcp-method") in {"tools/call", "prompts/get", "resources/read"}
 
             # Extract client IP for MCP access control
             _client_ip: Final = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -2055,21 +2125,22 @@ if MCP_AVAILABLE:
             # from the fully-authorized server set: a passthrough server that
             # the active toolset excludes should not trigger an OAuth flow
             # for a server the caller will be 403'd on after authentication.
-            await _raise_preemptive_401_for_unauthenticated_servers(
-                scope=scope,
-                mcp_servers=mcp_servers,
-                oauth2_headers=oauth2_headers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                user_api_key_auth=user_api_key_auth,
-                client_ip=_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
-                raw_headers=raw_headers,
-            )
+            if not defer_upstream_probes:
+                await _raise_preemptive_401_for_unauthenticated_servers(
+                    scope=scope,
+                    mcp_servers=mcp_servers,
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=_client_ip,
+                    allowed_server_ids=toolset_allowed_server_ids,
+                    raw_headers=raw_headers,
+                )
 
-            # Pre-flight auth check for pass-through servers.  Must run after
-            # toolset scoping so the probe list is derived from the fully-authorized
-            # server set, not the raw user-supplied names.
-            await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
+                # Pre-flight auth check for pass-through servers.  Must run after
+                # toolset scoping so the probe list is derived from the fully-authorized
+                # server set, not the raw user-supplied names.
+                await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers: Final = MCPDebug.maybe_build_debug_headers(
@@ -2138,7 +2209,24 @@ if MCP_AVAILABLE:
 
             body = b""
             if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive)
+                consumed_messages, body = await _read_request_body_for_routing(receive, full_body=defer_upstream_probes)
+                if defer_upstream_probes:
+                    rejection: Final = await _preflight_modern_interaction(
+                        scope,
+                        body,
+                        OperationContext(
+                            _caller=user_api_key_auth,
+                            mcp_auth_header=mcp_auth_header,
+                            mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
+                            mcp_server_auth_headers=mcp_server_auth_headers,
+                            oauth2_headers=oauth2_headers,
+                            raw_headers=raw_headers,
+                            client_ip=_client_ip,
+                        ),
+                    )
+                    if rejection is not None:
+                        await rejection(scope, receive, send)
+                        return
                 is_initialize = _is_initialize_request(body)
 
             use_stateful: Final = bool(session_id or is_initialize)
@@ -2279,12 +2367,16 @@ if MCP_AVAILABLE:
                         client_info=_extract_initialize_client_info(body),
                     )
 
-                async with _gateway_initialize_instructions_request_scope(
-                    user_api_key_auth,
-                    mcp_servers,
-                    _client_ip,
-                    scoped_server_endpoint=scoped_server_endpoint,
-                    is_initialize=is_initialize,
+                async with (
+                    contextlib.nullcontext()
+                    if defer_upstream_probes
+                    else _gateway_initialize_instructions_request_scope(
+                        user_api_key_auth,
+                        mcp_servers,
+                        _client_ip,
+                        scoped_server_endpoint=scoped_server_endpoint,
+                        is_initialize=is_initialize,
+                    )
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":

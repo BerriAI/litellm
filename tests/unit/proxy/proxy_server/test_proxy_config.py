@@ -5449,14 +5449,24 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("versions", [None, ["2024-11-05"], [], ["2026-07-28"], ["unknown"]])
-async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, monkeypatch, versions):
+@pytest.mark.parametrize(
+    ("versions", "valid"),
+    [
+        (None, True),
+        (["2024-11-05"], True),
+        (["2026-07-28"], True),
+        (["2025-11-25", "2026-07-28"], True),
+        ([], False),
+        (["unknown"], False),
+    ],
+)
+async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, monkeypatch, versions, valid):
     config = tmp_path / "mcp-versions.yaml"
     config.write_text(json.dumps({"model_list": [], "general_settings": {"mcp_advertised_versions": versions}}))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
-    if versions is None or versions == ["2024-11-05"]:
+    if valid:
         _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config))
         assert settings["mcp_advertised_versions"] == versions
         return
