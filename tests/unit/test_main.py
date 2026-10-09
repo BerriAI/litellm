@@ -4184,6 +4184,36 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert logging_obj.response_cost_calculator(result=response) == pytest.approx(0.63)
 
 
+@pytest.mark.parametrize("prices_in_litellm_params", [True, False], ids=["litellm_params", "model_info"])
+def test_stream_chunk_builder_prices_custom_pricing_deployment_over_provider_cost(
+    monkeypatch: pytest.MonkeyPatch, prices_in_litellm_params: bool
+):
+    deployment_id: Final = "stream-custom-pricing-deployment"
+    prices: Final = {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+    monkeypatch.setitem(litellm.model_cost, deployment_id, {**prices, "litellm_provider": "openai", "mode": "chat"})
+    usage_chunk: Final = _stream_builder_text_chunk("my-model", "")
+    # an OpenAI-compatible provider reporting usage.cost in its own unit
+    usage_chunk.usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500, cost=48555.0)
+    chunks: Final = [
+        _stream_builder_text_chunk("my-model", "Hello "),
+        _stream_builder_text_chunk("my-model", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+    logging_obj: Final = _stream_builder_logging_obj(model="my-model", custom_llm_provider="openai")
+    model_info: Final = {"id": deployment_id} if prices_in_litellm_params else {"id": deployment_id, **prices}
+    logging_obj.litellm_params.update(
+        {**(prices if prices_in_litellm_params else {}), "metadata": {"model_info": model_info}}
+    )
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert response._hidden_params.get("response_cost") is None
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(1000 * 1e-6 + 500 * 2e-6)
+
+
 def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
     audio_bytes: Final = b"ID3-fake-mp3-bytes"
