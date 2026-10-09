@@ -275,30 +275,18 @@ async def test_upstream_held_past_the_deployment_timeout_answers_408_on_every_ro
     assert sorted(upstream_trail(received)) == sorted((route.method, proxy_path(route, marker)) for route in ROUTES)
 
 
-def _plain_exception_cases() -> tuple[tuple[str, str, bytes, str | None], ...]:
-    malformed: Final = tuple((f"malformed_{route.name}", route.name, b"{not json", None) for route in BODY_ROUTES)
-    return (
-        ("run_without_assistant", "run_thread", b"{}", "assistant_id"),
-        ("message_without_role", "add_message", b"{}", "role"),
-        *malformed,
-    )
+_PLAIN_EXCEPTION_CASES: Final = (("run_thread", "assistant_id"), ("add_message", "role"))
 
 
 @pytest.mark.parametrize(
-    ("route_name", "content", "named"),
-    [case[1:] for case in _plain_exception_cases()],
-    ids=[case[0] for case in _plain_exception_cases()],
+    ("route_name", "named"), _PLAIN_EXCEPTION_CASES, ids=("run_without_assistant", "message_without_role")
 )
-def test_plain_exception_answers_an_openai_shaped_500(
-    scripted: _Scripted, route_name: str, content: bytes, named: str | None
-) -> None:
+def test_plain_exception_answers_an_openai_shaped_500(scripted: _Scripted, route_name: str, named: str) -> None:
     marker: Final = new_marker()
     with assistants_wire(lambda _: _scripted_error(404, marker), port=scripted.port) as wire:
-        response: Final = _send_raw(scripted.gateway, ROUTE_BY_NAME[route_name], marker, content)
+        response: Final = _send_raw(scripted.gateway, ROUTE_BY_NAME[route_name], marker, b"{}")
         assert provider_requests(wire.drain()) == ()
-    message: Final = assert_openai_error(response, UNMAPPED_500)
-    assert message, response.text
-    assert named is None or named in message, response.text
+    assert named in assert_openai_error(response, UNMAPPED_500), response.text
 
 
 @pytest.mark.parametrize("route", BODY_ROUTES, ids=[route.name for route in BODY_ROUTES])
