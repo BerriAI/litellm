@@ -580,6 +580,32 @@ def test_langfuse_usage_details_omit_zero_cache_and_reasoning_counts():
     assert usage == {"input": 12, "output": 8, "total": 20}
 
 
+def _langfuse_streamed_payload() -> dict[str, object]:
+    return {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "completionStartTime": 1791547200.25,
+    }
+
+
+def test_langfuse_mapper_sends_the_first_chunk_time_of_a_streamed_call():
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _langfuse_streamed_payload(), time_to_first_chunk_seconds=1.0
+    )
+
+    attrs: Final = LangfuseMapper().map(data)
+
+    assert attrs["langfuse.observation.completion_start_time"] == "2026-10-09T12:00:00.250000+00:00"
+
+
+def test_langfuse_mapper_leaves_out_the_completion_start_time_of_a_call_that_did_not_stream():
+    """A call that did not stream has its end time backfilled as completionStartTime, which is no first chunk."""
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(_langfuse_streamed_payload()))
+
+    assert "langfuse.observation.completion_start_time" not in attrs
+
+
 def test_langfuse_mapper_names_the_trace_from_the_caller():
     named = LangfuseMapper().map(_llm_call(trace=TraceControls(name="nightly-eval")))
     assert named["langfuse.trace.name"] == "nightly-eval"

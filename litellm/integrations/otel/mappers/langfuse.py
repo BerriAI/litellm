@@ -12,6 +12,7 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 
 import json
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
@@ -45,6 +46,11 @@ class LangfuseMapper:
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
+        "langfuse.observation.completion_start_time": lambda d: (
+            datetime.fromtimestamp(d.completion_start_seconds, tz=timezone.utc).isoformat()
+            if d.completion_start_seconds is not None
+            else None
+        ),
     }
 
     # Sub-tables folded into their respective JSON blobs.
