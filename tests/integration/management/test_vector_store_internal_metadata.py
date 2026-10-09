@@ -26,7 +26,7 @@ def test_vector_store_create_and_update_only_forward_caller_metadata(gateway: Ga
         create_response: Final = gateway.request(
             "POST",
             "/v1/vector_stores",
-            {"model": model, "name": "x"},
+            {"model": model, "name": "x", "metadata": {}},
             key=key,
         )
         assert create_response.status_code == 200, create_response.text

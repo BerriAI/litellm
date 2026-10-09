@@ -138,6 +138,45 @@ async def test_aspeech_sets_deployment_metadata():
     assert metadata["model_info"]["id"] is not None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_litellm_metadata", [True, False])
+async def test_avector_store_create_keeps_caller_metadata(include_litellm_metadata):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                    "api_key": "sk-test",
+                    "api_base": "https://example.invalid/v1",
+                },
+            }
+        ]
+    )
+    metadata = {"team": "llmproxy"}
+    request_kwargs = {
+        "name": "x",
+        "metadata": metadata,
+        **({"litellm_metadata": {}} if include_litellm_metadata else {}),
+    }
+    mock_response = MagicMock()
+
+    with patch(
+        "litellm.vector_stores.acreate",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_acreate:
+        response = await router.avector_store_create(model="gpt-5", **request_kwargs)
+
+    assert response is mock_response
+    assert mock_acreate.await_args is not None
+    assert mock_acreate.await_args.kwargs["metadata"] == {"team": "llmproxy"}
+    if include_litellm_metadata:
+        litellm_metadata = mock_acreate.await_args.kwargs["litellm_metadata"]
+        assert litellm_metadata["deployment"] == "openai/gpt-5"
+        assert litellm_metadata["model_info"]["id"] is not None
+
+
 @pytest.mark.asyncio()
 async def test_moderation_endpoint_with_api_base():
     """

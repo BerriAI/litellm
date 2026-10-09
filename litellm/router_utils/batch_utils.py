@@ -165,6 +165,7 @@ def get_router_metadata_variable_name(function_name: str | None) -> str:
             "_acreate_batch",
             "file",
             "_ageneric_api_call_with_fallbacks",
+            "vector_store",
         ]
     )
     if function_name and any(method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA):

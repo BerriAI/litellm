@@ -114,6 +114,10 @@ def test_router_metadata_variable_name():
     )
 
 
+def test_router_metadata_variable_name_for_vector_store_create():
+    assert get_router_metadata_variable_name(function_name="avector_store_create") == "litellm_metadata"
+
+
 def test_non_json_input():
     """Test that replace_model_in_jsonl returns original content for non-JSON input"""
     from litellm.router_utils.batch_utils import replace_model_in_jsonl
