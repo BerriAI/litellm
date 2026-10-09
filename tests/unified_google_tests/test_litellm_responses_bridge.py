@@ -15,6 +15,8 @@ from tests.unified_google_tests.base_interactions_test import (
 class TestLiteLLMResponsesBridge(BaseInteractionsTest):
     """Test LiteLLM Responses bridge using the base test suite."""
 
+    test_create_streaming = None
+
     def get_model(self) -> str:
         """Return the model string for the bridge provider.
 

@@ -149,7 +149,7 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
                 "input": "blocked prompt",
                 "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
             },
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/responses"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/responses"),
             route="/v1/responses",
             original_exception=HTTPException(status_code=400, detail="blocked"),
         )
@@ -195,7 +195,7 @@ async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatc
 
 def test_get_model_group_info_order():
     from litellm import Router
-    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm.proxy.proxy_server import get_model_group_info
 
     router = Router(
         model_list=[
@@ -203,19 +203,19 @@ def test_get_model_group_info_order():
                 "model_name": "openai/tts-1",
                 "litellm_params": {
                     "model": "openai/tts-1",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
             {
                 "model_name": "openai/gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
         ]
     )
-    model_list = _get_model_group_info(
+    model_list = get_model_group_info(
         llm_router=router,
         all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
         model_group=None,
@@ -277,10 +277,10 @@ def _patch_today(monkeypatch, year, month, day):
 
 
 def test_get_projected_spend_over_limit_day_one(monkeypatch):
-    from litellm.proxy.utils import _get_projected_spend_over_limit
+    from litellm.proxy.utils import get_projected_spend_over_limit
 
     _patch_today(monkeypatch, 2026, 1, 1)
-    result = _get_projected_spend_over_limit(100.0, 1.0)
+    result = get_projected_spend_over_limit(100.0, 1.0)
 
     assert result is not None
     projected_spend, projected_exceeded_date = result
@@ -289,10 +289,10 @@ def test_get_projected_spend_over_limit_day_one(monkeypatch):
 
 
 def test_get_projected_spend_over_limit_december(monkeypatch):
-    from litellm.proxy.utils import _get_projected_spend_over_limit
+    from litellm.proxy.utils import get_projected_spend_over_limit
 
     _patch_today(monkeypatch, 2026, 12, 15)
-    result = _get_projected_spend_over_limit(100.0, 1.0)
+    result = get_projected_spend_over_limit(100.0, 1.0)
 
     assert result is not None
     projected_spend, projected_exceeded_date = result
@@ -301,10 +301,10 @@ def test_get_projected_spend_over_limit_december(monkeypatch):
 
 
 def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
-    from litellm.proxy.utils import _get_projected_spend_over_limit
+    from litellm.proxy.utils import get_projected_spend_over_limit
 
     _patch_today(monkeypatch, 2026, 4, 11)
-    result = _get_projected_spend_over_limit(100.0, 200.0)
+    result = get_projected_spend_over_limit(100.0, 200.0)
 
     assert result is not None
     projected_spend, projected_exceeded_date = result
@@ -629,7 +629,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         from unittest.mock import AsyncMock
 
         from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
         request_start = real_datetime.datetime.now() - real_datetime.timedelta(seconds=2)
@@ -659,7 +659,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         proxy_logging_obj.alert_types = []
         spend_writer = SimpleNamespace(update_database=AsyncMock())
         original_callbacks = list(litellm.callbacks)
-        litellm.callbacks = [_ProxyDBLogger(spend_writer=lambda: spend_writer)]
+        litellm.callbacks = [ProxyDBLogger(spend_writer=lambda: spend_writer)]
         try:
             with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
                 await proxy_logging_obj.post_call_failure_hook(
@@ -2090,7 +2090,7 @@ async def test_proxy_only_error_expected_4xx_skips_traceback_for_both_handlers(m
                     "model": "does-not-exist",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/chat/completions"),
                 route="/v1/chat/completions",
                 original_exception=exc,
             )
@@ -2141,7 +2141,7 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
                     "model": "gpt-4o",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/chat/completions"),
                 route="/v1/chat/completions",
                 original_exception=exc,
             )

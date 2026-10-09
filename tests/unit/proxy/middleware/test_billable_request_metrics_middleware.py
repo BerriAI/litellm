@@ -8,7 +8,8 @@ middleware is a transparent pass-through when no recorder is injected.
 
 import asyncio
 import threading
-from typing import List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Final, List, Optional, Tuple
 
 import pytest
 from starlette.applications import Starlette
@@ -28,6 +29,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
+from litellm.types.proxy.gateway_requests import GatewayRequestCounts, GatewayRequestKey
 
 
 class FakeRecorder:
@@ -505,14 +507,18 @@ def test_varying_model_ids_fold_into_a_single_persisted_key():
     that is. The SGR key is persisted, so it must not carry that dimension: a
     caller who could vary it could mint an unbounded number of table rows.
     """
-    accumulator = GatewayRequestAccumulator()
+    frozen_now: Final = datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc)
+    accumulator = GatewayRequestAccumulator(clock=lambda: frozen_now)
     for model_id in ("deploy-1", "deploy-2", "deploy-3"):
         client = TestClient(_make_sink_app(None, accumulator, status_code=200, model_id=model_id))
         client.post("/v1/chat/completions")
 
-    snapshot = accumulator.drain()
-    assert len(snapshot) == 1
-    assert next(iter(snapshot.values())).successful_requests == 3
+    snapshot: Final = accumulator.drain()
+    assert snapshot == {
+        GatewayRequestKey(date=frozen_now.strftime("%Y-%m-%d"), category="llm", route="/chat/completions"): (
+            GatewayRequestCounts(successful_requests=3, failed_requests=0)
+        )
+    }
 
 
 @pytest.mark.parametrize("status_code", [400, 429, 500, 503])
