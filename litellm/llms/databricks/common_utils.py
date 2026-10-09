@@ -10,8 +10,11 @@ Authentication priority:
 3. Databricks SDK automatic auth - Fallback (uses unified auth)
 """
 
+import hashlib
 import os
 import re
+import threading
+import time
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -20,6 +23,14 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 class DatabricksException(BaseLLMException):
     pass
+
+
+# OAuth M2M access tokens are reused until shortly before they expire, so each
+# completion does not trigger a new token request.
+_OAUTH_M2M_TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
+_OAUTH_M2M_DEFAULT_TOKEN_TTL_SECONDS: Final = 3600
+_oauth_m2m_token_cache: dict[tuple[str, str, str], tuple[str, float]] = {}
+_oauth_m2m_token_cache_lock: Final = threading.Lock()
 
 
 class DatabricksBase:
@@ -235,6 +246,17 @@ class DatabricksBase:
         workspace_url: Final = urlunsplit((api_base_parts.scheme, api_base_parts.netloc, "", "", ""))
         token_url: Final = f"{workspace_url}/oidc/v1/token"
 
+        # The secret is hashed so it is not kept as a plain dict key.
+        cache_key: Final = (
+            token_url,
+            client_id,
+            hashlib.sha256(client_secret.encode("utf-8")).hexdigest(),
+        )
+        with _oauth_m2m_token_cache_lock:
+            cached: Final = _oauth_m2m_token_cache.get(cache_key)
+            if cached is not None and cached[1] > time.monotonic():
+                return cached[0]
+
         try:
             response: Final = requests.post(
                 token_url,
@@ -259,7 +281,18 @@ class DatabricksBase:
             )
 
         token_data: Final = response.json()
-        return token_data["access_token"]
+        access_token: Final = token_data["access_token"]
+
+        try:
+            ttl = float(token_data.get("expires_in", _OAUTH_M2M_DEFAULT_TOKEN_TTL_SECONDS))
+        except (TypeError, ValueError):
+            ttl = float(_OAUTH_M2M_DEFAULT_TOKEN_TTL_SECONDS)
+        ttl -= _OAUTH_M2M_TOKEN_EXPIRY_SKEW_SECONDS
+        if ttl > 0:
+            with _oauth_m2m_token_cache_lock:
+                _oauth_m2m_token_cache[cache_key] = (access_token, time.monotonic() + ttl)
+
+        return access_token
 
     def _get_databricks_credentials(
         self, api_key: str | None, api_base: str | None, headers: dict | None
