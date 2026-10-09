@@ -37,12 +37,13 @@ class OpenAILikeBase:
             )
 
         if headers is None:
-            headers = {
-                "Content-Type": "application/json",
-            }
+            headers = {}
 
-        if (
-            api_key is not None and "Authorization" not in headers
+        if not any(k.lower() == "content-type" for k in headers):
+            headers["Content-Type"] = "application/json"
+
+        if api_key is not None and not any(
+            k.lower() == "authorization" for k in headers
         ):  # [TODO] remove 'validate_environment' from OpenAI base. should use llm providers config for this only.
             headers.update({"Authorization": f"Bearer {api_key}"})
 
