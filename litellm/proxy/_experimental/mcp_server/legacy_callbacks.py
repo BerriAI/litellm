@@ -24,7 +24,7 @@ class SamplingCallback(Protocol):
 
 
 class ElicitationCallback(Protocol):
-    async def __call__(self, context: object, params: ElicitRequestParams, /) -> ElicitResult | ErrorData: ...
+    async def __call__(self, context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData: ...
 
 
 def create_sampling_callback(

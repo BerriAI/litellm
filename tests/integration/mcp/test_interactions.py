@@ -276,8 +276,8 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
                 )
             )
             peer.drain()
-            revoked: Final = rpc(gateway, "tools/call", retry)
-            assert revoked["result"]["isError"] is True, revoked
+            revoked: Final = rpc(gateway, "tools/call", retry, status=403)
+            assert revoked["detail"] == "MCP continuation target is no longer authorized", revoked
             assert peer.drain() == (), "Revoked access must reject a valid continuation before upstream dispatch"
 
             auth_state.write_text(json.dumps(identity))
@@ -356,7 +356,14 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
             yaml.safe_dump(
                 {
                     "model_list": [],
-                    "mcp_servers": {"mrtr": {"url": peer.url, "transport": "http", "protocol_version": "2026-07-28"}},
+                    "mcp_servers": {
+                        "mrtr": {
+                            "url": peer.url,
+                            "transport": "http",
+                            "protocol_version": "2026-07-28",
+                            "allow_elicitation": True,
+                        }
+                    },
                     "general_settings": {
                         "master_key": _KEY,
                         "store_model_in_db": False,

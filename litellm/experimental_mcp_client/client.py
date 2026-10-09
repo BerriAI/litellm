@@ -102,6 +102,7 @@ from litellm.types.mcp import (
 
 if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -413,7 +414,7 @@ class MCPClient:
         aws_auth: httpx2.Auth | None = None,
         resolved_auth: httpx2.Auth | None = None,
         sampling_callback: Callable | None = None,
-        elicitation_callback: Callable | None = None,
+        elicitation_callback: "ElicitationCallback | None" = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
     ):
@@ -440,7 +441,7 @@ class MCPClient:
         self._resolved_auth: httpx2.Auth | None = resolved_auth
         self._last_initialize_instructions: str | None = None
         self._sampling_callback: Callable | None = sampling_callback
-        self._elicitation_callback: Callable | None = elicitation_callback
+        self._elicitation_callback: ElicitationCallback | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
         # handle the basic auth value if provided
         if auth_value:
@@ -633,15 +634,6 @@ class MCPClient:
                         # The SDK closes pending requests when its message handler raises.
                         raise RuntimeError("MCP response stream failed")
 
-                    session_kwargs: Final = {
-                        name: callback
-                        for name, callback in (
-                            ("sampling_callback", self._sampling_callback),
-                            ("elicitation_callback", self._elicitation_callback),
-                            ("logging_callback", self._logging_callback),
-                        )
-                        if callback is not None
-                    }
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
                     session_ctx: Final = ClientSession(
@@ -649,7 +641,9 @@ class MCPClient:
                         write_stream,
                         read_timeout_seconds=self.timeout,
                         message_handler=receive_message,
-                        **session_kwargs,
+                        sampling_callback=self._sampling_callback,
+                        elicitation_callback=self._elicitation_callback,
+                        logging_callback=self._logging_callback,
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
@@ -964,7 +958,9 @@ class MCPClient:
         with anyio.fail_after(self.timeout):
             first: Final = await request(input_responses, request_state)
             if allow_input_required:
-                return await ModernClientInteraction(session).complete(first, request)
+                return await ModernClientInteraction(
+                    session, allow_elicitation=self._elicitation_callback is not None
+                ).complete(first, request)
             if not isinstance(first, InputRequiredResult):
                 return first
             interaction: Final[ClientInteraction] = LegacyClientInteraction(session)

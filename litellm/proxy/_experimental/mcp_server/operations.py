@@ -87,6 +87,8 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.interactions import (
     BoundInputRequiredResult,
+    ContinuationState,
+    InteractionOperation,
     open_continuation,
     seal_continuation,
     target_digest,
@@ -3221,6 +3223,17 @@ GatewayResult: TypeAlias = (
 )
 
 
+def validate_continuation(operation: InteractionOperation, context: OperationContext) -> ContinuationState | None:
+    state: Final = open_continuation(operation, context, now=int(time.time()))
+    if state is not None:
+        target: Final = global_mcp_server_manager.get_mcp_server_by_id(state.target_id)
+        if target is None or target_digest(target) != state.target_digest:
+            raise MCPError(code=-32602, message="MCP continuation target changed; start a fresh request")
+        if set(operation.params.input_responses or {}) & set(state.gateway_responses or {}):
+            raise MCPError(code=-32602, message="Cannot replace gateway input responses")
+    return state
+
+
 class GatewayOperations:
     def __init__(self, host_progress_callback: ProgressCallback | None = None) -> None:
         self._host_progress_callback = host_progress_callback
@@ -3270,13 +3283,7 @@ class GatewayOperations:
             if operation.params.request_state is not None or operation.params.input_responses:
                 raise MCPError(code=-32602, message="Continuations require the modern MCP protocol")
             return await self._execute(operation, context)
-        state: Final = open_continuation(operation, context, now=int(time.time()))
-        if state is not None:
-            target: Final = global_mcp_server_manager.get_mcp_server_by_id(state.target_id)
-            if target is None or target_digest(target) != state.target_digest:
-                raise MCPError(code=-32602, message="MCP continuation target changed; start a fresh request")
-            if set(operation.params.input_responses or {}) & set(state.gateway_responses or {}):
-                raise MCPError(code=-32602, message="Cannot replace gateway input responses")
+        state: Final = validate_continuation(operation, context)
         upstream: Final = operation.model_copy(
             update={
                 "params": operation.params.model_copy(

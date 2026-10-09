@@ -204,6 +204,7 @@ class _DeferredInteraction:
 @dataclass(frozen=True, slots=True)
 class ModernClientInteraction:
     session: ClientSession
+    allow_elicitation: bool
 
     async def request(self, key: str, request: InputRequest) -> InputResponse | ErrorData:
         if isinstance(request, ElicitRequest):
@@ -218,6 +219,8 @@ class ModernClientInteraction:
         pending: Final[InputRequests] = {
             key: request for key, request in (result.input_requests or {}).items() if isinstance(request, ElicitRequest)
         }
+        if pending and not self.allow_elicitation:
+            raise MCPError(code=-32602, message="Elicitation is disabled for this MCP server")
         if result.input_requests and not pending:
             return result
         local: Final = tuple(

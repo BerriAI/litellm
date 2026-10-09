@@ -11155,3 +11155,194 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     context = dispatched.await_args.args[1]
     assert context.user_api_key_auth.user_id == "discover-caller"
     assert context.mcp_servers == ("allowed",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,params",
+    (
+        ("tools/call", {"name": "confirm", "arguments": {}}),
+        ("prompts/get", {"name": "confirm"}),
+        ("resources/read", {"uri": "test://confirm"}),
+    ),
+)
+@pytest.mark.parametrize("continuation", ("initial", "valid", "tampered", "revoked"))
+@pytest.mark.parametrize("large_body", (False, True))
+@pytest.mark.parametrize("passthrough", (False, True))
+async def test_modern_oauth_challenge_follows_continuation_authorization(
+    method, params, continuation, large_body, passthrough, monkeypatch
+):
+    import time
+    from pydantic import TypeAdapter
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.interactions import InteractionOperation, bind_target, seal_continuation
+    from mcp.types import InputRequiredResult
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "challenge-test-salt")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
+    caller = UserAPIKeyAuth(user_id="alice")
+    target = _make_oauth2_server("interactive", oauth2_flow="authorization_code").model_copy(
+        update={"auth_type": MCPAuth.none, "extra_headers": ["Authorization"], "oauth_passthrough": True}
+        if passthrough
+        else {}
+    )
+    operation = TypeAdapter(InteractionOperation).validate_python({"method": method, "params": params})
+    context = OperationContext(_caller=caller, mcp_servers=("interactive",))
+    sealed = seal_continuation(
+        bind_target(InputRequiredResult(request_state="upstream"), target), operation, context, now=int(time.time())
+    )
+    request_params = {
+        **params,
+        **(
+            {"requestState": "invalid" if continuation == "tampered" else sealed.request_state}
+            if continuation != "initial"
+            else {}
+        ),
+    }
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": method,
+            "params": {
+                **request_params,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "padding": "x" * (server._MCP_ROUTING_PEEK_MAX_BYTES * 2 if large_body else 0),
+                },
+            },
+        }
+    ).encode()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/interactive",
+        "scheme": "http",
+        "server": ("localhost", 8000),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"test-gateway-key"),
+            (b"authorization", b"Bearer expired-upstream-token"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+            (b"mcp-method", method.encode()),
+            (b"mcp-name", params["uri" if method == "resources/read" else "name"].encode()),
+            (b"accept", b"application/json, text/event-stream"),
+        ],
+    }
+    receive = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": body[: len(body) // 2], "more_body": True},
+            {"type": "http.request", "body": body[len(body) // 2 :], "more_body": False},
+        ]
+    )
+    send = AsyncMock()
+    with (
+        patch.object(
+            server,
+            "extract_mcp_auth_context",
+            AsyncMock(
+                return_value=(
+                    caller,
+                    None,
+                    ["interactive"],
+                    None,
+                    {"Authorization": "Bearer expired-upstream-token"},
+                    None,
+                )
+            ),
+        ),
+        patch.object(server, "_SESSION_MANAGERS_INITIALIZED", True),
+        patch.object(server, "_probe_upstream_auth", AsyncMock(return_value=(401, None))) as probe,
+        patch.object(server.session_manager_stateless, "handle_request", AsyncMock()) as dispatch,
+        patch.object(
+            mcp_operations,
+            "_get_allowed_mcp_servers",
+            AsyncMock(return_value=[] if continuation == "revoked" else [target]),
+        ),
+        patch.object(mcp_operations.global_mcp_server_manager, "get_mcp_server_by_id", return_value=target),
+        patch.object(mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", return_value=target),
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "ensure_oauth_metadata_discovered", AsyncMock(return_value=target)
+        ) as discovery,
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "has_user_oauth_token", AsyncMock(return_value=False)
+        ) as token,
+    ):
+        if continuation in ("initial", "valid"):
+            with pytest.raises(HTTPException) as rejected:
+                await server.handle_streamable_http_mcp(scope, receive, send)
+            assert rejected.value.status_code == 401
+            if passthrough:
+                assert "resource_metadata=" in rejected.value.headers["www-authenticate"]
+                assert "invalid_token" in rejected.value.headers["www-authenticate"]
+                probe.assert_awaited_once_with(target.url, "Bearer expired-upstream-token")
+                token.assert_not_awaited()
+            else:
+                assert (
+                    'Bearer authorization_uri="http://localhost:8000/.well-known/oauth-authorization-server/mcp/interactive"'
+                    == rejected.value.headers["www-authenticate"]
+                )
+                token.assert_awaited_once()
+                probe.assert_not_awaited()
+        elif continuation == "revoked":
+            with pytest.raises(HTTPException) as rejected:
+                await server.handle_streamable_http_mcp(scope, receive, send)
+            assert rejected.value.status_code == 403
+            probe.assert_not_awaited()
+            discovery.assert_not_awaited()
+            token.assert_not_awaited()
+        else:
+            await server.handle_streamable_http_mcp(scope, receive, send)
+            response_body = json.loads(
+                next(
+                    call.args[0]["body"]
+                    for call in send.await_args_list
+                    if call.args[0]["type"] == "http.response.body"
+                )
+            )
+            assert response_body["error"]["code"] == -32602
+            probe.assert_not_awaited()
+            discovery.assert_not_awaited()
+            token.assert_not_awaited()
+        dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_request", ("malformed", "other_method", "header_mismatch", "duplicate_header"))
+async def test_modern_preflight_leaves_invalid_envelopes_to_sdk_without_upstream_work(invalid_request):
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+
+    envelope = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/list" if invalid_request == "other_method" else "tools/call",
+        "params": {
+            "name": "confirm",
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
+        },
+    }
+    headers = [
+        (b"mcp-protocol-version", b"2026-07-28"),
+        (b"mcp-method", b"tools/call"),
+        (b"mcp-name", b"wrong" if invalid_request == "header_mismatch" else b"confirm"),
+    ]
+    scope = {
+        "type": "http",
+        "headers": [*headers, *([(b"mcp-method", b"tools/call")] if invalid_request == "duplicate_header" else [])],
+    }
+    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock()) as resolve:
+        result = await server._preflight_modern_interaction(
+            scope,
+            b"{" if invalid_request == "malformed" else json.dumps(envelope).encode(),
+            OperationContext(_caller=UserAPIKeyAuth(user_id="alice"), mcp_servers=("interactive",)),
+        )
+    assert result is None
+    resolve.assert_not_awaited()

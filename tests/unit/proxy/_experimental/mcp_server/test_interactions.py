@@ -174,7 +174,7 @@ async def test_modern_sampling_errors_abort_without_relaying_form_input() -> Non
 
     send, receive = anyio.create_memory_object_stream[SessionMessage](1)
     try:
-        interaction: Final = ModernClientInteraction(ClientSession(receive, send, sampling_callback=sampling))
+        interaction: Final = ModernClientInteraction(ClientSession(receive, send, sampling_callback=sampling), allow_elicitation=True)
         form: Final = ElicitRequest(
             params=ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object", "properties": {}})
         )
