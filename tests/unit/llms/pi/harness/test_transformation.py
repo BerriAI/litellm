@@ -339,6 +339,8 @@ def test_parse_reasoning_and_tool_error_and_name_mapping():
         state,
     )
     assert plain == [ToolResult(id="m", output="raw", is_error=False)]
+    no_result = parse({"type": "tool_execution_end", "toolCallId": "e", "toolName": "bash"}, state)
+    assert no_result == [ToolResult(id="e", output="", is_error=False)]
 
 
 def test_final_text_is_last_assistant_message():
@@ -437,6 +439,11 @@ def test_config_files_split_settings_and_mcp():
     assert dict(config_files({"mcpServers": {"moyai": MOYAI}})).keys() == {MCP_FILENAME}
     assert dict(config_files({"theme": "dark"})).keys() == {SETTINGS_FILENAME}
     assert config_files({}) == ()
+
+
+def test_config_files_reject_values_that_are_not_json():
+    with pytest.raises(TypeError, match=r"set in PiOptions\.config is not JSON serializable"):
+        config_files({"theme": {"dark", "light"}})
 
 
 @pytest.mark.parametrize(

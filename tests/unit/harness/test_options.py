@@ -6,11 +6,22 @@ import pytest
 from litellm.harness.options import HarnessOptions
 
 
+def is_hashable(value: object) -> bool:
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
+
+
 @pytest.mark.parametrize("options_type", get_args(HarnessOptions), ids=lambda t: t.__name__)
 def test_defaults_pass_python_311_unhashable_default_check(options_type: type) -> None:
-    for options_field in dataclasses.fields(options_type):
-        if options_field.default is not dataclasses.MISSING:
-            hash(options_field.default)
+    unhashable = [
+        options_field.name
+        for options_field in dataclasses.fields(options_type)
+        if options_field.default is not dataclasses.MISSING and not is_hashable(options_field.default)
+    ]
+    assert unhashable == []
 
 
 @pytest.mark.parametrize("options_type", get_args(HarnessOptions), ids=lambda t: t.__name__)
