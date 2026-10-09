@@ -19,6 +19,7 @@ from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lo
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
     REQUEST_LOG_INDEXES,
+    REQUEST_LOG_INDEXES_ENV_VAR,
     RequestLogIndex,
     build_index_on_partitioned_table,
     ensure_request_log_indexes,
@@ -149,6 +150,7 @@ def scratch_database(release: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         _deploy_release(database_url, tmp_path / "prisma", release)
         monkeypatch.delenv("DIRECT_URL", raising=False)
         monkeypatch.setenv("DATABASE_URL", database_url)
+        monkeypatch.setenv(REQUEST_LOG_INDEXES_ENV_VAR, "true")
         yield database_url
     finally:
         with psycopg.connect(admin_url, autocommit=True) as conn:
@@ -581,6 +583,21 @@ def test_a_migration_job_that_could_not_build_the_indexes_reports_failure_and_su
     assert _migration_job(use_v2_resolver) is True
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
     assert _index_validity(scratch_database, "api_key_startTime_idx") == {API_KEY_INDEX: True}
+
+
+@requires_db
+@RESOLVERS
+def test_a_migration_job_without_the_opt_in_succeeds_and_builds_no_index(
+    scratch_database: str, use_v2_resolver: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api_key_index_before: Final = _index_validity(scratch_database, "api_key_startTime_idx")
+    monkeypatch.delenv(REQUEST_LOG_INDEXES_ENV_VAR, raising=False)
+
+    assert _migration_job(use_v2_resolver) is True
+
+    _assert_every_ledger_row_is_finished(scratch_database)
+    assert _index_validity(scratch_database, "litellm_call_id_idx") == {}
+    assert _index_validity(scratch_database, "api_key_startTime_idx") == api_key_index_before
 
 
 @requires_db
