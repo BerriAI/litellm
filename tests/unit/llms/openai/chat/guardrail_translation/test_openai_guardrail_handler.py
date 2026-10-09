@@ -2484,3 +2484,61 @@ class TestCommentaryGuardrailCoverage:
 
         assert chunks[0].choices[0].delta.provider_specific_fields["commentary"] == "Ping me at [EMAIL]"
         assert chunks[1].choices[0].delta.provider_specific_fields["commentary"] == ""
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_commentary_blank_rewrite_removes_original_fragments(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class CommentaryBlankingGuardrail(CustomGuardrail):
+            def __init__(self) -> None:
+                super().__init__(guardrail_name="commentary-blanker")
+                self.streaming_end_of_stream_only = True
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return GenericGuardrailAPIInputs(texts=["" for _text in inputs.get("texts", [])])
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-4",
+                created=1,
+                model="gpt-5.4-mini",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(provider_specific_fields={"commentary": "Ping me at "}),
+                        finish_reason=None,
+                    )
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-4",
+                created=1,
+                model="gpt-5.4-mini",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(provider_specific_fields={"commentary": "a@b.com"}),
+                        finish_reason="stop",
+                    )
+                ],
+            ),
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=CommentaryBlankingGuardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        for chunk in chunks:
+            assert (chunk.choices[0].delta.provider_specific_fields or {}).get("commentary") in (None, ""), chunk

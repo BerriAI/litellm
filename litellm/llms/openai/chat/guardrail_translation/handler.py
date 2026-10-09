@@ -1210,7 +1210,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     @staticmethod
     def _string_choice_commentary(response: "ModelResponse") -> tuple[str | None, ...]:
         return tuple(
-            _commentary_text(getattr(choice.message, "provider_specific_fields", None)) for choice in response.choices
+            _raw_commentary(getattr(choice.message, "provider_specific_fields", None)) for choice in response.choices
         )
 
     async def _write_ended_stream_commentary_rewrites(
@@ -1521,12 +1521,17 @@ class _BlockedChunk(TypedDict):
     usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
 
 
-def _commentary_text(fields: object) -> str | None:
+def _raw_commentary(fields: object) -> str | None:
     if not isinstance(fields, dict):
         return None
     fields_map: Final = cast("Mapping[str, object]", fields)  # cast-ok: isinstance check above
     commentary: Final = fields_map.get("commentary")
-    return commentary if isinstance(commentary, str) and commentary else None
+    return commentary if isinstance(commentary, str) else None
+
+
+def _commentary_text(fields: object) -> str | None:
+    commentary: Final = _raw_commentary(fields)
+    return commentary if commentary else None
 
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
