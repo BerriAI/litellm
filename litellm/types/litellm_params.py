@@ -87,6 +87,7 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    fireworks_shared_session_affinity: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

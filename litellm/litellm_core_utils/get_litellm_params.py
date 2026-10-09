@@ -67,6 +67,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "otpm",
             "use_xai_oauth",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            "fireworks_shared_session_affinity",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS

@@ -72,13 +72,21 @@ jobs:
       # a lookup key into the haveibeenpwned range API (the protocol mandates
       # SHA-1) and the digest itself never leaves the proxy beyond its first 5
       # characters.
-      - name: Filter SARIF (OCI sha256, HIBP sha1)
+      # Finally it fires on the Fireworks shared-session affinity token in
+      # litellm/llms/fireworks_ai/common_utils.py, where a credential is hashed so
+      # concurrent requests on one Fireworks key map to a stable x-session-affinity
+      # value and their shared prompt prefix hits the replica cache. Nothing is
+      # authenticated by that digest; it is a cache-partition key, and SHA-256 is
+      # kept because two credentials must not collide onto one token. CodeQL flags
+      # it because the flow starts at a lookup key literally named `api_key`.
+      - name: Filter SARIF (OCI sha256, HIBP sha1, Fireworks affinity token)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
             -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
+            -litellm/llms/fireworks_ai/common_utils.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 
