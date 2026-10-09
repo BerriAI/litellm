@@ -329,9 +329,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
 
-    def get_json_schema_from_pydantic_object(
-        self, response_format: type[BaseModel] | dict | None
-    ) -> dict | None:
+    def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         """
         Databricks Model Serving expects standard JSON Schema pointers (e.g. '#/$defs/{model}').
         AnthropicConfig overrides this with ref_template='/$defs/{model}' (without leading '#'),
