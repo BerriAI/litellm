@@ -35,6 +35,10 @@ class _JsonBodyView(TypedDict):
     body: ReadOnly[object]
 
 
+def _print_json(data: object) -> None:
+    rich.print_json(data=data)
+
+
 @click.group()
 def credentials():
     """Manage credentials for the LiteLLM proxy server"""
@@ -57,7 +61,7 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
     assert isinstance(response, dict)
 
     if output_format == "json":
-        rich.print_json(data=response)
+        _print_json(response)
     else:  # table format
         table: Final = Table(title="Credentials")
 
@@ -111,12 +115,12 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str, dis
         response: Final = client.create(
             credential_name, credential_info["value"], credential_values["value"], display_name=display_name
         )
-        rich.print_json(data=response)
+        _print_json(response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
             error_body: Final[_JsonBodyView] = {"body": e.response.json()}
-            rich.print_json(data=error_body["body"])
+            _print_json(error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -135,12 +139,12 @@ def update(ctx: click.Context, credential_name: str, display_name: str | None, c
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
     try:
         response: Final = client.update_display_name(credential_name, None if clear_display_name else display_name)
-        rich.print_json(data=response)
+        _print_json(response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
             error_body: Final[_JsonBodyView] = {"body": e.response.json()}
-            rich.print_json(data=error_body["body"])
+            _print_json(error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -155,12 +159,12 @@ def delete(ctx: click.Context, credential_name: str):
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
     try:
         response: Final = client.delete(credential_name)
-        rich.print_json(data=response)
+        _print_json(response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
             error_body: Final[_JsonBodyView] = {"body": e.response.json()}
-            rich.print_json(data=error_body["body"])
+            _print_json(error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -174,4 +178,4 @@ def get(ctx: click.Context, credential_name: str):
     context: Final = cli_context_values(ctx)
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
     response: Final = client.get(credential_name)
-    rich.print_json(data=response)
+    _print_json(response)
