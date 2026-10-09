@@ -2640,9 +2640,7 @@ class LiteLLMCompletionResponsesConfig:
                             # no summarized reasoning, so it stays empty
                             summary=[],
                             content=[{"type": "reasoning_text", "text": text} for text in (reasoning_content,) if text],
-                            # the map only returns completed/incomplete, both
-                            # valid for a reasoning item's narrower status union
-                            status=cast(
+                            status=cast(  # cast-ok: the map only returns completed/incomplete, both valid for a reasoning item's narrower status union
                                 "Literal['in_progress', 'completed', 'incomplete']",
                                 LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                     choice.finish_reason
