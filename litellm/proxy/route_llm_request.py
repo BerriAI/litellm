@@ -317,9 +317,11 @@ def _router_default_litellm_params(
 
 def _router_serves_model(llm_router: LitellmRouter, model_name: str) -> bool:
     """Whether dispatch reaches one of the router's deployments for a model that
-    `get_model_list` does not list: a deployment id or name, an alias, or a team public name."""
+    `get_model_list` does not list: a deployment id or name, an alias, a team public name,
+    or an A2A agent."""
     return (
-        llm_router.is_recognized_model(model_name)
+        _is_a2a_agent_model(model_name)
+        or llm_router.is_recognized_model(model_name)
         or model_name in llm_router.deployment_names  # pyright: ignore[reportUnknownMemberType]  # Router.deployment_names is an untyped list
         or model_name in llm_router.team_public_model_names
     )

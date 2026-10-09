@@ -1915,6 +1915,7 @@ def test_router_default_ignored_for_model_the_router_does_not_merge_for(route_ty
         pytest.param("openai/gpt-4o-mini", None, id="deployment-name"),
         pytest.param("served-deployment", None, id="deployment-id"),
         pytest.param("team-public", None, id="team-public-name"),
+        pytest.param("a2a/support-agent", None, id="a2a-agent"),
         pytest.param("gpt-4.1", "openai/*", id="wildcard"),
     ],
 )
