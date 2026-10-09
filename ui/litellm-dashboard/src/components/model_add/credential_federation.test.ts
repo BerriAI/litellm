@@ -6,6 +6,7 @@ import {
   federatedProviderOf,
   inferAuthMethod,
   isFederatedCredential,
+  jwksPanelFor,
   providerFieldValidators,
   selectionFor,
 } from "./credential_federation";
@@ -341,5 +342,38 @@ describe("buildCredentialPatch", () => {
     );
     const written = Object.keys(patch.credential_values);
     expect(patch.credential_values_to_delete.filter((key) => written.includes(key))).toEqual([]);
+  });
+});
+
+describe("jwksPanelFor", () => {
+  const storedCredential = (provider: string, values: Record<string, unknown>) => ({
+    credential_name: "anthropic-wif",
+    credential_values: values,
+    credential_info: { custom_llm_provider: provider },
+  });
+  const storedInternalIssuer = { anthropic_identity_source: "internal_issuer", anthropic_issuer_url: "http****" };
+
+  it.each([apiKeySelection, tokenFileSelection, keycloakSelection, environmentSelection, openAISelection])(
+    "hides the panel unless internal issuer federation is selected (%o)",
+    (selection) => {
+      expect(jwksPanelFor(storedCredential("Anthropic", storedInternalIssuer), selection)).toEqual({ kind: "hidden" });
+    },
+  );
+
+  it.each(["Anthropic", "anthropic"])("serves the stored %s internal issuer credential by name", (provider) => {
+    expect(jwksPanelFor(storedCredential(provider, storedInternalIssuer), internalIssuerSelection)).toEqual({
+      kind: "saved",
+      credentialName: "anthropic-wif",
+    });
+  });
+
+  it("asks to save first when nothing the jwks route can serve is stored yet", () => {
+    expect(jwksPanelFor(null, internalIssuerSelection)).toEqual({ kind: "after_save" });
+    expect(jwksPanelFor(storedCredential("Anthropic", storedKeycloak), internalIssuerSelection)).toEqual({
+      kind: "after_save",
+    });
+    expect(jwksPanelFor(storedCredential("OpenAI", storedInternalIssuer), internalIssuerSelection)).toEqual({
+      kind: "after_save",
+    });
   });
 });
