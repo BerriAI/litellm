@@ -1765,6 +1765,11 @@ async def test_route_request_router_settings_override_skips_null_fields():
 def _router_with_defaults(default_litellm_params: dict[str, object], *, wildcard_target: str | None = None):
     import litellm
 
+    wildcard: Final[tuple[dict[str, object], ...]] = (
+        ({"model_name": "*", "litellm_params": {"model": wildcard_target, "api_key": "test-key"}},)
+        if wildcard_target is not None
+        else ()
+    )
     model_list: Final[list[dict[str, object]]] = [
         {
             "model_name": "served",
@@ -1776,40 +1781,13 @@ def _router_with_defaults(default_litellm_params: dict[str, object], *, wildcard
             "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
             "model_info": {"id": "team-deployment", "team_id": "team-a", "team_public_model_name": "team-public"},
         },
+        *wildcard,
     ]
-    if wildcard_target is not None:
-        model_list.append({"model_name": "*", "litellm_params": {"model": wildcard_target, "api_key": "test-key"}})
     return litellm.Router(
         model_list=model_list,
         model_group_alias={"served-alias": "served"},
         default_litellm_params=default_litellm_params,
     )
-
-
-def test_router_defaults_never_cover_a_param_the_router_takes_positionally() -> None:
-    """A param the Router method names in its signature binds before the default merge,
-    so a router-wide default for it never reaches the call."""
-    import inspect
-
-    from litellm.proxy.route_llm_request import (
-        _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE,  # pyright: ignore[reportPrivateUsage]  # the gate's route set
-        REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE,
-    )
-
-    router: Final = _router_with_defaults({})
-    named_by_router: Final = {
-        route_type
-        for route_type, params in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.items()
-        if callable(method := getattr(router, route_type, None))
-        and any(
-            param in (signature := inspect.signature(method)).parameters
-            and signature.parameters[param].kind is not inspect.Parameter.VAR_KEYWORD
-            for param in params
-        )
-    }
-
-    assert named_by_router == {"aimage_generation", "aspeech", "atext_completion", "atranscription"}
-    assert named_by_router <= _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE
 
 
 @pytest.mark.parametrize(

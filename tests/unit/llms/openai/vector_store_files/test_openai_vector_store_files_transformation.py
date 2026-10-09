@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 import pytest
 
@@ -63,7 +65,7 @@ def test_transform_create_request(config: OpenAIVectorStoreFilesConfig):
     assert payload["attributes"]["key"] == "value"
 
 
-_SEVENTEEN_ATTRIBUTES = {f"key_{index}": f"value_{index}" for index in range(17)}
+_SEVENTEEN_ATTRIBUTES: Final[dict[str, str]] = {f"key_{index}": f"value_{index}" for index in range(17)}
 
 
 def test_transform_create_request_keeps_every_attribute(config: OpenAIVectorStoreFilesConfig):

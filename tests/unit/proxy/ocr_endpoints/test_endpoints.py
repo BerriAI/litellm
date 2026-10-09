@@ -4,6 +4,7 @@ Tests for the proxy OCR endpoint helpers that select the response format
 """
 
 import io
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import orjson
@@ -149,7 +150,7 @@ def test_upload_octet_stream_content_type_falls_back_to_filename_inference():
 
 
 def _multipart_request(form: dict[str, object]) -> MagicMock:
-    request = MagicMock()
+    request: Final = MagicMock()
     request.headers = {"content-type": "multipart/form-data; boundary=x"}
     request.form = AsyncMock(return_value=form)
     return request
@@ -167,7 +168,7 @@ def _multipart_request(form: dict[str, object]) -> MagicMock:
     ],
     ids=["missing-file", "empty-file"],
 )
-async def test_malformed_multipart_upload_is_a_400_on_the_file_param(form, message):
+async def test_malformed_multipart_upload_is_a_400_on_the_file_param(form: dict[str, object], message: str) -> None:
     with pytest.raises(OCRRequestError) as exc_info:
         await _parse_ocr_request(_multipart_request(form))
 
