@@ -16,21 +16,36 @@ vi.mock("@/components/page_utils", () => ({
 describe("PageVisibilitySettings", () => {
   it("should render the not-set tag when enabledPagesInternalUsers is null", () => {
     renderWithProviders(
-      <PageVisibilitySettings enabledPagesInternalUsers={null} isUpdating={false} onUpdate={vi.fn()} />,
+      <PageVisibilitySettings
+        enabledPagesInternalUsers={null}
+        isUpdating={false}
+        setInConfig={false}
+        onUpdate={vi.fn()}
+      />,
     );
     expect(screen.getByText("Not set (all pages visible)")).toBeInTheDocument();
   });
 
   it("should show the selected page count tag when pages are configured", () => {
     renderWithProviders(
-      <PageVisibilitySettings enabledPagesInternalUsers={["usage", "keys"]} isUpdating={false} onUpdate={vi.fn()} />,
+      <PageVisibilitySettings
+        enabledPagesInternalUsers={["usage", "keys"]}
+        isUpdating={false}
+        setInConfig={false}
+        onUpdate={vi.fn()}
+      />,
     );
     expect(screen.getByText("2 pages selected")).toBeInTheDocument();
   });
 
   it("should show singular 'page' when exactly one page is selected", () => {
     renderWithProviders(
-      <PageVisibilitySettings enabledPagesInternalUsers={["usage"]} isUpdating={false} onUpdate={vi.fn()} />,
+      <PageVisibilitySettings
+        enabledPagesInternalUsers={["usage"]}
+        isUpdating={false}
+        setInConfig={false}
+        onUpdate={vi.fn()}
+      />,
     );
     expect(screen.getByText("1 page selected")).toBeInTheDocument();
   });
@@ -39,7 +54,12 @@ describe("PageVisibilitySettings", () => {
     const onUpdate = vi.fn();
     const user = userEvent.setup();
     renderWithProviders(
-      <PageVisibilitySettings enabledPagesInternalUsers={["usage"]} isUpdating={false} onUpdate={onUpdate} />,
+      <PageVisibilitySettings
+        enabledPagesInternalUsers={["usage"]}
+        isUpdating={false}
+        setInConfig={false}
+        onUpdate={onUpdate}
+      />,
     );
 
     // Expand the collapse panel first to reveal the reset button
@@ -56,7 +76,12 @@ describe("PageVisibilitySettings", () => {
     try {
       const user = userEvent.setup();
       renderWithProviders(
-        <PageVisibilitySettings enabledPagesInternalUsers={null} isUpdating={false} onUpdate={vi.fn()} />,
+        <PageVisibilitySettings
+          enabledPagesInternalUsers={null}
+          isUpdating={false}
+          setInConfig={false}
+          onUpdate={vi.fn()}
+        />,
       );
 
       await user.click(screen.getByRole("button", { name: /configure page visibility/i }));
@@ -75,15 +100,56 @@ describe("PageVisibilitySettings", () => {
     }
   });
 
+  it("leaves the page checkboxes editable when the config does not set the list", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <PageVisibilitySettings
+        enabledPagesInternalUsers={null}
+        isUpdating={false}
+        setInConfig={false}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /configure page visibility/i }));
+
+    expect(await screen.findByRole("checkbox", { name: /usage/i })).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByText(/proxy config file/)).not.toBeInTheDocument();
+  });
+
   it("should display the property description when provided", () => {
     renderWithProviders(
       <PageVisibilitySettings
         enabledPagesInternalUsers={null}
         enabledPagesPropertyDescription="Controls which pages are visible"
         isUpdating={false}
+        setInConfig={false}
         onUpdate={vi.fn()}
       />,
     );
     expect(screen.getByText("Controls which pages are visible")).toBeInTheDocument();
+  });
+
+  it("locks the page checkboxes and both buttons and points to the config file when the config sets the list", async () => {
+    const onUpdate = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <PageVisibilitySettings
+        enabledPagesInternalUsers={["usage"]}
+        isUpdating={false}
+        setInConfig
+        onUpdate={onUpdate}
+      />,
+    );
+
+    expect(screen.getByText("general_settings.enabled_ui_pages_internal_users")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /configure page visibility/i }));
+
+    expect(await screen.findByRole("checkbox", { name: /usage/i })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("checkbox", { name: /models/i })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Save Page Visibility Settings" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /reset to default/i })).toBeDisabled();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 });

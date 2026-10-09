@@ -194,4 +194,100 @@ describe("UISettings", () => {
     );
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
   });
+
+  describe("settings the proxy config file sets", () => {
+    const switchSettings = [
+      ["disable_model_add_for_internal_users", "Disable model add for internal users"],
+      ["disable_team_admin_delete_team_user", "Disable team admin delete team user"],
+      ["require_auth_for_public_ai_hub", "Require authentication for public AI Hub"],
+      ["forward_client_headers_to_llm_api", "Forward client headers to LLM API"],
+      ["forward_llm_provider_auth_headers", "Forward LLM provider auth headers"],
+      ["enable_projects_ui", "Enable Projects UI"],
+      ["enable_chat_ui", "Enable Chat page"],
+      ["disable_agents_for_internal_users", "Disable agents for internal users"],
+      ["allow_agents_for_team_admins", "Allow agents for team admins"],
+      ["disable_vector_stores_for_internal_users", "Disable vector stores for internal users"],
+      ["allow_vector_stores_for_team_admins", "Allow vector stores for team admins"],
+      ["scope_user_search_to_org", "Scope user search to organization"],
+      ["disable_custom_api_keys", "Disable custom Virtual key values"],
+    ] as const;
+
+    const mockSources = (source: Record<string, string>, values: Record<string, unknown> = {}) => {
+      const base = buildSettingsResponse().data;
+      mockUseUISettings.mockReturnValue(
+        buildSettingsResponse({
+          data: {
+            ...base,
+            field_schema: {
+              ...base.field_schema,
+              properties: {
+                ...base.field_schema.properties,
+                enable_projects_ui: { description: "Enable Projects UI" },
+              },
+            },
+            values: {
+              ...base.values,
+              disable_agents_for_internal_users: true,
+              disable_vector_stores_for_internal_users: true,
+              ...values,
+            },
+            source,
+          },
+        }),
+      );
+    };
+
+    it.each(switchSettings)("greys out %s and points to the config file, leaving the rest editable", (key, name) => {
+      const mutateMock = vi.fn();
+      mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+      mockSources(Object.fromEntries(switchSettings.map(([other]) => [other, other === key ? "config" : "db"])));
+
+      render(<UISettings />);
+
+      expect(screen.getByRole("switch", { name })).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByText(`general_settings.${key}`)).toBeInTheDocument();
+      expect(screen.getAllByText(/proxy config file/)).toHaveLength(1);
+      switchSettings
+        .filter(([other]) => other !== key)
+        .forEach(([, otherName]) =>
+          expect(screen.getByRole("switch", { name: otherName })).not.toHaveAttribute("aria-disabled", "true"),
+        );
+
+      fireEvent.click(screen.getByRole("switch", { name }));
+
+      expect(mutateMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps every switch editable when the values come from the database or defaults", () => {
+      mockSources(Object.fromEntries(switchSettings.map(([key], index) => [key, index % 2 === 0 ? "db" : "default"])));
+
+      render(<UISettings />);
+
+      switchSettings.forEach(([, name]) =>
+        expect(screen.getByRole("switch", { name })).not.toHaveAttribute("aria-disabled", "true"),
+      );
+      expect(screen.queryByText(/proxy config file/)).not.toBeInTheDocument();
+    });
+
+    it("blocks disconnecting Moyai when the config file sets moyai_url", () => {
+      const mutateMock = vi.fn();
+      mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+      mockSources({ moyai_url: "config" }, { moyai_url: "https://moyai.example.com" });
+
+      render(<UISettings />);
+      fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+      expect(screen.getByRole("button", { name: "Disconnect" })).toBeDisabled();
+      expect(screen.getByText("general_settings.moyai_url")).toBeInTheDocument();
+      expect(mutateMock).not.toHaveBeenCalled();
+    });
+
+    it("locks internal user page visibility when the config file sets it", () => {
+      mockSources({ enabled_ui_pages_internal_users: "config" }, { enabled_ui_pages_internal_users: ["usage"] });
+
+      render(<UISettings />);
+
+      expect(screen.getByText("general_settings.enabled_ui_pages_internal_users")).toBeInTheDocument();
+    });
+  });
 });

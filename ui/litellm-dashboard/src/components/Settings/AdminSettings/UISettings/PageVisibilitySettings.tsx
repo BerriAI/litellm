@@ -9,10 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
+import SetInConfigNote from "./SetInConfigNote";
+
 interface PageVisibilitySettingsProps {
   enabledPagesInternalUsers: string[] | null | undefined;
   enabledPagesPropertyDescription?: string;
   isUpdating: boolean;
+  setInConfig: boolean;
   onUpdate: (settings: { enabled_ui_pages_internal_users: string[] | null }) => void;
 }
 
@@ -20,6 +23,7 @@ export default function PageVisibilitySettings({
   enabledPagesInternalUsers,
   enabledPagesPropertyDescription,
   isUpdating,
+  setInConfig,
   onUpdate,
 }: PageVisibilitySettingsProps) {
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
@@ -74,6 +78,7 @@ export default function PageVisibilitySettings({
           Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they
           cannot be made visible to internal users regardless of this setting.
         </p>
+        {setInConfig && <SetInConfigNote settingKey="enabled_ui_pages_internal_users" />}
       </div>
 
       <Collapsible className="rounded-lg border border-border">
@@ -96,6 +101,7 @@ export default function PageVisibilitySettings({
                         <Checkbox
                           id={checkboxId}
                           checked={selectedPages.includes(page.page)}
+                          disabled={setInConfig}
                           onCheckedChange={(checked) => togglePage(page.page, checked === true)}
                         />
                         <span className="space-y-0.5">
@@ -110,11 +116,16 @@ export default function PageVisibilitySettings({
             ))}
 
             <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={handleSavePageVisibility} disabled={isUpdating}>
+              <Button type="button" onClick={handleSavePageVisibility} disabled={isUpdating || setInConfig}>
                 Save Page Visibility Settings
               </Button>
               {isPageVisibilitySet && (
-                <Button type="button" variant="outline" onClick={handleResetToDefault} disabled={isUpdating}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleResetToDefault}
+                  disabled={isUpdating || setInConfig}
+                >
                   Reset to Default (All Pages)
                 </Button>
               )}

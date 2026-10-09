@@ -23,7 +23,11 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings", () => ({
 const TPM_LABEL = "Tokens per minute Limit (TPM)";
 const MAX_BUDGET_LABEL = "Max Budget (USD)";
 
-const mockSettings = (supported: readonly string[], enabled: readonly string[]) =>
+const mockSettings = (
+  supported: readonly string[],
+  enabled: readonly string[],
+  source: Record<string, string> = { team_admin_editable_team_fields: "db" },
+) =>
   mockUseUISettings.mockReturnValue({
     isLoading: false,
     data: {
@@ -36,6 +40,7 @@ const mockSettings = (supported: readonly string[], enabled: readonly string[]) 
         },
       },
       values: { team_admin_editable_team_fields: enabled },
+      source,
     },
   });
 
@@ -172,5 +177,33 @@ describe("TeamAdminEditableFieldsSettings", () => {
     expect(screen.getByRole("checkbox", { name: TPM_LABEL })).not.toBeChecked();
     expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("greys out the checkboxes and Save and points to the config file when the config sets the list", () => {
+    mockSettings(["max_budget", "tpm_limit"], ["tpm_limit"], { team_admin_editable_team_fields: "config" });
+    const mutate = mockSave({});
+
+    renderWithProviders(<TeamAdminEditableFieldsSettings />);
+    fireEvent.click(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL }));
+
+    expect(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: TPM_LABEL })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("checkbox", { name: TPM_LABEL })).toBeChecked();
+    expect(saveButton()).toBeDisabled();
+    expect(screen.getByText("general_settings.team_admin_editable_team_fields")).toBeInTheDocument();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it.each(["db", "default"])("keeps the checkboxes editable when the list comes from %s", (source) => {
+    mockSettings(["max_budget"], [], { team_admin_editable_team_fields: source });
+    mockSave({});
+
+    renderWithProviders(<TeamAdminEditableFieldsSettings />);
+    fireEvent.click(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL }));
+
+    expect(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL })).toBeChecked();
+    expect(saveButton()).toBeEnabled();
+    expect(screen.queryByText(/proxy config file/)).not.toBeInTheDocument();
   });
 });
