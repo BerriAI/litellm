@@ -108,7 +108,7 @@ stop_forwards() {
 
 forward_bundled() {
   stop_forwards
-  forward "$control" 14418 "$control_port"
+  qualification_forward_control
   forward lens-lens-worker 14419 4318
 }
 
@@ -423,7 +423,7 @@ YAML
   kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
-  forward "$control" 14418 "$control_port"
+  qualification_forward_control
   saved_trace
   qualification_outage
   printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway image upgrade, and restart passed\n' "$chart"
@@ -440,7 +440,7 @@ YAML
   "${install[@]}" --set lensWorker.mode=external \
     --set lensWorker.externalUrl=http://external-lens:4318 || diagnose
   test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
-  forward "$control" 14418 "$control_port"
+  qualification_forward_control
   forward external-lens 14419 4318
   api /lens/service | jq -e '.configured and .connected and .status.storage_ready'
   saved_trace
@@ -463,7 +463,7 @@ YAML
   fi
   "${install[@]}" --set lensWorker.mode=disabled --set "$tracing_setting=false" || diagnose
   test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
-  forward "$control" 14418 "$control_port"
+  qualification_forward_control
   api /lens/service | jq -e '.configured == false and .connected == false'
   test "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 20 \
     -H "Authorization: Bearer $master_key" http://127.0.0.1:14418/lens/datasets)" = 503

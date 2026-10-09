@@ -31,19 +31,28 @@ qualification_finish() {
 
 qualification_request() {
   local credential=$1 method=$2 route=$3 expected=$4 label=$5 input=${6:-}
+  local port=14418
+  if [[ "$chart" == litellm && "$route" == /v1/chat/completions ]]; then port=14420; fi
   local response="$qa_dir/release-response.json" status
   printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$credential" > "$qa_dir/release-headers"
   local arguments=(--silent --show-error --max-time 90 --request "$method" \
     --header "@$qa_dir/release-headers" --output "$response" --dump-header "$qa_dir/release-response.headers" \
     --write-out '%{http_code}')
   if [[ -n "$input" ]]; then arguments+=(--data-binary "@$input"); fi
-  status=$(curl "${arguments[@]}" "http://127.0.0.1:14418$route")
+  status=$(curl "${arguments[@]}" "http://127.0.0.1:$port$route")
   if [[ "$status" != "$expected" ]]; then
     qualification_record "$label" "failed-http-$status-expected-$expected"
     printf '%s: expected HTTP %s, received %s\n' "$label" "$expected" "$status" >&2
     return 1
   fi
   qualification_record "$label" "http-$status"
+}
+
+qualification_forward_control() {
+  forward "$control" 14418 "$control_port"
+  if [[ "$qualification_mode" == release && "$chart" == litellm ]]; then
+    forward lens-gateway 14420 4000
+  fi
 }
 
 qualification_provider_values() {
