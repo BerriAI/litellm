@@ -17,6 +17,8 @@ from integration._support.process import LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, 
 from psycopg import sql
 from psycopg.rows import class_row
 
+pytestmark: Final = pytest.mark.timeout(240)
+
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO_ROOT / "db_scripts" / "partition_spend_logs.sql"
