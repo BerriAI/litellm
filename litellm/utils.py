@@ -4561,7 +4561,17 @@ def get_optional_params(
         for k in non_default_params:
             if k not in supported_params:
                 if k in PROVIDER_UNVALIDATED_PARAMS:
-                    warn_unvalidated_param_dropped(k, custom_llm_provider, model)
+                    # `k` comes from `get_non_default_params`, annotated `-> dict`,
+                    # so its keys are Unknown to the type checker and passing one
+                    # as an argument trips reportUnknownArgumentType. Matching it
+                    # against the hint table's own keys yields the same string
+                    # with a known type, and the table is the set that warns.
+                    for hinted_param in UNVALIDATED_PARAM_DROP_HINTS:
+                        if hinted_param == k:
+                            warn_unvalidated_param_dropped(
+                                hinted_param, custom_llm_provider, model
+                            )
+                            break
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param
