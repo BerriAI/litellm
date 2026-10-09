@@ -9,16 +9,16 @@
 #   - nothing staged  -> scope is the working tree's diff against the merge base
 #     with origin's current default branch, untracked files included
 # The per-area checks:
-#   - litellm/ Python  -> `make lint` (test-linting.yml's lint job)
+#   - litellm/ Python  -> `make lint` (test-linting.yml's python job)
 #   - tests/e2e and tests/e2e_harness Python
 #                      -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
-#                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
+#                         + raw HTTP client ban (test-linting.yml's check_e2e_no_raw_requests)
 #   - tests/ Python, ruff-tests.toml, scripts/check_test_quality.py,
 #     scripts/test_quality_gate.py
 #                      -> ruff over ruff-tests.toml + `make lint-test-quality` (test-linting.yml's
 #                         test-tree ruff and test-quality gate steps)
-#   - dashboard        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
-#   - proxy/types      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift (check-ui-api-types.yml)
+#   - dashboard        -> prettier + eslint + lint budgets (test-linting.yml's ui job)
+#   - proxy/types      -> regenerate the lazy OpenAPI snapshot and dashboard API types, fail on drift (test-linting.yml's ui-api-types job)
 #
 # Each block is skipped when no matching files are in scope, so unrelated commits
 # stay fast. This is intentionally not auto-installed as a git hook (see
@@ -110,11 +110,11 @@ e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
-# check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
+# test-linting.yml triggers on any file under litellm/proxy or litellm/types
 # (Prisma schema and configs included, not just Python) plus the generator and its
 # lockfiles, so match that whole trigger set rather than a Python subset.
 spec_files=$(scope_match "$spec_pattern")
-# CI's frontend-lint runs prettier over a wider extension set than eslint; keep that
+# CI's ui job runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
 ui_prettier_changed=$(scope_match "$ui_prettier_pattern")
 ui_eslint_changed=$(scope_match "$ui_eslint_pattern")
@@ -176,7 +176,7 @@ EOF
         if [ ${#eslint_rel[@]} -gt 0 ]; then
             npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_rel[@]}" || rc=1
         fi
-        # Whole-folder lint budgets, exactly as the frontend-lint job runs them: the
+        # Whole-folder lint budgets, exactly as the ui job runs them: the
         # counts are not diff-scoped, so a local pass here means the budget step will
         # pass in CI too.
         report=$(mktemp)
@@ -259,7 +259,7 @@ genapi_checks() {
     local status=0
     echo "check: checking the lazy OpenAPI snapshot and dashboard API types are in sync (npm run gen:api)"
     # gen-api-types.mjs imports litellm.proxy.proxy_server, which needs the proxy deps
-    # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
+    # and an up-to-date Prisma client; test-linting.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
     if [ ! -d ui/litellm-dashboard/node_modules ]; then
