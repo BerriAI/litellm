@@ -1184,6 +1184,18 @@ class TestDeploymentNonChatSurfaces:
         assert bearer_of(route) == "Bearer moderation-bearer"
 
     @respx.mock
+    def test_moderation_ignores_unrelated_kwargs_it_never_validated(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("moderation-bearer")
+        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+
+        response: Final = litellm.moderation(
+            input="hi", model="omni-moderation-latest", api_version=20240101, **deployment_wif
+        )
+
+        assert response.results[0].flagged is False
+        assert bearer_of(route) == "Bearer moderation-bearer"
+
+    @respx.mock
     @pytest.mark.asyncio
     async def test_async_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("amoderation-bearer")

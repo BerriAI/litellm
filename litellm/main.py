@@ -7811,7 +7811,7 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     openai_client: Final = kwargs.get("client", None) or build_openai_client(
         api_key=api_key,
         api_base=api_base,
-        litellm_params=GenericLiteLLMParams.model_validate(kwargs).model_dump(exclude_none=True),
+        litellm_params=kwargs,
     )
 
     if model is not None:
