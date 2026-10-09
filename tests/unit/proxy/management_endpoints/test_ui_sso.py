@@ -1426,7 +1426,7 @@ async def test_redirect_from_openid_allows_custom_sso_to_resolve_missing_provide
     generate_key.assert_not_awaited()
 
 
-_GRAPH_ME_ERROR_PAYLOAD = {
+_GRAPH_ME_ERROR_PAYLOAD: Final = {
     "error": {
         "code": "Authentication_MissingOrMalformed",
         "message": "Access Token missing or malformed.",
