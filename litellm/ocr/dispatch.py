@@ -9,7 +9,7 @@ from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
-from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str
+from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str, signature
 
 __all__ = ("aocr", "ocr")
 
@@ -38,18 +38,21 @@ def _bind_request(
     )
 
 
+_OCR: Final = signature(_bind_request)
+
+
 def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
     try:
-        fields: Final = _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
-        return native_call(args, kwargs, fields)
+        _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
     except TypeError as error:
         raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
+    return native_call(_OCR, args, kwargs)
 
 
 def _context(request: NativeCall) -> RouteContext:
-    prefix, separator, _ = str(request.bound["model"]).partition("/")
-    provider: Final = optional_str(request.bound.get("custom_llm_provider")) or (prefix if separator else None)
-    return RouteContext(Route.OCR, provider=provider, model=str(request.bound["model"]))
+    prefix, separator, _ = str(request.resolved["model"]).partition("/")
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider")) or (prefix if separator else None)
+    return RouteContext(Route.OCR, provider=provider, model=str(request.resolved["model"]))
 
 
 _DISPATCH: Final = PublicDispatch(

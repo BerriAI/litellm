@@ -3485,6 +3485,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -3692,7 +3693,9 @@ dependencies = [
  "litellm-auth-types",
  "rstest",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
+ "strum",
  "tempfile",
  "thiserror 2.0.19",
 ]
@@ -3990,6 +3993,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4248,6 +4252,7 @@ dependencies = [
 name = "litellm-llms-types"
 version = "0.1.0"
 dependencies = [
+ "indexmap 2.14.0",
  "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
@@ -4538,6 +4543,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "strum",
  "tar",
  "target-lexicon",
  "tempfile",
@@ -6512,6 +6518,7 @@ checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
 dependencies = [
  "chrono",
  "dyn-clone",
+ "indexmap 2.14.0",
  "ref-cast",
  "schemars_derive 1.2.2",
  "serde",

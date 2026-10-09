@@ -64,7 +64,7 @@ jobs:
         uses: ./.github/actions/cache-prisma-binaries
 
       # The three source scanners only need the pinned dev tools (ruff and the
-      # stdlib checkers), the same versions test-linting.yml's lint job runs.
+      # stdlib checkers), the same versions test-linting.yml's python job runs.
       - name: Install the dev tools
         if: matrix.checker != 'basedpyright'
         run: |
