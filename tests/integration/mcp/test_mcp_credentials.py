@@ -598,3 +598,39 @@ def test_deprecated_string_x_mcp_auth_callers_on_a_user_less_key_own_separate_li
         )
         assert seen == (f"Adds for Bearer {first_token}", f"Adds for Bearer {second_token}"), seen
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
+
+
+@pytest.mark.parametrize("entry", ("mcp", "server_mcp", "sse"))
+def test_oauth_passthrough_probe_uses_server_token_without_admission_key(gateway: Gateway, entry: EntryPoint) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "probe" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario, peer, alias, auth_type="none", oauth_passthrough=True, extra_headers=["Authorization"]
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        upstream_token: Final = "upstream-" + uuid.uuid4().hex
+        caller: Final = McpCaller(
+            gateway,
+            key,
+            entry,
+            alias,
+            headers={"Authorization": f"Bearer {key}", f"x-mcp-{alias}-authorization": f"Bearer {upstream_token}"},
+        )
+        peer.drain()
+        outcome: Final = caller.call(f"{alias}-add", ADD, identity if entry != "server_mcp" else None)
+        assert outcome.ok, outcome.raw
+        observed: Final = peer.drain()
+        probes: Final = tuple(
+            request
+            for request in observed
+            if TypeAdapter(dict[str, object]).validate_python(request["body"]).get("id") == "litellm-mcp-auth-probe"
+        )
+        assert probes, "expected an upstream initialize authentication probe"
+        assert all(_header(probe, b"authorization") == f"Bearer {upstream_token}".encode() for probe in probes)
+        assert len(tool_calls(observed)) == 1
+        header_sets: Final = tuple(
+            TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
+        )
+        assert all(all(key.encode() not in value for value in headers.values()) for headers in header_sets), (
+            "upstream authentication probe exposed the gateway admission key"
+        )

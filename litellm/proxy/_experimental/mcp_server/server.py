@@ -81,6 +81,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    lookup_mcp_server_auth_in_headers,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -1941,6 +1942,9 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None,
         mcp_servers: list[str] | None,
         client_ip: str | None,
+        *,
+        oauth2_headers: Mapping[str, str] | None,
+        mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,
     ) -> None:
         """Probe pass-through upstream servers in parallel before the MCP session starts.
 
@@ -1955,8 +1959,7 @@ if MCP_AVAILABLE:
         Fails-open: network errors are logged and the request is allowed through.
 
         """
-        forwarded_auth: Final = _get_forwarded_auth_from_scope(scope)
-        if not forwarded_auth:
+        if not oauth2_headers and not mcp_server_auth_headers:
             return
 
         # Use the authorized server set, not the raw user-supplied names, so that
@@ -1966,20 +1969,29 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        passthrough_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
-            (srv, forwarded_auth, srv.name)
-            for srv in allowed_servers
-            # Restrict to genuine OAuth pass-through servers (auth_type none +
-            # Authorization in extra_headers). Gateway-managed OAuth2 servers
-            # must not receive the ``resource_metadata=`` challenge emitted
-            # below — they require ``authorization_uri=`` pointing at the
-            # gateway AS metadata. ``is_oauth_passthrough`` already requires
-            # ``auth_type in (None, MCPAuth.none)``, which is mutually
-            # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
-            # so M2M servers are implicitly excluded here.
-            if srv.is_oauth_passthrough
+        forwarded_auth: Final = next(
+            (value for name, value in (oauth2_headers or {}).items() if name.lower() == "authorization"), None
         )
-        probe_targets: Final = passthrough_targets
+        probe_targets: Final[list[tuple[MCPServer, str, str]]] = []
+        for srv in allowed_servers:
+            if not srv.is_oauth_passthrough:
+                continue
+            server_headers = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers or {},
+                alias=srv.alias,
+                server_name=srv.server_name,
+                access_groups=srv.access_groups,
+            )
+            server_auth = (
+                server_headers
+                if isinstance(server_headers, str)
+                else next(
+                    (value for name, value in (server_headers or {}).items() if name.lower() == "authorization"), None
+                )
+            )
+            auth_header = server_auth if server_auth is not None else forwarded_auth
+            if auth_header:
+                probe_targets.append((srv, auth_header, srv.name))
         if not probe_targets:
             return
 
@@ -2060,7 +2072,16 @@ if MCP_AVAILABLE:
             allowed_server_ids={target.server_id for target in allowed},
             raw_headers=context.raw_headers,
         )
-        await _check_passthrough_upstream_auth(scope, context.user_api_key_auth, authorized_names, context.client_ip)
+        await _check_passthrough_upstream_auth(
+            scope,
+            context.user_api_key_auth,
+            authorized_names,
+            context.client_ip,
+            oauth2_headers=context.oauth2_headers,
+            mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
+            if context.mcp_server_auth_headers is not None
+            else None,
+        )
         return None
 
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
@@ -2140,7 +2161,14 @@ if MCP_AVAILABLE:
                 # Pre-flight auth check for pass-through servers.  Must run after
                 # toolset scoping so the probe list is derived from the fully-authorized
                 # server set, not the raw user-supplied names.
-                await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
+                await _check_passthrough_upstream_auth(
+                    scope,
+                    user_api_key_auth,
+                    mcp_servers,
+                    _client_ip,
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers: Final = MCPDebug.maybe_build_debug_headers(
@@ -2513,7 +2541,14 @@ if MCP_AVAILABLE:
             # being stuck with a silently empty tool list. Must run after
             # toolset scoping so the probe list is derived from the fully-
             # authorized server set, not the raw user-supplied names.
-            await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _sse_client_ip)
+            await _check_passthrough_upstream_auth(
+                scope,
+                user_api_key_auth,
+                mcp_servers,
+                _sse_client_ip,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+            )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
