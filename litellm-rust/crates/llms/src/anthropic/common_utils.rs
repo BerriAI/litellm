@@ -1,9 +1,10 @@
 use crate::base_llm::messages::context::MessagesModelCapabilities;
-use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
-use litellm_http::request::{
-    has_header, header_value, header_values, with_header, without_headers,
+use litellm_auth::{
+    CredentialPlacement, CredentialPlanKind, CredentialRule, ExistingHeaderBehavior,
+    ProviderAuthPolicy, SecretValue,
 };
+use litellm_core_utils::settings::resolve_non_empty;
+use litellm_http::request::{header_value, header_values, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
@@ -32,6 +33,20 @@ pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("
 const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
 const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
+pub const ANTHROPIC_AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
+    rules: &[CredentialRule {
+        kind: CredentialPlanKind::Static,
+        placement: API_KEY_PLACEMENT,
+    }],
+    accepted_existing_headers: &[API_KEY_HEADER, AUTHORIZATION],
+    existing_header_behavior: ExistingHeaderBehavior::Preserve,
+    scope: None,
+    audience: None,
+};
+pub const MISSING_ANTHROPIC_API_KEY: litellm_auth::Error = litellm_auth::Error::MissingApiKey {
+    provider: "Anthropic",
+    environment_variable: ANTHROPIC_API_KEY_ENV,
+};
 
 pub fn supports_effort_tier(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
     match level {
@@ -98,6 +113,19 @@ pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<Str
     resolve_non_empty(None, env_lookup, &[ANTHROPIC_AUTH_TOKEN_ENV])
 }
 
+pub fn get_bearer_auth(
+    api_key: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<AuthScheme> {
+    match api_key {
+        Some(key) => OauthToken::parse_key(key).map(OauthToken::into_auth),
+        None => get_auth_token(env_lookup).map(|token| AuthScheme::Credential {
+            placement: CredentialPlacement::Bearer,
+            secret: SecretValue::new(token),
+        }),
+    }
+}
+
 /// Python's `AnthropicModelInfo.get_auth_header`, naming the credential instead of building
 /// the header: the key goes in `x-api-key` unless it is an OAuth token, and without a key
 /// `ANTHROPIC_AUTH_TOKEN` is sent as a bearer.
@@ -105,18 +133,12 @@ pub fn get_auth_header(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<AuthScheme> {
-    if let Some(key) = get_api_key(api_key, env_lookup) {
-        return Some(match OauthToken::parse_key(&key) {
-            Some(token) => token.into_auth(),
-            None => AuthScheme::Credential {
-                placement: API_KEY_PLACEMENT,
-                secret: SecretValue::new(key),
-            },
-        });
-    }
-    get_auth_token(env_lookup).map(|token| AuthScheme::Credential {
-        placement: CredentialPlacement::Bearer,
-        secret: SecretValue::new(token),
+    let api_key = get_api_key(api_key, env_lookup);
+    get_bearer_auth(api_key.as_deref(), env_lookup).or_else(|| {
+        api_key.map(|key| AuthScheme::Credential {
+            placement: API_KEY_PLACEMENT,
+            secret: SecretValue::new(key),
+        })
     })
 }
 
@@ -124,15 +146,12 @@ pub fn resolve_anthropic_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, litellm_auth::Error> {
-    get_api_key(api_key, env_lookup).ok_or(litellm_auth::Error::MissingApiKey {
-        provider: "Anthropic",
-        environment_variable: ANTHROPIC_API_KEY_ENV,
-    })
+    get_api_key(api_key, env_lookup).ok_or(MISSING_ANTHROPIC_API_KEY)
 }
 
 /// Whether the caller already forwarded an Anthropic credential, in either header.
 pub fn has_anthropic_credential(headers: &[(String, String)]) -> bool {
-    has_header(headers, API_KEY_HEADER) || has_header(headers, AUTHORIZATION)
+    ANTHROPIC_AUTH_POLICY.has_existing_credential(headers)
 }
 
 pub fn resolve_anthropic_api_base(

@@ -38,6 +38,13 @@ impl ProviderAuthPolicy {
         })
     }
 
+    pub fn placement(&self, kind: CredentialPlanKind) -> Option<CredentialPlacement> {
+        self.rules
+            .iter()
+            .find(|rule| rule.kind == kind)
+            .map(|rule| rule.placement)
+    }
+
     pub fn apply(
         &self,
         headers: Vec<(String, String)>,
@@ -52,16 +59,12 @@ impl ProviderAuthPolicy {
                 )),
             };
         }
-        let rule = self
-            .rules
-            .iter()
-            .find(|rule| rule.kind == kind)
-            .ok_or_else(|| {
-                Error::InvalidConfiguration(
-                    "credential plan is not allowed by the provider auth policy".into(),
-                )
-            })?;
-        apply_credential(headers, credential.secret().expose(), rule.placement)
+        let placement = self.placement(kind).ok_or_else(|| {
+            Error::InvalidConfiguration(
+                "credential plan is not allowed by the provider auth policy".into(),
+            )
+        })?;
+        apply_credential(headers, credential.secret().expose(), placement)
     }
 }
 

@@ -1,5 +1,8 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_http::request::{has_bearer_auth, has_header};
+use litellm_auth::{
+    CredentialPlacement, CredentialPlanKind, CredentialRule, ExistingHeaderBehavior,
+    ProviderAuthPolicy, SecretValue,
+};
+use litellm_http::request::has_bearer_auth;
 use litellm_llms_types::formats::messages::{
     CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
     SystemPrompt,
@@ -14,7 +17,8 @@ use crate::{
         },
     },
     azure_ai::common_utils::{
-        AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, resolve_azure_api_base, resolve_azure_api_key,
+        AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, MISSING_AZURE_API_KEY, get_azure_api_key,
+        resolve_azure_api_base,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -26,7 +30,16 @@ use crate::{
     },
 };
 
-const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
+const AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
+    rules: &[CredentialRule {
+        kind: CredentialPlanKind::Static,
+        placement: CredentialPlacement::Header("x-api-key"),
+    }],
+    accepted_existing_headers: &["x-api-key"],
+    existing_header_behavior: ExistingHeaderBehavior::Preserve,
+    scope: None,
+    audience: None,
+};
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 
 pub struct AzureAnthropicMessagesConfig;
@@ -88,17 +101,18 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
+        if has_bearer_auth(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
             });
         }
-        let auth = AuthScheme::Credential {
-            placement: API_KEY_PLACEMENT,
-            secret: SecretValue::new(resolve_azure_api_key(api_key, env_lookup)?),
-        };
-        Ok(ValidatedEnvironment { headers, auth })
+        Ok(ValidatedEnvironment::with_api_key(
+            &AUTH_POLICY,
+            headers,
+            get_azure_api_key(api_key, env_lookup).map(SecretValue::new),
+            MISSING_AZURE_API_KEY,
+        )?)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -169,6 +183,7 @@ mod tests {
     use litellm_auth::CredentialPlacement;
 
     use super::*;
+    use crate::azure_ai::common_utils::resolve_azure_api_key;
     use crate::base_llm::messages::context::MessagesModelCapabilities;
 
     fn request_from(value: serde_json::Value) -> MessagesRequest {
