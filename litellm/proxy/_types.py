@@ -3206,7 +3206,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
         None,
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
-        "Modern protocol serving and Apps/Tasks remain disabled.",
+        "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,

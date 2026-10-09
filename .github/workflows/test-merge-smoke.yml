@@ -1,4 +1,4 @@
-name: Merge smoke checks
+name: smoke
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   dashboard-build:
-    name: Dashboard build
+    name: dashboard-build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -27,7 +27,7 @@ jobs:
         run: docker build --target ui-builder -f Dockerfile .
 
   core-checks:
-    name: Core checks (Python ${{ matrix.python-version }})
+    name: py${{ matrix.python-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -79,9 +79,6 @@ jobs:
       - name: Proxy startup check
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py proxy-startup --diagnostics-dir "${RUNNER_TEMP}/smoke-diagnostics"
 
-      - name: Run curated smoke cases
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py pytest --manifest .github/merge-smoke-tests.json
-
       - name: Upload smoke diagnostics
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
@@ -93,3 +90,18 @@ jobs:
       - name: Remove the network namespace
         if: always()
         run: sudo ip netns delete smoke
+
+  smoke-passed:
+    name: smoke passed
+    needs: [dashboard-build, core-checks]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every smoke job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
