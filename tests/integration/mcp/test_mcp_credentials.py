@@ -18,6 +18,7 @@ from integration._support.mcp import (
     ScriptedTool,
     call_tool,
     mcp_peer,
+    openapi_peer,
     register_mcp,
     scripted_peer,
     text_result,
@@ -160,6 +161,49 @@ def test_callers_own_litellm_key_never_reaches_the_peer_over_rest(
         assert all(all(key.encode() not in value for value in headers.values()) for headers in header_sets), (
             "caller key appeared in the recorded MCP header set"
         )
+
+
+@pytest.mark.parametrize("entry", ENTRY_POINTS)
+def test_extra_headers_cannot_forward_gateway_admission_key(gateway: Gateway, entry: EntryPoint) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "cred" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario, peer, alias, extra_headers=["X-LiteLLM-API-Key", "x-tenant"],
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(gateway, key, entry, alias, headers={"x-tenant": "tenant-control"})
+        peer.drain()
+        outcome: Final = caller.call(f"{alias}-add", ADD, identity if entry != "server_mcp" else None)
+        assert outcome.ok, outcome.raw
+        observed: Final = peer.drain()
+        calls: Final = tool_calls(observed)
+        assert len(calls) == 1, calls
+        assert _header(calls[0], b"x-tenant") == b"tenant-control"
+        header_sets: Final = tuple(
+            TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
+        )
+        assert all(all(key.encode() not in value for value in headers.values()) for headers in header_sets), (
+            "gateway admission key reached the upstream through Extra Headers"
+        )
+
+
+@pytest.mark.parametrize("entry", ("server_mcp", "rest"))
+def test_openapi_extra_headers_cannot_forward_gateway_admission_key(gateway: Gateway, entry: EntryPoint) -> None:
+    with openapi_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "cred" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario, peer, alias, extra_headers=["X-LiteLLM-API-Key", "x-tenant"],
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(gateway, key, entry, alias, headers={"x-tenant": "tenant-control"})
+        peer.drain()
+        outcome: Final = caller.call(f"{alias}-getpet", {"petId": "7"}, identity if entry == "rest" else None)
+        assert outcome.ok, outcome.raw
+        observed: Final = peer.drain()
+        assert [(request["method"], request["path"]) for request in observed] == [("GET", "/pets/7")]
+        headers: Final = TypeAdapter(dict[bytes, bytes]).validate_python(observed[0]["headers"])
+        assert headers.get(b"x-tenant") == b"tenant-control"
+        assert all(key.encode() not in value for value in headers.values()), "gateway admission key reached OpenAPI"
 
 
 def test_server_scoped_caller_header_reaches_only_its_server(gateway: Gateway) -> None:
