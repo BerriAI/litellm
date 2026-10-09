@@ -303,7 +303,12 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
         ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
         model_prefix: Final = wildcard_suffix.replace("*", "")
 
-        is_partial_filter: Final = any(wc_model.startswith(model_prefix) for wc_model in wildcard_models)
+        deployment_repeats_prefix: Final = litellm_params is not None and litellm_params.model.endswith(
+            f"/{wildcard_suffix}"
+        )
+        is_partial_filter: Final = deployment_repeats_prefix or any(
+            wc_model.startswith(model_prefix) for wc_model in wildcard_models
+        )
         if is_partial_filter:
             filtered_wildcard_models = [wc_model for wc_model in wildcard_models if wc_model.startswith(model_prefix)]
             wildcard_models = filtered_wildcard_models
@@ -314,7 +319,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     known_providers: Final = {provider.value for provider in LlmProviders}
     suffix_appended_wildcard_models: Final = []
     for model in wildcard_models:
-        if not model.startswith(wildcard_provider_prefix):
+        if not model.startswith(f"{wildcard_provider_prefix}/"):
             # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
             # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
             # multiple instances), replace that existing provider prefix instead of stacking
