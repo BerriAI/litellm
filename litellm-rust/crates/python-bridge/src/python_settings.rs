@@ -68,7 +68,7 @@ fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<boo
         .value(py)
         .getattr("name")?
         .extract::<Option<String>>()?
-        .is_some_and(|name| name == expected))
+        .is_some_and(|name| name == expected || name.starts_with(&format!("{expected}."))))
 }
 
 #[cfg(test)]

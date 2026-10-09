@@ -1,6 +1,8 @@
 mod aws;
+mod vertex;
 
 pub use aws::AwsParams;
+pub use vertex::VertexParams;
 
 /// One connection param of Python's `CredentialLiteLLMParams` and every place Python reads
 /// it from, in order: the wire names on a call or a deployment, the `litellm.<name>` module
