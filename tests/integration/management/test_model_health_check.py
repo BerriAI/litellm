@@ -24,6 +24,16 @@ _CONFIGURED_PROBE_REPLY: Final = JsonResponse(
         "usage": {"input_tokens": 10, "output_tokens": 1},
     },
 )
+_VLLM_PROBE_REPLY: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "Qwen/Qwen3-0.6B",
+        "answers": {
+            "reachable": {"type": "choice", "choice": "yes", "confidence": 1.0, "probabilities": {"yes": 1.0, "no": 0.0}}
+        },
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+    },
+)
 _STRANDS_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
     body={
@@ -144,6 +154,35 @@ def test_evaluation_mode_health_check_of_the_self_hosted_strands_model_resolves_
                     "model": "strands-decider-2B-hobson-v19",
                     "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
                     "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                },
+            )
+        ]
+
+
+def test_evaluation_mode_health_check_of_hosted_vllm_sends_a_choice_probe(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _VLLM_PROBE_REPLY)
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="hosted_vllm/Qwen/Qwen3-0.6B",
+            api_base=handle.api_base(),
+            model_info={"mode": "evaluation"},
+        )
+        report: Final = _health_report(gateway, model)
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        assert _probes_sent_to(gateway, handle) == [
+            (
+                f"/{handle.scenario_id}/v1/systemone",
+                {
+                    "model": "Qwen/Qwen3-0.6B",
+                    "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
+                    "questions": {
+                        "reachable": {
+                            "type": "choice",
+                            "instructions": "Is the service reachable?",
+                            "criteria": {"yes": None, "no": None},
+                        }
+                    },
                 },
             )
         ]
