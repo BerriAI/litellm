@@ -42,6 +42,8 @@ JOB_OVERHEAD_MINUTES: Final = 5
 EXPRESSION: Final = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
 QUOTED: Final = re.compile(r"'[^']*'")
 ARITHMETIC: Final = re.compile(r"[+*]")
+JOB_DEADLINE: Final = "${{ matrix.job-timeout-minutes }}"
+TEST_DEADLINE: Final = "${{ matrix.timeout-minutes }}"
 
 
 class WorkflowStartupError(Exception):
@@ -51,6 +53,9 @@ class WorkflowStartupError(Exception):
 class WorkflowJob(BaseModel):
     strategy: Mapping[str, object] = Field(default_factory=dict)
     steps: tuple[Mapping[str, object], ...] = ()
+    timeout_minutes: object = Field(default=None, alias="timeout-minutes")
+
+    model_config = {"populate_by_name": True}
 
 
 class WorkflowFile(BaseModel):
@@ -87,6 +92,11 @@ def timeout_contract_errors(rel: Path, workflow: WorkflowFile, ceiling: int) -> 
     job: Final = workflow.jobs.get("unit")
     if job is None:
         return
+    if job.timeout_minutes != JOB_DEADLINE:
+        yield f"{rel}: job `unit` sets timeout-minutes to `{job.timeout_minutes}`, not `{JOB_DEADLINE}`"
+    test_deadlines: Final = tuple(s.get("timeout-minutes") for s in job.steps if s.get("name") == "Run tests")
+    if test_deadlines != (TEST_DEADLINE,):
+        yield f"{rel}: job `unit` step `Run tests` must set timeout-minutes to `{TEST_DEADLINE}`, found {test_deadlines}"
     matrix_value: Final = job.strategy.get("matrix", {})
     if not isinstance(matrix_value, Mapping):
         yield f"{rel}: job `unit` has no readable matrix"
