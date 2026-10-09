@@ -186,7 +186,7 @@ def _not_found_unless_config_defined(credential_name: str, not_found_detail: str
     )
 
 
-def _credential_view(credential: CredentialItem, credential_values: dict[str, object]) -> CredentialView:
+def _credential_view(credential: CredentialItem, credential_values: Mapping[str, object]) -> CredentialView:
     return CredentialView(
         credential_name=credential.credential_name,
         display_name=credential.display_name,

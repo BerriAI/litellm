@@ -6313,7 +6313,9 @@ class ProxyConfig:
         credential_list_dict: Final = config.get("credential_list")
         credential_list = []
         if credential_list_dict:
-            credential_list = [CredentialItem(**{**cred, "source": "config"}) for cred in credential_list_dict]
+            credential_list = [
+                CredentialItem.model_validate({**cred, "source": "config"}) for cred in credential_list_dict
+            ]
         return credential_list
 
     def parse_search_tools(self, config: dict) -> list[SearchToolTypedDict] | None:

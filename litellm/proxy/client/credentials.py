@@ -158,9 +158,9 @@ class CredentialsManagementClient:
         credential_name: str,
         display_name: str | None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> Mapping[str, object] | requests.Request:
         url: Final = f"{self._base_url}/credentials/{credential_name}"
-        data: Final = {"display_name": display_name, "credential_info": {}}
+        data: Final[Mapping[str, object]] = {"display_name": display_name, "credential_info": {}}
 
         request: Final = requests.Request("PATCH", url, headers=self._get_headers(), json=data)
 

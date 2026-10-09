@@ -97,7 +97,7 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
 )
 @click.option("--display-name", type=str, default=None, help="Optional label shown in the UI")
 @click.pass_context
-def create(ctx: click.Context, credential_name: str, info: str, values: str, display_name: str | None):
+def create(ctx: click.Context, credential_name: str, info: str, values: str, display_name: str | None) -> None:
     """Create a new credential"""
     context: Final = cli_context_values(ctx)
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
@@ -127,7 +127,7 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str, dis
 @click.option("--display-name", type=str, default=None, help="New label shown in the UI")
 @click.option("--clear-display-name", is_flag=True, help="Remove the label so the UI shows the credential name")
 @click.pass_context
-def update(ctx: click.Context, credential_name: str, display_name: str | None, clear_display_name: bool):
+def update(ctx: click.Context, credential_name: str, display_name: str | None, clear_display_name: bool) -> None:
     """Change a credential's display name. The credential name itself cannot change"""
     if (display_name is None) == (not clear_display_name):
         raise click.UsageError("Pass exactly one of --display-name or --clear-display-name")
