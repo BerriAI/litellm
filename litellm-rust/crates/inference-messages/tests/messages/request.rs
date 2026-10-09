@@ -1,3 +1,5 @@
+use litellm_auth_gcp::VertexParams;
+use litellm_inference_messages::LitellmParams;
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
@@ -597,6 +599,55 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
         only_request(&upstream).await.json()["metadata"],
         json!({"user_id": "u-1"})
     );
+}
+
+#[rstest]
+#[case::not_streaming(false, ":rawPredict")]
+#[case::streaming(true, ":streamRawPredict?alt=sse")]
+#[tokio::test]
+async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
+    call: MessagesCall,
+    #[case] stream: bool,
+    #[case] suffix: &str,
+) {
+    let streamed = ResponseTemplate::new(200).set_body_raw(
+        "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "text/event-stream",
+    );
+    let upstream = upstream([if stream { streamed } else { message_response() }]).await;
+
+    run(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: LitellmParams {
+                vertex: VertexParams {
+                    vertex_project: Some("proj".into()),
+                    vertex_location: Some("us-east5".into()),
+                    ..VertexParams::default()
+                },
+                ..LitellmParams::default()
+            },
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Authorization", "Bearer caller-token")]),
+            ..with_model(call, "claude-sonnet-4-5@20250929")
+        },
+        json!({"stream": stream}),
+    ))
+    .await
+    .expect("messages call succeeds");
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.url.path().to_string() + request.url.query().map_or("", |_| "?alt=sse"),
+        format!(
+            "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
+        )
+    );
+    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("anthropic-version"), None);
+    let body = request.json();
+    assert_eq!(body.get("model"), None);
+    assert_eq!(body["anthropic_version"], json!("vertex-2023-10-16"));
 }
 
 #[rstest]
