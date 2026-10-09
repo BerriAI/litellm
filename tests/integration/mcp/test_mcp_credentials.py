@@ -601,7 +601,10 @@ def test_deprecated_string_x_mcp_auth_callers_on_a_user_less_key_own_separate_li
 
 
 @pytest.mark.parametrize("entry", ("mcp", "server_mcp", "sse"))
-def test_oauth_passthrough_probe_uses_server_token_without_admission_key(gateway: Gateway, entry: EntryPoint) -> None:
+@pytest.mark.parametrize("forwarded_token", (False, True))
+def test_oauth_passthrough_probe_uses_server_token_without_admission_key(
+    gateway: Gateway, entry: EntryPoint, forwarded_token: bool
+) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "probe" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(
@@ -614,7 +617,12 @@ def test_oauth_passthrough_probe_uses_server_token_without_admission_key(gateway
             key,
             entry,
             alias,
-            headers={"Authorization": f"Bearer {key}", f"x-mcp-{alias}-authorization": f"Bearer {upstream_token}"},
+            headers={
+                "Authorization": f"Bearer {upstream_token if forwarded_token else key}",
+                f"x-mcp-{alias}-authorization": "Bearer expired-token"
+                if forwarded_token
+                else f"Bearer {upstream_token}",
+            },
         )
         peer.drain()
         outcome: Final = caller.call(f"{alias}-add", ADD, identity if entry != "server_mcp" else None)
@@ -628,6 +636,7 @@ def test_oauth_passthrough_probe_uses_server_token_without_admission_key(gateway
         assert probes, "expected an upstream initialize authentication probe"
         assert all(_header(probe, b"authorization") == f"Bearer {upstream_token}".encode() for probe in probes)
         assert len(tool_calls(observed)) == 1
+        assert all(_header(request, b"authorization") == f"Bearer {upstream_token}".encode() for request in observed)
         header_sets: Final = tuple(
             TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
         )

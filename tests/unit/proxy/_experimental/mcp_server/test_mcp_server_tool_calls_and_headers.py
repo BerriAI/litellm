@@ -7117,6 +7117,7 @@ async def test_legacy_delegate_bare_token_is_not_probed_upstream():  # test-qual
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7155,6 +7156,7 @@ async def test_legacy_delegate_dual_credentials_are_not_probed_upstream():  # te
             client_ip=None,
             oauth2_headers={"Authorization": "Bearer upstream-token"},
             mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
         )
 
     probe.assert_not_awaited()
@@ -7205,6 +7207,7 @@ async def test_oauth_passthrough_preflight_preserves_status_contract(probe_statu
                 client_ip=None,
             oauth2_headers={"Authorization": "Bearer upstream-token"},
             mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
             )
             assert result is None
         else:
@@ -7216,6 +7219,7 @@ async def test_oauth_passthrough_preflight_preserves_status_contract(probe_statu
                     client_ip=None,
             oauth2_headers={"Authorization": "Bearer upstream-token"},
             mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
                 )
             assert exc_info.value.status_code == expected_status
             if expected_status == 401:
@@ -7254,6 +7258,7 @@ async def test_delegate_tokenless_request_not_probed():
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7289,6 +7294,7 @@ async def test_delegate_preflight_skipped_on_multi_server_routes():
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7334,6 +7340,7 @@ async def test_bare_authorization_never_probes_passthrough_servers():
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7382,6 +7389,7 @@ async def test_delegate_not_probed_when_named_only_via_server_id():
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7417,6 +7425,7 @@ async def test_delegate_probe_not_fanned_out_to_access_group_members():
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -11284,7 +11293,7 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
                     [route_name],
                     None,
                     {"Authorization": "Bearer expired-upstream-token"},
-                    None,
+                    {"Authorization": "Bearer expired-upstream-token"},
                 )
             ),
         ),
@@ -11459,8 +11468,12 @@ async def test_modern_preflight_leaves_invalid_envelopes_to_sdk_without_upstream
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize("binding", ("probe", "PROBE", "shared"))
-async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding: str):
+@pytest.mark.parametrize("forwarded_token", (False, True))
+async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding: str, forwarded_token: bool):
+    import respx
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 
@@ -11478,16 +11491,28 @@ async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding:
     scope: Final = _delegate_scope(
         [
             (b"x-litellm-api-key", b"sk-admission-key"),
-            (b"authorization", b"Bearer sk-admission-key"),
+            (b"authorization", b"Bearer distinct-upstream-token" if forwarded_token else b"Bearer sk-admission-key"),
             (b"mcp-protocol-version", b"2026-07-28"),
             (b"mcp-method", b"tools/call"),
             (b"mcp-name", b"probe-add"),
         ]
     )
     context: Final = OperationContext(
-        _caller=UserAPIKeyAuth(api_key="hashed-admission-key"),
+        _caller=UserAPIKeyAuth(
+            api_key="hashed-admission-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="probe-permission", mcp_servers=[target.server_id]
+            ),
+        ),
         mcp_servers=("probe",),
-        mcp_server_auth_headers={binding: {"Authorization": "Bearer distinct-upstream-token"}},
+        mcp_server_auth_headers={
+            binding: {"Authorization": "Bearer expired-token" if forwarded_token else "Bearer distinct-upstream-token"}
+        },
+        oauth2_headers={"Authorization": "Bearer distinct-upstream-token"} if forwarded_token else None,
+        raw_headers={
+            "x-litellm-api-key": "sk-admission-key",
+            **({"Authorization": "Bearer distinct-upstream-token"} if forwarded_token else {}),
+        },
     )
     body: Final = json.dumps(
         {
@@ -11504,25 +11529,24 @@ async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding:
             },
         }
     ).encode()
-    http_client: Final = AsyncMock()
-    http_client.post.return_value = httpx.Response(200, request=httpx.Request("POST", target.url))
-    with (
-        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[target])),
-        patch.object(mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", return_value=target),
-        patch.object(server, "get_async_httpx_client", return_value=http_client),
-    ):
+    mcp_operations.global_mcp_server_manager.registry[target.server_id] = target
+    with respx.mock as upstream:
+        probe: Final = upstream.post(target.url).respond(200)
         result: Final = await server._preflight_modern_interaction(scope, body, context)
     assert result is None
-    http_client.post.assert_awaited_once()
-    sent_headers: Final = http_client.post.call_args.kwargs["headers"]
+    assert probe.call_count == 1
+    sent_headers: Final = probe.calls[0].request.headers
     assert sent_headers["Authorization"] == "Bearer distinct-upstream-token"
     assert all("sk-admission-key" not in value for value in sent_headers.values())
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize("allowed", (True, False))
-@pytest.mark.parametrize("header_shape", ("mapping", "string", "non_authorization"))
+@pytest.mark.parametrize("header_shape", ("mapping", "non_authorization"))
 async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allowed: bool, header_shape: str):
+    import respx
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
     from litellm.proxy._experimental.mcp_server import server
 
     targets: Final = [
@@ -11538,33 +11562,37 @@ async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allow
         )
         for name in ("first", "second")
     ]
-    http_client: Final = AsyncMock()
-    http_client.post.return_value = httpx.Response(200, request=httpx.Request("POST", targets[0].url))
-    with (
-        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=targets if allowed else [])),
-        patch.object(server, "get_async_httpx_client", return_value=http_client),
-    ):
+    mcp_operations.global_mcp_server_manager.registry.update({target.server_id: target for target in targets})
+    with respx.mock(assert_all_called=False) as upstream:
+        first: Final = upstream.post(targets[0].url).respond(200)
+        second: Final = upstream.post(targets[1].url).respond(200)
         result: Final = await server._check_passthrough_upstream_auth(
+            raw_headers=None,
             scope=_delegate_scope([(b"authorization", b"Bearer sk-admission-key")]),
-            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-admission-key"),
+            user_api_key_auth=UserAPIKeyAuth(
+                api_key="hashed-admission-key",
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="probe-permission",
+                    mcp_servers=[target.server_id for target in targets] if allowed else [],
+                ),
+            ),
             mcp_servers=["first", "second"],
             client_ip=None,
             oauth2_headers=None,
             mcp_server_auth_headers={
-                "first": "Bearer first-token"
-                if header_shape == "string"
-                else {"x-other" if header_shape == "non_authorization" else "aUtHoRiZaTiOn": "Bearer first-token"},
-                "second": "Bearer second-token"
-                if header_shape == "string"
-                else {"x-other" if header_shape == "non_authorization" else "Authorization": "Bearer second-token"},
+                "first": {"x-other" if header_shape == "non_authorization" else "aUtHoRiZaTiOn": "Bearer first-token"},
+                "second": {
+                    "x-other" if header_shape == "non_authorization" else "Authorization": "Bearer second-token"
+                },
             },
         )
     assert result is None
-    assert [
-        (call.args[0] if call.args else call.kwargs["url"], call.kwargs["headers"]["Authorization"])
-        for call in http_client.post.call_args_list
-    ] == (
-        [("http://first/mcp", "Bearer first-token"), ("http://second/mcp", "Bearer second-token")]
+    assert tuple(
+        (str(call.request.url), call.request.headers["Authorization"])
+        for route in (first, second)
+        for call in route.calls
+    ) == (
+        (("http://first/mcp", "Bearer first-token"), ("http://second/mcp", "Bearer second-token"))
         if allowed and header_shape != "non_authorization"
-        else []
+        else ()
     )

@@ -81,7 +81,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
-    lookup_mcp_server_auth_in_headers,
+    merge_mcp_headers,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -1944,7 +1944,8 @@ if MCP_AVAILABLE:
         client_ip: str | None,
         *,
         oauth2_headers: Mapping[str, str] | None,
-        mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        raw_headers: Mapping[str, str] | None,
     ) -> None:
         """Probe pass-through upstream servers in parallel before the MCP session starts.
 
@@ -1969,36 +1970,48 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        forwarded_auth: Final = next(
-            (value for name, value in (oauth2_headers or {}).items() if name.lower() == "authorization"), None
-        )
-        probe_targets: Final[list[tuple[MCPServer, str, str]]] = []
-        for srv in allowed_servers:
-            if not srv.is_oauth_passthrough:
-                continue
-            server_headers = lookup_mcp_server_auth_in_headers(
-                mcp_server_auth_headers or {},
-                alias=srv.alias,
-                server_name=srv.server_name,
-                access_groups=srv.access_groups,
+        prepared_headers: Final = tuple(
+            (
+                srv,
+                operations._prepare_mcp_server_headers(
+                    server=srv,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=None,
+                    oauth2_headers=dict(oauth2_headers) if oauth2_headers is not None else None,
+                    raw_headers=dict(raw_headers) if raw_headers is not None else None,
+                    user_api_key_auth=user_api_key_auth,
+                    scope_servers=allowed_servers,
+                ),
             )
-            server_auth = (
-                server_headers
-                if isinstance(server_headers, str)
-                else next(
-                    (value for name, value in (server_headers or {}).items() if name.lower() == "authorization"), None
+            for srv in allowed_servers
+            if srv.is_oauth_passthrough
+        )
+        probe_headers: Final = tuple(
+            (
+                srv,
+                merge_mcp_headers(
+                    extra_headers=auth if isinstance(auth, dict) else None,
+                    static_headers=extra,
+                ),
+            )
+            for srv, (auth, extra) in prepared_headers
+        )
+        probe_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
+            (srv, auth_header, srv.name)
+            for srv, headers in probe_headers
+            if (
+                auth_header := next(
+                    (value for name, value in (headers or {}).items() if name.lower() == "authorization"), None
                 )
             )
-            auth_header = server_auth if server_auth is not None else forwarded_auth
-            if auth_header:
-                probe_targets.append((srv, auth_header, srv.name))
+        )
         if not probe_targets:
             return
 
         probe_results: Final = await asyncio.gather(
             *[_probe_upstream_auth(srv.url or "", auth_header) for srv, auth_header, _ in probe_targets]
         )
-        for (srv, _, challenge_server_name), (probe_status, _) in zip(probe_targets, probe_results):
+        for (_srv, _, challenge_server_name), (probe_status, _) in zip(probe_targets, probe_results):
             if probe_status == 401:
                 # Token is missing or expired: keep pass-through clients on the
                 # protected-resource discovery flow so they re-authorize against
@@ -2081,6 +2094,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
             if context.mcp_server_auth_headers is not None
             else None,
+            raw_headers=context.raw_headers,
         )
         return None
 
@@ -2168,6 +2182,7 @@ if MCP_AVAILABLE:
                     _client_ip,
                     oauth2_headers=oauth2_headers,
                     mcp_server_auth_headers=mcp_server_auth_headers,
+                    raw_headers=raw_headers,
                 )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
@@ -2548,6 +2563,7 @@ if MCP_AVAILABLE:
                 _sse_client_ip,
                 oauth2_headers=oauth2_headers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                raw_headers=raw_headers,
             )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
