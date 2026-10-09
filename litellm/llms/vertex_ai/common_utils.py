@@ -694,18 +694,16 @@ def _fix_enum_types(schema, depth=0):
         if not keep_enum:
             enum_values: Final = cast(Sequence[object], schema["enum"])  # cast-ok: the schema is an untyped JSON dict
             is_integer_type: Final = isinstance(schema_type, str) and schema_type.lower() == "integer"
+            # integer strings too: a schema converted on an earlier call already holds its values as strings
             is_integer_enum: Final = is_integer_type and all(
-                isinstance(value, int) and not isinstance(value, bool) for value in enum_values
-            )
-            is_converted_integer_enum: Final = (
-                is_integer_type
-                and schema.get("format") == "enum"
-                and all(isinstance(value, str) for value in enum_values)
+                (isinstance(value, int) and not isinstance(value, bool))
+                or (isinstance(value, str) and value.lstrip("-").isdigit())
+                for value in enum_values
             )
             if is_integer_enum:
                 schema["format"] = "enum"  # rebind-ok: this function edits the schema in place by design
                 schema["enum"] = [str(value) for value in enum_values]  # rebind-ok: same in-place edit
-            elif not is_converted_integer_enum:
+            else:
                 schema.pop("enum", None)
 
     # Recurse into nested structures
