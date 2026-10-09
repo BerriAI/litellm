@@ -46,7 +46,7 @@ export interface BuilderInsightBuilder {
   email: string;
   archetype: string;
   tagline: string;
-  uses: readonly string[];
+  uses: string;
   markdown: string;
   spend: number;
   requests: number;
@@ -148,7 +148,6 @@ export const teamTotals = (
 export const teamAgents = (
   builders: readonly (Pick<BuilderInsightBuilder, "spend" | "agents">)[],
 ): TeamAgent[] => {
-  const teamSpend = builders.reduce((total, builder) => total + builder.spend, 0);
   const perAgent = builders
     .flatMap((builder) => builder.agents)
     .reduce<ReadonlyMap<string, Omit<TeamAgent, "share">>>((totals, agent) => {
@@ -166,9 +165,10 @@ export const teamAgents = (
         ],
       ]);
     }, new Map());
+  const totalAgentSpend = [...perAgent.values()].reduce((total, agent) => total + agent.spend, 0);
 
   return [...perAgent.values()]
-    .map((agent) => ({ ...agent, share: teamSpend > 0 ? agent.spend / teamSpend : 0 }))
+    .map((agent) => ({ ...agent, share: totalAgentSpend > 0 ? agent.spend / totalAgentSpend : 0 }))
     .sort((left, right) => right.spend - left.spend);
 };
 
@@ -194,3 +194,27 @@ export const dailySeries = (
         : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       return { date: day.date, label, spend: day.spend, requests: day.requests };
     });
+
+export const aggregateModels = (models: readonly BuilderModelEntry[]): BuilderModelEntry[] =>
+  [...models.reduce<ReadonlyMap<string, BuilderModelEntry>>((totals, entry) => {
+    const model = entry.model.replace(/^(openai|anthropic|bedrock|vertex_ai|azure)\//, "");
+    const current = totals.get(model);
+    return new Map<string, BuilderModelEntry>([
+      ...totals,
+      [
+        model,
+        {
+          model,
+          spend: (current?.spend ?? 0) + entry.spend,
+          requests: (current?.requests ?? 0) + entry.requests,
+        },
+      ] as const,
+    ]);
+  }, new Map()).values()].sort((left, right) => right.spend - left.spend);
+
+export const builderInitials = (name: string): string => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length > 1) return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
+  const first = parts[0] ?? "";
+  return `${first[0]?.toUpperCase() ?? ""}${first[1]?.toLowerCase() ?? ""}`;
+};

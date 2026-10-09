@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChartSkeleton, Panel, Stat } from "../overview/Primitives";
 import { formatCompactUsd } from "../overview/overviewData";
 import { agentRowFor, type AgentRow } from "../overview/agentCatalog";
@@ -8,6 +8,7 @@ import { AgentMark } from "../overview/TopAgents";
 import { BuilderDetail } from "./BuilderDetail";
 import { BuilderList } from "./BuilderList";
 import { MarkdownFile } from "./MarkdownFile";
+import { SpendVsOutput } from "./SpendVsOutput";
 import { sortBuilders, teamAgents, teamTotals, type BuilderSort } from "./builderInsightsData";
 import { useBuilderInsights } from "./useBuilderInsights";
 
@@ -18,9 +19,9 @@ function TeamAgents({
 }: {
   builders: Parameters<typeof teamAgents>[0];
 }) {
-  const agents = teamAgents(builders);
+  const agents = teamAgents(builders).filter((agent) => agent.share >= 0.005);
   return (
-    <Panel title="Agents" subtitle="Share of spend by User-Agent, 7-day sample of SpendLogs">
+    <Panel title="Agents" subtitle="Share of spend by User-Agent · 7d sample">
       <div className="grid gap-3">
         {agents.map((agent) => {
           const row: AgentRow = agentRowFor(agent.id);
@@ -54,16 +55,38 @@ export default function BuilderInsights() {
   const [sort, setSort] = useState<BuilderSort>("spend");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const selectedBuilders = useMemo(() => (data ? sortBuilders(data.builders, "spend") : []), [data]);
-  const selectedBuilder = data?.builders.find((builder) => builder.id === selectedId) ?? selectedBuilders[0];
+  const sortedBuilders = useMemo(() => (data ? sortBuilders(data.builders, sort) : []), [data, sort]);
+  const selectedBuilder = sortedBuilders.find((builder) => builder.id === selectedId) ?? sortedBuilders[0];
+  const selectedIndex = selectedBuilder ? sortedBuilders.indexOf(selectedBuilder) : -1;
   const totals = useMemo(() => teamTotals(data?.builders ?? []), [data]);
+  const navigate = useCallback(
+    (direction: -1 | 1) => {
+      const next = sortedBuilders[selectedIndex + direction];
+      if (next) setSelectedId(next.id);
+    },
+    [selectedIndex, sortedBuilders],
+  );
 
   useEffect(() => {
-    if (!selectedId || !data) return;
-    const first = data.builders[0]?.id;
-    if (first === selectedId) return;
+    if (!selectedId) return;
     document.getElementById("builder-insights-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [data, selectedId]);
+  }, [selectedId]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest("input, textarea, select, [contenteditable='true']")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      navigate(event.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigate]);
 
   if (isPending) {
     return (
@@ -79,8 +102,18 @@ export default function BuilderInsights() {
 
   if (isError || !data) return <p className="py-10 text-center text-sm text-muted-foreground">Builder Insights is unavailable</p>;
 
+  const snapshotStart = new Date(`${data.window.start}T00:00:00`);
+  const snapshotEnd = new Date(`${data.window.end}T00:00:00`);
+  const snapshotStartLabel = snapshotStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const snapshotEndLabel = snapshotEnd.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+
   return (
     <div className="grid gap-3">
+      <p className="text-right text-xs text-muted-foreground">Snapshot · {snapshotStartLabel} to {snapshotEndLabel}</p>
       <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-5 lg:divide-x">
         <div className="border-b px-5 py-4 sm:border-b-0">
           <Stat label="Team spend" value={formatCompactUsd(totals.spend)} hint={`${totals.builderCount} builders · 30 days`} />
@@ -112,16 +145,31 @@ export default function BuilderInsights() {
           />
         </div>
         <div className="lg:col-span-2">
-          <MarkdownFile filename="team-insights.md" markdown={data.markdown} />
+          <SpendVsOutput
+            builders={data.builders}
+            selectedId={selectedBuilder?.id ?? null}
+            medianSpendPerPr={totals.medianSpendPerPr}
+            onSelect={setSelectedId}
+          />
         </div>
       </div>
-      <TeamAgents builders={data.builders} />
+      <div className="grid gap-3 lg:grid-cols-5">
+        <div className="lg:col-span-3">
+          <MarkdownFile filename="team-insights.md" markdown={data.markdown} />
+        </div>
+        <div className="lg:col-span-2">
+          <TeamAgents builders={data.builders} />
+        </div>
+      </div>
       {selectedBuilder && (
         <BuilderDetail
           builder={selectedBuilder}
           sampleStart={data.window.sampleStart}
           sampleEnd={data.window.sampleEnd}
           detailId="builder-insights-detail"
+          canGoPrevious={selectedIndex > 0}
+          canGoNext={selectedIndex < sortedBuilders.length - 1}
+          onNavigate={navigate}
         />
       )}
       <p className="text-xs text-muted-foreground">

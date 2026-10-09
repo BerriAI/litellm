@@ -331,7 +331,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
             </div>
           )}
-          <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+          {usageView !== "builders" && <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />}
         </div>
       </header>
       {aggregatedFailed && (

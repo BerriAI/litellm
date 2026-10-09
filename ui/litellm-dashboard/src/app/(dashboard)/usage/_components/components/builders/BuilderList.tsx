@@ -5,21 +5,19 @@ import { AgentMark } from "../overview/TopAgents";
 import { agentRowFor } from "../overview/agentCatalog";
 import { formatCompactUsd } from "../overview/overviewData";
 import { Panel, Segmented, Sparkline } from "../overview/Primitives";
-import { dailySeries, sortBuilders, type BuilderInsightBuilder, type BuilderSort } from "./builderInsightsData";
+import {
+  builderInitials,
+  dailySeries,
+  sortBuilders,
+  type BuilderInsightBuilder,
+  type BuilderSort,
+} from "./builderInsightsData";
 
 const SORT_OPTIONS = [
   { value: "spend", label: "Spend" },
   { value: "prs", label: "PRs" },
   { value: "efficiency", label: "Cost per PR" },
 ] as const satisfies readonly { value: BuilderSort; label: string }[];
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .map((part) => part[0] ?? "")
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
 
 const perPr = (builder: BuilderInsightBuilder) =>
   builder.spendPerPr ?? (builder.prs > 0 ? builder.spend / builder.prs : null);
@@ -65,7 +63,7 @@ export function BuilderList({
               <span className="text-sm tabular-nums text-muted-foreground">{index + 1}.</span>
               <span className="flex min-w-0 items-center gap-3">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
-                  {initials(builder.name)}
+                  {builderInitials(builder.name)}
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-foreground">{builder.name}</span>

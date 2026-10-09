@@ -3,25 +3,19 @@
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { AgentMark } from "../overview/TopAgents";
 import { agentRowFor } from "../overview/agentCatalog";
 import { formatCompact, formatCompactUsd, formatUsd } from "../overview/overviewData";
 import { Panel, Stat } from "../overview/Primitives";
 import { ActivityHeatmap } from "./ActivityHeatmap";
-import { dailySeries, type BuilderInsightBuilder } from "./builderInsightsData";
+import { aggregateModels, builderInitials, dailySeries, type BuilderInsightBuilder } from "./builderInsightsData";
 import { MarkdownFile } from "./MarkdownFile";
 import { stackedUsageColor } from "@/components/shared/charts";
 
 const perPr = (builder: BuilderInsightBuilder) =>
   builder.spendPerPr ?? (builder.prs > 0 ? builder.spend / builder.prs : null);
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .map((part) => part[0] ?? "")
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
@@ -51,8 +45,11 @@ function DailySpend({ builder }: { builder: BuilderInsightBuilder }) {
 }
 
 function AgentMix({ builder }: { builder: BuilderInsightBuilder }) {
-  const agents = [...builder.agents].filter((agent) => agent.spend > 0).sort((left, right) => right.spend - left.spend);
-  const total = agents.reduce((sum, agent) => sum + agent.spend, 0);
+  const allAgents = [...builder.agents].filter((agent) => agent.spend > 0);
+  const total = allAgents.reduce((sum, agent) => sum + agent.spend, 0);
+  const agents = allAgents
+    .filter((agent) => agent.spend / total >= 0.005)
+    .sort((left, right) => right.spend - left.spend);
   return (
     <Panel title="Agent mix">
       <div className="flex h-2 overflow-hidden rounded-full bg-muted">
@@ -81,7 +78,7 @@ function AgentMix({ builder }: { builder: BuilderInsightBuilder }) {
 }
 
 function ModelMix({ builder }: { builder: BuilderInsightBuilder }) {
-  const models = [...builder.models].sort((left, right) => right.spend - left.spend).slice(0, 5);
+  const models = aggregateModels(builder.models).slice(0, 5);
   return (
     <Panel title="Model mix">
       <div className="grid gap-3">
@@ -131,18 +128,24 @@ export function BuilderDetail({
   sampleStart,
   sampleEnd,
   detailId,
+  canGoPrevious,
+  canGoNext,
+  onNavigate,
 }: {
   builder: BuilderInsightBuilder;
   sampleStart: string;
   sampleEnd: string;
   detailId: string;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onNavigate: (direction: -1 | 1) => void;
 }) {
   const costPerPr = perPr(builder);
   return (
     <section id={detailId} className="scroll-mt-4 space-y-3">
       <div className="flex flex-wrap items-center gap-4 rounded-xl border bg-card p-5">
         <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-muted text-base font-semibold text-muted-foreground">
-          {initials(builder.name)}
+          {builderInitials(builder.name)}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -152,7 +155,32 @@ export function BuilderDetail({
             </Badge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{builder.tagline}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{builder.email}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{builder.uses}</p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">{builder.email}</span>
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Previous builder"
+              disabled={!canGoPrevious}
+              onClick={() => onNavigate(-1)}
+            >
+              <ChevronLeft aria-hidden="true" className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Next builder"
+              disabled={!canGoNext}
+              onClick={() => onNavigate(1)}
+            >
+              <ChevronRight aria-hidden="true" className="size-4" />
+            </Button>
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-2 overflow-hidden rounded-xl border bg-card sm:grid-cols-4 lg:grid-cols-7 lg:divide-x">

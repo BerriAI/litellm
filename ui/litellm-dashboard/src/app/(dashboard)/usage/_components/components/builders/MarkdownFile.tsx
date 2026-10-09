@@ -47,7 +47,7 @@ export function MarkdownFile({ filename, markdown }: { filename: string; markdow
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <article className="max-h-[32rem] overflow-auto bg-background px-5 py-4">
+      <article className="bg-background px-5 py-4">
         <ReactMarkdown components={markdownComponents}>{markdown}</ReactMarkdown>
       </article>
     </div>

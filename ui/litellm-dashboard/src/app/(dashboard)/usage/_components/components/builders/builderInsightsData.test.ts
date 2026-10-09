@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateModels,
+  builderInitials,
   dailySeries,
   sortBuilders,
   teamAgents,
@@ -54,29 +56,28 @@ describe("teamTotals", () => {
 });
 
 describe("teamAgents", () => {
-  it("sums spend and requests, counts builders at the five-percent threshold, and ranks by spend", () => {
+  it("shares 7-day agent spend across agents, counts builders at five percent, and ranks by spend", () => {
     expect(
       teamAgents([
         {
           spend: 100,
           agents: [
-            { id: "codex", spend: 60, requests: 6, share: 0.6 },
-            { id: "python", spend: 4, requests: 2, share: 0.04 },
-            { id: "claude-code", spend: 36, requests: 3, share: 0.36 },
+            { id: "codex", spend: 6, requests: 6, share: 0.06 },
+            { id: "python", spend: 2, requests: 2, share: 0.02 },
+            { id: "claude-code", spend: 4, requests: 3, share: 0.04 },
           ],
         },
         {
           spend: 200,
           agents: [
-            { id: "codex", spend: 10, requests: 1, share: 0.05 },
-            { id: "python", spend: 190, requests: 20, share: 0.95 },
+            { id: "codex", spend: 2, requests: 1, share: 0.05 },
           ],
         },
       ]),
     ).toEqual([
-      { id: "python", spend: 194, requests: 22, builders: 1, share: 194 / 300 },
-      { id: "codex", spend: 70, requests: 7, builders: 2, share: 70 / 300 },
-      { id: "claude-code", spend: 36, requests: 3, builders: 1, share: 0.12 },
+      { id: "codex", spend: 8, requests: 7, builders: 2, share: 8 / 14 },
+      { id: "claude-code", spend: 4, requests: 3, builders: 0, share: 4 / 14 },
+      { id: "python", spend: 2, requests: 2, builders: 0, share: 2 / 14 },
     ]);
   });
 });
@@ -108,5 +109,35 @@ describe("dailySeries", () => {
       { date: "2026-10-01", label: "Oct 1", spend: 10, requests: 1 },
       { date: "2026-10-02", label: "Oct 2", spend: 20, requests: 2 },
     ]);
+  });
+});
+
+describe("aggregateModels", () => {
+  it("merges leading provider prefixes while preserving spend and request totals", () => {
+    expect(
+      aggregateModels([
+        { model: "gpt-6-astra", spend: 100, requests: 10 },
+        { model: "openai/gpt-6-astra", spend: 40, requests: 4 },
+        { model: "anthropic/claude-5", spend: 30, requests: 3 },
+        { model: "bedrock/sonnet-5", spend: 20, requests: 2 },
+        { model: "vertex_ai/gemini-4", spend: 15, requests: 1 },
+        { model: "azure/gpt-6", spend: 10, requests: 1 },
+        { model: "custom/openai/gpt-6-astra", spend: 5, requests: 1 },
+      ]),
+    ).toEqual([
+      { model: "gpt-6-astra", spend: 140, requests: 14 },
+      { model: "claude-5", spend: 30, requests: 3 },
+      { model: "sonnet-5", spend: 20, requests: 2 },
+      { model: "gemini-4", spend: 15, requests: 1 },
+      { model: "gpt-6", spend: 10, requests: 1 },
+      { model: "custom/openai/gpt-6-astra", spend: 5, requests: 1 },
+    ]);
+  });
+});
+
+describe("builderInitials", () => {
+  it("uses initials for multiple name parts and a capitalized two-letter monogram otherwise", () => {
+    expect(builderInitials("Tin")).toBe("Ti");
+    expect(builderInitials("Moe Li")).toBe("ML");
   });
 });
