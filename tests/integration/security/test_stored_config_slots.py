@@ -62,6 +62,12 @@ from integration.security._sweeps import (
     sweep_all,
     sweep_sink,
 )
+from pydantic import BaseModel, JsonValue
+
+from litellm.types.guardrails import (
+    GuardrailInfoResponse,
+    ListGuardrailsResponse,
+)
 
 OUTCOMES: Final = ("success", "provider_4xx")
 BEDROCK_MODEL: Final = "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -77,6 +83,11 @@ VERTEX_LOCATION: Final = "us-central1"
 VERTEX_MODEL_PATH: Final = (
     f"/v1/projects/{VERTEX_PROJECT}/locations/{VERTEX_LOCATION}/publishers/google/models/{VERTEX_BACKEND}"
 )
+
+
+class _CreatedGuardrail(BaseModel):
+    guardrail_id: str
+    guardrail_name: str
 
 
 @pytest.fixture(scope="module")
@@ -627,7 +638,7 @@ def _guardrail(request: Request) -> Reply:
     return Reply(body=json.dumps({"action": "NONE"}).encode())
 
 
-def _guardrail_params(url: str, secret: Canary) -> dict[str, object]:
+def _guardrail_params(url: str, secret: Canary) -> dict[str, JsonValue]:
     return {
         "guardrail": "generic_guardrail_api",
         "mode": "pre_call",
@@ -689,6 +700,121 @@ def test_config_guardrail_api_key_reaches_only_the_guardrail(
                 context=f"slot E1 (config), {outcome}",
                 since=started,
             )
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("outcome", OUTCOMES)
+def test_api_created_guardrail_api_key_is_encrypted_at_rest_and_reaches_only_the_guardrail(
+    rig: Rig, outcome: str, request: pytest.FixtureRequest
+) -> None:
+    started: Final = datetime.now(UTC)
+    secret: Final = canary("E1")
+    marker: Final = canary(MARKER)
+    name: Final = f"canary-api-guardrail-{uuid.uuid4().hex}"
+    with wire_server(_guardrail) as wire, rig.proxy.scenario() as scenario:
+        guardrail: Final = Recorder(wire)
+        created_response: Final = rig.proxy.request(
+            "POST",
+            "/guardrails",
+            {"guardrail": {"guardrail_name": name, "litellm_params": _guardrail_params(wire.url, secret)}},
+        )
+        assert created_response.status_code == 200, created_response.text
+        created: Final = _CreatedGuardrail.model_validate_json(created_response.content)
+        assert created.guardrail_name == name, created_response.text
+        guardrail_id: Final = created.guardrail_id
+
+        def delete_guardrail() -> None:
+            deleted: Final = rig.proxy.request("DELETE", f"/guardrails/{guardrail_id}")
+            assert deleted.status_code == 200, deleted.text
+            assert (
+                read_rows(
+                    'SELECT guardrail_id FROM "LiteLLM_GuardrailsTable" WHERE guardrail_id=%s',
+                    (guardrail_id,),
+                )
+                == []
+            )
+
+        scenario.cleanups.callback(delete_guardrail)
+        caller: Final = _caller(scenario, models=[CONFIG_MODEL])
+        response, request_id = _chat(rig.proxy, caller.key, CONFIG_MODEL, "E1", marker, outcome)
+        _guardrail_delivered(guardrail, marker, secret)
+        guardrail_requests: Final = guardrail.requests()
+        assert [(item.method, item.target) for item in guardrail_requests] == [("POST", GUARDRAIL_PATH)]
+
+        _assert_stored_without_canary(
+            "SELECT litellm_params->>'api_key' FROM \"LiteLLM_GuardrailsTable\" WHERE guardrail_id=%s",
+            (guardrail_id,),
+            secret,
+        )
+        params_rows: Final = read_rows(
+            'SELECT litellm_params::text AS params FROM "LiteLLM_GuardrailsTable" WHERE guardrail_id=%s',
+            (guardrail_id,),
+        )
+        assert len(params_rows) == 1, params_rows
+        stored_params: Final = string_value(params_rows[0]["params"])
+        assert find_canary(stored_params, (secret,)) == (), f"Slot {secret.slot} stored in plaintext JSON"
+
+        masked_secret: Final = f"{secret.value[:2]}{'*' * 4}{secret.value[-2:]}"
+        detail_routes: Final = (f"/guardrails/{guardrail_id}", f"/guardrails/{guardrail_id}/info")
+        detail_responses: Final = tuple(rig.proxy.request("GET", path) for path in detail_routes)
+        assert tuple(item.status_code for item in detail_responses) == (200, 200), tuple(
+            item.text for item in detail_responses
+        )
+        details: Final = tuple(GuardrailInfoResponse.model_validate_json(item.content) for item in detail_responses)
+        assert all(item.created_at is not None and item.updated_at is not None for item in details), details
+        assert (
+            tuple(
+                (
+                    item.guardrail_id,
+                    item.guardrail_name,
+                    item.guardrail_definition_location.value,
+                )
+                for item in details
+            )
+            == ((guardrail_id, name, "db"),) * 2
+        ), tuple(item.text for item in detail_responses)
+        assert (
+            tuple((item.created_at, item.updated_at) for item in details)
+            == ((details[0].created_at, details[0].updated_at),) * 2
+        )
+        assert all(item.litellm_params is not None for item in details), tuple(item.text for item in detail_responses)
+        assert (
+            tuple(
+                (
+                    item.litellm_params.default_on,
+                    item.litellm_params.api_base,
+                    item.litellm_params.api_key,
+                )
+                for item in details
+                if item.litellm_params is not None
+            )
+            == ((True, wire.url, masked_secret),) * 2
+        ), tuple(item.text for item in detail_responses)
+
+        list_response: Final = rig.proxy.request("GET", "/v2/guardrails/list")
+        assert list_response.status_code == 200, list_response.text
+        listed_guardrails: Final = ListGuardrailsResponse.model_validate_json(list_response.content).guardrails
+        matching_entries: Final = tuple(item for item in listed_guardrails if item.guardrail_id == guardrail_id)
+        assert len(matching_entries) == 1, list_response.text
+        assert find_canary(list_response.content, (secret,)) == (), list_response.text
+
+        _finish(
+            rig,
+            rig.proxy,
+            request,
+            secrets=(secret,),
+            marker=marker,
+            response=response,
+            request_id=request_id,
+            caller=caller,
+            ids={"model": CONFIG_MODEL, "guardrail_id": guardrail_id},
+            detail_routes=detail_routes,
+            reads=_reads(rig.proxy, {"/guardrails/list": {}, "/v2/guardrails/list": {}}),
+            extra_sinks={GUARDRAIL_SINK: guardrail.requests},
+            own_headers={GUARDRAIL_SINK: ("x-api-key", "E1")},
+            context=f"slot E1 (API-created DB guardrail), {outcome}",
+            since=started,
+        )
 
 
 def _langfuse(request: Request) -> Reply:
