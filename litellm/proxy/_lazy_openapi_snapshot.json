@@ -24254,6 +24254,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ResponseReasoningItem"
                       }
                     ]
                   },
