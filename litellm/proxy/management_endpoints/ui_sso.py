@@ -1786,6 +1786,15 @@ async def get_existing_user_info_from_db(
     return user_info
 
 
+def sso_lookup_user_ids(alternate_user_id: str | None, provider_id: str | None) -> tuple[str, ...]:
+    """The nonblank ids an SSO sign-in can match an existing account by, the alternate id first"""
+    return tuple(
+        user_id
+        for user_id in (alternate_user_id, provider_id)
+        if user_id is not None and not _is_blank_sso_user_id(user_id)
+    )
+
+
 async def get_user_info_from_db(
     result: CustomOpenID | OpenID | dict,
     prisma_client: PrismaClient,
@@ -1796,17 +1805,10 @@ async def get_user_info_from_db(
     alternate_user_id: str | None = None,
 ) -> LiteLLM_UserTable | NewUserResponse | None:
     try:
-        potential_user_ids: Final[list[str]] = []  # mutable-ok: the candidate ids below are appended in order
-        if alternate_user_id is not None:
-            potential_user_ids.append(alternate_user_id)
-        if not isinstance(result, dict):
-            _id = getattr(result, "id", None)
-            if _id is not None and isinstance(_id, str):
-                potential_user_ids.append(_id)
-        else:
-            _id = result.get("id", None)
-            if _id is not None and isinstance(_id, str):
-                potential_user_ids.append(_id)
+        provider_id: Final = result.get("id", None) if isinstance(result, dict) else getattr(result, "id", None)
+        potential_user_ids: Final = sso_lookup_user_ids(
+            alternate_user_id, provider_id if isinstance(provider_id, str) else None
+        )
 
         user_email = normalize_email(
             getattr(result, "email", None) if not isinstance(result, dict) else result.get("email", None)
@@ -1815,8 +1817,6 @@ async def get_user_info_from_db(
         user_info: LiteLLM_UserTable | NewUserResponse | None = None
 
         for user_id in potential_user_ids:
-            if _is_blank_sso_user_id(user_id):
-                continue
             user_info = await get_existing_user_info_from_db(
                 user_id=user_id,
                 user_email=user_email,
