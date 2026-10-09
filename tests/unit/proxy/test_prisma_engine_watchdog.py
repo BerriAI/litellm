@@ -16,6 +16,7 @@ Covers:
 
 import asyncio
 import os
+import sys
 import threading
 import time
 from typing import Final
@@ -26,6 +27,7 @@ import pytest
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 WRITER_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
+posix_only: Final = pytest.mark.skipif(sys.platform == "win32", reason="os.kill liveness path is POSIX-only")
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +75,7 @@ def test_is_engine_alive_returns_true_when_pid_unknown(engine_client):
     assert engine_client._is_engine_alive() is True
 
 
+@posix_only
 def test_is_engine_alive_returns_false_when_process_gone(engine_client):
     """_is_engine_alive returns False when os.kill raises ProcessLookupError."""
     engine_client._engine_pid = 9999
@@ -80,6 +83,7 @@ def test_is_engine_alive_returns_false_when_process_gone(engine_client):
         assert engine_client._is_engine_alive() is False
 
 
+@posix_only
 def test_is_engine_alive_returns_true_on_permission_error(engine_client):
     """_is_engine_alive returns True when os.kill raises PermissionError (process exists but not ours)."""
     engine_client._engine_pid = 1234
@@ -87,6 +91,7 @@ def test_is_engine_alive_returns_true_on_permission_error(engine_client):
         assert engine_client._is_engine_alive() is True
 
 
+@posix_only
 def test_is_engine_alive_returns_true_for_running_process(engine_client):
     """_is_engine_alive returns True when os.kill succeeds (process running)."""
     engine_client._engine_pid = 1234
@@ -99,6 +104,7 @@ def test_is_engine_alive_returns_true_for_running_process(engine_client):
 # ---------------------------------------------------------------------------
 
 
+@posix_only
 @pytest.mark.asyncio
 async def test_poll_missing_process_triggers_reconnect(engine_client) -> None:
     """Polling loop triggers attempt_db_reconnect when os.kill raises ProcessLookupError."""
@@ -115,6 +121,7 @@ async def test_poll_missing_process_triggers_reconnect(engine_client) -> None:
     )
 
 
+@posix_only
 @pytest.mark.asyncio
 async def test_poll_permission_error_stops_polling(engine_client) -> None:
     """Polling loop stops cleanly when os.kill raises PermissionError (process not ours)."""
@@ -131,6 +138,7 @@ async def test_poll_permission_error_stops_polling(engine_client) -> None:
     assert engine_client._engine_pid == 0
 
 
+@posix_only
 @pytest.mark.asyncio
 async def test_stop_loop_halts_polling(engine_client) -> None:
     """Polling loop exits cleanly when _stop_engine_watcher is called."""

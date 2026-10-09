@@ -651,59 +651,67 @@ async def test_direct_reconnect_probe_success_clears_writer_unavailable(
 # ---------------------------------------------------------------------------
 
 
+def _attach_engine_process(client, pid, exit_code):
+    process = MagicMock()
+    process.pid = pid
+    process.poll.return_value = exit_code
+    client.writer_db._original_prisma.is_connected.return_value = True
+    client.writer_db._original_prisma._engine.process = process
+    return process
+
+
 @pytest.mark.asyncio
 async def test_poll_engine_proc_keeps_alive_engine_running(mock_proxy_logging):
-    """_poll_engine_proc must not terminate a living engine process.
-
-    Regression: before the fix, _poll_engine_proc called os.kill(pid, 0) which
-    on Windows routes to TerminateProcess and kills the sidecar on the first
-    poll tick. The fix delegates to _is_engine_alive(), which on Windows uses
-    Popen.poll() instead.
-    """
+    """On Windows a living engine must keep being watched and must never be
+    signalled, since os.kill(pid, 0) there is TerminateProcess."""
     client = PrismaClient(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
     client._engine_pid = 12345
     client._watching_engine = True
     client.attempt_db_reconnect = AsyncMock()
+    _attach_engine_process(client, pid=12345, exit_code=None)
 
     with (
-        patch.object(client, "_is_engine_alive", return_value=True) as mock_alive,
+        patch("sys.platform", "win32"),
+        patch("os.kill") as mock_kill,
         patch(
             "litellm.proxy.utils.asyncio.sleep",
             AsyncMock(side_effect=asyncio.CancelledError()),
         ),
+        pytest.raises(asyncio.CancelledError),
     ):
-        try:
-            await client._poll_engine_proc()
-        except asyncio.CancelledError:
-            pass
+        await client._poll_engine_proc()
 
-    mock_alive.assert_called_once()
+    mock_kill.assert_not_called()
     client.attempt_db_reconnect.assert_not_awaited()
+    assert client._watching_engine is True
+    assert client._engine_pid == 12345
 
 
 @pytest.mark.asyncio
 async def test_poll_engine_proc_triggers_reconnect_when_engine_dead(mock_proxy_logging):
-    """_poll_engine_proc must trigger reconnect when the engine is no longer alive."""
+    """On Windows an engine whose Popen.poll() reports an exit code must stop the
+    watcher and trigger a forced reconnect."""
     client = PrismaClient(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
     client._engine_pid = 12345
     client._watching_engine = True
     client._engine_confirmed_dead = False
-    client._reap_all_zombies = MagicMock(return_value=set())
-    client._cleanup_engine_watcher = MagicMock()
     client.attempt_db_reconnect = AsyncMock(return_value=True)
+    _attach_engine_process(client, pid=12345, exit_code=1)
 
-    with patch.object(client, "_is_engine_alive", return_value=False):
+    with patch("sys.platform", "win32"), patch("os.kill") as mock_kill:
         await client._poll_engine_proc()
 
+    mock_kill.assert_not_called()
     client.attempt_db_reconnect.assert_awaited_once_with(
         reason="engine_process_death",
         force=True,
     )
     assert client._engine_confirmed_dead is True
+    assert client._watching_engine is False
 
 
 def test_is_engine_alive_windows_living_process(mock_proxy_logging):
