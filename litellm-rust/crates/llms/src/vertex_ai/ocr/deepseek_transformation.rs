@@ -452,12 +452,8 @@ mod tests {
             json!({})
         );
         assert_eq!(
-            litellm_core_utils::call_arguments::compose_body(
-                &arguments,
-                &json!({"model":"deepseek-ocr"}),
-                &[]
-            )
-            .unwrap(),
+            litellm_owned_params::compose_body(&arguments, &json!({"model":"deepseek-ocr"}), &[])
+                .unwrap(),
             json!({"model":"deepseek-ocr","temperature":0.5,"extension":null})
         );
     }
@@ -542,8 +538,7 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let composed =
-            litellm_core_utils::call_arguments::compose_body(&arguments, &body, &[]).unwrap();
+        let composed = litellm_owned_params::compose_body(&arguments, &body, &[]).unwrap();
         assert_eq!(composed["temperature"], 0.7);
     }
 

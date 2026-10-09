@@ -15,23 +15,12 @@ pub use sdk::GoogleCredentials;
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_APPLICATION_CREDENTIALS_ENV: &str = "GOOGLE_APPLICATION_CREDENTIALS";
-const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
-const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
-const VERTEXAI_CREDENTIALS_ENV: &str = "VERTEXAI_CREDENTIALS";
-const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
-const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
-const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
-
-pub const SECRET_NAMES: &[&str] = &[
-    VERTEX_AI_API_KEY_ENV,
-    VERTEXAI_API_KEY_ENV,
-    VERTEXAI_CREDENTIALS_ENV,
-    GOOGLE_APPLICATION_CREDENTIALS_ENV,
-    VERTEXAI_PROJECT_ENV,
-    VERTEXAI_LOCATION_ENV,
-    VERTEX_LOCATION_ENV,
-];
+pub mod settings;
+pub use settings::secret_names;
+use settings::{
+    GOOGLE_APPLICATION_CREDENTIALS_ENV, VERTEX_AI_API_KEY_ENV, VERTEX_LOCATION_ENV,
+    VERTEXAI_API_KEY_ENV, VERTEXAI_CREDENTIALS_ENV, VERTEXAI_LOCATION_ENV, VERTEXAI_PROJECT_ENV,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexConfig {
@@ -522,7 +511,7 @@ mod tests {
             seen.lock()
                 .unwrap()
                 .iter()
-                .all(|name| SECRET_NAMES.contains(&name.as_str()))
+                .all(|name| secret_names().contains(&name.as_str()))
         );
     }
 

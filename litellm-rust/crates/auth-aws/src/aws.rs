@@ -673,7 +673,7 @@ mod tests {
             seen.lock()
                 .unwrap()
                 .iter()
-                .all(|name| crate::constants::SECRET_NAMES.contains(&name.as_str()))
+                .all(|name| crate::settings::secret_names().contains(&name.as_str()))
         );
     }
 

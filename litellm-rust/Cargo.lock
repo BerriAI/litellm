@@ -4095,7 +4095,9 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-auth-types",
  "litellm-core-utils",
  "litellm-host",
  "litellm-host-native",
@@ -4104,6 +4106,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-owned-params",
  "litellm-secrets",
  "litellm-tracing",
  "mime_guess",
@@ -4233,6 +4236,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-llms-types",
+ "litellm-owned-params",
  "litellm-python-compat",
  "litellm-secrets",
  "reqwest 0.12.28",
@@ -4275,6 +4279,21 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "time",
+]
+
+[[package]]
+name = "litellm-owned-params"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
+ "litellm-core-utils",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

@@ -1,11 +1,3 @@
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
-    #[error("invalid request: extra_body must be an object")]
-    ExtraBody,
-    #[error("invalid request: body must be a JSON object")]
-    Body,
-}
-
 use std::ops::{Deref, DerefMut};
 
 use serde::{Deserialize, Serialize};
@@ -14,49 +6,6 @@ use serde_json::{Map, Value};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct OpaqueParams(Map<String, Value>);
-
-pub fn is_control_param(name: &str) -> bool {
-    matches!(
-        name,
-        "api_key"
-            | "api_base"
-            | "custom_llm_provider"
-            | "extra_headers"
-            | "timeout"
-            | "timeout_seconds"
-            | "request_timeout"
-            | "max_retries"
-            | "req_format"
-            | "max_response_bytes"
-            | "azure_ad_token"
-            | "azure_ad_token_provider"
-            | "tenant_id"
-            | "client_id"
-            | "client_secret"
-            | "azure_scope"
-            | "azure_authority_host"
-            | "azure_credential"
-            | "azure_federated_token_file"
-            | "enable_azure_ad_token_refresh"
-            | "vertex_credentials"
-            | "vertex_ai_credentials"
-            | "vertex_project"
-            | "vertex_ai_project"
-            | "vertex_location"
-            | "vertex_ai_location"
-            | "aws_access_key_id"
-            | "aws_secret_access_key"
-            | "aws_session_token"
-            | "aws_region_name"
-            | "aws_session_name"
-            | "aws_profile_name"
-            | "aws_role_name"
-            | "aws_web_identity_token"
-            | "aws_sts_endpoint"
-            | "aws_external_id"
-            | "aws_bedrock_runtime_endpoint"
-    )
-}
 
 impl Deref for OpaqueParams {
     type Target = Map<String, Value>;

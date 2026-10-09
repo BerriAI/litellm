@@ -41,7 +41,7 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
     type Environment = TextractEnvironment;
 
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+        litellm_auth_aws::settings::secret_names()
     }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {

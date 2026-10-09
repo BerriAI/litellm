@@ -9,7 +9,9 @@ use litellm_llms::base_llm::ocr::{
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use serde_json::Value;
 
-use super::{arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind};
+use litellm_owned_params::is_secret;
+
+use super::{prepare::prepare_request, provider_config::OcrConfigKind};
 use crate::types::ResolvedOcrRequest;
 
 pub(crate) async fn perform_ocr_request(
@@ -54,7 +56,7 @@ impl<'a, H> OcrCallHooks<'a, H> {
                 secret_fields: request
                     .optional_params
                     .keys()
-                    .filter(|name| is_secret_param(name))
+                    .filter(|name| is_secret(name))
                     .cloned()
                     .collect(),
                 api_key: request.connection.api_key.clone(),

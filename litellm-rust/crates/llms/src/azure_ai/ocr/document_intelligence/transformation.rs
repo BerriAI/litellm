@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
+use litellm_auth_azure::AzureAuthInputs;
 use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
 use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
@@ -124,14 +124,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     }
 
     fn secret_names(&self) -> Vec<&'static str> {
-        [
-            [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV].as_slice(),
-            AZURE_AUTH_SECRET_NAMES,
-        ]
-        .into_iter()
-        .flatten()
-        .copied()
-        .collect()
+        [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV]
+            .into_iter()
+            .chain(litellm_auth_azure::secret_names())
+            .collect()
     }
 
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {

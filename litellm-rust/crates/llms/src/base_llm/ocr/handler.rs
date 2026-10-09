@@ -220,7 +220,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     signer: Option<&dyn RequestSigner>,
     hooks: &dyn CallHooks<Error>,
 ) -> Result<OutboundRequest, Error> {
-    let composed = litellm_core_utils::call_arguments::compose_body(
+    let composed = litellm_owned_params::compose_body(
         &request.optional_params,
         &body,
         config.get_supported_ocr_params(&request.model),

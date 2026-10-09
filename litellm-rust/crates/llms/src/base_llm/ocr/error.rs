@@ -105,7 +105,7 @@ pub enum Error {
     #[error(transparent)]
     Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
-    Params(#[from] litellm_core_utils::params::Error),
+    Params(#[from] litellm_owned_params::Error),
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
