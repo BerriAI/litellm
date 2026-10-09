@@ -243,6 +243,7 @@ YAML
   cat > "$qa_dir/common.yaml" <<'YAML'
 fullnameOverride: lens
 migrationJob:
+  ttlSecondsAfterFinished: 3600
   hooks:
     helm: {enabled: true}
     argocd: {enabled: false}
