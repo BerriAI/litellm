@@ -650,7 +650,14 @@ async def poll_user_connection(
             _GITHUB_COPILOT_PROVIDER,
             connection_payload,
         )
-        await set_user_provider_credential_cache(user_api_key_cache, user_id, credential_name, connection_payload)
+        if not await set_user_provider_credential_cache(
+            user_api_key_cache, user_id, credential_name, connection_payload
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="GitHub connection saved, but the cache could not be refreshed; "
+                "requests may be rejected for up to 60 seconds",
+            )
         return UserConnectionPollResponse(status="connected", github_login=github_login)
     except litellm.CallerCredentialRateLimitError as e:
         raise HTTPException(status_code=429, detail=str(e))

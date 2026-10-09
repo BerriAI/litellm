@@ -9510,7 +9510,17 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"] == {}
 
     @pytest.mark.asyncio
-    async def test_auto_router_deployment_loads_every_per_user_connection(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "auto_router_model",
+        [
+            "auto_router/copilot-picker",
+            "auto_router/complexity_router",
+            "auto_router/adaptive_router",
+            "auto_router/quality_router",
+        ],
+        ids=["semantic", "complexity", "adaptive", "quality"],
+    )
+    async def test_auto_router_deployment_loads_every_per_user_connection(self, monkeypatch, auto_router_model: str):
         """An auto-router deployment can pick a Copilot group at request time, so
         discovery must fall back to every per-user credential the caller has."""
         from litellm.proxy.credential_endpoints import user_provider_credentials as upc
@@ -9532,7 +9542,7 @@ class TestResolveUserProviderCredentials:
             return_value=[
                 {
                     "model_name": "auto-chat",
-                    "litellm_params": {"model": "auto_router/copilot-picker"},
+                    "litellm_params": {"model": auto_router_model},
                 }
             ]
         )

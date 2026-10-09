@@ -2909,7 +2909,7 @@ def _per_user_credential_names_for_groups(
                 if isinstance(litellm_params, Mapping)
                 else getattr(litellm_params, "model", None)
             )
-            if isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) == "semantic":
+            if isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None:
                 return _all_per_user_credential_names()
             credential_name_obj: object = (
                 litellm_params.get("litellm_credential_name")
