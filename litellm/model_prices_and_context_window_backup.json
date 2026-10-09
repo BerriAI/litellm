@@ -80425,6 +80425,9 @@
     },
     "global.xai.grok-4.7": {
         "supports_regex_lookaround": false,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_flex": 2.5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
@@ -80448,6 +80451,9 @@
     },
     "us.xai.grok-4.7": {
         "supports_regex_lookaround": false,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_flex": 2.75e-07,
         "cache_read_input_token_cost_priority": 9.625e-07,
