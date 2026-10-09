@@ -42,6 +42,8 @@ JOB_OVERHEAD_MINUTES: Final = 5
 EXPRESSION: Final = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
 QUOTED: Final = re.compile(r"'[^']*'")
 ARITHMETIC: Final = re.compile(r"[+*]")
+
+
 class WorkflowStartupError(Exception):
     pass
 
@@ -142,9 +144,7 @@ def main() -> None:
     )
 
     if errors:
-        raise WorkflowStartupError(
-            "Workflow startup invariants violated:\n  - " + "\n  - ".join(errors)
-        )
+        raise WorkflowStartupError("Workflow startup invariants violated:\n  - " + "\n  - ".join(errors))
 
     print(f"Workflow startup invariants hold (setup ceiling {ceiling}m)")
 

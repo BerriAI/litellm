@@ -11,6 +11,7 @@ import pytest
 
 HARNESS: Final = Path(__file__).parents[2] / ".github" / "scripts" / "run_merge_smoke.py"
 
+
 def _run(root: Path, *argv: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-I", str(HARNESS), *argv],
