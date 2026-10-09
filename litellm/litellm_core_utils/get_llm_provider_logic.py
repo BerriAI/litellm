@@ -801,11 +801,18 @@ def _get_openai_compatible_provider_info(
             github_copilot_user_session_from,
         )
 
-        user_session: Final = github_copilot_user_session_from(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = github_copilot_user_session_from(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         if user_session is not None:
             api_base = user_session.api_base  # rebind-ok: resolves provider args in place
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
-        elif github_copilot_per_user_credential_name(litellm_params) is not None:  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        elif (
+            github_copilot_per_user_credential_name(
+                cast("dict[str, object]", litellm_params)  # cast-ok: untyped params dict
+            )
+            is not None
+        ):
             # per-user deployments resolve no token at provider-info time; the
             # caller's session supplies base + key per request
             api_base = api_base or DEFAULT_GITHUB_COPILOT_API_BASE  # rebind-ok: resolves provider args in place

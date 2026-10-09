@@ -642,11 +642,16 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
-        _supplemental: Final = {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
+            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=kwargs.get("api_base") or base_url,
+            api_base=cast(  # cast-ok: api_base arrives as a str in the request kwargs
+                "str | None", kwargs.get("api_base")
+            )
+            or base_url,
             litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 
@@ -2657,12 +2662,14 @@ def _complete_custom_openai(
             require_github_copilot_user_session,
         )
 
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(litellm_params)
         copilot_headers: Final = get_copilot_default_headers(
             user_session.token if user_session is not None else Authenticator().get_api_key()
         )
         if extra_headers:
-            copilot_headers.update(extra_headers)
+            copilot_headers.update(
+                cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
+            )
         if user_session is not None:
             pin_session_authorization(copilot_headers, user_session.token)
         extra_headers = copilot_headers
@@ -6507,7 +6514,11 @@ def embedding(
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
-    allowed_openai_params: Final[list[str] | None] = kwargs.get("allowed_openai_params", None)
+    allowed_openai_params: Final[list[str] | None] = (
+        cast(  # cast-ok: allowed_openai_params arrives as a str list in the request kwargs
+            "list[str] | None", kwargs.get("allowed_openai_params", None)
+        )
+    )
     optional_params: Final = get_optional_params_embeddings(
         model=model,
         user=user,

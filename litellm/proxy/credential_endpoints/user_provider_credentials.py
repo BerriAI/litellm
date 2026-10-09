@@ -9,7 +9,12 @@ negative marker so an unconnected user does not hit the DB per request.
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # narrows the untyped Redis cache to the str-keyed Protocol
+)
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -151,10 +156,35 @@ async def list_user_provider_credentials_for_credential(
     return await _table(prisma_client).find_many(where={"credential_name": credential_name})
 
 
+class _StringKeyCache(Protocol):
+    async def async_get_cache(
+        self,
+        key: str,
+        **kwargs: object,  # kwargs-ok: RedisCache accepts optional cache kwargs
+    ) -> object: ...
+
+    async def async_set_cache(
+        self,
+        key: str,
+        value: str,
+        **kwargs: object,  # kwargs-ok: RedisCache accepts ttl/nx kwargs
+    ) -> None: ...
+
+    async def async_delete_cache(
+        self,
+        key: str,
+        **kwargs: object,  # kwargs-ok: RedisCache accepts optional cache kwargs
+    ) -> None: ...
+
+
+def _string_cache(cache: "RedisCache") -> _StringKeyCache:
+    return cast(_StringKeyCache, cache)  # cast-ok: RedisCache exposes the str-keyed cache protocol
+
+
 async def _try_cache_get(token_cache: "RedisCache", key: str) -> object:
     """Redis errors must read as a plain miss: the DB is the source of truth."""
     try:
-        return await token_cache.async_get_cache(key)
+        return await _string_cache(token_cache).async_get_cache(key)
     except Exception:  # noqa: BLE001  # a Redis outage must fall back to the database, never reject a connected user
         verbose_proxy_logger.warning("aget_user_provider_tokens: Redis get failed; falling back to the database")
         return None
@@ -162,7 +192,9 @@ async def _try_cache_get(token_cache: "RedisCache", key: str) -> object:
 
 async def _try_cache_set(token_cache: "RedisCache", key: str, value: str, nx: bool = False) -> None:
     try:
-        await token_cache.async_set_cache(key, value, nx=nx, ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS)
+        await _string_cache(token_cache).async_set_cache(
+            key, value, nx=nx, ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS
+        )
     except Exception:  # noqa: BLE001  # caching is best-effort; a Redis outage is not worth failing the request
         verbose_proxy_logger.warning("aget_user_provider_tokens: Redis set failed; skipping the cache write")
 
@@ -181,7 +213,7 @@ async def invalidate_user_provider_credential_cache(
     if token_cache is None:
         return True
     try:
-        await token_cache.async_set_cache(
+        await _string_cache(token_cache).async_set_cache(
             _cache_key(user_id, credential_name),
             _NOT_CONNECTED,
             ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
@@ -211,7 +243,7 @@ async def drop_user_provider_credential_cache(
     if token_cache is None:
         return
     try:
-        await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
+        await _string_cache(token_cache).async_delete_cache(_cache_key(user_id, credential_name))
     except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
         verbose_proxy_logger.warning("drop_user_provider_credential_cache: Redis delete failed")
 
@@ -233,12 +265,12 @@ async def set_user_provider_credential_cache(
         return True
     key: Final = _cache_key(user_id, credential_name)
     try:
-        await token_cache.async_set_cache(
+        await _string_cache(token_cache).async_set_cache(
             key,
             _encode(payload),
             ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
         )
-        readback: object = await _try_cache_get(token_cache, key)
+        readback: Final = await _try_cache_get(token_cache, key)
         if isinstance(readback, str) and decode_user_provider_credential(readback) == payload:
             return True
         verbose_proxy_logger.warning(
@@ -247,10 +279,10 @@ async def set_user_provider_credential_cache(
     except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
         verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis set failed; falling back to delete")
     try:
-        await token_cache.async_delete_cache(key)
+        await _string_cache(token_cache).async_delete_cache(key)
     except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
         verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis delete failed")
-    after_delete: object = await _try_cache_get(token_cache, key)
+    after_delete: Final = await _try_cache_get(token_cache, key)
     if after_delete is None:
         return True
     if isinstance(after_delete, str) and decode_user_provider_credential(after_delete) == payload:

@@ -4229,8 +4229,14 @@ class Router:
             github_copilot_per_user_credential_name,
         )
 
-        configured_per_user_name: Final = github_copilot_per_user_credential_name(deployment.get("litellm_params"))
-        caller_credential_name: Final = kwargs.get("litellm_credential_name")
+        configured_per_user_name: Final = github_copilot_per_user_credential_name(
+            cast(  # cast-ok: deployment litellm_params is a str-keyed dict
+                "Mapping[str, object]", deployment.get("litellm_params")
+            )
+        )
+        caller_credential_name: Final[object] = cast(  # cast-ok: kwargs is the untyped request dict
+            "object", kwargs.get("litellm_credential_name")
+        )
         if (
             configured_per_user_name is not None
             and isinstance(caller_credential_name, str)
@@ -8680,8 +8686,13 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                    requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
-                    request_kwargs=kwargs,
+                    requested_model_group=(
+                        get_litellm_metadata_from_kwargs(
+                            cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+                        )
+                        or {}
+                    ).get("model_group"),
+                    request_kwargs=cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
                 )  # setting deployment_id in cooldown deployments
 
                 return result
@@ -10135,10 +10146,21 @@ class Router:
         credential_values: Final = (
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         )
-        vertex_project: Final = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
-        vertex_location: Final = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
+        from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+
+        vertex_project: Final = (
+            cast("str | None", credential_values.get("vertex_project"))  # cast-ok: vertex credential values are str
+            or deployment.litellm_params.vertex_project
+        )
+        vertex_location: Final = (
+            cast("str | None", credential_values.get("vertex_location"))  # cast-ok: vertex credential values are str
+            or deployment.litellm_params.vertex_location
+        )
         vertex_credentials: Final = (
-            credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
+            cast(  # cast-ok: vertex_credentials holds the typed credential union
+                "VERTEX_CREDENTIALS_TYPES | None", credential_values.get("vertex_credentials")
+            )
+            or deployment.litellm_params.vertex_credentials
         )
 
         if vertex_project is None or vertex_location is None:

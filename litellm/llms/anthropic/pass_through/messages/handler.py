@@ -7,7 +7,7 @@
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Sequence
 from functools import partial
 from typing import Any, Final, cast
 
@@ -630,7 +630,10 @@ def anthropic_messages_handler(
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=cast(  # cast-ok: anthropic messages are dicts at runtime
-            "list[dict]", strip_provider_specific_fields_from_anthropic_messages(messages)
+            "list[dict[str, object]]",
+            strip_provider_specific_fields_from_anthropic_messages(
+                cast(Sequence[object], messages)  # cast-ok: anthropic payloads arrive as untyped dicts
+            ),
         ),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
         anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),

@@ -1957,7 +1957,9 @@ class LiteLLMProxyRequestSetup:
         return TeamCallbackMetadata(
             success_callback=team_config.get("success_callback", None),
             failure_callback=team_config.get("failure_callback", None),
-            callback_vars=callback_vars_dict,
+            callback_vars=cast(  # cast-ok: callback_vars_dict values are str-coerced above
+                "dict[str, str]", callback_vars_dict
+            ),
         )
 
     @staticmethod
@@ -2651,24 +2653,32 @@ async def add_litellm_data_to_request(
         getattr(request.state, "litellm_roi_estimator", False) is True
     )
 
-    verbose_proxy_logger.debug("[PROXY] returned data from litellm_pre_call_utils: %s", data)
+    verbose_proxy_logger.debug(
+        "[PROXY] returned data from litellm_pre_call_utils: %s",
+        data,
+    )
 
     # Team/Project credential overrides from model_config
     # Placed after the debug log to avoid leaking credential secrets in logs
     _apply_credential_overrides_from_model_config(
         data=data,
         user_api_key_dict=user_api_key_dict,
-        pre_alias_model_name=_pre_alias_model,
+        pre_alias_model_name=cast("str | None", _pre_alias_model),  # cast-ok: the pre-alias model name arrives as a str
         llm_router=llm_router,
     )
 
     await _resolve_user_provider_credentials_for_request(
-        data=data,
+        data=cast("dict[str, object]", data),  # cast-ok: data is the untyped request body dict
         authenticated_user_id=authenticated_user_id,
         team_id=user_api_key_dict.team_id,
         llm_router=llm_router,
         router_settings=(
-            user_api_key_dict.router_settings if isinstance(user_api_key_dict.router_settings, dict) else None
+            cast("dict[str, object]", rs)  # cast-ok: router_settings is a plain config dict
+            if isinstance(
+                rs := cast("object", user_api_key_dict.router_settings),  # cast-ok: config dict
+                dict,
+            )
+            else None
         ),
     )
 
@@ -2715,7 +2725,10 @@ def _per_user_oauth_configured() -> bool:
 
     return any(
         isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
+            GITHUB_COPILOT_AUTH_TYPE_KEY
+        )
+        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         for credential in (litellm.credential_list or ())
     )
 
@@ -2734,7 +2747,10 @@ def _all_per_user_credential_names() -> tuple[str, ...]:
         for credential in (litellm.credential_list or ())
         if getattr(credential, "credential_name", None)
         and isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
+            GITHUB_COPILOT_AUTH_TYPE_KEY
+        )
+        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
 
@@ -2744,7 +2760,13 @@ def _fallback_entry_target_count(entry: object) -> int:
     key plus one per target in its value lists, so empty lists and scalar
     values still cost what the router scan costs."""
     if isinstance(entry, dict):
-        return sum(max(1, len(value)) if isinstance(value, list) else 1 for value in entry.values())
+        entry_dict: Final = cast("dict[object, object]", entry)  # cast-ok: fallback entries are plain dicts at runtime
+        return sum(
+            max(1, len(cast("Sequence[object]", value)))  # cast-ok: fallback values are scalar or list entries
+            if isinstance(value, list)
+            else 1
+            for value in entry_dict.values()
+        )
     return 1
 
 
@@ -2761,20 +2783,22 @@ def _fallback_lists(
     fallbacks in ``_configured_fallbacks``."""
     lists: Final[list[Sequence[object]]] = []  # mutable-ok: accumulates each fallback list found
     for router_list in (
-        llm_router.fallbacks,
-        llm_router.context_window_fallbacks,
-        llm_router.content_policy_fallbacks,
+        cast("object", llm_router.fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", llm_router.context_window_fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", llm_router.content_policy_fallbacks),  # cast-ok: router fallback attrs are untyped
     ):
         if isinstance(router_list, list):
-            lists.append(router_list)
+            lists.append(cast("Sequence[object]", router_list))  # cast-ok: fallback lists hold mixed entry shapes
     for key in _REQUEST_FALLBACK_KEYS:
         entries: object = data.get(key)
         if isinstance(entries, list):
-            lists.append(entries)
+            lists.append(cast("Sequence[object]", entries))  # cast-ok: request fallback lists hold mixed entry shapes
     for settings in (router_settings, team_router_settings):
         key_fallbacks: object = settings.get("fallbacks") if settings is not None else None
         if isinstance(key_fallbacks, list):
-            lists.append(key_fallbacks)
+            lists.append(
+                cast("Sequence[object]", key_fallbacks)  # cast-ok: settings fallback lists hold mixed entry shapes
+            )
     return tuple(lists)
 
 
@@ -2786,18 +2810,23 @@ def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
     bare keys (duplicate keys union their targets, a superset of the router's
     first-wins resolution), plus the entries only the router matcher can score
     ("*" keys, provider-prefixed keys, bare-string generic targets)."""
-    exact: dict[str, tuple[str, ...]] = {}  # mutable-ok: one entry per bare source key
-    fuzzy: list[object] = []  # mutable-ok: accumulates matcher-only entries
+    exact: Final[dict[str, tuple[str, ...]]] = {}  # mutable-ok: one entry per bare source key
+    fuzzy: Final[list[object]] = []  # mutable-ok: accumulates matcher-only entries
     for entry in fallback_list:
         if isinstance(entry, dict) and entry:
-            key = next(iter(entry))
-            raw = entry[key]
-            values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+            entry_dict = cast("dict[object, object]", entry)  # cast-ok: fallback entries are plain dicts at runtime
+            key = next(iter(entry_dict))
+            raw = entry_dict[key]
+            values = (
+                cast("Sequence[object]", raw)  # cast-ok: fallback values are scalar or list entries
+                if isinstance(raw, list)
+                else ([raw] if raw is not None else [])
+            )
             targets = tuple(name for value in values if (name := _fallback_target_name(value)) is not None)
-            if "*" in key or "/" in key:
-                fuzzy.append(entry)
-            else:
+            if isinstance(key, str) and not ("*" in key or "/" in key):
                 exact[key] = exact.get(key, ()) + targets
+            else:
+                fuzzy.append(entry)
         else:
             fuzzy.append(entry)
     return exact, tuple(fuzzy)
@@ -2807,7 +2836,8 @@ def _fuzzy_entry_matched(entry: object, resolved: object) -> bool:
     """Whether a fuzzy entry is the one the router matcher returned for a group,
     so its targets never get expanded a second time."""
     if isinstance(entry, dict) and entry:
-        value: Final = entry[next(iter(entry))]
+        entry_dict: Final = cast("dict[object, object]", entry)  # cast-ok: fallback entries are plain dicts at runtime
+        value: Final = entry_dict[next(iter(entry_dict))]
         return value is resolved or value == resolved
     if isinstance(entry, str):
         return resolved == [entry]
@@ -2848,7 +2878,9 @@ def _fallback_target_name(value: object) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        model_value: Final = value.get("model")
+        model_value: Final = cast("dict[str, object]", value).get(  # cast-ok: fallback dict entries are str-keyed
+            "model"
+        )
         return model_value if isinstance(model_value, str) else None
     return None
 
@@ -2903,22 +2935,38 @@ def _per_user_credential_names_for_groups(
             *((deployment_id_match,) if deployment_id_match is not None else ()),
         )
         for deployment in deployments:
-            litellm_params: object = (
-                deployment.get("litellm_params")
+            dep_map = (
+                cast("Mapping[str, object]", deployment)  # cast-ok: deployments are str-keyed dicts or objects
                 if isinstance(deployment, Mapping)
-                else getattr(deployment, "litellm_params", None)
+                else None
+            )
+            litellm_params: object = (
+                dep_map.get("litellm_params") if dep_map is not None else getattr(deployment, "litellm_params", None)
+            )
+            lp_map = (
+                cast("Mapping[str, object]", litellm_params)  # cast-ok: deployment litellm_params is a str-keyed dict
+                if isinstance(litellm_params, Mapping)
+                else None
             )
             deployment_model: object = (
-                litellm_params.get("model")
-                if isinstance(litellm_params, Mapping)
-                else getattr(litellm_params, "model", None)
+                lp_map.get("model")
+                if lp_map is not None
+                else getattr(
+                    litellm_params,
+                    "model",
+                    None,
+                )
             )
             if isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None:
                 return _all_per_user_credential_names()
             credential_name_obj: object = (
-                litellm_params.get("litellm_credential_name")
-                if isinstance(litellm_params, Mapping)
-                else getattr(litellm_params, "litellm_credential_name", None)
+                lp_map.get("litellm_credential_name")
+                if lp_map is not None
+                else getattr(
+                    litellm_params,
+                    "litellm_credential_name",
+                    None,
+                )
             )
             if not isinstance(credential_name_obj, str) or not credential_name_obj or credential_name_obj in names:
                 continue
@@ -2952,7 +3000,11 @@ async def _team_router_settings(user_api_key_dict_team_id: str | None) -> Mappin
             proxy_logging_obj=proxy_logging_obj,
         )
         settings: Final = getattr(team_obj, "router_settings", None)
-        return settings if isinstance(settings, Mapping) else None
+        return (
+            cast("Mapping[str, object]", settings)  # cast-ok: team router_settings is a plain config dict
+            if isinstance(settings, Mapping)
+            else None
+        )
     except Exception:  # noqa: BLE001  # advisory discovery must never break the request
         return None
 
@@ -2986,7 +3038,10 @@ async def _resolve_user_provider_credentials_for_request(
     # bound is on aggregate target names, not outer entries, so a single dict
     # holding thousands of targets is counted honestly.
     request_fallback_targets: Final = sum(
-        sum(_fallback_entry_target_count(entry) for entry in entries)
+        sum(
+            _fallback_entry_target_count(entry)
+            for entry in cast("Sequence[object]", entries)  # cast-ok: request fallback lists hold mixed entry shapes
+        )
         for key in _REQUEST_FALLBACK_KEYS
         if isinstance(entries := data.get(key), list)
     )
@@ -3004,7 +3059,7 @@ async def _resolve_user_provider_credentials_for_request(
         target
         for target in (
             model,
-            litellm.model_alias_map.get(model) if isinstance(litellm.model_alias_map, Mapping) else None,
+            litellm.model_alias_map.get(model),
             (
                 resolve_model_group_alias(router_settings.get("model_group_alias"), model)
                 if router_settings is not None

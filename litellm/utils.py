@@ -8311,7 +8311,12 @@ def convert_list_message_to_dict(
     messages: Sequence[BaseModel | Mapping[str, object]],
 ) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
     def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
-        return cast(AllMessageValues, convert_to_dict(message))  # cast-ok: message dicts satisfy the TypedDict shape
+        return cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: messages are dicts or pydantic models at runt
+            ),
+        )
 
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
@@ -8330,7 +8335,10 @@ def validate_and_fix_openai_messages(messages: list):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
         convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
-            AllMessageValues, convert_to_dict(message)
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: dicts or pydantic models at runtime
+            ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)

@@ -4,6 +4,7 @@ CRUD endpoints for storing reusable credentials.
 
 import time
 from collections.abc import Mapping
+from datetime import datetime
 from typing import (
     Annotated,
     Final,
@@ -172,9 +173,12 @@ class CredentialHelperUtils:
     @staticmethod
     def encrypt_credential_values(credential: CredentialItem, new_encryption_key: str | None = None) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
-        encrypted_credential_values: Final = {}
+        encrypted_credential_values: Final[dict[str, object]] = {}  # mutable-ok: built one entry per credential value
         for key, value in (credential.credential_values or {}).items():
-            encrypted_credential_values[key] = encrypt_value_helper(value, new_encryption_key)
+            encrypted_credential_values[key] = encrypt_value_helper(
+                cast("str", value),  # cast-ok: credential values are str at the encryption boundary
+                new_encryption_key,
+            )
 
         # Return a new object to avoid mutating the caller's credential, which
         # is kept in memory and should remain unencrypted.
@@ -545,7 +549,7 @@ async def list_user_connections(
             if payload is not None:
                 github_logins[row.credential_name] = payload.github_login
             updated = getattr(row, "updated_at", None)
-            if updated is not None:
+            if isinstance(updated, datetime):
                 connected_at[row.credential_name] = updated.isoformat()
         return UserProviderConnectionsResponse(
             connections=[

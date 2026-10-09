@@ -9,7 +9,12 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -201,7 +206,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - copilot-vision-request if vision content detected
         - User-provided extra_headers (merged with priority)
         """
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         default_headers: Final = get_copilot_default_headers(user_session.token) if user_session is not None else None
         try:
             # Get GitHub Copilot API key via OAuth
@@ -217,7 +224,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             copilot_headers: Final = default_headers or get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers: Final = {**copilot_headers, **headers}
+            merged_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
+                "dict[str, str]", {**copilot_headers, **headers}
+            )
             if user_session is not None:
                 pin_session_authorization(merged_headers, user_session.token)
 
@@ -254,7 +263,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         effective_api_base = (
             (user_session.api_base if user_session is not None else None)
             or api_base
