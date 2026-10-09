@@ -436,8 +436,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # sees it; it joins the same guardrail batch with its own choice mapping
         commentary_choice_indices: Final[list[int]] = []  # mutable-ok: ordered extraction mapping
         for choice_idx, choice in enumerate(response.choices):
-            if not isinstance(choice, litellm.Choices):
-                continue
             commentary = _commentary_text(getattr(choice.message, "provider_specific_fields", None))
             if commentary:
                 commentary_choice_indices.append(choice_idx)
@@ -958,34 +956,28 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     @staticmethod
     def _combine_streaming_commentary(
         responses_so_far: Sequence["ModelResponseStream"],
-    ) -> dict[int, str]:
+    ) -> Mapping[int, str]:
         """Concatenate ``delta.provider_specific_fields["commentary"]`` per choice
         index, mirroring what ``_combine_streaming_texts`` does for content."""
         combined: Final[dict[int, str]] = {}  # mutable-ok: per-choice accumulator
         for response in responses_so_far:
             for choice in response.choices:
-                if isinstance(choice, litellm.StreamingChoices):
-                    fields = getattr(choice.delta, "provider_specific_fields", None)
-                elif isinstance(choice, litellm.Choices):
-                    fields = getattr(choice.message, "provider_specific_fields", None)
-                else:
-                    continue
-                commentary = _commentary_text(fields)
+                commentary = _commentary_text(getattr(choice.delta, "provider_specific_fields", None))
                 if commentary:
-                    idx: Final = getattr(choice, "index", 0) or 0
+                    idx = getattr(choice, "index", 0) or 0
                     combined[idx] = combined.get(idx, "") + commentary
         return combined
 
     async def _apply_guardrail_responses_to_output_streaming_commentary(
         self,
-        responses: list["ModelResponseStream"],
-        guardrailed_texts: list[str],
-        choice_indices: list[int],
+        responses: Sequence["ModelResponseStream"],
+        guardrailed_texts: Sequence[str],
+        choice_indices: Sequence[int],
     ) -> None:
         """Mirror ``_apply_guardrail_responses_to_output_streaming`` for commentary:
         the combined guardrailed text lands in the choice's first commentary chunk
         and later chunks are blanked."""
-        guardrail_map: Final[dict[int, str]] = {
+        guardrail_map: Final[Mapping[int, str]] = {
             choice_idx: guardrailed_texts[task_idx]
             for task_idx, choice_idx in enumerate(choice_indices)
             if task_idx < len(guardrailed_texts)
@@ -993,14 +985,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         already_set: Final[set[int]] = set()  # mutable-ok: per-choice first-chunk tracking
         for response in responses:
             for choice in response.choices:
-                if not isinstance(choice, litellm.StreamingChoices):
-                    continue
                 fields = getattr(choice.delta, "provider_specific_fields", None)
-                if not isinstance(fields, dict):
+                if _commentary_text(fields) is None or not isinstance(fields, dict):
                     continue
-                if not isinstance(fields.get("commentary"), str):
-                    continue
-                idx: Final = getattr(choice, "index", 0) or 0
+                idx = getattr(choice, "index", 0) or 0
                 if idx not in guardrail_map:
                     continue
                 fields["commentary"] = guardrail_map[idx] if idx not in already_set else ""
@@ -1163,14 +1151,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_output_commentary(
         self,
         response: "ModelResponse",
-        responses: list[str],
-        choice_indices: list[int],
+        responses: Sequence[str],
+        choice_indices: Sequence[int],
     ) -> None:
         """Write guardrailed commentary back to each choice's provider_specific_fields."""
         for task_idx, choice_idx in enumerate(choice_indices):
             if task_idx >= len(responses):
                 break
-            fields: Final = getattr(response.choices[choice_idx].message, "provider_specific_fields", None)
+            fields = getattr(response.choices[choice_idx].message, "provider_specific_fields", None)
             if isinstance(fields, dict):
                 fields["commentary"] = responses[task_idx]
 
@@ -1216,8 +1204,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     @staticmethod
     def _string_choice_commentary(response: "ModelResponse") -> tuple[str | None, ...]:
         return tuple(
-            _commentary_text(getattr(choice.message, "provider_specific_fields", None))
-            for choice in response.choices
+            _commentary_text(getattr(choice.message, "provider_specific_fields", None)) for choice in response.choices
         )
 
     async def _write_ended_stream_commentary_rewrites(
@@ -1531,7 +1518,8 @@ class _BlockedChunk(TypedDict):
 def _commentary_text(fields: object) -> str | None:
     if not isinstance(fields, dict):
         return None
-    commentary: Final = fields.get("commentary")
+    fields_map: Final = cast("Mapping[str, object]", fields)  # cast-ok: isinstance check above
+    commentary: Final = fields_map.get("commentary")
     return commentary if isinstance(commentary, str) and commentary else None
 
 

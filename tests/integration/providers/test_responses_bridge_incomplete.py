@@ -823,9 +823,7 @@ def test_chat_over_responses_deployment_stream_joins_commentary_fragments(gatewa
                         "status": "completed",
                         "role": "assistant",
                         "phase": "commentary",
-                        "content": [
-                            {"type": "output_text", "text": "Let me answer that.", "annotations": []}
-                        ],
+                        "content": [{"type": "output_text", "text": "Let me answer that.", "annotations": []}],
                     },
                     {
                         "type": "message",
@@ -870,17 +868,18 @@ def test_chat_over_responses_deployment_stream_joins_commentary_fragments(gatewa
                 for line in response_body.decode().splitlines()
                 if line.startswith("data: ") and line != "data: [DONE]"
             )
-            deltas: Final = tuple(
-                choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ()
-            )
+            deltas: Final = tuple(choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ())
             assert deltas, response_body.decode()
             assert "".join(str(delta.get("content") or "") for delta in deltas) == answer, response_body.decode()
-            assert "".join(
-                str(object_value(delta["provider_specific_fields"])["commentary"])
-                for delta in deltas
-                if isinstance(delta.get("provider_specific_fields"), dict)
-                and "commentary" in delta["provider_specific_fields"]
-            ) == "Let me answer that.", response_body.decode()
+            assert (
+                "".join(
+                    str(object_value(delta["provider_specific_fields"])["commentary"])
+                    for delta in deltas
+                    if isinstance(delta.get("provider_specific_fields"), dict)
+                    and "commentary" in delta["provider_specific_fields"]
+                )
+                == "Let me answer that."
+            ), response_body.decode()
 
 
 @pytest.mark.covers("other.provider_wire.responses_bridge.output_guardrail_masks_commentary")
@@ -979,9 +978,7 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email(gateway
                             "status": "completed",
                             "role": "assistant",
                             "phase": "commentary",
-                            "content": [
-                                {"type": "output_text", "text": commentary_text, "annotations": []}
-                            ],
+                            "content": [{"type": "output_text", "text": commentary_text, "annotations": []}],
                         },
                         {
                             "type": "message",
@@ -1073,9 +1070,7 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email(gateway
                         headers={"Authorization": f"Bearer {gateway.key}"},
                         json={
                             "model": model,
-                            "messages": [
-                                {"role": "user", "content": f"What is the weather in Paris? {identity}"}
-                            ],
+                            "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
                             "stream": True,
                             "cache": {"no-cache": True},
                         },
@@ -1093,21 +1088,22 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email(gateway
                         assert "".join(str(delta.get("content") or "") for delta in deltas) == answer, (
                             response_body.decode()
                         )
-                        assert "".join(
-                            str(object_value(delta["provider_specific_fields"])["commentary"])
-                            for delta in deltas
-                            if isinstance(delta.get("provider_specific_fields"), dict)
-                            and "commentary" in delta["provider_specific_fields"]
-                        ) == "Let me check for [EMAIL_REDACTED] first", response_body.decode()
+                        assert (
+                            "".join(
+                                str(object_value(delta["provider_specific_fields"])["commentary"])
+                                for delta in deltas
+                                if isinstance(delta.get("provider_specific_fields"), dict)
+                                and "commentary" in delta["provider_specific_fields"]
+                            )
+                            == "Let me check for [EMAIL_REDACTED] first"
+                        ), response_body.decode()
                 else:
                     response = gateway.request(
                         "POST",
                         "/v1/chat/completions",
                         {
                             "model": model,
-                            "messages": [
-                                {"role": "user", "content": f"What is the weather in Paris? {identity}"}
-                            ],
+                            "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
                             "cache": {"no-cache": True},
                         },
                     )
@@ -1120,9 +1116,7 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email(gateway
                             "message": {
                                 "role": "assistant",
                                 "content": answer,
-                                "provider_specific_fields": {
-                                    "commentary": "Let me check for [EMAIL_REDACTED] first"
-                                },
+                                "provider_specific_fields": {"commentary": "Let me check for [EMAIL_REDACTED] first"},
                             },
                         }
                     ], response.text

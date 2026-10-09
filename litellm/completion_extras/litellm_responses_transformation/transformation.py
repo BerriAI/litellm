@@ -340,7 +340,7 @@ def _typed_tool_call_dict(item: object, index: int) -> Mapping[str, object] | No
 _RAW_MESSAGE_CONTENT_PARTS: Final = TypeAdapter(list[dict[str, object]])
 
 
-def _raw_output_text_parts(raw_content: object) -> tuple[dict[str, object], ...]:
+def _raw_output_text_parts(raw_content: object) -> tuple[Mapping[str, object], ...]:
     try:
         content_list: Final = _RAW_MESSAGE_CONTENT_PARTS.validate_python(raw_content)
     except ValidationError:
