@@ -2591,56 +2591,56 @@ def throw_retryable_error(*_, **__):
 def test_completion_retries_respect_provider_wait(
     headers: dict[str, str], retry_strategy: str, expected_wait: float
 ) -> None:
-    response = httpx.Response(
+    response: Final = httpx.Response(
         status_code=429,
         headers=headers,
         request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
     )
-    error = litellm.RateLimitError(
+    error: Final = litellm.RateLimitError(
         message="rate limited",
         llm_provider="openai",
         model="test-model",
         response=response,
         headers={"x-request-id": "request-1"},
     )
-    calls: list[dict[str, object]] = []
+    outcomes: Final = iter((error, "recovered"))
+    sleep: Final = MagicMock()
 
     def completion_stub(**kwargs: object) -> str:
-        calls.append(kwargs)
-        if len(calls) == 1:
-            raise error
-        return "recovered"
+        outcome: Final = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
-    with patch("tenacity.nap.time.sleep") as sleep:
-        result = litellm_main.completion_with_retries(
+    with patch("tenacity.nap.time.sleep", sleep):
+        result: Final = litellm_main.completion_with_retries(
             num_retries=2,
             retry_strategy=retry_strategy,
             original_function=completion_stub,
         )
 
     assert result == "recovered"
-    assert len(calls) == 2
     sleep.assert_called_once_with(expected_wait)
 
 
 def test_completion_first_retry_respects_provider_wait() -> None:
     from litellm.utils import client
 
-    response = httpx.Response(
+    response: Final = httpx.Response(
         status_code=429,
         headers={"retry-after": "2"},
         request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
     )
-    error = litellm.RateLimitError(
+    error: Final = litellm.RateLimitError(
         message="rate limited", llm_provider="openai", model="gpt-4o-mini", response=response
     )
-    attempts: list[int] = []
+    errors: Final = iter((error, error))
+    sleep: Final = MagicMock()
 
     def completion(**kwargs: object) -> None:
-        attempts.append(1)
-        raise error
+        raise next(errors)
 
-    with patch("tenacity.nap.time.sleep") as sleep, pytest.raises(litellm.RateLimitError):
+    with patch("tenacity.nap.time.sleep", sleep), pytest.raises(litellm.RateLimitError):
         client(completion)(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hi"}],
@@ -2649,7 +2649,7 @@ def test_completion_first_retry_respects_provider_wait() -> None:
             litellm_logging_obj=_completion_logging_obj("first-retry"),
         )
 
-    assert len(attempts) == 2
+    assert next(errors, None) is None
     sleep.assert_called_once_with(2.0)
 
 
