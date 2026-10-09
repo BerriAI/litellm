@@ -1,17 +1,18 @@
 mod common_utils;
 mod constants;
 mod handler;
-mod prepare;
+mod provider_config;
 pub mod route;
 mod types;
 
 use futures_util::FutureExt;
 use litellm_auth::AuthServices;
-use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
-
-use litellm_inference::{caching::CallCache, context::CallContext};
+use litellm_host::interceptors::Interceptors;
+use litellm_inference::context::CallContext;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
+
+use crate::provider_config::resolve_provider_config;
 
 pub use litellm_inference::RouteError as Error;
 pub use types::{
@@ -74,33 +75,18 @@ impl MessagesRoute {
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
         litellm_inference::diagnostic::call(async {
-            let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
+            let model = call.body.model.clone();
+            let custom_llm_provider = call.custom_llm_provider.clone();
+            let (provider, config) =
+                resolve_provider_config(&model, custom_llm_provider.as_deref())?;
             litellm_inference::diagnostic::provider(
-                &prepared.body.model,
-                prepared.provider.as_str(),
+                provider.model,
+                <&'static str>::from(provider.provider),
             );
-            let request = self.prepare_outbound(prepared, &context).boxed().await?;
-            let cache = CallCache::<route::Messages>::from_wire(
-                self.cache.as_ref().filter(|_| request.cacheable()),
-                context.cache,
-                &request.identity,
-                &request.wire,
-            );
-            let identity = request.identity.clone();
-            let (output, source) = match cache.lookup().await {
-                Some(hit) => hit,
-                None => (
-                    self.call_provider(request, &context).await?,
-                    ResultSource::Provider,
-                ),
-            };
-            context
-                .result_ready(ExecutionFacts {
-                    provider: identity,
-                    source: source.clone(),
-                })
-                .await?;
-            Ok(cache.finish(output, &source).await)
+            let secrets = self.secrets.resolve(config.config().secret_names()).await?;
+            handler::execute(self, config, provider, call, secrets, &context)
+                .boxed()
+                .await
         })
         .await
     }
