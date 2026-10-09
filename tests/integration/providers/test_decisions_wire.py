@@ -256,11 +256,13 @@ def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: G
     provider: Final = _PROVIDERS[1]
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
-        model: Final = _deployment(scenario, handle, provider)
         response: Final = gateway.request(
             "POST",
             "/health/test_connection",
-            {"litellm_params": {"model": model}, "mode": "evaluation"},
+            {
+                "litellm_params": {"model": provider.model, "api_base": handle.api_base(), "api_key": provider.api_key},
+                "mode": "evaluation",
+            },
         )
 
         assert response.status_code == 200, response.text
