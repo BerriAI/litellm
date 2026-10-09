@@ -1,8 +1,8 @@
 "use client";
 
 import { getCoreRowModel, useReactTable, type ColumnDef, type TableOptions } from "@tanstack/react-table";
-import { ArrowDown, ChevronRight } from "lucide-react";
-import { useEffect } from "react";
+import { ArrowDown, ChevronRight, Plus, Star } from "lucide-react";
+import { createContext, useContext, useEffect } from "react";
 import { useInView } from "react-intersection-observer";
 
 import { DataTableViewOptions } from "@/components/shared/DataTable/DataTableViewOptions";
@@ -10,21 +10,34 @@ import { usePersistedColumnVisibility } from "@/components/shared/DataTable/useP
 import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cva.config";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
 import { SpanIcon } from "../ui/SpanIcon";
-import { StatusMark } from "../ui/StatusMark";
+import type { TraceFindingState } from "./useTraceFindings";
+import { flaggedSignals, isFlagged, type TraceSignalState } from "./useTraceSignals";
+import { LOW_SCORE, isLowFeedback, type TraceFeedbackState } from "./useTraceFeedback";
+import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
-import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
+import { fmtMs, previewText, traceAgentNames } from "../utils";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
+  findings: ReadonlyMap<string, TraceFindingState>;
+  feedback?: ReadonlyMap<string, TraceFeedbackState>;
+  canViewFindings?: boolean;
+  signals?: ReadonlyMap<string, TraceSignalState>;
+  showSignals?: boolean;
+  signalsColumn?: boolean;
+  onSetUpSignals?: () => void;
   isLoading: boolean;
   error: Error | null;
   hasMore: boolean;
   isFetching?: boolean;
+  /** Rows from the previous range shown while the new one loads: blurred, and never paged further. */
+  isPlaceholder?: boolean;
   onRetry?: () => void;
   onLoadMore: () => void;
   rangeEmpty?: boolean;
@@ -37,7 +50,34 @@ export const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`;
 };
 
-const firstLine = (text: string): string => text.split("\n")[0] ?? text;
+type RunCost = { label: string; partial: { short: string; long: string } | null };
+
+export const runCost = ({
+  spend,
+  priced_calls,
+  llm_calls,
+}: Pick<TraceSummary, "spend" | "priced_calls" | "llm_calls">): RunCost | null => {
+  if (spend == null || priced_calls === 0) return null;
+  if (priced_calls >= llm_calls) return { label: formatCost(spend), partial: null };
+  return {
+    label: `≥ ${formatCost(spend)}`,
+    partial: { short: `${priced_calls}/${llm_calls} priced`, long: `${priced_calls} of ${llm_calls} calls priced` },
+  };
+};
+
+function CostCell({ run }: { run: TraceSummary }) {
+  const cost = runCost(run);
+  if (!cost) return "—";
+  if (!cost.partial) return cost.label;
+  return (
+    <span className="inline-flex items-baseline gap-1.5" title={cost.partial.long}>
+      {cost.label}
+      <span className="text-xs text-muted-foreground">{cost.partial.short}</span>
+    </span>
+  );
+}
+
+const singleLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
@@ -46,6 +86,14 @@ const SKELETON_ROWS = Array.from({ length: 12 }, (_, i) => i);
 const ROW_HEIGHT = 36;
 const MUTED_NUM = "font-mono text-muted-foreground";
 const NUM = "font-mono text-foreground";
+const FindingsContext = createContext<ReadonlyMap<string, TraceFindingState>>(new Map());
+const SignalsContext = createContext<ReadonlyMap<string, TraceSignalState>>(new Map());
+const NO_SIGNALS: ReadonlyMap<string, TraceSignalState> = new Map();
+const SignalSetupContext = createContext<{ configured: boolean; onSetUp?: () => void }>({ configured: false });
+const FLAGGED_ROW = "bg-destructive/[0.04] shadow-[inset_2px_0_0_var(--color-destructive)] hover:bg-destructive/[0.07]";
+const FeedbackContext = createContext<ReadonlyMap<string, TraceFeedbackState>>(new Map());
+const NO_FEEDBACK: ReadonlyMap<string, TraceFeedbackState> = new Map();
+const feedbackOrEmpty = (feedback?: ReadonlyMap<string, TraceFeedbackState>) => feedback ?? NO_FEEDBACK;
 
 function AgentCell({ run }: { run: TraceSummary }) {
   const framework = traceFramework(run);
@@ -60,12 +108,14 @@ function AgentCell({ run }: { run: TraceSummary }) {
 }
 
 function InputCell({ run }: { run: TraceSummary }) {
+  const input = singleLine(previewText(run.input_preview));
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
-      <span className="truncate text-foreground">
-        {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
-      </span>
+      {input ? (
+        <span className="truncate text-foreground">{input}</span>
+      ) : (
+        <span className="truncate text-muted-foreground">No input recorded</span>
+      )}
       {run.resolution_limited && (
         <span
           className="shrink-0 text-xs text-muted-foreground"
@@ -74,8 +124,91 @@ function InputCell({ run }: { run: TraceSummary }) {
           Partial totals
         </span>
       )}
-      <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">{run.trace_id}</span>
+      <span className="hidden max-w-32 min-w-0 shrink-[100] truncate font-mono text-xs text-muted-foreground 2xl:inline">
+        {run.trace_id}
+      </span>
     </div>
+  );
+}
+
+function FindingCount({ run }: { run: TraceSummary }) {
+  const state = useContext(FindingsContext).get(runKey(run));
+  if (!state || state.status === "pending")
+    return <Skeleton aria-label="Loading findings" className="ml-auto h-3 w-5" />;
+  if (state.status === "error") return <span title="Could not load findings">Unavailable</span>;
+  if (state.count === null) return <span title="No conclusive investigation for this trace">-</span>;
+  return <span title={`${state.count} findings from completed investigations`}>{state.count.toLocaleString()}</span>;
+}
+
+function SignalsHeader() {
+  const { configured, onSetUp } = useContext(SignalSetupContext);
+  if (configured || !onSetUp) return <>Signals</>;
+  return (
+    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+      Signals
+      <Button
+        type="button"
+        variant="outline"
+        size="xs"
+        aria-label="Set up signals"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSetUp();
+        }}
+        className="h-5 rounded-full px-2 font-medium tracking-normal normal-case"
+      >
+        <Plus />
+        Set up
+      </Button>
+    </span>
+  );
+}
+
+const mutedCell = (label: string, title: string) => (
+  <span className="text-muted-foreground" title={title}>
+    {label}
+  </span>
+);
+
+function SignalsCell({ run }: { run: TraceSummary }) {
+  const { configured } = useContext(SignalSetupContext);
+  const state = useContext(SignalsContext).get(runKey(run));
+  const muted = mutedCell;
+  if (!configured) return muted("-", "Signals are not set up");
+  if (!state || state.status === "pending") return <Skeleton aria-label="Loading signals" className="h-3 w-16" />;
+  if (state.status === "error") return muted("Unavailable", "Could not load signals");
+  const { status } = state.signals;
+  if (status === "unclassified" || status === "pending")
+    return muted("Checking", "The System 1 model is checking this run");
+  if (status === "failed") return muted("Not checked", "The System 1 model could not check this run");
+  const flags = flaggedSignals(state.signals);
+  if (!flags.length) return <span title="No signals detected" />;
+  return <SignalPills flags={flags} className="overflow-hidden" />;
+}
+
+export const formatScore = (score: number): string => (Number.isInteger(score) ? String(score) : score.toFixed(1));
+
+export function FeedbackScore({ run }: { run: TraceSummary }) {
+  const state = useContext(FeedbackContext).get(runKey(run));
+  if (!state || state.status === "pending")
+    return <Skeleton aria-label="Loading feedback" className="ml-auto h-3 w-8" />;
+  if (state.status === "error") return <span title="Could not load feedback">Unavailable</span>;
+  const { count, average, lowest } = state.summary;
+  if (count === 0 || average == null) return <span title="No feedback yet">—</span>;
+  const low = lowest != null && lowest <= LOW_SCORE;
+  return (
+    <span
+      data-testid="feedback-score"
+      data-low={low || undefined}
+      title={`User feedback: ${count} ${count === 1 ? "rating" : "ratings"}, lowest ${lowest}/10`}
+      className={cn(
+        "inline-flex w-16 items-center justify-between rounded px-1.5 py-0.5 tabular-nums",
+        low ? "bg-destructive/10 text-destructive" : "bg-muted text-foreground",
+      )}
+    >
+      <Star className={cn("size-3 shrink-0", low ? "fill-destructive" : "fill-amber-400 text-amber-400")} />
+      {formatScore(average)}/10
+    </span>
   );
 }
 
@@ -120,6 +253,13 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   },
   { id: "input", header: "Input", cell: ({ row }) => <InputCell run={row.original} /> },
   {
+    id: "signals",
+    size: 300,
+    header: () => <SignalsHeader />,
+    cell: ({ row }) => <SignalsCell run={row.original} />,
+    meta: { title: "Signals", renderSkeleton: () => <Skeleton className="h-3 w-16" /> },
+  },
+  {
     id: "agents",
     size: 72,
     header: "Agents",
@@ -144,20 +284,22 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     id: "cost",
     size: 80,
     header: "Cost",
-    cell: ({ row }) => (row.original.spend == null ? "—" : formatCost(row.original.spend)),
+    cell: ({ row }) => <CostCell run={row.original} />,
     meta: { numeric: true, className: NUM },
   },
   {
-    id: "failed",
-    size: 72,
-    header: "Failed",
-    cell: ({ row }) =>
-      row.original.error_count > 0 ? (
-        <StatusMark status="error" count={row.original.error_count} />
-      ) : (
-        <span className="font-mono text-muted-foreground/60">0</span>
-      ),
-    meta: { numeric: true },
+    id: "findings",
+    size: 96,
+    header: "Findings",
+    cell: ({ row }) => <FindingCount run={row.original} />,
+    meta: { numeric: true, className: NUM },
+  },
+  {
+    id: "feedback",
+    size: 96,
+    header: "Feedback",
+    cell: ({ row }) => <FeedbackScore run={row.original} />,
+    meta: { numeric: true, className: NUM },
   },
   {
     id: "open",
@@ -205,13 +347,34 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
+function rowFlags(
+  run: TraceSummary,
+  feedback: ReadonlyMap<string, TraceFeedbackState> | undefined,
+  signals: ReadonlyMap<string, TraceSignalState>,
+  showSignals: boolean,
+) {
+  const lowFeedback = isLowFeedback(feedback?.get(runKey(run)));
+  const signalled = showSignals && isFlagged(signals.get(runKey(run)));
+  return { lowFeedback, flagged: lowFeedback || signalled };
+}
+
+const bodyClassName = (blurred?: boolean) => cn("transition-[filter]", blurred && "blur-[1.5px]");
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
+  findings,
+  feedback,
+  canViewFindings = true,
+  signals = NO_SIGNALS,
+  showSignals = false,
+  signalsColumn = showSignals,
+  onSetUpSignals,
   isLoading,
   error,
   hasMore,
   isFetching = false,
+  isPlaceholder,
   onRetry,
   onLoadMore,
   rangeEmpty = false,
@@ -219,12 +382,15 @@ export function AgentTracesTable({
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
-  const canContinue = settled && hasMore;
+  const canContinue = settled && hasMore && !isPlaceholder;
   const autoContinue = canContinue && traces.length > 0;
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
-    columns: RUN_COLUMNS,
+    columns: RUN_COLUMNS.filter(
+      (column) => (canViewFindings || column.id !== "findings") && (signalsColumn || column.id !== "signals"),
+    ),
+    defaultColumn: { size: undefined },
     getRowId: runKey,
     autoResetAll: false,
     state: { columnVisibility },
@@ -233,54 +399,68 @@ export function AgentTracesTable({
   };
   const table = useReactTable(tableOptions);
   return (
-    <InspectorTable.Root table={table} data-testid="runs-table">
-      <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
-        <InspectorTable.Header />
-        <InspectorTable.Body<TraceSummary>
-          rowHeight={() => ROW_HEIGHT}
-          after={
-            <>
-              {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
-              {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
-            </>
-          }
-        >
-          {(row) => (
-            <InspectorTable.Row
-              row={row}
-              item={traceRefOf(row.original)}
-              data-testid="agent-trace-row"
-              className="h-9"
-            />
-          )}
-        </InspectorTable.Body>
-      </InspectorTable.Grid>
-      {isLoading && (
-        <p role="status" className="sr-only">
-          Loading runs…
-        </p>
-      )}
-      {error && (
-        <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
-          <span>
-            {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
-          </span>
-          {onRetry && (
-            <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
-              Retry
-            </Button>
-          )}
-        </div>
-      )}
-      {canContinue && traces.length === 0 && (
-        <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
-          <span>No loaded runs match these filters.</span>
-          <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
-            Load older runs
-          </Button>
-        </div>
-      )}
-      {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
-    </InspectorTable.Root>
+    <FindingsContext.Provider value={findings}>
+      <FeedbackContext.Provider value={feedbackOrEmpty(feedback)}>
+        <SignalsContext.Provider value={signals}>
+          <SignalSetupContext.Provider value={{ configured: showSignals, onSetUp: onSetUpSignals }}>
+            <InspectorTable.Root table={table} data-testid="runs-table">
+              <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
+                <InspectorTable.Header />
+                <InspectorTable.Body<TraceSummary>
+                  className={bodyClassName(isPlaceholder)}
+                  rowHeight={() => ROW_HEIGHT}
+                  after={
+                    <>
+                      {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
+                      {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
+                    </>
+                  }
+                >
+                  {(row) => {
+                    const { lowFeedback, flagged } = rowFlags(row.original, feedback, signals, showSignals);
+                    return (
+                      <InspectorTable.Row
+                        row={row}
+                        item={traceRefOf(row.original)}
+                        data-testid="agent-trace-row"
+                        data-flagged={flagged || undefined}
+                        data-low-feedback={lowFeedback || undefined}
+                        className={cn("h-9", flagged && FLAGGED_ROW)}
+                      />
+                    );
+                  }}
+                </InspectorTable.Body>
+              </InspectorTable.Grid>
+              {isLoading && (
+                <p role="status" className="sr-only">
+                  Loading runs…
+                </p>
+              )}
+              {error && (
+                <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
+                  <span>
+                    {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
+                  </span>
+                  {onRetry && (
+                    <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
+                      Retry
+                    </Button>
+                  )}
+                </div>
+              )}
+              {canContinue && traces.length === 0 && (
+                <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
+                  <span>No loaded runs match these filters.</span>
+                  <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
+                    Load older runs
+                  </Button>
+                </div>
+              )}
+              {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
+            </InspectorTable.Root>
+          </SignalSetupContext.Provider>
+        </SignalsContext.Provider>
+      </FeedbackContext.Provider>
+    </FindingsContext.Provider>
   );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fieldNode, payloadView, textFormat } from "./payload";
+import { fieldNode, payloadView, textFormat, toolInput, toolSummary, toolResult } from "./payload";
 
 describe("textFormat", () => {
   it.each([
@@ -151,5 +151,65 @@ describe("payloadView", () => {
       text: "StopEvent(result=1)",
       format: "code",
     });
+  });
+});
+
+describe("tool payloads", () => {
+  it("decodes transport escapes once while preserving literal escapes inside a command", () => {
+    const args = { command: "printf 'first\\nsecond'\nls src", workdir: "/workspace" };
+    expect(toolInput(JSON.stringify(args))).toEqual(args);
+    expect(toolSummary(JSON.stringify(args))).toBe("printf 'first\\nsecond' ls src");
+  });
+
+  it("extracts a useful action from a truncated tree preview without showing JSON scaffolding", () => {
+    expect(toolSummary('{"command":"npm test\\n-- --run')).toBe("npm test -- --run");
+    expect(toolSummary('{"file_path":"/workspace/src/page.tsx","offset":10}')).toBe("/workspace/src/page.tsx");
+    expect(toolSummary('{"unknown":42}')).toBe("");
+    expect(toolSummary({ command: "[ -f package.json ] && npm test" })).toBe("[ -f package.json ] && npm test");
+    expect(toolSummary(JSON.stringify({ command: "{ npm test; }" }))).toBe("{ npm test; }");
+  });
+
+  it("preserves command failure metadata and renders structured results as fields", () => {
+    expect(toolResult(JSON.stringify({ output: "first\nsecond", exit_code: 1, error: null }))).toEqual({
+      body: { kind: "text", text: "first\nsecond", format: "plain" },
+      metadata: [
+        ["exit_code", { kind: "scalar", text: "1" }],
+        ["error", { kind: "scalar", text: "null" }],
+      ],
+    });
+    expect(toolResult('{"result":{"number":42,"state":"open"}}').body).toEqual(
+      fieldNode({ result: { number: 42, state: "open" } }),
+    );
+  });
+
+  it("unwraps MCP text while preserving unknown blocks, annotations and error flags", () => {
+    expect(toolResult('{"content":[{"type":"text","text":"Permission denied"}],"isError":true}')).toEqual({
+      body: fieldNode("Permission denied"),
+      metadata: [["isError", { kind: "scalar", text: "true" }]],
+    });
+    const unknown = {
+      content: [
+        { type: "image", data: "sample" },
+        { type: "text", text: "caption", annotations: { audience: ["user"] } },
+      ],
+    };
+    expect(toolResult(JSON.stringify(unknown)).body).toEqual(fieldNode(unknown));
+    expect(toolResult("{malformed output").body).toEqual(fieldNode("{malformed output"));
+  });
+
+  it("recognizes message arrays inside normalized text without rewriting ordinary agent content", () => {
+    const raw = JSON.stringify([{ role: "user", content: "SAVED TASK RESUMED: Continue this task" }]);
+    expect(payloadView(raw, { kind: "text", text: raw }, false)).toEqual({
+      kind: "messages",
+      messages: [{ role: "user", content: "SAVED TASK RESUMED: Continue this task" }],
+    });
+    const summary = JSON.stringify([{ content: "Checking files", tool_names: ["read_file"] }]);
+    expect(payloadView(summary, { kind: "text", text: summary }, false, true)).toMatchObject({
+      kind: "messages",
+      messages: [
+        { role: "assistant", content: "Checking files", tool_calls: [{ name: "read_file", args: undefined }] },
+      ],
+    });
+    expect(payloadView(summary, { kind: "text", text: summary }, false).kind).toBe("text");
   });
 });

@@ -166,6 +166,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="mcp_discoverable",
         module_path="litellm.proxy._experimental.mcp_server.discoverable_endpoints",
         path_prefixes=(
+            "/oauth/client-metadata.json",
             "/.well-known/oauth-",
             "/.well-known/openid-configuration",
             "/.well-known/jwks.json",
@@ -267,7 +268,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="decisions",
         module_path="litellm.proxy.decisions_endpoints.endpoints",
-        path_prefixes=("/v1/decisions", "/decisions"),
+        path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone"),
     ),
     LazyFeature(
         name="claude_code_marketplace",
@@ -353,7 +354,7 @@ class LazyFeatureMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
-            path = scope.get("path", "")
+            path: str = scope.get("path", "")
             # Strip the request's root_path so prefix matching works under a
             # server root path. Without this, requests like /api/v1/policies/...
             # never match the registered prefixes (/policies/...) and lazy

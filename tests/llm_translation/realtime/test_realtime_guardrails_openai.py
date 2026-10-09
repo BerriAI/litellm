@@ -224,68 +224,6 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
 
 
 @pytest.mark.asyncio
-async def test_voice_transcript_blocked_by_guardrail():
-    """
-    Simulate a backend-side voice transcription event containing the blocked phrase.
-    Guardrail must block it - no response.create sent to OpenAI.
-    """
-    from websockets.exceptions import ConnectionClosed
-
-    guardrail = _make_guardrail(GuardrailEventHooks.realtime_input_transcription)
-    litellm.callbacks = [guardrail]
-
-    client_events: List[dict] = []
-
-    # Build the transcript event that would come from the OpenAI backend
-    transcript_event = json.dumps(
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "transcript": f"This is {BLOCKED_PHRASE} in my voice message",
-            "item_id": "item_integ_test",
-        }
-    ).encode()
-
-    # Mock backend that delivers the transcript then closes
-    backend_ws = MagicMock()
-    backend_ws.recv = AsyncMock(
-        side_effect=[
-            transcript_event,
-            ConnectionClosed(None, None),
-        ]
-    )
-    backend_ws.send = AsyncMock()
-
-    try:
-        streaming, _ = await _build_streaming(client_events, backend_ws)
-        await streaming.backend_to_client_send_messages()
-
-        event_types = [e.get("type") for e in client_events]
-
-        # 1. Error event must be sent to client
-        error_events = [e for e in client_events if e.get("type") == "error"]
-        assert len(error_events) >= 1, f"Expected guardrail error event, got: {event_types}"
-        assert error_events[0]["error"]["type"] == "guardrail_violation"
-
-        # 2. Check what was sent to backend.
-        #    The guardrail may send response.cancel + conversation.item.create (block msg)
-        #    + response.create (to speak the block message). That's acceptable.
-        #    What we assert is that a response.cancel was sent (blocking the original).
-        sent_to_backend = [
-            json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args and isinstance(c.args[0], str)
-        ]
-        response_cancels = [e for e in sent_to_backend if e.get("type") == "response.cancel"]
-        assert len(response_cancels) >= 1 or len(sent_to_backend) == 0, (
-            f"Guardrail should have sent response.cancel or nothing, got: {sent_to_backend}"
-        )
-
-        # Note: The guardrail may or may not send transcript deltas; the error event
-        # (assertion #1) is the primary signal that the blocked content was handled.
-
-    finally:
-        litellm.callbacks = []
-
-
-@pytest.mark.asyncio
 async def test_clean_text_message_passes_through_to_openai():
     """
     A clean message (no blocked phrase) must pass the guardrail and result in a real

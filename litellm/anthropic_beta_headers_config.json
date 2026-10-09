@@ -36,7 +36,8 @@
     "web-search-2025-03-05": "web-search-2025-03-05",
     "mid-conversation-output-config-2026-07-01": "mid-conversation-output-config-2026-07-01",
     "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
-    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01"
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01",
+    "inline-tools-2026-09-15": "inline-tools-2026-09-15"
   },
   "azure_ai": {
     "advisor-tool-2026-03-01": null,
@@ -214,7 +215,8 @@
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
     "web-fetch-2025-09-10": null,
-    "web-search-2025-03-05": "web-search-2025-03-05"
+    "web-search-2025-03-05": "web-search-2025-03-05",
+    "inline-tools-2026-09-15": "inline-tools-2026-09-15"
   },
   "databricks": {
     "advisor-tool-2026-03-01": null,

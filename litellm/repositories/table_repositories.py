@@ -131,10 +131,6 @@ class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKe
     table_name = "litellm_jwtkeymapping"
 
 
-class ManagedFileRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedFileTable"]):
-    table_name = "litellm_managedfiletable"
-
-
 class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"]):
     table_name = "litellm_memorytable"
 

@@ -13,6 +13,7 @@ pub const DATABASE: &str = "trace_test";
 
 pub struct SeededDatabase {
     pub database: ClickHouseDatabase,
+    #[allow(dead_code)] // dead_code: also shared with reads.rs, which uses a direct storage reader
     pub readers: QueryReaders,
 }
 
@@ -158,7 +159,8 @@ fn span_row(span: &DecodedSpan, team: &str, key: &str) -> BTreeMap<String, Value
                     .find_map(|key| match key {
                         litellm_traces::CallKey::LiteLlmRequest(id)
                         | litellm_traces::CallKey::ProviderResponse(id) => Some(id.as_str()),
-                        litellm_traces::CallKey::Transport
+                        litellm_traces::CallKey::ProviderRequest(_)
+                        | litellm_traces::CallKey::Transport
                         | litellm_traces::CallKey::GatewayAttempt => None,
                     })
                     .unwrap_or_default()
