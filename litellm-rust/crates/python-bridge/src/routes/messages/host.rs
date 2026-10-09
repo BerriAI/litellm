@@ -5,12 +5,12 @@ use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
-    Error, LitellmParams, MessagesCall, MessagesSettings, MessagesShaping, litellm_params,
-    messages_body,
+    Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
+use litellm_router_types::LitellmParams;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},

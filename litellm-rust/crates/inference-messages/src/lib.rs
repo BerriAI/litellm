@@ -14,7 +14,6 @@ use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
 pub use litellm_inference::RouteError as Error;
-pub use litellm_router_types::LitellmParams;
 pub use types::{
     MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, litellm_params,
     messages_body,
