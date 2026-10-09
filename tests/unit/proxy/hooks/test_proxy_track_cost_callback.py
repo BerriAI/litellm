@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -354,6 +355,61 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
         )
 
         assert mock_update_database.call_args[1]["response_cost"] == pytest.approx(0.0013)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot_guardrail_information, expected_guardrail_names",
+    [
+        (None, ["detect-only-scanner"]),
+        ([], ["detect-only-scanner"]),
+        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+    ],
+)
+async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
+    snapshot_guardrail_information: list[dict[str, str]] | None, expected_guardrail_names: list[str]
+):
+    """
+    A provider that drops a live stream mid-flight gets the failure logged at once, and only then does the
+    post_call scan of the chunks the client already received record its verdict, so the failure row showed no
+    guardrail at all while billing the scan's cost
+    """
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    failure_snapshot: Final = {
+        "metadata": {},
+        "hidden_params": {},
+        "model_map_information": {},
+        "guardrail_information": snapshot_guardrail_information,
+    }
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6-sol",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "detect-only-scanner", "guardrail_status": "success"}
+                ]
+            },
+            "litellm_logging_obj": SimpleNamespace(
+                model_call_details={"standard_logging_object": failure_snapshot}, litellm_trace_id="trace-1"
+            ),
+        },
+        original_exception=Exception("provider dropped the stream"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    logged_guardrails: Final = json.loads(row["metadata"])["guardrail_information"]
+    assert [entry["guardrail_name"] for entry in logged_guardrails] == expected_guardrail_names
+    assert failure_snapshot["guardrail_information"] == snapshot_guardrail_information
 
 
 @pytest.mark.asyncio
