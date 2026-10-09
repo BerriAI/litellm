@@ -7,6 +7,7 @@ redacted audit rows for callback mutations.
 """
 
 import json
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1738,7 +1739,7 @@ async def test_add_team_callbacks_rejects_capture_message_content_on_a_non_otel_
 
 
 @pytest.fixture
-def otel_v2_on(monkeypatch):
+def otel_v2_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")

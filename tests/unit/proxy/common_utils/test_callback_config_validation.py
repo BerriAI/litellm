@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Final
 
 import pytest
@@ -265,7 +266,7 @@ def test_arize_sampling_rates_are_not_family_credentials():
 
 
 @pytest.fixture
-def otel_v2_on(monkeypatch):
+def otel_v2_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -281,7 +282,7 @@ def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callba
     assert callback_config_error(callback_name, {"capture_message_content": value}) is None
 
 
-def test_capture_message_content_is_rejected_while_otel_v2_is_off(monkeypatch) -> None:
+def test_capture_message_content_is_rejected_while_otel_v2_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
