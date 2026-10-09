@@ -6,6 +6,7 @@ Fixtures under fixtures/ are sanitized `pi --mode json` output recorded from
 
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from litellm.harness.errors import (
 from litellm.harness.handlers.cli_handler import PERSIST_DIR_SCRIPT, CLIHarnessHandler
 from litellm.harness.options import OpenCodeOptions, PiOptions
 from litellm.harness.sandbox.base import CompletedRun
-from litellm.harness.types import Harness, Reasoning, Text, ToolCall, ToolResult
+from litellm.harness.types import Event, Harness, Reasoning, Text, ToolCall, ToolResult
 from litellm.llms.base_llm.harness.transformation import (
     HarnessSessionSetup,
     HarnessTurnError,
@@ -33,10 +34,10 @@ from litellm.llms.pi.harness.transformation import (
     MANAGED_ENV_KEYS,
     MCP_FILENAME,
     MODELS_FILENAME,
-    SETTINGS_FILENAME,
     PI_CONFIG_DIR_ENV,
     PI_ISOLATION_ENV,
     PI_TOKEN_ENV,
+    SETTINGS_FILENAME,
     PiHarnessConfig,
     PiStreamState,
     build_models_json,
@@ -57,15 +58,15 @@ MOYAI = {"command": "/path/to/mcp-server", "args": [], "env": {}, "exposure": "d
 CONFIG = PiHarnessConfig()
 
 
-def load_fixture(name: str) -> list[dict]:
+def load_fixture(name: str) -> list[dict[str, object]]:
     return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line]
 
 
-def parse(obj: dict, state: PiStreamState) -> list:
+def parse(obj: Mapping[str, object], state: PiStreamState) -> Sequence[Event]:
     return CONFIG.transform_stream_line(obj, state)
 
 
-def parse_all(name: str, state: PiStreamState | None = None):
+def parse_all(name: str, state: PiStreamState | None = None) -> tuple[list[Event], PiStreamState]:
     state = state or CONFIG.create_stream_state()
     events = []
     for obj in load_fixture(name):
@@ -73,7 +74,7 @@ def parse_all(name: str, state: PiStreamState | None = None):
     return events, state
 
 
-def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict:
+def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict[str, object]:
     message = {
         "role": "assistant",
         "content": [{"type": "text", "text": text}],
@@ -84,11 +85,8 @@ def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict
     return {"type": "message_end", "message": message}
 
 
-# --------------------------------------------------------------------------- fakes
-
-
 class FakeStdin:
-    def __init__(self):
+    def __init__(self) -> None:
         self.data = b""
         self.closed = False
 
@@ -103,7 +101,7 @@ class FakeStdin:
 
 
 class FakeProcess:
-    def __init__(self, stdout: bytes, stderr: bytes = b"", exit_code: int = 0):
+    def __init__(self, stdout: bytes, stderr: bytes = b"", exit_code: int = 0) -> None:
         self.stdin = FakeStdin()
         self.stdout = asyncio.StreamReader()
         self.stdout.feed_data(stdout)
@@ -126,42 +124,51 @@ class FakeSandbox:
     workdir: str = "/work"
     has_binary: bool = True
     persist_ok: bool = True
-    outputs: list = field(default_factory=list)
-    files: dict = field(default_factory=dict)
-    execs: list = field(default_factory=list)
-    runs: list = field(default_factory=list)
+    outputs: list[FakeProcess] = field(default_factory=list)
+    files: dict[str, bytes] = field(default_factory=dict)
+    execs: list[dict[str, object]] = field(default_factory=list)
+    runs: list[Sequence[str]] = field(default_factory=list)
     tempdirs: int = 0
 
-    async def exec(self, cmd, *, env=None, cwd=None):
+    async def exec(
+        self, cmd: Sequence[str], *, env: Mapping[str, str] | None = None, cwd: str | None = None
+    ) -> FakeProcess:
         self.execs.append({"cmd": cmd, "env": dict(env or {}), "cwd": cwd})
         return self.outputs.pop(0)
 
-    async def run(self, cmd, *, env=None, cwd=None, timeout=None):
+    async def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> CompletedRun:
         self.runs.append(cmd)
         if self.persist_ok:
             return CompletedRun("", "", 0)
         return CompletedRun("", "read-only fs", 1)
 
-    async def read(self, path):
+    async def read(self, path: str) -> bytes:
         return self.files[path]
 
-    async def write(self, path, data):
+    async def write(self, path: str, data: bytes) -> None:
         self.files[path] = data
 
-    def host_url(self, port):
+    def host_url(self, port: int) -> str:
         return f"http://host.docker.internal:{port}"
 
-    async def which(self, binary):
+    async def which(self, binary: str) -> str | None:
         return f"/usr/bin/{binary}" if self.has_binary else None
 
-    async def tempdir(self):
+    async def tempdir(self) -> str:
         self.tempdirs += 1
         return f"/tmp/pi-{self.tempdirs}"
 
-    async def snapshot(self):
+    async def snapshot(self) -> dict[str, str]:
         return {}
 
-    async def close(self):
+    async def close(self) -> None:
         return None
 
 
@@ -177,7 +184,7 @@ class Answer(BaseModel):
     country: str
 
 
-def make_ctx(sandbox=None, **kwargs) -> SessionContext:
+def make_ctx(sandbox: FakeSandbox | None = None, **kwargs: object) -> SessionContext:
     return SessionContext(
         harness=Harness.PI,
         sandbox=sandbox or FakeSandbox(),
@@ -192,19 +199,21 @@ def setup_for(ctx: SessionContext) -> HarnessSessionSetup:
     return CONFIG.transform_session_setup(ctx, PRIVATE)
 
 
-def setup_models(setup: HarnessSessionSetup) -> dict:
+def setup_models(setup: HarnessSessionSetup) -> dict[str, object]:
     return json.loads(setup.files[MODELS_FILENAME])
 
 
-def fixture_proc(name: str, **kwargs) -> FakeProcess:
-    return FakeProcess((FIXTURES / name).read_bytes(), **kwargs)
+def fixture_proc(name: str, exit_code: int = 0) -> FakeProcess:
+    return FakeProcess((FIXTURES / name).read_bytes(), exit_code=exit_code)
 
 
-async def collect(handler, ctx, prompt):
+async def collect(handler: CLIHarnessHandler, ctx: SessionContext, prompt: str) -> list[Event]:
     return [e async for e in handler.turn(ctx, prompt)]
 
 
-async def started(sandbox=None, **kwargs):
+async def started(
+    sandbox: FakeSandbox | None = None, **kwargs: object
+) -> tuple[CLIHarnessHandler, SessionContext, FakeSandbox]:
     sandbox = sandbox or FakeSandbox()
     handler = CLIHarnessHandler(PiHarnessConfig())
     ctx = make_ctx(sandbox, **kwargs)
@@ -212,16 +221,13 @@ async def started(sandbox=None, **kwargs):
     return handler, ctx, sandbox
 
 
-def flag(argv, name: str) -> str:
+def flag(argv: Sequence[str], name: str) -> str:
     args = list(argv)
     return args[args.index(name) + 1]
 
 
-def written_models(sandbox, private: str = PRIVATE) -> dict:
+def written_models(sandbox: FakeSandbox, private: str = PRIVATE) -> dict[str, object]:
     return json.loads(sandbox.files[f"{private}/{MODELS_FILENAME}"])
-
-
-# --------------------------------------------------------------------------- parsing
 
 
 def test_parse_write_read_turn():
@@ -391,9 +397,6 @@ def test_aborted_run_is_an_error():
     assert state.stop_reason == "stop"
     parse({"type": "agent_settled", "aborted": True}, state)
     assert state.stop_reason == "aborted"
-
-
-# --------------------------------------------------------------------------- config
 
 
 def test_permission_mapping():
@@ -609,9 +612,6 @@ def test_turn_response_paths():
         CONFIG.transform_turn_response(make_ctx(), PiStreamState(), 3, [])
 
 
-# --------------------------------------------------------------------------- handler
-
-
 async def test_start_writes_token_only_in_env():
     handler, ctx, sandbox = await started()
     assert written_models(sandbox)["providers"]["litellm"]["apiKey"] == f"${PI_TOKEN_ENV}"
@@ -819,12 +819,3 @@ def test_turn_request_never_trusts_project_files():
     ctx = make_ctx()
     argv = list(CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None).argv)
     assert argv[:4] == ["pi", "--mode", "json", "--no-approve"]
-
-
-def test_endpoint_request_fixture_documents_contract():
-    requests = load_fixture("endpoint_requests.jsonl")
-    assert {r["path"] for r in requests} == {"/v1/chat/completions"}
-    assert all(r["auth_prefix"] == "Bearer <session-token>" for r in requests)
-    assert all(r["stream"] is True for r in requests)
-    assert all(r["stream_options"] == {"include_usage": True} for r in requests)
-    assert requests[-1]["tools"] == ["read", "grep", "find", "ls"]

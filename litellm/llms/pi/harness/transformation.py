@@ -87,7 +87,6 @@ MANAGED_CONFIG_KEYS: Final = frozenset(
     }
 )
 
-# Env this config owns; PiOptions.env may not override these.
 MANAGED_ENV_KEYS: Final = frozenset({PI_CONFIG_DIR_ENV, PI_TOKEN_ENV})
 
 PI_ISOLATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
