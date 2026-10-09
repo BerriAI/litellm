@@ -46,6 +46,7 @@ pub enum ResultSource {
 pub struct ExecutionFacts {
     pub provider: ProviderIdentity,
     pub source: ResultSource,
+    pub reported_cost: Option<serde_json::Number>,
 }
 
 pub trait Interceptors<E>: Send + Sync {

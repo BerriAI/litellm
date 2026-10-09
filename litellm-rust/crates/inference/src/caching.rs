@@ -172,6 +172,7 @@ where
         ExecutionFacts {
             provider: identity,
             source,
+            reported_cost: None,
         },
         interceptors,
         observers,
@@ -213,6 +214,7 @@ where
         ExecutionFacts {
             provider: identity,
             source: source.clone(),
+            reported_cost: None,
         },
         interceptors,
         observers,

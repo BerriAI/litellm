@@ -87,6 +87,7 @@ impl MessagesRoute {
                 &request.wire,
             );
             let identity = request.identity.clone();
+            let config = request.provider.config();
             let (output, source) = match cache.lookup().await {
                 Some(hit) => hit,
                 None => (
@@ -94,10 +95,17 @@ impl MessagesRoute {
                     ResultSource::Provider,
                 ),
             };
+            let reported_cost = match (&source, &output) {
+                (ResultSource::Provider, MessagesCallResponse::Complete(response)) => {
+                    config.reported_cost(response)
+                }
+                _ => None,
+            };
             context
                 .result_ready(ExecutionFacts {
                     provider: identity,
                     source: source.clone(),
+                    reported_cost,
                 })
                 .await?;
             Ok(cache.finish(output, &source).await)
