@@ -1,7 +1,6 @@
 use futures_util::future::BoxFuture;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
-use litellm_inference::provider::ResolvedProvider;
 use litellm_llms::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient},
@@ -14,11 +13,9 @@ use serde_json::Value;
 use super::{arguments::is_secret_param, provider_config::OcrConfigKind};
 use crate::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
 
-#[allow(clippy::too_many_arguments)] // Required by the shared route execution signature.
 pub(crate) async fn execute(
     client: &OcrClient,
     config: OcrConfigKind,
-    provider: ResolvedProvider<'_>,
     call: ResolvedOcrRequest,
     secrets: Secrets,
     host: &impl Interceptors<Error>,
@@ -27,6 +24,7 @@ pub(crate) async fn execute(
 ) -> Result<LiteLLMOcrResponse, Error> {
     call.response_format()?;
     let LiteLLMOcrRequest {
+        model,
         document,
         credentials,
         transport,
@@ -37,7 +35,7 @@ pub(crate) async fn execute(
     } = call;
     let resolved = config.resolve_credentials(credentials, &secrets);
     let request = PreparedOcrRequest {
-        model: provider.model.to_owned(),
+        model,
         document,
         connection: OcrConnection::new(resolved, transport, client.settings().clone(), secrets),
         caller_document,
