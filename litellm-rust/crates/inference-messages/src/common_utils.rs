@@ -6,6 +6,7 @@ use litellm_llms::{
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -19,6 +20,7 @@ pub(crate) enum MessagesProvider {
     Anthropic,
     AzureAi,
     Bedrock,
+    Deepseek,
     VertexAi,
 }
 
@@ -28,6 +30,7 @@ impl MessagesProvider {
             Self::Anthropic => LlmProviders::Anthropic,
             Self::AzureAi => LlmProviders::AzureAi,
             Self::Bedrock => LlmProviders::Bedrock,
+            Self::Deepseek => LlmProviders::Deepseek,
             Self::VertexAi => LlmProviders::VertexAi,
         }
         .into()
@@ -38,6 +41,7 @@ impl MessagesProvider {
             Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+            Self::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
             Self::VertexAi => &VERTEX_ANTHROPIC_MESSAGES_CONFIG,
         }
     }
@@ -50,6 +54,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::Deepseek => Some(MessagesProvider::Deepseek),
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::VertexAi)
         }
@@ -77,6 +82,7 @@ mod tests {
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
     #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
     #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
+    #[case::deepseek("deepseek", MessagesProvider::Deepseek)]
     #[case::vertex_ai("vertex_ai", MessagesProvider::VertexAi)]
     fn provider_round_trips_through_its_python_name(
         #[case] name: &str,
