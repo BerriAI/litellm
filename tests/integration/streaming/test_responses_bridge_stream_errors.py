@@ -392,8 +392,8 @@ def assert_messages_errorframe(events: Sequence[tuple[str, Mapping[str, JsonValu
     error: Final = object_value(events[-1][1]["error"])
     assert error["type"] == "rate_limit_error", error
     message: Final = string_value(error["message"])
-    assert message.startswith(_SENTINEL_PREFIX + _RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
-    assert message.count(_SENTINEL_PREFIX) == 1, message
+    assert message.startswith(_RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
+    assert message.count(_RATE_LIMIT_PREFIX) == 1 and _SENTINEL_PREFIX not in message, message
 
 
 def test_messages_over_the_bridged_stream_carry_the_provider_error_once_in_the_errorframe(gateway: Gateway) -> None:
