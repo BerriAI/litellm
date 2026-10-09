@@ -36039,6 +36039,8 @@ export interface components {
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
+            /** Implicit Cache Read Input Token Cost */
+            implicit_cache_read_input_token_cost?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -50900,6 +50902,8 @@ export interface components {
             enable_tag_filtering?: boolean | null;
             /** Id */
             id: string | null;
+            /** Implicit Cache Read Input Token Cost */
+            implicit_cache_read_input_token_cost?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Token */
@@ -51257,6 +51261,8 @@ export interface components {
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
+            /** Implicit Cache Read Input Token Cost */
+            implicit_cache_read_input_token_cost?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
