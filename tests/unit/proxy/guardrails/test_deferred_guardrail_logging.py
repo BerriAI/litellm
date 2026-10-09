@@ -30,6 +30,7 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import Rules, _dispatch_success_logging, function_setup
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -38,6 +39,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from tests.unit.responses.mcp.test_chat_completions_handler import _mcp_auto_execute_request, _Recorder
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -614,8 +616,11 @@ async def test_a_follow_up_call_held_with_the_request_shares_its_post_call_guard
     logged: Final[list[tuple[str, str]]] = []
     both_logged: Final = asyncio.Event()
 
-    async def record(kwargs: dict[str, Any], response_obj: object, start_time: datetime, end_time: datetime) -> None:
-        logged.append((kwargs["standard_logging_object"]["status"], kwargs["litellm_call_id"]))
+    async def record(
+        kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        logged.append((payload["status"], cast(str, kwargs["litellm_call_id"])))
         if len(logged) == 2:
             both_logged.set()
 
@@ -643,10 +648,40 @@ async def test_a_follow_up_call_held_with_the_request_shares_its_post_call_guard
         await ProxyLogging._dispatch_proxy_only_failure_handlers(
             request, HTTPException(status_code=400, detail="blocked")
         )
-    await both_logged.wait()
+    await asyncio.wait_for(both_logged.wait(), timeout=30)
 
     status: Final = "failure" if blocked else "success"
     assert sorted(logged) == [(status, "follow-up"), (status, "request")], logged
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_mcp_auto_execute_follow_up_shares_the_outcome_of_a_request_held_for_post_call_guardrails(
+    monkeypatch: pytest.MonkeyPatch, blocked: bool
+) -> None:
+    """With logging held for post-call guardrails, both model calls of an MCP auto-execute request are
+    logged once they pass and both fail, without the blocked answer, when they block"""
+    recorder: Final = _Recorder(expected=2)
+    parent, kwargs = _mcp_auto_execute_request(monkeypatch, recorder, stream=False)
+    parent.defer_async_logging = True
+
+    await litellm.acompletion(**kwargs)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=30)
+    assert recorder.calls == [], "logged before the post-call guardrails ran"
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(parent, exception_raised=blocked)
+    if blocked:
+        await ProxyLogging._dispatch_proxy_only_failure_handlers(
+            parent, HTTPException(status_code=400, detail="blocked")
+        )
+    await asyncio.wait_for(recorder.done.wait(), timeout=30)
+
+    status: Final = "failure" if blocked else "success"
+    assert sorted((call.status, call.is_first_call, call.logs_answer) for call in recorder.calls) == [
+        (status, False, not blocked),
+        (status, True, False),
+    ], recorder.calls
 
 
 # ---------------------------------------------------------------------------
