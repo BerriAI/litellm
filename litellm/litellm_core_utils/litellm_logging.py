@@ -4136,11 +4136,6 @@ class Logging(LiteLLMLoggingBaseClass):
             "sync_deployment_callback_on_success",
         ]
         if isinstance(cb, str):
-            # The "cache" string is injected into success_callback by litellm's
-            # response cache (litellm_settings.cache). It is an internal mechanism,
-            # not a user callback, so it must not reserve a sync-logging
-            # thread-pool slot per async call (which is what triggered the
-            # "dictionary changed size during iteration" race on /v1/messages).
             return cb == "cache"
 
         if not callable(cb):
