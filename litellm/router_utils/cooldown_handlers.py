@@ -49,6 +49,7 @@ else:
     Span = Any
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
+_CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -739,7 +740,7 @@ def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_statu
     if credential_name is None:
         return False
 
-    credential_values: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+    credential_values: Final[Mapping[str, object]] = _CREDENTIAL_VALUES_ADAPTER.validate_python(
         CredentialAccessor.get_credential_values(credential_name)
     )
     credential_token_exchange_endpoint: Final = credential_values.get("token_exchange_endpoint")
