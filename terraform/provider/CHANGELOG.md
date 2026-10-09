@@ -49,6 +49,7 @@ longer signal it.
 
 ### Fixed
 
+- **key**: `litellm_key` and `litellm_key_block` drop a key deleted outside Terraform from state again now that `/key/info` serves deleted keys with `status = "deleted"` instead of a 404, so plan recreates it, and destroying a `litellm_key` the proxy already deleted succeeds instead of failing on the 404 `No keys found` from `/key/delete`
 - **model**: `litellm_model` refresh now reads the `{"data": [...]}` envelope `/model/info` returns, so `model_info` fields changed outside Terraform show up as drift instead of silently keeping the previous state
 - **key**: An update that changes `team_id` and fails because the key was already cascade-deleted along with its previous team now recovers by recreating the key under the new team, instead of aborting the apply. The key's absence is confirmed against the proxy first, so an unrelated failure still errors out, and a `team_id` change between two teams that both still exist stays a plain in-place update
 - **credential**: create now reports a `credential_name` collision as a clear error naming the `terraform import` command that adopts the existing credential, instead of surfacing the proxy's raw 500 with a Prisma `Unique constraint failed` message. New `adopt_existing` argument (default `false`) opts into taking the existing credential over during create, which makes `apply` idempotent again once state loses track of a credential that still exists on the proxy. Requires a proxy that answers 409 on the collision; older proxies are still detected by their 500 message

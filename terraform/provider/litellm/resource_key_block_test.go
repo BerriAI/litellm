@@ -98,6 +98,25 @@ func TestResourceLiteLLMKeyBlockRead_404ClearsID(t *testing.T) {
 	}
 }
 
+func TestResourceLiteLLMKeyBlockRead_DeletedKeyClearsID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"sk-test-123","info":{"blocked":true,"status":"deleted"}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newKeyBlockTestResourceData(t, "sk-test-123")
+	d.SetId(keyBlockTestHash)
+
+	if err := resourceLiteLLMKeyBlockRead(d, client); err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if d.Id() != "" {
+		t.Fatalf("expected ID cleared for deleted key, got %q", d.Id())
+	}
+}
+
 func TestResourceLiteLLMKeyBlockDelete(t *testing.T) {
 	var gotPath string
 	var unblockPayload map[string]interface{}
