@@ -10,6 +10,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
@@ -74,14 +75,16 @@ def parse_all(name: str, state: PiStreamState | None = None) -> tuple[list[Event
 
 
 def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict[str, object]:
-    message = {
-        "role": "assistant",
-        "content": [{"type": "text", "text": text}],
-        "stopReason": stop_reason,
+    error_field: Final = {"errorMessage": error} if error else {}
+    return {
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "stopReason": stop_reason,
+            **error_field,
+        },
     }
-    if error:
-        message["errorMessage"] = error
-    return {"type": "message_end", "message": message}
 
 
 class FakeStdin:
@@ -171,11 +174,14 @@ class FakeSandbox:
         return None
 
 
-@dataclass
+@dataclass(frozen=True)
 class FakeEndpoint:
     port: int = 4555
     token: str = TOKEN
     model: str | None = None
+
+
+DEFAULT_ENDPOINT: Final = FakeEndpoint()
 
 
 class Answer(BaseModel):
@@ -183,13 +189,18 @@ class Answer(BaseModel):
     country: str
 
 
-def make_ctx(sandbox: FakeSandbox | None = None, **kwargs: object) -> SessionContext:
+def make_ctx(
+    sandbox: FakeSandbox | None = None,
+    model: str | None = MODEL,
+    endpoint: FakeEndpoint | None = DEFAULT_ENDPOINT,
+    **kwargs: object,
+) -> SessionContext:
     return SessionContext(
         harness=Harness.PI,
         sandbox=sandbox or FakeSandbox(),
         session_id="s1",
-        model=kwargs.pop("model", MODEL),
-        endpoint=kwargs.pop("endpoint", FakeEndpoint()),
+        model=model,
+        endpoint=endpoint,
         **kwargs,
     )
 
@@ -519,14 +530,13 @@ def test_session_setup_token_only_in_env():
 
 
 def test_session_setup_env_and_persisted_sessions():
-    """Managed keys win over PiOptions.env even here, behind validate_environment's rejection."""
     options = PiOptions(env={"FOO": "1", PI_TOKEN_ENV: "evil", PI_CONFIG_DIR_ENV: "/home/u/.pi/agent"})
     setup = setup_for(make_ctx(options=options))
     assert list(setup.persisted_dirs) == [("sessions", "pi/sessions")]
     assert setup.skills_dir == "skills"
     env = setup.env
-    assert env[PI_CONFIG_DIR_ENV] == f"{PRIVATE}/agent"
-    assert env[PI_TOKEN_ENV] == TOKEN
+    assert env[PI_CONFIG_DIR_ENV] == f"{PRIVATE}/agent", "managed keys must win over PiOptions.env"
+    assert env[PI_TOKEN_ENV] == TOKEN, "managed keys must win over PiOptions.env"
     for key, value in PI_ISOLATION_ENV.items():
         assert env[key] == value
     assert env["FOO"] == "1"
@@ -821,7 +831,8 @@ async def test_model_falls_back_to_endpoint_model():
 
 
 def test_turn_request_never_trusts_project_files():
-    """A repo's .pi/extensions would run as the host user at startup; --no-approve blocks it."""
     ctx = make_ctx()
     argv = list(CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None).argv)
-    assert argv[:4] == ["pi", "--mode", "json", "--no-approve"]
+    assert argv[:4] == ["pi", "--mode", "json", "--no-approve"], (
+        "without --no-approve a repo's .pi/extensions run as the host user at startup"
+    )
