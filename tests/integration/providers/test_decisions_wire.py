@@ -252,6 +252,23 @@ def test_each_provider_gets_its_own_path_key_and_body_and_is_billed_from_the_cos
         assert math.isclose(_number(row["spend"]), expected_spend, rel_tol=1e-9), row
 
 
+def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:
+    provider: Final = _PROVIDERS[1]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        model: Final = _deployment(scenario, handle, provider)
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_connection",
+            {"litellm_params": {"model": model}, "mode": "evaluation"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}{provider.path}"
+
+
 def test_repeated_identical_requests_each_reach_the_upstream_and_are_each_billed(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
