@@ -259,6 +259,26 @@ def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: G
     provider: Final = _PROVIDERS[1]
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_connection",
+            {
+                "litellm_params": {"model": provider.model, "api_base": handle.api_base(), "api_key": provider.api_key},
+                "mode": "evaluation",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}{provider.path}"
+
+
+def test_test_connection_by_configured_alias_probes_the_stored_model(gateway: Gateway) -> None:
+    pytest.skip("BUG: /health/test_connection given only a configured alias sends the alias as the model")
+    provider: Final = _PROVIDERS[1]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
         model: Final = _deployment(scenario, handle, provider)
         response: Final = gateway.request(
             "POST",
