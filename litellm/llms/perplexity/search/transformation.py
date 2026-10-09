@@ -29,6 +29,15 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
 
     max_results: int  # Optional - maximum number of results (1-20), default 10
     search_domain_filter: list[str]  # Optional - list of domains to filter (max 20)
+    search_recency_filter: str  # Optional - hour | day | week | month | year
+    search_after_date_filter: str  # Optional - publish date >= MM/DD/YYYY
+    search_before_date_filter: str  # Optional - publish date <= MM/DD/YYYY
+    last_updated_after_filter: str  # Optional - last-updated date >= MM/DD/YYYY
+    last_updated_before_filter: str  # Optional - last-updated date <= MM/DD/YYYY
+    search_language_filter: list[str]  # Optional - ISO 639-1 codes (max 20)
+    search_context_size: str  # Optional - low | medium | high
+    search_mode: str  # Optional - web | neural (pro plan)
+    max_tokens: int  # Optional - max tokens across results
     max_tokens_per_page: int  # Optional - max tokens per page, default 1024
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
 
@@ -111,24 +120,16 @@ class PerplexitySearchConfig(BaseSearchConfig):
             "query": query,
         }
 
-        # Add optional parameters following Perplexity API spec (only if not None)
-        max_results: Final = optional_params.get("max_results")
-        if max_results is not None:
-            request_data["max_results"] = max_results
+        # Perplexity's native parameter names match LiteLLM's unified search
+        # spec, so every set optional parameter is forwarded as-is rather than a
+        # hardcoded subset; parameters such as search_recency_filter and the
+        # date filters would otherwise be silently dropped. None-valued params
+        # are omitted, and a caller-supplied "query" never overwrites the one.
+        forwarded: Final = {
+            key: value for key, value in optional_params.items() if value is not None and key != "query"
+        }
 
-        search_domain_filter: Final = optional_params.get("search_domain_filter")
-        if search_domain_filter is not None:
-            request_data["search_domain_filter"] = search_domain_filter
-
-        max_tokens_per_page: Final = optional_params.get("max_tokens_per_page")
-        if max_tokens_per_page is not None:
-            request_data["max_tokens_per_page"] = max_tokens_per_page
-
-        country: Final = optional_params.get("country")
-        if country is not None:
-            request_data["country"] = country
-
-        return dict(request_data)
+        return dict(request_data, **forwarded)
 
     def transform_search_response(
         self,
