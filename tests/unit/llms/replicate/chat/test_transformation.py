@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.llms.replicate.chat.handler import async_completion
+from litellm.llms.replicate.chat.handler import completion as replicate_completion
 from litellm.llms.replicate.chat.transformation import ReplicateConfig
 from litellm.types.utils import ModelResponse
 
@@ -183,3 +184,91 @@ def test_transform_response_string_output():
         api_key="test-key",
     )
     assert result.choices[0].message.content == "Hello from DeepSeek"
+
+
+DEEPSEEK_V3_TOKENIZER_CONFIG = {
+    "add_bos_token": True,
+    "add_eos_token": False,
+    "bos_token": {"__type": "AddedToken", "content": "<｜begin▁of▁sentence｜>", "lstrip": False, "rstrip": False},
+    "eos_token": {"__type": "AddedToken", "content": "<｜end▁of▁sentence｜>", "lstrip": False, "rstrip": False},
+    "model_max_length": 131072,
+    "tokenizer_class": "LlamaTokenizerFast",
+    "chat_template": (
+        "{{ bos_token }}{% for message in messages %}"
+        "{% if message['role'] == 'system' %}{{ message['content'] }}"
+        "{% elif message['role'] == 'user' %}{{ '<｜User｜>' + message['content'] }}"
+        "{% elif message['role'] == 'assistant' %}{{ '<｜Assistant｜>' + message['content'] + eos_token }}"
+        "{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<｜Assistant｜>' }}{% endif %}"
+    ),
+}
+
+
+@pytest.mark.respx(assert_all_called=False)
+@patch("litellm.llms.replicate.chat.handler.get_httpx_client")
+def test_sync_completion_handles_starting_status(mock_get_client, monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
+    respx_mock.get("https://huggingface.co/deepseek-ai/deepseek-v3/raw/main/tokenizer_config.json").respond(
+        200, json=DEEPSEEK_V3_TOKENIZER_CONFIG
+    )
+    mock_client = Mock()
+    mock_get_client.return_value = mock_client
+
+    post_response = Mock()
+    post_response.json.return_value = {
+        "id": "test-prediction-id",
+        "urls": {
+            "get": "https://api.replicate.com/v1/predictions/test-id",
+            "cancel": "https://api.replicate.com/v1/predictions/test-id/cancel",
+        },
+    }
+    mock_client.post.return_value = post_response
+
+    get_response_starting = Mock()
+    get_response_starting.status_code = 200
+    get_response_starting.json.return_value = {
+        "id": "test-prediction-id",
+        "status": "starting",
+        "output": None,
+    }
+
+    get_response_succeeded = Mock()
+    get_response_succeeded.status_code = 200
+    get_response_succeeded.json.return_value = {
+        "id": "test-prediction-id",
+        "status": "succeeded",
+        "output": ["Hello", " DeepSeek!"],
+    }
+    get_response_succeeded.text = json.dumps(get_response_succeeded.json.return_value)
+    get_response_succeeded.headers = {}
+
+    mock_client.get.side_effect = [get_response_starting, get_response_succeeded]
+
+    model_response = litellm.ModelResponse()
+    model_response.choices = [litellm.Choices()]
+    model_response.choices[0].message = litellm.Message(content="")
+
+    mock_logging = Mock()
+    mock_logging.post_call = Mock()
+
+    with patch("time.sleep"):
+        result = replicate_completion(
+            model="deepseek-ai/deepseek-v3",
+            messages=[{"role": "user", "content": "Hi"}],
+            api_base="https://api.replicate.com",
+            model_response=model_response,
+            print_verbose=print,
+            optional_params={},
+            litellm_params={},
+            logging_obj=mock_logging,
+            api_key="test-key",
+            encoding=None,
+            headers={},
+        )
+
+    assert result is not None
+    assert result.choices[0].message.content == "Hello DeepSeek!"
+
+    assert mock_client.get.call_count >= 1
+    assert json.loads(mock_client.post.call_args.kwargs["data"])["input"]["prompt"] == (
+        "<｜begin▁of▁sentence｜><｜User｜>Hi<｜Assistant｜>"
+    )

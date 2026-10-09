@@ -398,3 +398,22 @@ def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_befor
 
     assert exc_info.value.status_code == 400
     send.assert_not_called()
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_transform_request_meta_llama(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
+    respx_mock.get(host="huggingface.co").respond(404, text="Entry not found")
+    bedrock_transformer = AmazonInvokeConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    result = bedrock_transformer.transform_request(
+        model="meta.llama2-70b",
+        messages=messages,
+        optional_params={"max_gen_len": 2048},
+        litellm_params={},
+        headers={},
+    )
+
+    expected_result = {"prompt": "Hello", "max_gen_len": 2048}
+    assert result == expected_result

@@ -2,6 +2,7 @@ import json
 import traceback
 from unittest.mock import MagicMock, patch
 
+import httpx
 import litellm
 import pytest
 
@@ -190,4 +191,116 @@ def test_completion_triton_infer_api():
     except Exception as e:
         print("exception", e)
         traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+LLAMA_3_CHAT_TEMPLATE = (
+    "{{ bos_token }}{% for message in messages %}"
+    "<|start_header_id|>{{ message['role'] }}<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+    "{% endfor %}{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
+)
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.respx(assert_all_called=False)
+def test_completion_triton_generate_api(stream, monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
+    respx_mock.get(host="huggingface.co").respond(404, text="Entry not found")
+    try:
+        mock_response = MagicMock()
+        if stream:
+
+            def mock_iter_lines():
+                mock_output = "".join(
+                    [
+                        'data: {"model_name":"ensemble","model_version":"1","sequence_end":false,"sequence_id":0,"sequence_start":false,"text_output":"'
+                        + t
+                        + '"}\n\n'
+                        for t in ["I", " am", " an", " AI", " assistant"]
+                    ]
+                )
+                for out in mock_output.split("\n"):
+                    yield out
+
+            mock_response.iter_lines = mock_iter_lines
+        else:
+
+            def return_val():
+                return {
+                    "text_output": "I am an AI assistant",
+                }
+
+            mock_response.json = return_val
+        mock_response.status_code = 200
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            return_value=mock_response,
+        ) as mock_post:
+            response = litellm.completion(
+                model="triton/llama-3-8b-instruct",
+                messages=[{"role": "user", "content": "who are u?"}],
+                max_tokens=10,
+                timeout=5,
+                api_base="http://localhost:8000/generate",
+                stream=stream,
+            )
+
+            mock_post.assert_called_once()
+
+            call_kwargs = mock_post.call_args.kwargs
+
+            if stream:
+                assert call_kwargs["url"] == "http://localhost:8000/generate_stream"
+            else:
+                assert call_kwargs["url"] == "http://localhost:8000/generate"
+
+            request_data = json.loads(call_kwargs["data"])
+
+            assert request_data["text_input"] == "who are u?"
+            assert request_data["parameters"]["max_tokens"] == 10
+
+            if stream:
+                tokens = ["I", " am", " an", " AI", " assistant", None]
+                idx = 0
+                for chunk in response:
+                    assert chunk.choices[0].delta.content == tokens[idx]
+                    idx += 1
+                assert idx == len(tokens)
+            else:
+                assert response.choices[0].message.content == "I am an AI assistant"
+
+    except Exception as e:
+        print("exception", e)
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_triton_generate_raw_request(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
+    respx_mock.get("https://huggingface.co/llama-3-8b-instruct/raw/main/tokenizer_config.json").respond(
+        404, text="Entry not found"
+    )
+    respx_mock.get("https://huggingface.co/llama-3-8b-instruct/raw/main/chat_template.jinja").respond(
+        200, text=LLAMA_3_CHAT_TEMPLATE
+    )
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    try:
+        kwargs = {
+            "model": "triton/llama-3-8b-instruct",
+            "messages": [{"role": "user", "content": "who are u?"}],
+            "api_base": "http://localhost:8000/generate",
+        }
+        raw_request = return_raw_request(endpoint=CallTypes.completion, kwargs=kwargs)
+        assert raw_request is not None
+        assert "bad_words" not in json.dumps(raw_request["raw_request_body"])
+        assert "stop_words" not in json.dumps(raw_request["raw_request_body"])
+        assert raw_request["raw_request_body"]["text_input"] == (
+            "<|start_header_id|>user<|end_header_id|>\n\nwho are u?<|eot_id|>"
+            "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        )
+    except Exception as e:
         pytest.fail(f"Error occurred: {e}")
