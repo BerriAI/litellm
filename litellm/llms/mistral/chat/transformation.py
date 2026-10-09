@@ -26,7 +26,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
+from litellm.types.llms.mistral import MistralTextBlock, MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
@@ -255,6 +255,7 @@ class MistralConfig(OpenAIGPTConfig):
         The above statement is not valid now. Need to plan to remove all the #1,2,3
         Mistral API supports content as a list.
         """
+        reasoning: Final = tuple(m.get("reasoning_content") if m["role"] == "assistant" else None for m in messages)
         messages = [self._strip_output_only_fields(m) for m in messages]
 
         ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
@@ -273,13 +274,13 @@ class MistralConfig(OpenAIGPTConfig):
 
         ## 3. Handle name in message
         new_messages: Final[list[AllMessageValues]] = []
-        for m in messages:
+        for m, text in zip(messages, reasoning, strict=True):
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
             if MistralConfig._is_empty_assistant_message(m):
                 continue
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
-            new_messages.append(m)
+            new_messages.append(MistralConfig._with_thinking_chunk(m, text) if text else m)
 
         if is_async:
             return super()._transform_messages(new_messages, model, True)
@@ -434,6 +435,17 @@ class MistralConfig(OpenAIGPTConfig):
         return cast(
             AllMessageValues,
             {k: v for k, v in message.items() if k not in ("reasoning_content", "thinking_blocks")},
+        )
+
+    @staticmethod
+    def _with_thinking_chunk(message: AllMessageValues, reasoning: str) -> AllMessageValues:
+        thinking: Final = MistralThinkingBlock(
+            type="thinking", thinking=[MistralTextBlock(type="text", text=reasoning)]
+        )
+        content: Final = message.get("content")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # AllMessageValues content union is partially untyped
+        text: Final = (MistralTextBlock(type="text", text=content),) if isinstance(content, str) and content else ()
+        return cast(  # cast-ok: OpenAI message TypedDicts have no Mistral thinking chunk
+            AllMessageValues, {**message, "content": [thinking, *text]}
         )
 
     @classmethod

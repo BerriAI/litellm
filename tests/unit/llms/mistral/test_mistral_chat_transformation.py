@@ -805,11 +805,18 @@ class TestMistralStripsOutputOnlyFields:
     Regression for https://github.com/BerriAI/litellm/issues/30835.
     """
 
-    def test_assistant_reasoning_content_is_dropped(self):
+    def test_assistant_reasoning_is_replayed_as_a_thinking_chunk(self):
         messages = cast(
             List[AllMessageValues],
             [
                 {"role": "user", "content": "Question?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "I should call the tool.",
+                    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calc", "arguments": "{}"}}],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "391"},
                 {
                     "role": "assistant",
                     "content": "Follow-up",
@@ -824,11 +831,18 @@ class TestMistralStripsOutputOnlyFields:
             MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
         )
 
-        assistant_message = result[-1]
-        assert "reasoning_content" not in assistant_message
-        assert "thinking_blocks" not in assistant_message
-        assert assistant_message["content"] == "Follow-up"
-        assert assistant_message["role"] == "assistant"
+        assert result[1] == {
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": [{"type": "text", "text": "I should call the tool."}]}],
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calc", "arguments": "{}"}}],
+        }
+        assert result[-1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "Some internal reasoning text."}]},
+                {"type": "text", "text": "Follow-up"},
+            ],
+        }
 
     def test_non_assistant_messages_are_untouched(self):
         messages = cast(
