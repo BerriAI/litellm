@@ -5,7 +5,7 @@ use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::call::Operation;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_host_python::{PythonBinding, PythonHostCalls, from_py, present};
+use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_secrets::source::SecretSource;
@@ -17,11 +17,13 @@ use super::NativeCall;
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{
-        RouteOptions, optional_timeout, project_optional_fields, public_response,
+        RouteOptions, optional_timeout, present, project_optional_fields, public_response,
         python_timeout_seconds,
     },
 };
 
+/// The Python side of a chat or Responses route. `request` is the resolved call the host
+/// projected, kept for the failure mapping that names the call's provider.
 pub(super) struct InferenceHost {
     pub request: Py<PyDict>,
     module: &'static str,
@@ -34,17 +36,21 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyDict>, module: &'static str) -> Self {
-        Self { request, module }
+    pub fn new(py: Python<'_>, module: &'static str) -> Self {
+        Self {
+            request: PyDict::new(py).unbind(),
+            module,
+        }
     }
 
     pub fn project(
-        &self,
+        &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         input: &str,
     ) -> PyResult<ProjectedCall> {
-        let argument = |name: &str| self.argument(py, arguments, name);
+        self.request = arguments.clone().unbind();
+        let argument = |name: &str| present(arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
@@ -87,15 +93,6 @@ impl InferenceHost {
         })
     }
 
-    pub fn argument<'py>(
-        &self,
-        py: Python<'py>,
-        arguments: &Bound<'py, PyDict>,
-        name: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        present(arguments, self.request.bind(py), name)
-    }
-
     pub fn parameters(
         &self,
         py: Python<'_>,
@@ -103,7 +100,7 @@ impl InferenceHost {
     ) -> PyResult<Map<String, Value>> {
         let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
         project_optional_fields(names.iter().map(String::as_str), |name| {
-            self.argument(py, arguments, name)
+            present(arguments, name)
         })
     }
 
@@ -169,7 +166,7 @@ where
     } else {
         R::SYNC_CALL_TYPE
     };
-    crate::cache::admit_native(py, &call.kwargs, call_type)?;
+    crate::cache::admit_native(py, &call.resolved, call_type)?;
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,

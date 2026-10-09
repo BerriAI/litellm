@@ -3,7 +3,6 @@
 //! against a Python binding, host services and active call hooks. Everything here is Python-specific by
 //! construction; another host language gets its own crate of the same shape.
 
-mod argument;
 mod binding;
 mod conversion_cache;
 mod driver;
@@ -19,7 +18,6 @@ mod owned;
 mod runtime;
 mod services;
 
-pub use argument::{effective_py_args, lookup, present};
 pub use binding::PythonBinding;
 pub use conversion_cache::{FromPythonCache, ToPythonCache};
 pub use driver::{CallOptions, run_call};

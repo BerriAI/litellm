@@ -1,5 +1,10 @@
+//! The SDK policy the `@client` wrapper applies to the keyword dict before the function
+//! body runs: credential inheritance from `litellm.credential_list` and the budget and
+//! retry limits. It writes into the keyword layer in place, as `function_setup` does, so
+//! the legacy logger reads the inherited values too.
+
 use litellm_host::hooks::CallHooks;
-use litellm_host_python::{PythonOwned, PythonRuntime};
+use litellm_host_python::{HookStep, PythonOwned, PythonRuntime};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -36,14 +41,18 @@ pub(crate) const PYTHON_CONTRACT: &str = include_str!("../preflight_contract.jso
 pub(crate) struct SdkPolicy;
 
 impl CallHooks<PythonRuntime> for SdkPolicy {
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+    fn prepare_request(
+        &mut self,
+        py: Python<'_>,
+        arguments: Py<PyDict>,
+    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
         inherit_credentials(py, arguments.bind(py), || {
             Ok(PythonPreflight::CredentialList
                 .call(py, ())?
                 .cast_into::<PyList>()?)
         })?;
-        PythonPreflight::CheckLimits.call(py, (arguments,))?;
-        Ok(())
+        PythonPreflight::CheckLimits.call(py, (&arguments,))?;
+        Ok(HookStep::Ready(arguments))
     }
 }
 
@@ -106,41 +115,10 @@ fn inherit_credentials<'py>(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::sync::Mutex;
 
     use super::*;
+    use crate::test_support::preflight_stubs;
     use strum::VariantArray;
-
-    /// Tests share one interpreter, and the stub module below is global state, so the
-    /// tests that install it run one at a time.
-    static PREFLIGHT_MODULE: Mutex<()> = Mutex::new(());
-
-    /// A fresh stand-in for `litellm.rust_bridge.preflight` that records every call, then
-    /// `script` run against it with the module bound as `preflight`.
-    fn preflight_stubs<'py>(py: Python<'py>, script: &std::ffi::CStr) -> Bound<'py, PyDict> {
-        let locals = PyDict::new(py);
-        py.run(
-            c"
-import sys
-import types
-
-for name in ('litellm', 'litellm.rust_bridge'):
-    sys.modules.setdefault(name, types.ModuleType(name))
-preflight = types.ModuleType('litellm.rust_bridge.preflight')
-preflight.warnings = []
-preflight.checked = []
-preflight.credential_list = lambda: []
-preflight.warn_unknown_credential = lambda name, loaded: preflight.warnings.append((name, loaded))
-preflight.check_limits = lambda kwargs: preflight.checked.append(kwargs)
-sys.modules['litellm.rust_bridge.preflight'] = preflight
-",
-            Some(&locals),
-            Some(&locals),
-        )
-        .unwrap();
-        py.run(script, Some(&locals), Some(&locals)).unwrap();
-        locals
-    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -410,13 +388,12 @@ arguments = {'litellm_credential_name': 'ocr-test'}
 
     #[rstest::rstest]
     fn an_unknown_name_is_reported_with_the_loaded_count_and_leaves_the_arguments_alone() {
-        let _guard = PREFLIGHT_MODULE
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
         Python::initialize();
         Python::attach(|py| {
-            let locals = preflight_stubs(
+            let locals = PyDict::new(py);
+            let _guard = preflight_stubs(
                 py,
+                &locals,
                 c"
 class Credential:
     credential_name = 'listed'
@@ -425,9 +402,14 @@ preflight.credential_list = lambda: [Credential(), Credential()]
 arguments = {'litellm_credential_name': 'missing'}
 ",
             );
-            SdkPolicy
-                .arguments_prepared(py, &argument_dict(&locals).unbind())
-                .unwrap();
+            let arguments = argument_dict(&locals).unbind();
+            let HookStep::Ready(prepared) = SdkPolicy
+                .prepare_request(py, arguments.clone_ref(py))
+                .unwrap()
+            else {
+                panic!("the SDK policy never awaits");
+            };
+            assert!(prepared.is(&arguments));
             py.run(
                 c"
 assert arguments == {'litellm_credential_name': 'missing'}, arguments
@@ -443,13 +425,12 @@ assert preflight.checked == [arguments]
 
     #[rstest::rstest]
     fn limits_are_checked_on_the_arguments_after_credentials_are_inherited() {
-        let _guard = PREFLIGHT_MODULE
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
         Python::initialize();
         Python::attach(|py| {
-            let locals = preflight_stubs(
+            let locals = PyDict::new(py);
+            let _guard = preflight_stubs(
                 py,
+                &locals,
                 c"
 class Credential:
     credential_name = 'ocr-test'
@@ -463,9 +444,9 @@ preflight.check_limits = check_limits
 arguments = {'litellm_credential_name': 'ocr-test'}
 ",
             );
-            let error = SdkPolicy
-                .arguments_prepared(py, &argument_dict(&locals).unbind())
-                .unwrap_err();
+            let Err(error) = SdkPolicy.prepare_request(py, argument_dict(&locals).unbind()) else {
+                panic!("the limit check must refuse the call");
+            };
             assert!(
                 error
                     .value(py)

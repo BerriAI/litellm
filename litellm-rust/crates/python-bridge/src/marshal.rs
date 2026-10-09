@@ -53,6 +53,14 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
         .extract()
 }
 
+/// An argument the call supplies: present in the resolved call and not `None`.
+pub(crate) fn present<'py>(
+    arguments: &Bound<'py, PyDict>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(arguments.get_item(name)?.filter(|value| !value.is_none()))
+}
+
 pub(crate) fn required_field<'py>(
     fields: &Bound<'py, PyDict>,
     name: &str,

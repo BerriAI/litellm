@@ -14,14 +14,16 @@ use litellm_host::{
     machine::Machine,
     protocol::Protocol,
 };
-use litellm_host_python::{HookChain, PythonBinding, PythonHostCalls, effective_py_args};
+use litellm_host_python::{HookChain, PythonBinding, PythonHostCalls};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
 };
 
-/// The public call as Python bound it: `base` holds the positional arguments by name plus
-/// the signature defaults, `kwargs` the caller's keyword dict.
+/// The public call as Python bound it. `args`, `kwargs` and `base` exist for the legacy
+/// callback layer, which hands the caller's own keyword dict to Python callbacks; nothing
+/// else reads them. `resolved` is Python's own binding of the call, `kwargs` over `base`,
+/// for the reads that admit or decline a call before any hook runs.
 #[derive(FromPyObject)]
 pub(crate) struct NativeCall<'py> {
     #[pyo3(attribute)]
@@ -30,13 +32,8 @@ pub(crate) struct NativeCall<'py> {
     kwargs: Bound<'py, PyDict>,
     #[pyo3(attribute, from_py_with = mapping_dict)]
     base: Bound<'py, PyDict>,
-}
-
-impl<'py> NativeCall<'py> {
-    /// The call before any hook ran, for the reads that admit or decline it.
-    fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
-        effective_py_args(&self.base, &self.kwargs)
-    }
+    #[pyo3(attribute, from_py_with = mapping_dict)]
+    resolved: Bound<'py, PyDict>,
 }
 
 fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
@@ -49,8 +46,8 @@ fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> 
     Ok(dict)
 }
 
-/// The hooks around a native call, outermost first: the legacy Python callbacks, then
-/// the SDK preflight, which must see the keyword view legacy logging has already adopted.
+/// The hooks around a native call. The legacy layer is the only one that sees the caller's
+/// keyword dict; what leaves it is the resolved call every later reader projects from.
 fn call_hooks(
     py: Python<'_>,
     operation: Operation,
@@ -59,13 +56,11 @@ fn call_hooks(
 ) -> PyResult<(Py<PyDict>, HookChain)> {
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
-    let hooks = HookChain::new()
-        .layer(
-            py,
-            &litellm_callbacks_legacy_python::LegacyLayer::new(operation, asynchronous),
-            call,
-        )
-        .with(crate::preflight::SdkPolicy);
+    let hooks = HookChain::new().layer(
+        py,
+        &litellm_callbacks_legacy_python::LegacyLayer::new(operation, asynchronous),
+        call,
+    );
     Ok((arguments, hooks))
 }
 
@@ -127,6 +122,7 @@ mod tests {
             .unwrap();
         attributes.set_item("kwargs", &fields).unwrap();
         attributes.set_item("base", PyDict::new(py)).unwrap();
+        attributes.set_item("resolved", &fields).unwrap();
         py.import("types")
             .unwrap()
             .getattr("SimpleNamespace")

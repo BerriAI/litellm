@@ -95,10 +95,6 @@ impl LegacyLogging {
         profile(self.operation).stream_billing
     }
 
-    pub(crate) fn adopt_arguments(&mut self, py: Python<'_>, arguments: &Py<PyDict>) {
-        self.call.set_kwargs(arguments.clone_ref(py));
-    }
-
     /// Deployment hooks are awaited, and Python's synchronous `@client` wrapper never
     /// runs them.
     fn runs_deployment_hooks(&self) -> bool {
@@ -569,11 +565,6 @@ impl CallHooks<PythonRuntime> for LegacyLogging {
         self.prepare_call(py, arguments, started_at)
     }
 
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        self.adopt_arguments(py, arguments);
-        Ok(())
-    }
-
     fn before_provider_request(
         &mut self,
         py: Python<'_>,
@@ -961,7 +952,6 @@ mod payload_tests {
     use std::ffi::CStr;
 
     use litellm_auth::SecretValue;
-    use litellm_host::call::Operation;
     use litellm_host::hooks::CallHooks;
     use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
     use litellm_host::lifecycle::ExecutionEvent;
@@ -1132,57 +1122,6 @@ check = lambda: None
         fn __clear__(slf: &Bound<'_, Self>) {
             drop(slf.borrow_mut().logging.take());
         }
-    }
-
-    #[rstest]
-    #[case::completion(Operation::Completion, "Chat completions")]
-    #[case::responses(Operation::Responses, "Responses")]
-    #[case::messages(Operation::Messages, "Messages")]
-    #[case::ocr(Operation::Ocr, "OCR document processing")]
-    fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
-        #[case] operation: Operation,
-        #[case] description: &str,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = namespace(py, PAYLOAD_LOGGER);
-            run(
-                py,
-                &locals,
-                c"
-original = [0]
-replacement = [1]
-kwargs['pages'] = original
-prepared = {'pages': replacement}
-",
-            );
-            let mut logging = LegacyLogging {
-                operation,
-                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
-                ..legacy_call(py, &locals, false)
-            };
-            let prepared = local(&locals, "prepared")
-                .cast_into::<pyo3::types::PyDict>()
-                .unwrap()
-                .unbind();
-            logging.arguments_prepared(py, &prepared).unwrap();
-            let wire = WireRequest {
-                body: json!({"pages": [1]}),
-                ..route_wire()
-            };
-            let (_, step) = send_and_receive(py, &mut logging, wire, &route_context());
-            assert!(matches!(step, HookStep::Ready(_)));
-            locals.set_item("description", description).unwrap();
-            run(
-                py,
-                &locals,
-                c"
-assert logger.pre['complete_input_dict']['pages'] is replacement
-assert logger.pre_input == description
-assert original == [0]
-",
-            );
-        });
     }
 
     #[rstest::rstest]

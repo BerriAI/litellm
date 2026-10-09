@@ -23,18 +23,18 @@ enum OcrHostData {
     Released,
 }
 
-/// The Python side of the OCR route: projects the prepared arguments (reading a file-like
+/// The Python side of the OCR route: projects the resolved call (reading a file-like
 /// document as it goes), acquires Azure AD tokens, and builds the public response and
-/// exception.
+/// exception. `request` is the call it projected, kept for the failure mapping.
 pub(super) struct OcrPythonHost {
     request: Py<PyDict>,
     data: OcrHostData,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyDict>) -> Self {
+    pub(super) fn new(py: Python<'_>) -> Self {
         Self {
-            request,
+            request: PyDict::new(py).unbind(),
             data: OcrHostData::Unprojected,
         }
     }
@@ -54,11 +54,12 @@ impl OcrPythonHost {
             .acquire(py)
     }
 
-    fn projection(&mut self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
+    fn projection(&mut self, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
         let OcrHostData::Unprojected = self.data else {
             return Err(missing_state());
         };
-        let (request, handles) = project_request(self.request.bind(py), arguments)?;
+        self.request = arguments.clone().unbind();
+        let (request, handles) = project_request(arguments)?;
         let caller_token = handles.azure_ad_token_provider.is_some();
         self.data = OcrHostData::Projected(Box::new(handles));
         Ok(OcrCall {
@@ -96,7 +97,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<OcrCall, InvokeError<Error>> {
-        self.projection(py, arguments)
+        self.projection(arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
     }
 
@@ -209,7 +210,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(PyDict::new(py).unbind());
+            let mut host = OcrPythonHost::new(py);
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);
