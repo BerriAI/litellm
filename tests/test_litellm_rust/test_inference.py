@@ -66,7 +66,7 @@ def native_call(
             "max_tokens": 32,
             **options,
         }
-        request: Final = NativeCall(args=(), kwargs=kwargs, bound=kwargs)
+        request: Final = NativeCall(args=(), kwargs=kwargs, base={})
         return (_native.acompletion if asynchronous else _native.completion)(request)
     response_kwargs: Final = {
         "model": RESPONSES_MODEL,
@@ -79,7 +79,7 @@ def native_call(
     response_request: Final = NativeCall(
         args=(),
         kwargs=response_kwargs,
-        bound={
+        base={
             "model": RESPONSES_MODEL,
             "input": "hello",
             "stream": None,
