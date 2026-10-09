@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -52,7 +53,6 @@ interface AddModelFormProps {
   selectedProvider: string | null;
   setSelectedProvider: (provider: string | null) => void;
   providerModels: string[];
-  setProviderModelsFn: (provider: string | null) => void;
   getPlaceholder: (provider: string) => string;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
@@ -76,7 +76,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   selectedProvider,
   setSelectedProvider,
   providerModels,
-  setProviderModelsFn,
   getPlaceholder,
   showAdvancedSettings,
   setShowAdvancedSettings,
@@ -153,20 +152,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     [sortedProviderMetadata],
   );
 
-  const credentialOptions: SearchSelectOption[] = useMemo(
-    () => [
-      { label: "None", value: "" },
-      ...credentials.map((credential) => ({
-        label: credential.credential_name,
-        value: credential.credential_name,
-      })),
-    ],
-    [credentials],
-  );
+  const credentialSelectOptions: SearchSelectOption[] = useMemo(() => credentialOptions(credentials), [credentials]);
 
   const applyProviderSelection = (provider: string | null) => {
     setSelectedProvider(provider);
-    setProviderModelsFn(provider);
     form.setValue("model", []);
     form.setValue("model_name", undefined);
   };
@@ -326,7 +315,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           <SearchSelect
                             inputId={control.id}
                             placeholder="Select or search for existing credentials"
-                            options={credentialOptions}
+                            options={credentialSelectOptions}
                             value={(control.value as string | null | undefined) ?? ""}
                             onValueChange={(value) => control.onChange(value === "" ? null : value)}
                           />

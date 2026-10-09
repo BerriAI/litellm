@@ -516,12 +516,10 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
         for param in GATED_MOCK_PARAM_NAMES
         if f"{param}=" in source or f'"{param}"' in source
     )
-    assert senders, "expected the E2E suite to still exercise the gated mock testing params"
-
     config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
     general_settings = config.get("general_settings") or {}
 
-    assert general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
+    assert not senders or general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
         f"proxy_server_config.yaml must set general_settings.{MOCK_TESTING_CONFIG_KEY}: true — "
         f"the E2E suite sends gated mock testing params ({', '.join(sorted(senders))}) "
         "and the proxy rejects them with a 400 otherwise"

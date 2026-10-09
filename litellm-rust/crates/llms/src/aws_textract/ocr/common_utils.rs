@@ -23,9 +23,11 @@ const HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAA
 /// Textract has operations rather than models; the model slot of
 /// `aws_textract/<model>` names the one to call.
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, VariantNames, PartialEq, Eq)]
-#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
+#[strum(ascii_case_insensitive)]
 pub enum TextractOperation {
+    #[strum(serialize = "detect-document-text")]
     DetectDocumentText,
+    #[strum(serialize = "analyze-document")]
     AnalyzeDocument,
 }
 

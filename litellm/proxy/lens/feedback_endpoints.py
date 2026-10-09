@@ -56,6 +56,8 @@ def write_scope(auth: UserAPIKeyAuth) -> Scope:
         return Scope(all_teams=True)
     if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         raise HTTPException(403, "Admin viewers cannot write feedback")
+    if not auth.team_id and not auth.token:
+        raise HTTPException(403, "Feedback requires a team or API key")
     return Scope(team_id=auth.team_id or "", api_key_hash="" if auth.team_id else auth.token or "")
 
 

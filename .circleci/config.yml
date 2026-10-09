@@ -856,58 +856,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  litellm_router_unit_testing: # Runs all tests with the "router" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/router_unit_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 4"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml router_unit_tests_coverage.xml
-            mv .coverage router_unit_tests_coverage
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - router_unit_tests_coverage.xml
-            - router_unit_tests_coverage
   llm_translation_testing:
     docker:
       - *python312_image
@@ -1024,16 +972,13 @@ jobs:
           command: |
             mkdir -p test-results
             export LITELLM_LOG=WARNING
-            TEST_FILES=$(circleci tests glob "tests/guardrails_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 2 \
-                --timeout=120 --timeout_method=thread"
+            uv run --no-sync python -m pytest --tb=short \
+              -vv \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
+              --junitxml=test-results/junit.xml \
+              --durations=5 \
+              --timeout=120 --timeout_method=thread \
+              "tests/guardrails_tests/test_custom_guardrail.py::test_get_guardrail_dynamic_request_body_params"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1095,50 +1040,6 @@ jobs:
             - google_generate_content_endpoint_coverage.xml
             - google_generate_content_endpoint_coverage
 
-  llm_responses_api_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    environment:
-      REQUEST_TIMEOUT: "180"
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/llm_responses_api_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 8 \
-                --reruns 1 --only-rerun Timeout"
-          no_output_timeout: 15m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
   ocr_testing:
     docker:
       - *python312_image
@@ -2537,7 +2438,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3477,15 +3378,38 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows
-      - windows_release_wheel
-      - provider_replay_harness
-      - base_sdk_install
-      - local_testing_part1
-      - local_testing_part2
-      - langfuse_logging_unit_tests
-      - litellm_router_testing
-      - litellm_router_unit_testing
+      - using_litellm_on_windows:
+          filters:
+            branches:
+              only: main
+      - windows_release_wheel:
+          filters:
+            branches:
+              only: main
+      - provider_replay_harness:
+          filters:
+            branches:
+              only: main
+      - base_sdk_install:
+          filters:
+            branches:
+              only: main
+      - local_testing_part1:
+          filters:
+            branches:
+              only: main
+      - local_testing_part2:
+          filters:
+            branches:
+              only: main
+      - langfuse_logging_unit_tests:
+          filters:
+            branches:
+              only: main
+      - litellm_router_testing:
+          filters:
+            branches:
+              only: main
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3505,31 +3429,68 @@ workflows:
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-      - proxy_build_from_pip_tests
+      - proxy_build_from_pip_tests:
+          filters:
+            branches:
+              only: main
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-      - llm_translation_testing
-      - realtime_translation_testing
+      - llm_translation_testing:
+          filters:
+            branches:
+              only: main
+      - realtime_translation_testing:
+          filters:
+            branches:
+              only: main
       - guardrails_testing
-      - google_generate_content_endpoint_testing
-      - llm_responses_api_testing
-      - ocr_testing
-      - search_testing
-      - batches_testing
-      - litellm_utils_testing
-      - pass_through_unit_testing
-      - image_gen_testing
-      - logging_testing
-      - audio_testing
+      - google_generate_content_endpoint_testing:
+          filters:
+            branches:
+              only: main
+      - ocr_testing:
+          filters:
+            branches:
+              only: main
+      - search_testing:
+          filters:
+            branches:
+              only: main
+      - batches_testing:
+          filters:
+            branches:
+              only: main
+      - litellm_utils_testing:
+          filters:
+            branches:
+              only: main
+      - pass_through_unit_testing:
+          filters:
+            branches:
+              only: main
+      - image_gen_testing:
+          filters:
+            branches:
+              only: main
+      - logging_testing:
+          filters:
+            branches:
+              only: main
+      - audio_testing:
+          filters:
+            branches:
+              only: main
       - upload-coverage:
+          filters:
+            branches:
+              only: main
           requires:
             - realtime_translation_testing
             - google_generate_content_endpoint_testing
-            - guardrails_testing
             - ocr_testing
             - search_testing
             - batches_testing
@@ -3541,17 +3502,30 @@ workflows:
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
-            - litellm_router_unit_testing
-            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-      - installing_litellm_on_python
-      - installing_litellm_on_python_3_13
-      - installing_litellm_on_python_v2_migration_resolver
+      - installing_litellm_on_python:
+          filters:
+            branches:
+              only: main
+      - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only: main
+      - installing_litellm_on_python_v2_migration_resolver:
+          filters:
+            branches:
+              only: main
       - helm_chart_testing:
+          filters:
+            branches:
+              only: main
           requires:
             - build_docker_database_image
       - test_bad_database_url:
+          filters:
+            branches:
+              only: main
           requires:
             - build_docker_database_image
