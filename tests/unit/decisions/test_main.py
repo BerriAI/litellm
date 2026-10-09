@@ -806,7 +806,7 @@ async def test_strands_decider_runtime_arn_router_deployment_answers_openai_form
                     "aws_access_key_id": _RUNTIME_CREDENTIALS.access_key,
                     "aws_secret_access_key": _RUNTIME_CREDENTIALS.secret_key,
                     "aws_region_name": "eu-west-1",
-                    "extra_headers": {_SESSION_HEADER: "pooled-session-0123456789abcdef0123456"},
+                    "agentcore_runtime_session_id": "pooled-session-0123456789abcdef0123456",
                 },
             }
         ]
@@ -816,6 +816,7 @@ async def test_strands_decider_runtime_arn_router_deployment_answers_openai_form
     response: Final = await router.adecisions(
         model="strands",
         input="review",
+        extra_headers={_SESSION_HEADER: "caller-session-0123456789abcdef01234567"},
         questions=[
             {
                 "type": "score",

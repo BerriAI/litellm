@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
@@ -18,6 +19,7 @@ from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.llms.bedrock import AwsAuthParams
 
 AGENTCORE_SESSION_HEADER: Final = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
+_RESERVED_HEADER_PREFIXES: Final = ("x-amzn-bedrock-agentcore-runtime-", "x-amz-")
 _RUNTIME_ARN: Final = re.compile(
     r"\Aarn:aws(?:-[a-z]+)*:bedrock-agentcore:(?P<region>[a-z0-9-]+):[0-9]{12}:runtime/[A-Za-z0-9_-]+\Z"
 )
@@ -63,10 +65,28 @@ def _runtime_error(payload: object) -> _RuntimeError | None:
     return reply.error if reply.answers is None else None
 
 
-def _with_session_id(headers: Mapping[str, str], runtime: AgentCoreRuntime) -> Mapping[str, str]:
-    if any(name.lower() == AGENTCORE_SESSION_HEADER.lower() for name in headers):
-        return headers
-    return {**headers, AGENTCORE_SESSION_HEADER: runtime.default_session_id}
+class _SessionParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agentcore_runtime_session_id: str | None = None
+
+
+def _is_reserved_header(name: str) -> bool:
+    lowered: Final = name.lower()
+    return lowered == "host" or lowered.startswith(_RESERVED_HEADER_PREFIXES)
+
+
+def _runtime_headers(
+    headers: Mapping[str, str], runtime: AgentCoreRuntime, litellm_params: Mapping[str, object]
+) -> Mapping[str, str]:
+    dropped: Final = sorted(name for name in headers if _is_reserved_header(name))
+    if dropped:
+        verbose_logger.warning("Strands Decider: not forwarding reserved AgentCore header(s) %s", dropped)
+    configured: Final = _SessionParams.model_validate(litellm_params).agentcore_runtime_session_id
+    return {
+        **{name: value for name, value in headers.items() if not _is_reserved_header(name)},
+        AGENTCORE_SESSION_HEADER: runtime.default_session_id if configured is None else configured,
+    }
 
 
 class StrandsDeciderDecisionsConfig(BaseDecisionsConfig, SignsRequestsWithAWS):
@@ -93,7 +113,7 @@ class StrandsDeciderDecisionsConfig(BaseDecisionsConfig, SignsRequestsWithAWS):
         runtime: Final = agentcore_runtime(api_base)
         if runtime is None:
             return headers, None
-        session_headers: Final = _with_session_id(headers, runtime)
+        session_headers: Final = _runtime_headers(headers, runtime, litellm_params)
         if api_key is not None:
             return session_headers, None
         payload: Final = json.dumps(body)

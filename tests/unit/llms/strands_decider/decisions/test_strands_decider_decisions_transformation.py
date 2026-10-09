@@ -133,18 +133,47 @@ def test_default_session_id_is_stable_per_runtime_and_within_the_agentcore_lengt
     assert 33 <= len(session_id) <= 256
 
 
-def test_caller_session_id_header_wins_over_the_default() -> None:
-    caller_header: Final = AGENTCORE_SESSION_HEADER.lower()
+_CALLER_RESERVED_HEADERS: Final = {
+    AGENTCORE_SESSION_HEADER.lower(): "caller-session-0123456789abcdef0123456789",
+    "X-Amzn-Bedrock-AgentCore-Runtime-User-Id": "someone-else",
+    "X-Amz-Security-Token": "caller-token",
+    "Host": "evil.example",
+}
+
+
+@pytest.mark.parametrize("api_key", [None, "runtime-jwt"])
+def test_caller_reserved_agentcore_headers_never_reach_the_runtime(api_key: str | None) -> None:
+    signed_headers, _ = _sign(
+        StrandsDeciderDecisionsConfig(aws=_RecordingAWS()),
+        _ARN,
+        {**_CALLER_RESERVED_HEADERS, "X-Request-Source": "batch"},
+        api_key=api_key,
+    )
+    default_headers, _ = _sign(StrandsDeciderDecisionsConfig(aws=_RecordingAWS()), _ARN, {}, api_key=api_key)
+
+    forwarded: Final = {name.lower(): value for name, value in signed_headers.items()}
+    assert forwarded[AGENTCORE_SESSION_HEADER.lower()] == default_headers[AGENTCORE_SESSION_HEADER]
+    assert not any(value in forwarded.values() for value in _CALLER_RESERVED_HEADERS.values())
+    assert "x-amzn-bedrock-agentcore-runtime-user-id" not in forwarded
+    assert "host" not in forwarded
+    assert forwarded["x-request-source"] == "batch"
+
+
+def test_deployment_session_param_picks_the_session_over_the_default_and_any_caller_header() -> None:
+    replica_session: Final = "strands-decider-replica-a-0000000000"
 
     signed_headers, _ = _sign(
         StrandsDeciderDecisionsConfig(aws=_RecordingAWS()),
         _ARN,
-        {caller_header: "caller-session-0123456789abcdef0123456789"},
+        _CALLER_RESERVED_HEADERS,
+        litellm_params={"agentcore_runtime_session_id": replica_session},
     )
 
-    session_headers: Final = [name for name in signed_headers if name.lower() == caller_header]
-    assert session_headers == [caller_header]
-    assert signed_headers[caller_header] == "caller-session-0123456789abcdef0123456789"
+    session_headers: Final = [
+        value for name, value in signed_headers.items() if name.lower() == "x-amzn-bedrock-agentcore-runtime-session-id"
+    ]
+    assert session_headers == [replica_session]
+    assert AGENTCORE_SESSION_HEADER.lower() in signed_headers["Authorization"]
 
 
 def test_api_key_on_a_runtime_arn_sends_the_bearer_token_without_sigv4() -> None:
