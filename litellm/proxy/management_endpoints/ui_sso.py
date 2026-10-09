@@ -1796,7 +1796,7 @@ async def get_user_info_from_db(
     alternate_user_id: str | None = None,
 ) -> LiteLLM_UserTable | NewUserResponse | None:
     try:
-        potential_user_ids: Final = []
+        potential_user_ids: Final[list[str]] = []  # mutable-ok: the candidate ids below are appended in order
         if alternate_user_id is not None:
             potential_user_ids.append(alternate_user_id)
         if not isinstance(result, dict):
@@ -1815,6 +1815,8 @@ async def get_user_info_from_db(
         user_info: LiteLLM_UserTable | NewUserResponse | None = None
 
         for user_id in potential_user_ids:
+            if _is_blank_sso_user_id(user_id):
+                continue
             user_info = await get_existing_user_info_from_db(
                 user_id=user_id,
                 user_email=user_email,
@@ -2339,8 +2341,6 @@ async def _complete_cli_sso_callback_session(
         alternate_user_id=user_id,
     )
     if user_info is None:
-        raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
-    if not user_info.user_id:
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
     resolved_user_id: Final = _require_sso_user_id(user_info.user_id)
 
@@ -2915,12 +2915,9 @@ def _is_blank_sso_user_id(user_id: object) -> bool:
 
 def _require_sso_user_id(user_id: object) -> str:
     """Return a nonblank SSO user id or reject the login with a 401"""
-    if not isinstance(user_id, str) or not user_id.strip():
-        verbose_proxy_logger.warning("SSO login rejected: the provider response resolved no user id or email")
-        raise HTTPException(
-            status_code=401,
-            detail="SSO login failed: the identity provider did not return a user id or email for this account",
-        )
+    if not isinstance(user_id, str) or _is_blank_sso_user_id(user_id):
+        verbose_proxy_logger.warning("SSO login rejected: the sign-in did not resolve to a user id")
+        raise HTTPException(status_code=401, detail="SSO login failed: this sign-in did not resolve to a user id")
     return user_id
 
 
