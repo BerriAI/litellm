@@ -66,7 +66,6 @@ from litellm.types.llms.vertex_ai import (
     LogprobsResult,
     ToolConfig,
     Tools,
-    UsageMetadata,
     VertexToolName,
 )
 from litellm.types.utils import (
@@ -1751,7 +1750,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model_response
 
     @staticmethod
-    def is_candidate_token_count_inclusive(usage_metadata: UsageMetadata) -> bool:
+    def is_candidate_token_count_inclusive(usage_metadata: Mapping[str, object]) -> bool:
         """
         Check if the candidate token count is inclusive of the thinking token count
 
@@ -1761,12 +1760,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        non_thinking_tokens: Final = (
-            usage_metadata.get("promptTokenCount", 0)
-            + usage_metadata.get("candidatesTokenCount", 0)
-            + usage_metadata.get("toolUsePromptTokenCount", 0)
+        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
+        candidate_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
+        tool_use_prompt_tokens: Final = usage_metadata.get("toolUsePromptTokenCount", 0)
+        total_tokens: Final = usage_metadata.get("totalTokenCount", 0)
+        return (
+            isinstance(prompt_tokens, int)
+            and isinstance(candidate_tokens, int)
+            and isinstance(tool_use_prompt_tokens, int)
+            and isinstance(total_tokens, int)
+            and prompt_tokens + candidate_tokens + tool_use_prompt_tokens == total_tokens
         )
-        return non_thinking_tokens == usage_metadata.get("totalTokenCount", 0)
 
     @staticmethod
     def _response_has_search_grounding(

@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -311,6 +312,61 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result.usage.input_tokens_details.image_tokens == 39
         assert result.usage.output_tokens == 17
         assert result.usage.total_tokens == 110
+
+    def test_transform_image_generation_response_preserves_usage_details_and_traffic_type(self):
+        mock_response: Final = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "candidatesTokenCount": 1300,
+                "thoughtsTokenCount": 40,
+                "totalTokenCount": 1352,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}],
+                "candidatesTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 10},
+                    {"modality": "IMAGE", "tokenCount": 1290},
+                ],
+                "trafficType": "ON_DEMAND_PRIORITY",
+            },
+        }
+        mock_response.headers = {}
+
+        model_response: Final = ImageResponse()
+        result: Final = self.config.transform_image_generation_response(
+            model="gemini-3.1-flash-image",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.usage.output_tokens == 1340
+        assert result.usage.input_tokens_details.model_dump() == {"text_tokens": 12, "image_tokens": 0}
+        assert result.usage.completion_tokens_details == {
+            "text_tokens": 10,
+            "image_tokens": 1290,
+            "reasoning_tokens": 40,
+        }
+        assert result.usage.output_tokens_details == result.usage.completion_tokens_details
+        assert result._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_PRIORITY"}
 
     def test_transform_image_generation_response_multiple_images(self):
         """Test response transformation with multiple images"""

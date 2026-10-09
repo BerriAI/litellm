@@ -45,3 +45,70 @@ def test_transform_gemini_image_usage_reports_image_and_chat_style_counts(
         "completion_tokens_details": expected_output_details,
         "output_tokens_details": expected_output_details,
     }
+
+
+def test_transform_gemini_image_usage_adds_exclusive_thoughts_to_output_tokens() -> None:
+    usage: Final = transform_gemini_image_usage(
+        {
+            "promptTokenCount": 12,
+            "candidatesTokenCount": 1300,
+            "thoughtsTokenCount": 40,
+            "totalTokenCount": 1352,
+            "candidatesTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 10},
+                {"modality": "IMAGE", "tokenCount": 1290},
+            ],
+        }
+    )
+
+    assert usage.output_tokens == 1340
+    assert usage.completion_tokens == 1340
+    assert usage.completion_tokens_details == {
+        "text_tokens": 10,
+        "image_tokens": 1290,
+        "reasoning_tokens": 40,
+    }
+    assert usage.output_tokens_details == usage.completion_tokens_details
+
+
+def test_transform_gemini_image_usage_does_not_double_count_inclusive_thoughts() -> None:
+    usage: Final = transform_gemini_image_usage(
+        {
+            "promptTokenCount": 12,
+            "candidatesTokenCount": 1300,
+            "thoughtsTokenCount": 40,
+            "totalTokenCount": 1312,
+            "candidatesTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 10},
+                {"modality": "IMAGE", "tokenCount": 1250},
+            ],
+        }
+    )
+
+    assert usage.output_tokens == 1300
+    assert usage.completion_tokens == 1300
+    assert usage.completion_tokens_details == {
+        "text_tokens": 10,
+        "image_tokens": 1250,
+        "reasoning_tokens": 40,
+    }
+    assert usage.output_tokens_details == usage.completion_tokens_details
+
+
+def test_transform_gemini_image_usage_fallback_excludes_thoughts_from_image_tokens() -> None:
+    usage: Final = transform_gemini_image_usage(
+        {
+            "promptTokenCount": 12,
+            "candidatesTokenCount": 1300,
+            "thoughtsTokenCount": 40,
+            "totalTokenCount": 1352,
+        }
+    )
+
+    assert usage.output_tokens == 1340
+    assert usage.completion_tokens_details == {
+        "text_tokens": 0,
+        "image_tokens": 1300,
+        "reasoning_tokens": 40,
+    }
+    assert usage.output_tokens_details == usage.completion_tokens_details
