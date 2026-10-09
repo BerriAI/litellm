@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
@@ -25,14 +26,14 @@ from litellm.types.videos.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
+    LiteLLMLoggingObj: TypeAlias = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = object
+    LiteLLMLoggingObj: TypeAlias = object
 
 _BYTEDANCE_DEFAULT_API_BASE: Final[str] = "https://ark.ap-southeast.bytepluses.com"
 _BYTEDANCE_API_PATH_PREFIX: Final[str] = "/api/v3/contents/generations/tasks"
 
-_SEEDANCE_STATUS_MAP: Final[dict[str, str]] = {
+_SEEDANCE_STATUS_MAP: Final[Mapping[str, str]] = {
     "queued": "queued",
     "running": "in_progress",
     "succeeded": "completed",
@@ -45,6 +46,8 @@ _VideoParams: TypeAlias = dict[str, object]
 _VideoHeaders: TypeAlias = dict[str, str]
 _ContentItem: TypeAlias = dict[str, object]
 _SupportedParams: TypeAlias = list[str]
+
+_SKIP_KEYS: Final[frozenset[str]] = frozenset({"input_reference", "last_frame", "reference_images"})
 
 
 class ByteDanceVideoConfig(BaseVideoConfig):
@@ -75,59 +78,61 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> _VideoParams:
-        mapped_params: _VideoParams = {}
+        mapped: Final[_VideoParams] = {}
 
         if "input_reference" in video_create_optional_params:
-            mapped_params["input_reference"] = video_create_optional_params["input_reference"]
+            mapped["input_reference"] = video_create_optional_params["input_reference"]
 
         if "last_frame" in video_create_optional_params:
-            mapped_params["last_frame"] = video_create_optional_params["last_frame"]
+            mapped["last_frame"] = video_create_optional_params["last_frame"]
 
         if "reference_images" in video_create_optional_params:
-            mapped_params["reference_images"] = video_create_optional_params["reference_images"]
+            mapped["reference_images"] = video_create_optional_params["reference_images"]
 
         if "size" in video_create_optional_params:
-            size = video_create_optional_params["size"]
+            size: Final = video_create_optional_params["size"]
             if isinstance(size, str) and "x" in size:
-                mapped_params["ratio"] = size.replace("x", ":")
+                mapped["ratio"] = size.replace("x", ":")
             elif isinstance(size, str):
-                mapped_params["ratio"] = size
+                mapped["ratio"] = size
 
         if "seconds" in video_create_optional_params:
-            seconds = video_create_optional_params["seconds"]
+            seconds: Final = video_create_optional_params["seconds"]
             if seconds is not None:
                 try:
-                    mapped_params["duration"] = int(float(seconds)) if isinstance(seconds, str) else int(seconds)
+                    mapped["duration"] = int(float(seconds)) if isinstance(seconds, str) else int(seconds)
                 except (ValueError, TypeError):
                     pass
 
         if "resolution" in video_create_optional_params:
-            mapped_params["resolution"] = video_create_optional_params["resolution"]
+            mapped["resolution"] = video_create_optional_params["resolution"]
 
         for key in ("seed", "generate_audio", "watermark", "return_last_frame"):
             if key in video_create_optional_params:
-                mapped_params[key] = video_create_optional_params[key]
+                mapped[key] = video_create_optional_params[key]
 
-        supported_openai_params: Final = self.get_supported_openai_params(model)
+        supported: Final = self.get_supported_openai_params(model)
         for key, value in video_create_optional_params.items():
-            if key not in supported_openai_params and key not in mapped_params:
-                mapped_params[key] = value
+            if key not in supported and key not in mapped:
+                mapped[key] = value
 
-        return mapped_params
+        return mapped
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: base class signature
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
-        if litellm_params and litellm_params.api_key:
-            api_key = api_key or litellm_params.api_key
+    ) -> dict:  # mutable-ok: base class signature
+        resolved_key: Final = (
+            (api_key if not (litellm_params and litellm_params.api_key) else litellm_params.api_key)
+            or litellm.api_key
+            or get_secret_str("BYTEDANCE_API_KEY")
+            or get_secret_str("ARK_API_KEY")
+        )
 
-        api_key = api_key or litellm.api_key or get_secret_str("BYTEDANCE_API_KEY") or get_secret_str("ARK_API_KEY")
-
-        if api_key is None:
+        if resolved_key is None:
             raise ValueError(
                 "ByteDance API key is required. Set BYTEDANCE_API_KEY or ARK_API_KEY "
                 "environment variable or pass api_key parameter."
@@ -135,7 +140,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
 
         headers.update(
             {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {resolved_key}",
                 "Content-Type": "application/json",
             }
         )
@@ -145,22 +150,21 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: base class signature
     ) -> str:
-        if api_base is None:
-            api_base = _BYTEDANCE_DEFAULT_API_BASE
-        return api_base.rstrip("/")
+        final_base: Final = api_base if api_base is not None else _BYTEDANCE_DEFAULT_API_BASE
+        return final_base.rstrip("/")
 
     def transform_video_create_request(
         self,
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: dict,  # mutable-ok: base class signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: base class signature
     ) -> tuple[_VideoParams, RequestFiles, str]:
-        content: list[_ContentItem] = [{"type": "text", "text": prompt}]
+        content: Final[list[_ContentItem]] = [{"type": "text", "text": prompt}]  # mutable-ok: building request payload
 
         # Read without mutating the caller's dict
         input_reference: Final = video_create_optional_request_params.get("input_reference")
@@ -204,18 +208,17 @@ class ByteDanceVideoConfig(BaseVideoConfig):
                 for ref_url in reference_images
             )
 
-        request_data: _VideoParams = {
+        request_data: Final[_VideoParams] = {
             "model": model,
             "content": content,
         }
 
         # Carry over mapped params (ratio, duration, resolution, and any extras)
-        _SKIP_KEYS: Final = frozenset({"input_reference", "last_frame", "reference_images"})
         for key, value in video_create_optional_request_params.items():
             if key not in _SKIP_KEYS and key not in request_data:
                 request_data[key] = value
 
-        files_list: list[tuple[str, object]] = []
+        files_list: Final[list[tuple[str, object]]] = []  # mutable-ok: base class return type
         full_url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}"
 
         return request_data, files_list, full_url
@@ -226,24 +229,20 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: base class signature
     ) -> VideoObject:
         response_data: Final = raw_response.json()
-
         task_id: Final[str] = response_data.get("id", "")
 
         # Extract optional fields from request_data
-        req_model: str | None = None
-        req_size: str | None = None
-        req_seconds: str | None = None
-        if request_data:
-            if "model" in request_data:
-                req_model = str(request_data["model"])
-            ratio = request_data.get("ratio")
-            if isinstance(ratio, str) and ":" in ratio:
-                req_size = ratio.replace(":", "x")
-            if "duration" in request_data:
-                req_seconds = str(request_data["duration"])
+        req_model: Final[str | None] = str(request_data["model"]) if request_data and "model" in request_data else None
+        req_ratio: Final = request_data.get("ratio") if request_data else None
+        req_size: Final[str | None] = (
+            req_ratio.replace(":", "x") if isinstance(req_ratio, str) and ":" in req_ratio else None
+        )
+        req_seconds: Final[str | None] = (
+            str(request_data["duration"]) if request_data and "duration" in request_data else None
+        )
 
         video_obj: Final = VideoObject(
             id=task_id,
@@ -261,12 +260,12 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         duration: Final = max(
             0.0, float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
         )
-        usage_data: dict[str, object] = {"duration_seconds": duration}
+        usage: Final[dict[str, object]] = {"duration_seconds": duration}  # mutable-ok: building usage payload
         if request_data:
-            res = request_data.get("resolution")
+            res: Final = request_data.get("resolution")
             if res is not None and str(res).strip() != "":
-                usage_data["video_resolution"] = str(res).strip().lower()
-        video_obj.usage = usage_data
+                usage["video_resolution"] = str(res).strip().lower()
+        video_obj.usage = usage
 
         return video_obj
 
@@ -278,8 +277,8 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: base class signature
+    ) -> tuple[str, dict]:  # mutable-ok: base class signature
         original_video_id: Final = extract_original_video_id(video_id)
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
         url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
@@ -297,13 +296,11 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_status: Final[str] = response_data.get("status", "queued")
         is_terminal: Final = raw_status in ("succeeded", "failed", "cancelled", "expired")
 
-        resp_size: str | None = None
-        if "ratio" in response_data:
-            ratio = response_data["ratio"]
-            if isinstance(ratio, str) and ":" in ratio:
-                resp_size = ratio.replace(":", "x")
-
-        error_payload = response_data.get("error")
+        resp_ratio: Final = response_data.get("ratio")
+        resp_size: Final[str | None] = (
+            resp_ratio.replace(":", "x") if isinstance(resp_ratio, str) and ":" in resp_ratio else None
+        )
+        error_payload: Final = response_data.get("error")
 
         video_obj: Final = VideoObject(
             id=response_data.get("id", ""),
@@ -320,15 +317,15 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
-        usage_data: dict[str, object] = dict(response_data.get("usage") or {})
+        usage: Final[dict[str, object]] = dict(response_data.get("usage") or {})  # mutable-ok: building usage payload
         duration: Final = max(
             0.0, float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
         )
-        usage_data["duration_seconds"] = duration
-        res = response_data.get("resolution")
+        usage["duration_seconds"] = duration
+        res: Final = response_data.get("resolution")
         if res is not None and str(res).strip() != "":
-            usage_data["video_resolution"] = str(res).strip().lower()
-        video_obj.usage = usage_data
+            usage["video_resolution"] = str(res).strip().lower()
+        video_obj.usage = usage
 
         return video_obj
 
@@ -337,27 +334,27 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: base class signature
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict]:  # mutable-ok: base class signature
         original_video_id: Final = extract_original_video_id(video_id)
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
         url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
         return url, {}
 
-    def _extract_video_url_from_response(self, response_data: dict[str, object]) -> str:
-        content = response_data.get("content")
+    def _extract_video_url_from_response(self, response_data: Mapping[str, object]) -> str:
+        content: Final = response_data.get("content")
         if isinstance(content, dict):
-            video_url = content.get("video_url")
+            video_url: Final = content.get("video_url")
             if video_url:
                 return str(video_url)
 
-        status = response_data.get("status", "unknown")
+        status: Final = response_data.get("status", "unknown")
         if status in ("queued", "running"):
             raise ValueError(f"Video is still processing (status: {status}). Please wait and try again.")
         if status == "failed":
-            error = response_data.get("error", {})
-            message = error.get("message", "Unknown error") if isinstance(error, dict) else "Unknown error"
+            error: Final = response_data.get("error", {})
+            message: Final = error.get("message", "Unknown error") if isinstance(error, dict) else "Unknown error"
             raise ValueError(f"Video generation failed: {message}")
 
         raise ValueError("Video URL not found in response. Video may not be ready yet.")
@@ -398,9 +395,9 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-        extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: base class signature
+        extra_body: dict[str, object] | None = None,  # mutable-ok: base class signature
+    ) -> tuple[str, dict]:  # mutable-ok: base class signature
         raise NotImplementedError("Video remix is not supported for ByteDance")
 
     def transform_video_remix_response(
@@ -415,12 +412,12 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: base class signature
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+        extra_query: dict[str, object] | None = None,  # mutable-ok: base class signature
+    ) -> tuple[str, dict]:  # mutable-ok: base class signature
         raise NotImplementedError("Video listing is not supported for ByteDance")
 
     def transform_video_list_response(
@@ -428,7 +425,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: base class signature
         raise NotImplementedError("Video listing is not supported for ByteDance")
 
     def transform_video_delete_request(
@@ -436,8 +433,8 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: base class signature
+    ) -> tuple[str, dict]:  # mutable-ok: base class signature
         original_video_id: Final = extract_original_video_id(video_id)
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
         url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
@@ -456,7 +453,12 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             created_at=response_data.get("created_at", 0),
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: base class signature
+    ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
         raise BaseLLMException(
