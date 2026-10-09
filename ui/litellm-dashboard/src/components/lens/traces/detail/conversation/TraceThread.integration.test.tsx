@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
 import research from "../../__fixtures__/research_trace.json";
@@ -249,5 +249,105 @@ describe("TraceThread", () => {
     await user.click(within(thread).getByText("Subagent: Investigate release", { exact: true }));
     expect(within(thread).getByText("Investigate failed checks")).toBeVisible();
     expect(within(thread).getAllByText("Investigation timed out")).toHaveLength(1);
+  });
+});
+
+interface CompletionRequest {
+  url: string;
+  body: { model: string; messages: { role: string; content: string }[] };
+}
+
+const submitted = (turnId: string) => ({
+  title: "Release check",
+  turns: [
+    {
+      turn_id: turnId,
+      user: "Read the release notes, please",
+      summary: "Read the changelog before answering",
+      steps: [{ span_id: "tool", label: "Read CHANGELOG.md", status: "ok" }],
+      reply: "",
+    },
+  ],
+});
+
+function completion(args: string) {
+  const call = { id: "call_1", type: "function", function: { name: "submit_thread", arguments: args } };
+  const message = { role: "assistant", content: null, tool_calls: [call] };
+  return {
+    id: "chatcmpl-1",
+    object: "chat.completion",
+    created: 0,
+    model: "fireworks_ai/deepseek-v4-pro",
+    choices: [{ index: 0, finish_reason: "tool_calls", message }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+}
+
+function stubGateway(status = 200): CompletionRequest[] {
+  const requests: CompletionRequest[] = [];
+  const respond = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = { url: String(input), body: JSON.parse(String(init?.body)) as CompletionRequest["body"] };
+    requests.push(request);
+    if (status !== 200) return new Response(JSON.stringify({ error: { message: "model not found" } }), { status });
+    const prompt = request.body.messages.find((message) => message.role === "user")!.content;
+    const turnId = (JSON.parse(prompt) as { turns: { turn_id: string }[] }).turns[0].turn_id;
+    const body = JSON.stringify(completion(JSON.stringify(submitted(turnId))));
+    return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  };
+  vi.stubGlobal("fetch", vi.fn(respond));
+  return requests;
+}
+
+describe("TraceThread readable view", () => {
+  beforeEach(() => {
+    testQueryClient.clear();
+    vi.mocked(agentTraceCall).mockReset().mockResolvedValue(trace);
+    vi.mocked(agentTraceSpanCall)
+      .mockReset()
+      .mockImplementation(async (_token, _trace, id) => details[id]);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.localStorage.clear();
+  });
+
+  it("asks the gateway's renderer agent for a transcript and shows it with links back to steps", async () => {
+    const user = userEvent.setup();
+    const requests = stubGateway();
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    expect(await within(thread).findByText("Read the release notes")).toBeVisible();
+    expect(requests).toHaveLength(0);
+
+    await user.click(within(thread).getByRole("button", { name: "Readable", pressed: false }));
+    expect(await within(thread).findByText("Read the release notes, please")).toBeVisible();
+    expect(within(thread).getByText("Read the changelog before answering")).toBeVisible();
+    expect(within(thread).getByText("The release is ready")).toBeVisible();
+    expect(within(thread).getByText("Rendered by fireworks_ai/deepseek-v4-pro")).toBeVisible();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe("http://proxy.test/chat/completions");
+    expect(requests[0].body.model).toBe("fireworks_ai/deepseek-v4-pro");
+    expect(requests[0].body.messages.at(-1)?.content).toContain("CHANGELOG.md");
+
+    await user.click(within(thread).getByRole("button", { name: "Inspect Read CHANGELOG.md" }));
+    expect(screen.getByRole("tab", { name: "Steps", selected: true })).toBeVisible();
+    expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "tool");
+  });
+
+  it("keeps the recorded thread and explains the failure when the renderer cannot run", async () => {
+    const user = userEvent.setup();
+    stubGateway(404);
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    await user.click(await within(thread).findByRole("button", { name: "Readable" }));
+    expect(await within(thread).findByRole("alert")).toHaveTextContent(/^Readable view failed: .*model not found/);
+    expect(within(thread).getByText("Read the release notes")).toBeVisible();
+    expect(within(thread).getByText("The release is ready")).toBeVisible();
   });
 });

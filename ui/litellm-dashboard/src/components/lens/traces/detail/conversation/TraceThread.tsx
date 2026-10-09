@@ -2,9 +2,11 @@
 
 import { ChevronRight, MessageSquareText, TriangleAlert, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
+import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
+import { storageKey, useStoredValue } from "@/lib/storage";
 
 import type { Trace } from "../../types";
 import { fmtMs } from "../../utils";
@@ -17,6 +19,8 @@ import {
   pendingConversationBranches,
 } from "./conversation";
 import { ConversationMessage, ConversationStep, ConversationSteps } from "./ConversationParts";
+import { validReadableTurns, type ReadableTurn } from "./readable";
+import { ReadableBar, ReadableWork } from "./ReadableParts";
 import {
   buildThread,
   replyErrorSpanIds,
@@ -26,6 +30,7 @@ import {
   type ThreadWork,
 } from "./thread";
 import { useConversationDetails } from "./useConversationDetails";
+import { useReadableThread } from "./useReadableThread";
 
 export interface ConversationTracePaging {
   loading: boolean;
@@ -34,6 +39,7 @@ export interface ConversationTracePaging {
 }
 
 const AUTO_LOAD_STEPS = 200;
+const READABLE_VIEW = storageKey("local", "lens.thread.readable", z.boolean(), false);
 
 interface TraceThreadProps {
   trace: Trace;
@@ -71,6 +77,12 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
     void loadMore(controller.signal);
     return () => controller.abort();
   }, [autoLoad, hasMore, loadMore, loadTracePage]);
+  const [readableOn, setReadableOn] = useStoredValue(READABLE_VIEW);
+  const readable = useReadableThread(trace, turns, accessToken, readableOn && !busy && !blocked);
+  const readableTurns =
+    readableOn && readable.data
+      ? validReadableTurns(readable.data, turns, new Set(trace.spans.map((span) => span.span_id)))
+      : null;
   const loadNext = () => {
     if (hasMore) void loadMore(new AbortController().signal);
     else loadTracePage?.();
@@ -78,6 +90,14 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
   return (
     <section aria-label="Trace thread" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto min-w-0 max-w-3xl space-y-8 px-3 py-4 sm:px-6 sm:py-6">
+        <ReadableBar
+          on={readableOn}
+          onToggle={() => setReadableOn(!readableOn)}
+          rendering={readable.isFetching}
+          error={readable.error}
+          ready={Boolean(readableTurns)}
+          onRegenerate={() => void readable.refetch()}
+        />
         {rootErrors.map((span) => (
           <ErrorBlock key={span.span_id} span={span} />
         ))}
@@ -87,7 +107,7 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
           </p>
         ))}
         {turns.map((turn) => (
-          <ThreadTurnView key={turn.id} turn={turn} onOpenStep={onOpenStep} />
+          <ThreadTurnView key={turn.id} turn={turn} readable={readableTurns?.get(turn.id)} onOpenStep={onOpenStep} />
         ))}
         <ThreadFooter
           turnCount={turns.length}
@@ -147,19 +167,27 @@ function ThreadFooter({ turnCount, busy, stepsFailed, traceFailed, complete, onR
   );
 }
 
-function ThreadTurnView({ turn, onOpenStep }: { turn: ThreadTurn; onOpenStep: (id: string) => void }) {
+interface ThreadTurnViewProps {
+  turn: ThreadTurn;
+  readable?: ReadableTurn;
+  onOpenStep: (id: string) => void;
+}
+
+function ThreadTurnView({ turn, readable, onOpenStep }: ThreadTurnViewProps) {
+  const prompt = readable?.user ? [{ role: "user", content: readable.user }] : turn.prompt;
   return (
     <article aria-label="Thread turn" className="min-w-0 space-y-3">
       {turn.context.length > 0 && <PromptContext count={turn.context.length} turn={turn} />}
-      {turn.prompt.map((message, index) => (
+      {prompt.map((message, index) => (
         <ConversationMessage key={index} message={message} />
       ))}
+      {readable && <ReadableWork turn={readable} onOpenStep={onOpenStep} />}
       {turn.work.length > 0 && <WorkedBar turn={turn} onOpenStep={onOpenStep} />}
       {turn.replyItem?.showError && <ErrorBlock span={turn.replyItem.span} />}
       {turn.reply && (
         <div className="space-y-1.5">
           <div className="px-1 py-1">
-            <Markdown text={turn.reply.content} />
+            <Markdown text={readable?.reply || turn.reply.content} />
           </div>
           <ReplyMeta turn={turn} onOpenStep={onOpenStep} />
         </div>
