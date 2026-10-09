@@ -1071,8 +1071,6 @@ def test_register_model_scopes_builtin_match_to_the_given_provider():
 
 
 def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_provider():
-    """A router-originated per-request registration whose deployment id equals
-    another provider's catalog key lands under the id, not the builtin row."""
     from litellm.main import _register_custom_pricing_for_request
 
     deployment_id: Final = "baseten/zai-org/glm-5.2"
@@ -1099,6 +1097,4 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
         assert litellm.model_cost[builtin_key] == builtin_row_before
     finally:
         _restore_model_cost_entries(model_cost_entries)
-        litellm.open_ai_chat_completion_models.intersection_update(
-            litellm.open_ai_chat_completion_models & openai_models_before
-        )
+        litellm.open_ai_chat_completion_models.intersection_update(openai_models_before)
