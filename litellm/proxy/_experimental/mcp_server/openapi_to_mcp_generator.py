@@ -191,10 +191,7 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
                 return super().compose_node(parent, index)
 
             def flatten_mapping(self, node: object) -> None:
-                if any(
-                    key_node.tag == "tag:yaml.org,2002:merge"
-                    for key_node, _ in getattr(node, "value", ())
-                ):
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in getattr(node, "value", ())):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
 
