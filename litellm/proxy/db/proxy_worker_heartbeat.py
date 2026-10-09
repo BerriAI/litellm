@@ -34,19 +34,20 @@ PROXY_WORKER_LIVENESS_WINDOW_SECONDS: Final = 3 * PROXY_WORKER_HEARTBEAT_INTERVA
 STALE_ROW_RETENTION_SECONDS: Final = 3600
 
 BEAT_SQL: Final = """
-INSERT INTO "LiteLLM_ProxyWorkerHeartbeat" (worker_id, hostname, last_heartbeat_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat_at = NOW()
+INSERT INTO "LiteLLM_ProxyWorkerHeartbeat" (worker_id, hostname, last_heartbeat_at, expires_at)
+VALUES ($1, $2, NOW(), NOW() + make_interval(secs => $3))
+ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat_at = NOW(), expires_at = EXCLUDED.expires_at
 """
 
 PRUNE_SQL: Final = """
 DELETE FROM "LiteLLM_ProxyWorkerHeartbeat"
 WHERE last_heartbeat_at < NOW() - make_interval(secs => $1)
+AND COALESCE(expires_at, last_heartbeat_at + make_interval(secs => $2)) <= NOW()
 """
 
 COUNT_SQL: Final = """
 SELECT COUNT(*)::int AS live_workers FROM "LiteLLM_ProxyWorkerHeartbeat"
-WHERE last_heartbeat_at > NOW() - make_interval(secs => $1)
+WHERE COALESCE(expires_at, last_heartbeat_at + make_interval(secs => $1)) > NOW()
 """
 
 DEREGISTER_SQL: Final = """
@@ -107,10 +108,12 @@ class ProxyWorkerHeartbeat:
             return
         try:
             async with db_span("proxy_worker_heartbeat", "LiteLLM_ProxyWorkerHeartbeat"):
-                await self.prisma_client.db.execute_raw(BEAT_SQL, self.worker_id, self.hostname)
+                await self.prisma_client.db.execute_raw(
+                    BEAT_SQL, self.worker_id, self.hostname, 3 * self.interval_seconds
+                )
             async with db_span("prune_proxy_worker_heartbeats", "LiteLLM_ProxyWorkerHeartbeat"):
                 await self.prisma_client.db.execute_raw(
-                    PRUNE_SQL, max(STALE_ROW_RETENTION_SECONDS, 3 * self.interval_seconds)
+                    PRUNE_SQL, STALE_ROW_RETENTION_SECONDS, PROXY_WORKER_LIVENESS_WINDOW_SECONDS
                 )
         except Exception as beat_err:  # noqa: BLE001  # a missed heartbeat must never take down the worker
             verbose_proxy_logger.debug("Proxy worker heartbeat write failed: %s", beat_err)
@@ -138,7 +141,7 @@ async def count_live_proxy_workers(prisma_client: PrismaClient) -> int | None:
         db: Final = prisma_client.db
         primary_db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
         async with db_span("count_live_proxy_workers", "LiteLLM_ProxyWorkerHeartbeat"):
-            rows: Final = await primary_db.query_raw(COUNT_SQL, 3 * interval_seconds)
+            rows: Final = await primary_db.query_raw(COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
         return _COUNT_ROWS_ADAPTER.validate_python(rows)[0]["live_workers"]
     except Exception as count_err:  # noqa: BLE001  # an unknown count must degrade to "warn", never to a 503
         verbose_proxy_logger.debug("Live proxy worker count unavailable: %s", count_err)
