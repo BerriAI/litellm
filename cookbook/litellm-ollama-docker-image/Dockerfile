@@ -20,6 +20,6 @@ COPY . /app
 
 # Install any needed packages specified in requirements.txt
 
-RUN python3 -m pip install litellm
+RUN python3 -m pip install -r requirements.txt
 COPY start.sh /start.sh
 ENTRYPOINT [ "/bin/bash", "/start.sh" ]
