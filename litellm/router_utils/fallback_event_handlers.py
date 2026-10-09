@@ -7,6 +7,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -568,6 +570,67 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
     return fallback_model_group, generic_fallback_idx
+
+
+_PER_REQUEST_FALLBACK_LISTS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+_FALLBACK_ENTRIES: Final = TypeAdapter(list[object])
+_FALLBACK_CHAINS: Final = TypeAdapter(dict[str, object])
+
+
+def malformed_request_fallbacks(kwargs: Mapping[str, object]) -> str | None:
+    """
+    The first entry of the request's own fallbacks, context_window_fallbacks, or content_policy_fallbacks
+    that the fallback walk could not act on, named by field, index, and key, or None when every entry
+    is a model name, a {model_group: [model names]} entry, or a params override.
+    """
+    messages: Final = (
+        _malformed_fallback_list(field, kwargs[field]) for field in _PER_REQUEST_FALLBACK_LISTS if field in kwargs
+    )
+    return next((message for message in messages if message is not None), None)
+
+
+def _malformed_fallback_list(field: str, fallbacks: object) -> str | None:
+    if fallbacks is None:
+        return None
+    try:
+        entries: Final = _FALLBACK_ENTRIES.validate_python(fallbacks, strict=True)
+    except ValidationError:
+        return f"{field} must be a list, got {type(fallbacks).__name__}"
+    messages: Final = (_malformed_fallback_entry(field, index, entry) for index, entry in enumerate(entries))
+    return next((message for message in messages if message is not None), None)
+
+
+def _malformed_fallback_entry(field: str, index: int, entry: object) -> str | None:
+    if isinstance(entry, str):
+        return None
+    try:
+        chains: Final = _FALLBACK_CHAINS.validate_python(entry, strict=True)
+    except ValidationError:
+        return f"{field}[{index}] must be a model name or a {{model_group: [model names]}} entry, got {type(entry).__name__}"
+    if not chains:
+        return f"{field}[{index}] must name one model group, got an empty object"
+    if _is_fallback_params_override(chains):
+        return None
+    messages: Final = (_malformed_fallback_targets(field, index, key, targets) for key, targets in chains.items())
+    return next((message for message in messages if message is not None), None)
+
+
+def _is_fallback_params_override(entry: Mapping[str, object]) -> bool:
+    return any(key in entry and not isinstance(entry[key], list) for key in LiteLLMParamsTypedDict.__annotations__)
+
+
+def _malformed_fallback_targets(field: str, index: int, key: str, targets: object) -> str | None:
+    location: Final = f"{field}[{index}][{json.dumps(key)}]"
+    try:
+        models: Final = _FALLBACK_ENTRIES.validate_python(targets, strict=True)
+    except ValidationError:
+        return f"{location} must be a list of model names, got {type(targets).__name__}"
+    bad_target: Final = next(
+        ((position, target) for position, target in enumerate(models) if not isinstance(target, str | dict)), None
+    )
+    if bad_target is None:
+        return None
+    return f"{location}[{bad_target[0]}] must be a model name, got {type(bad_target[1]).__name__}"
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")

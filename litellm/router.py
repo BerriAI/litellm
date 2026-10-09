@@ -227,6 +227,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
+    malformed_request_fallbacks,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
@@ -7887,6 +7888,9 @@ class Router:
         include_fallback_errors: Final = kwargs.get("include_fallback_errors", False) is True
         disable_fallbacks: Final[bool | None] = kwargs.pop("disable_fallbacks", False)
         record_disable_fallbacks(kwargs, disable_fallbacks is True)
+        malformed_fallbacks: Final = malformed_request_fallbacks(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped at this boundary
+        if malformed_fallbacks is not None:
+            raise litellm.BadRequestError(message=malformed_fallbacks, model=model_group or "", llm_provider="")
         fallbacks: Final[list | None] = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks: list | None = kwargs.get("context_window_fallbacks", self.context_window_fallbacks)
         content_policy_fallbacks: list | None = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)

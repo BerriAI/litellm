@@ -4001,6 +4001,36 @@ async def test_acompletion_mid_stream_fallback_honors_a_per_request_fallbacks_no
     assert _groups_called(provider_calls) == ["primary"]
 
 
+_MALFORMED_ENTRY_MESSAGE: Final = r'{field}\[0\]\["primary"\] must be a list of model names, got int'
+
+
+@pytest.mark.parametrize("field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_acompletion_rejects_a_malformed_per_request_fallback_entry_before_any_attempt(field, stream):
+    router: Final = _primary_and_backup_router()
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as provider_calls:
+        with pytest.raises(litellm.BadRequestError, match=_MALFORMED_ENTRY_MESSAGE.format(field=field)) as rejected:
+            await router.acompletion(
+                model="primary", messages=[{"role": "user", "content": "hi"}], stream=stream, **{field: [{"primary": 5}]}
+            )
+
+    assert rejected.value.status_code == 400
+    provider_calls.assert_not_called()
+
+
+def test_completion_rejects_a_malformed_per_request_fallback_entry_before_any_attempt():
+    router: Final = _primary_and_backup_router()
+
+    with patch("litellm.completion") as provider_calls:
+        with pytest.raises(litellm.BadRequestError, match=_MALFORMED_ENTRY_MESSAGE.format(field="fallbacks")) as rejected:
+            router.completion(model="primary", messages=[{"role": "user", "content": "hi"}], fallbacks=[{"primary": 5}])
+
+    assert rejected.value.status_code == 400
+    provider_calls.assert_not_called()
+
+
 def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():
     """LIT-7400 follow-up: a refusal on the final hop of an exhausted list passes through."""
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
