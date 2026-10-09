@@ -122,7 +122,7 @@ class MockPrismaClient:
         self.sibling_deployments = sibling_deployments or []
         self.db = self
 
-    async def find_unique(self, where):
+    async def find_unique(self, where, include=None):
         if self.team_exists:
             return LiteLLM_TeamTable(
                 team_id=where["team_id"],
@@ -7443,10 +7443,10 @@ class TestTeamMemberAutoRouterWrites:
         monkeypatch.setenv("LITELLM_SALT_KEY", "member-router-test-salt")
 
     @contextlib.contextmanager
-    def _environment(self, database: MagicMock, row: LiteLLM_ProxyModelTable) -> Iterator[None]:
+    def _environment(self, database: MagicMock, row: LiteLLM_ProxyModelTable, catalog: Router | None = None) -> Iterator[None]:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", database),  # test-quality-ok: [TQ008] endpoint storage singleton injection
-            patch("litellm.proxy.proxy_server.llm_router", self._catalog()),  # test-quality-ok: [TQ008] inject real destination model catalog
+            patch("litellm.proxy.proxy_server.llm_router", catalog or self._catalog()),  # test-quality-ok: [TQ008] inject real destination model catalog
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: [TQ008] endpoint storage mode singleton
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: [TQ008] inject licensed process state
             patch("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", return_value=None),  # test-quality-ok: [TQ008] inject unlimited license result
@@ -7520,6 +7520,102 @@ class TestTeamMemberAutoRouterWrites:
             "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
             "model_info": {"id": "allowed-id"},
         }])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    @pytest.mark.parametrize("dependency", ["tier", "default", "classifier", "inherited-default"])
+    async def test_team_admin_dependencies_are_bounded_before_persistence(
+        self, endpoint: str, dependency: str
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        original: Final = self._row()
+        row: Final = original.model_copy(update={"litellm_params": {
+            **original.litellm_params,
+            "complexity_router_default_model": "outside" if dependency == "inherited-default" else "allowed",
+        }})
+        team: Final = self._team(enabled=False).model_copy(update={
+            "members_with_roles": [Member(user_id="admin", role="admin")],
+        })
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.INTERNAL_USER, team_id=None)
+        config: Final = {
+            "classifier_type": "llm" if dependency == "classifier" else "heuristic",
+            "tiers": {"SIMPLE": "outside" if dependency == "tier" else "allowed"},
+            **({"classifier_llm_config": {"model": "outside"}} if dependency == "classifier" else {}),
+        }
+        params: Final = {
+            "complexity_router_config": config,
+            **({"complexity_router_default_model": "outside"} if dependency == "default" else {}),
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(params), model_info=ModelInfo(id=row.model_id)
+        )
+        deployment: Final = Deployment(
+            model_name="new-admin-router",
+            litellm_params=LiteLLM_Params.model_validate({
+                "model": "auto_router/complexity_router", **params,
+                **({"complexity_router_default_model": "outside"} if dependency == "inherited-default" else {}),
+            }),
+            model_info=ModelInfo(id=row.model_id, team_id=team.team_id),
+        )
+        catalog: Final = Router(model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}}
+            for name in ("allowed", "outside")
+        ])
+        operation: Final = (
+            add_new_model(deployment, actor) if endpoint == "create"
+            else patch_model(row.model_id, request, actor) if endpoint == "patch"
+            else update_model(request, actor)
+        )
+        with self._environment(database, row, catalog):
+            with pytest.raises(ProxyException) as denied:
+                await operation
+        assert denied.value.code == "403"
+        database.db.litellm_proxymodeltable.create.assert_not_awaited()
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_team_admin_can_update_another_users_router_without_member_opt_in(self, endpoint: str) -> None:
+        row: Final = self._row()
+        team: Final = self._team(enabled=False).model_copy(update={
+            "members_with_roles": [Member(user_id="admin", role="admin")],
+        })
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config={"tiers": {"SIMPLE": "allowed"}}),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row):
+            if endpoint == "patch":
+                await patch_model(row.model_id, request, actor)
+            else:
+                await update_model(request, actor)
+        saved: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        assert json.loads(saved["litellm_params"])["complexity_router_config"]["tiers"] == {"SIMPLE": "allowed"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_team_admin_router_transfer_checks_destination_dependencies(self, endpoint: str) -> None:
+        row: Final = self._row()
+        source: Final = self._team(enabled=False).model_copy(update={
+            "members_with_roles": [Member(user_id="admin", role="admin")],
+        })
+        destination: Final = source.model_copy(update={"team_id": "destination", "models": ["other"]})
+        database: Final = self._database(source, row)
+        database.db.litellm_teamtable.find_unique.side_effect = [source, destination]
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config={"tiers": {"SIMPLE": "allowed"}}),
+            model_info=ModelInfo(id=row.model_id, team_id="destination"),
+        )
+        operation: Final = patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await operation
+        assert denied.value.code == "403"
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
 
     @staticmethod
     def _classifier_config(classifier: Mapping[str, object], legacy: bool) -> Mapping[str, object]:

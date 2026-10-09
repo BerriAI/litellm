@@ -194,7 +194,17 @@ async def authorize_member_auto_router_dependencies(
         (
             dependency,
             dependency.model_name,
-            llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id),
+            tuple(
+                deployment
+                for deployment in llm_router.get_model_list(
+                    model_name=aliases.get(dependency.model_name, dependency.model_name)
+                    if aliases
+                    else dependency.model_name,
+                    team_id=team.team_id,
+                )
+                or ()
+                if Router._deployment_usable_by_team(deployment, team.team_id)  # pyright: ignore[reportPrivateUsage]  # use the serving path's team boundary
+            ),
         )
         for dependency in dependencies
     ):

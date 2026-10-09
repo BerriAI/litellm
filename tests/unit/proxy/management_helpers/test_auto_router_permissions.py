@@ -28,6 +28,94 @@ from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("member_marker", [False, None])
+async def test_unmarked_team_router_checks_dependencies_on_inference(
+    catalog: Router, monkeypatch: pytest.MonkeyPatch, bucket: str, member_marker: bool | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    cache: Final = UserApiKeyCache()
+    team: Final = LiteLLM_TeamTableCachedObj.model_validate(_team().model_dump())
+    await cache.async_set_cache(key="team_id:team-a", value=team, model_type=LiteLLM_TeamTableCachedObj)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", _Client())
+    actor: Final = _actor(user_id=None, team_id="team-a", models=[])
+    with pytest.raises(ProxyException) as denied:
+        await authorize_member_auto_router_inference(
+            deployment={
+                "model_info": {"team_id": "team-a", "member_auto_router": member_marker},
+                "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": {
+                    "classifier_type": "heuristic", "tiers": {"SIMPLE": "other"},
+                }},
+            },
+            request_kwargs={bucket: {"user_api_key_auth": actor}},
+            llm_router=catalog,
+        )
+    assert denied.value.code == "403"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["global", "proxy-admin", "ordinary"])
+async def test_explicit_admin_and_global_router_delegation_remain_unchanged(catalog: Router, shape: str) -> None:
+    from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
+
+    result: Final = await authorize_member_auto_router_inference(
+        deployment={
+            "model_info": {} if shape == "global" else {"team_id": "team-a"},
+            "litellm_params": {"model": "openai/gpt-4o-mini" if shape == "ordinary" else "auto_router/complexity_router"},
+        },
+        request_kwargs={"metadata": {"user_api_key_auth": _actor(user_role=LitellmUserRoles.PROXY_ADMIN)}},
+        llm_router=catalog,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["team-a", "team-b"])
+async def test_dependency_catalog_respects_team_ownership(owner: str) -> None:
+    catalog: Final = Router(model_list=[{
+        "model_name": "allowed", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+        "model_info": {"team_id": owner},
+    }])
+    operation: Final = authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config({"tiers": {"SIMPLE": "allowed"}}), default_model=None,
+        user_api_key_dict=_actor(), team=_team(), prisma_client=_Client(), llm_router=catalog,
+    )
+    if owner == "team-b":
+        with pytest.raises(HTTPException) as denied:
+            await operation
+        assert denied.value.status_code == 400
+    else:
+        assert await operation is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant", ["alias", "wildcard", "model-group", "access-group"])
+async def test_dependency_access_uses_existing_alias_and_grant_semantics(grant: str) -> None:
+    catalog: Final = Router(
+        model_list=[{
+            "model_name": "allowed", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+            "model_info": {"access_groups": ["permitted-group"]},
+        }],
+        model_group_alias={"public": "allowed"} if grant == "model-group" else {},
+    )
+    target: Final = "public" if grant in ("alias", "model-group") else "allowed"
+    team: Final = _team(
+        models=["allow*"] if grant == "wildcard" else ["permitted-group"] if grant == "access-group" else ["allowed"],
+        litellm_model_table={"model_aliases": {"public": "allowed"}, "created_by": "admin", "updated_by": "admin"} if grant == "alias" else None,
+    )
+    result: Final = await authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config({"tiers": {"SIMPLE": target}}), default_model=None,
+        user_api_key_dict=_actor(models=[]), team=team, prisma_client=_Client(), llm_router=catalog,
+    )
+    assert result is None
+
+
 class _ReadTable:
     async def find_unique(self, where: Mapping[str, object], include: Mapping[str, object] | None = None) -> None:
         return None
