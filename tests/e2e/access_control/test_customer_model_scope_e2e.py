@@ -15,7 +15,6 @@ create-and-clean pattern.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final
 
@@ -49,20 +48,16 @@ def _deployment(model_name: str) -> ModelNewBody:
 
 
 @pytest.fixture
-def deployments(client: AccessControlClient) -> Iterator[ScopedDeployments]:
+def deployments(client: AccessControlClient, resources: ResourceManager) -> ScopedDeployments:
     marker: Final = unique_marker()
     scoped: Final = ScopedDeployments(
         allowed_model=f"e2e-custmodel-allowed-{marker}",
         other_model=f"e2e-custmodel-other-{marker}",
     )
-    created: Final = tuple(
-        client.proxy.register_model(_deployment(name)) for name in (scoped.allowed_model, scoped.other_model)
-    )
-    try:
-        yield scoped
-    finally:
-        for model_id in created:
-            client.proxy.delete_model(model_id)
+    for name in (scoped.allowed_model, scoped.other_model):
+        model_id: Final = client.proxy.register_model(_deployment(name))
+        resources.defer(lambda mid=model_id: client.proxy.delete_model(mid))
+    return scoped
 
 
 class TestCustomerModelScope:
