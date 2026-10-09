@@ -19281,6 +19281,20 @@ async def test_repeated_stale_discovery_uses_current_callers_endpoint(endpoint: 
     assert resolved is replacement
 
 
+@pytest.mark.parametrize("header_name", ("x-litellm-api-key", "X-LiteLLM-API-Key"))
+def test_openapi_extra_headers_exclude_gateway_admission_key(header_name: str) -> None:
+    caller_key: Final = "Bearer sk-admission-only"
+    raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+    server: Final = MCPServer(
+        server_id="header-boundary", name="header-boundary", transport=MCPTransport.http,
+        spec_path="/spec.yaml", auth_type=MCPAuth.none, extra_headers=[header_name, "X-Tenant"],
+    )
+    assert resolve_openapi_tool_auth(
+        server, None, None, raw_headers, UserAPIKeyAuth(api_key="sk-admission-only"),
+    ) == (None, {"X-Tenant": "tenant-control"}, None)
+    assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+
+
 @pytest.mark.asyncio
 async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_consent() -> None:
     from types import SimpleNamespace

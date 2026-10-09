@@ -2652,6 +2652,66 @@ class TestCallToolRestAPI:
         assert captured["oauth2_headers"] is None
         fire_logging.assert_awaited_once()
 
+    async def test_extract_mcp_headers_scrubs_admitted_caller_credential(self) -> None:
+        caller_key: Final = "sk-rest-caller-admission-key-123"
+        upstream_token: Final = "Bearer unrelated-upstream-token"
+        request: Final = _build_request(
+            headers={
+                "x-litellm-api-key": f"Bearer {caller_key}",
+                "authorization": f"Bearer {caller_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
+                "x-mcp-upstream-authorization": upstream_token,
+            }
+        )
+
+        extracted_headers: Final = rest_endpoints._extract_mcp_headers_from_request(
+            request,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+        )
+
+        assert extracted_headers == (
+            None,
+            {"upstream": {"Authorization": upstream_token}},
+            {
+                "x-litellm-api-key": f"Bearer {caller_key}",
+                "x-mcp-upstream-authorization": upstream_token,
+            },
+            None,
+        )
+
+    async def test_extract_mcp_headers_preserves_caller_credential_without_authenticated_key(self) -> None:
+        caller_key: Final = "sk-rest-caller-admission-key-123"
+        caller_authorization: Final = f"Bearer {caller_key}"
+        upstream_token: Final = "Bearer unrelated-upstream-token"
+        request: Final = _build_request(
+            headers={
+                "x-litellm-api-key": caller_authorization,
+                "authorization": caller_authorization,
+                "x-mcp-echo_srv-authorization": caller_authorization,
+                "x-mcp-upstream-authorization": upstream_token,
+            }
+        )
+
+        extracted_headers: Final = rest_endpoints._extract_mcp_headers_from_request(
+            request,
+            UserAPIKeyAuth(),
+        )
+
+        assert extracted_headers == (
+            None,
+            {
+                "echo_srv": {"Authorization": caller_authorization},
+                "upstream": {"Authorization": upstream_token},
+            },
+            {
+                "x-litellm-api-key": caller_authorization,
+                "authorization": caller_authorization,
+                "x-mcp-echo_srv-authorization": caller_authorization,
+                "x-mcp-upstream-authorization": upstream_token,
+            },
+            {"Authorization": caller_authorization},
+        )
+
     @pytest.mark.parametrize(
         ("structured", "expected_structured", "expected_texts"),
         [
