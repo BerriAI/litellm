@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ComponentProps } from "react";
+import { createContext, useContext, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/cva.config";
 import { StepIndicator, type StepState } from "../ui/StepIndicator";
 import { SETUP_STEPS, type SetupStep as SetupStepId } from "./investigationSchema";
@@ -45,7 +45,7 @@ export type SetupStepProps = ComponentProps<"li"> & {
   id: SetupStepId;
   heading: string;
   description: string;
-  summary: string;
+  summary: ReactNode;
 };
 
 export function SetupStep({ id, heading, description, summary, className, children, ...props }: SetupStepProps) {
@@ -56,23 +56,40 @@ export function SetupStep({ id, heading, description, summary, className, childr
     <li
       data-slot="setup-step"
       data-state={state}
-      className={cn("group relative flex gap-4 [&:not(:last-child)]:pb-8", className)}
+      className={cn("group relative flex gap-3.5 [&:not(:last-child)]:pb-6", className)}
       {...props}
     >
-      <span aria-hidden="true" className="absolute top-7 bottom-0 left-3.5 w-px bg-border group-last:hidden" />
-      <StepIndicator aria-hidden="true" index={position} state={state} />
-      <div className="min-w-0 flex-1 pt-0.5">
+      <span
+        aria-hidden="true"
+        className="absolute top-8 bottom-2 left-3 w-px bg-border group-last:hidden group-data-[state=complete]:bg-foreground/15"
+      />
+      <StepIndicator aria-hidden="true" index={position} state={state} className="size-6" />
+      <div className="min-w-0 flex-1">
         <button
           type="button"
           disabled={state !== "complete"}
           aria-current={state === "current" ? "step" : undefined}
           onClick={() => onOpen(id)}
-          className="flex w-full flex-col items-start gap-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
+          className="group/step -mx-2 -my-1 flex w-[calc(100%+1rem)] items-start justify-between gap-3 rounded-md px-2 py-1 text-left outline-none transition-colors enabled:hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
         >
-          <span className="text-sm font-semibold group-data-[state=upcoming]:text-muted-foreground">{heading}</span>
-          <span className="text-xs text-muted-foreground">{state === "complete" ? summary : description}</span>
+          <span className="grid min-w-0 gap-0.5">
+            <span className="text-sm leading-6 font-medium group-data-[state=upcoming]:text-muted-foreground">
+              {heading}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">
+              {state === "complete" ? summary : description}
+            </span>
+          </span>
+          {state === "complete" && (
+            <span
+              aria-hidden="true"
+              className="pt-0.5 text-xs leading-5 font-medium text-muted-foreground group-hover/step:text-foreground"
+            >
+              Edit
+            </span>
+          )}
         </button>
-        {state === "current" && <div className="mt-4 space-y-5">{children}</div>}
+        {state === "current" && <div className="mt-5 grid gap-5">{children}</div>}
       </div>
     </li>
   );

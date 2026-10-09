@@ -15,8 +15,8 @@ export function AnalysisModelField({ models, gate }: AnalysisModelFieldProps) {
   const { control } = useFormContext<InvestigationInput>();
   const model = useWatch({ control, name: "selectedModel" });
   return (
-    <div className="space-y-2">
-      <p className="text-sm font-medium">Analysis model</p>
+    <div className="grid gap-2">
+      <span className="text-sm font-medium">Analysis model</span>
       <Controller
         control={control}
         name="selectedModel"

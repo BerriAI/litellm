@@ -1,23 +1,25 @@
 "use client";
 
-import { useEffect, useState, type ComponentProps } from "react";
-import { ChevronRight, RotateCw } from "lucide-react";
+import { memo, useEffect, useState, type ComponentProps } from "react";
+import { ChevronRight } from "lucide-react";
 import { useInView } from "react-intersection-observer";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 
 import { runTime } from "../model/format";
-import type { Execution, MatchingPreview } from "./useMatchingActivity";
+import type { Execution, MatchingPreview, PreviewSelection } from "./useMatchingActivity";
 
 const PREFETCH_MARGIN = "0px 0px 240px 0px";
+const SKELETON_ROWS = 6;
 
 type RunRowProps = ComponentProps<"div"> & { run: Execution };
 
 function RunRow({ run, className, ...props }: RunRowProps) {
   const steps = `${run.span_count} ${run.span_count === 1 ? "step" : "steps"}`;
   return (
-    <div data-slot="run-row" className={cn("min-w-0 py-3", className)} {...props}>
-      <p className="text-sm font-medium">{run.name}</p>
+    <div data-slot="run-row" className={cn("min-w-0 flex-1 py-3", className)} {...props}>
+      <p className="truncate text-sm font-medium">{run.name}</p>
       <p className="mt-1 text-xs text-muted-foreground">
         {runTime(run.start_time)} · {run.source === "traces" ? steps : "LLM request"}
       </p>
@@ -25,35 +27,55 @@ function RunRow({ run, className, ...props }: RunRowProps) {
   );
 }
 
-type PreviewFooterProps = ComponentProps<"div"> & Pick<MatchingPreview, "page" | "selection">;
+function PlaceholderRows() {
+  return Array.from({ length: SKELETON_ROWS }, (_, index) => (
+    <div key={index} data-testid="runs-placeholder" className="grid gap-2 border-b py-3 last:border-0">
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-3 w-1/3" />
+    </div>
+  ));
+}
 
-/** Selection count and a way to undo manual picks; hidden while every match is simply going to be analyzed. */
-function PreviewFooter({ page, selection, className, ...props }: PreviewFooterProps) {
-  const partial = page.eligible != null && page.executions.length < page.eligible;
-  const count = selection?.count ?? page.selected;
-  const picked = selection?.ids.length ?? 0;
-  const everything = count === page.eligible && !partial && picked === 0;
-  if (page.eligible == null || everything) return null;
-  return (
-    <div
-      data-slot="preview-footer"
-      className={cn("flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3", className)}
-      {...props}
-    >
-      <p className="text-xs text-muted-foreground">
-        {count} selected for analysis
-        {partial && (
-          <>
-            {" "}
-            · Showing {page.executions.length} of {page.eligible}
-          </>
-        )}
-      </p>
-      {selection && picked > 0 && (
-        <Button variant="outline" size="sm" onClick={selection.clear}>
-          Clear {picked} selected runs
+interface PreviewRowsProps {
+  readonly executions: readonly Execution[];
+  readonly selection: PreviewSelection | null;
+  readonly onOpen: (run: Execution) => void;
+}
+
+/** The preview can hold hundreds of rows; they re-render only when the rows or picks change, not on every keystroke. */
+const PreviewRows = memo(function PreviewRows({ executions, selection, onOpen }: PreviewRowsProps) {
+  return executions.map((run) => (
+    <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
+      {selection && (
+        <input
+          type="checkbox"
+          aria-label={`Select ${run.name}`}
+          checked={selection.ids.includes(run.id)}
+          onChange={(e) => selection.toggle(run.id, e.target.checked)}
+        />
+      )}
+      <RunRow run={run} />
+      {run.source === "traces" && (
+        <Button variant="ghost" size="icon-sm" aria-label={`Open ${run.name}`} onClick={() => onOpen(run)}>
+          <ChevronRight className="size-4" />
         </Button>
       )}
+    </div>
+  ));
+});
+
+/** Runs saved by hand on an older investigation; picks are no longer made here, only cleared. */
+function PickedRuns({ selection }: { selection: PreviewSelection }) {
+  const picked = selection.ids.length;
+  if (picked === 0) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2">
+      <p className="text-xs tabular-nums text-muted-foreground">
+        {selection.count.toLocaleString()} selected for analysis
+      </p>
+      <Button variant="ghost" size="xs" onClick={selection.clear}>
+        Clear {picked} selected runs
+      </Button>
     </div>
   );
 }
@@ -78,71 +100,55 @@ export function MatchingActivityPreview({
   useEffect(() => {
     if (nearTail && canContinue && !loadingMore) loadMore();
   }, [nearTail, canContinue, loadingMore, loadMore]);
+  const shown = status.ready || status.stale;
+  const showRows = shown && !status.error && page.executions.length > 0;
   return (
     <section
       aria-label="Matching activity"
       data-slot="matching-activity-preview"
-      className={cn("self-start rounded-lg border", className)}
+      className={cn("flex flex-col self-start overflow-hidden rounded-lg border bg-card", className)}
       {...props}
     >
-      <div className="border-b px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-medium" role="status">
-            {status.title}
-          </p>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh matching activity"
-            onClick={status.refresh}
-            disabled={!status.ready}
-          >
-            <RotateCw className="size-3" />
+      {status.notice && <p className="px-4 py-3 text-sm text-muted-foreground">{status.notice}</p>}
+      {status.ready && status.error && (
+        <p role="alert" className="px-4 py-3 text-sm text-destructive">
+          {status.error.message}{" "}
+          <Button variant="link" onClick={status.refresh}>
+            Retry preview
           </Button>
+        </p>
+      )}
+      {status.ready && page.eligible === 0 && (
+        <div className="grid gap-1 px-4 py-10 text-center">
+          <p className="text-sm font-medium">No matches</p>
+          <p className="text-xs text-muted-foreground">
+            Try removing a condition or check that your agent records this metadata. Recent trace updates need two
+            minutes to settle.
+          </p>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">{status.windowLabel} · No analysis cost</p>
-      </div>
-      <div ref={setScroller} aria-busy={loadingMore} className="max-h-[60dvh] overflow-y-auto px-4">
-        {status.ready && status.error && (
-          <p role="alert" className="py-3 text-sm text-destructive">
-            {status.error.message}{" "}
-            <Button variant="link" onClick={status.refresh}>
-              Retry preview
-            </Button>
-          </p>
-        )}
-        {status.ready && page.eligible === 0 && (
-          <p className="py-4 text-sm text-muted-foreground">
-            No matches. Try removing a condition or check that your agent records this metadata. Recent trace updates
-            need two minutes to settle.
-          </p>
-        )}
-        {status.ready &&
-          page.executions.map((run) => (
-            <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
-              {selection && (
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${run.name}`}
-                  checked={selection.ids.includes(run.id)}
-                  onChange={(e) => selection.toggle(run.id, e.target.checked)}
-                />
-              )}
-              <RunRow run={run} />
-              {run.source === "traces" && (
-                <Button variant="ghost" size="icon-sm" aria-label={`Open ${run.name}`} onClick={() => onOpen(run)}>
-                  <ChevronRight className="size-4" />
-                </Button>
-              )}
-            </div>
-          ))}
-        {canContinue && (
-          <p ref={tailRef} data-testid="preview-placeholder" className="py-3 text-xs text-muted-foreground">
-            Loading more…
-          </p>
-        )}
-      </div>
-      {status.ready && <PreviewFooter page={page} selection={selection} />}
+      )}
+      {(status.loading || showRows) && (
+        <div
+          ref={setScroller}
+          aria-busy={status.loading || status.stale || loadingMore}
+          className={cn(
+            "max-h-[calc(100dvh-16rem)] min-h-0 flex-1 overflow-y-auto px-4 transition-opacity lg:max-h-none",
+            status.stale && "opacity-60",
+          )}
+        >
+          {status.loading ? (
+            <PlaceholderRows />
+          ) : (
+            <PreviewRows executions={page.executions} selection={selection} onOpen={onOpen} />
+          )}
+          {canContinue && (
+            <p ref={tailRef} data-testid="preview-placeholder" className="py-3 text-xs text-muted-foreground">
+              Loading more…
+            </p>
+          )}
+        </div>
+      )}
+      {shown && selection && <PickedRuns selection={selection} />}
     </section>
   );
 }

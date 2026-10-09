@@ -118,6 +118,32 @@ describe("AgentTracesSection", () => {
     stubPost(async (traces) => traces.map((trace) => ({ ...trace, finding_count: null })));
   });
 
+  it("offers to investigate the agent-filtered runs over the shown range, only while that filter alone narrows them up to now", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00Z") });
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const user = userEvent.setup();
+    const onInvestigate = vi.fn();
+    const renderFiltered = (searchParams: string) =>
+      renderWithProviders(
+        <AgentTracesSection accessToken="sk-test" isActive range={ROLLING_DAY} onInvestigate={onInvestigate} />,
+        { searchParams },
+      );
+    for (const searchParams of [
+      "",
+      "?agent=support_triage_agent&q=status:error",
+      "?agent=support_triage_agent&status=error",
+      `?agent=support_triage_agent&from=${Date.parse("2026-09-30T06:00Z")}&to=${Date.parse("2026-09-30T12:00Z")}`,
+    ]) {
+      const view = renderFiltered(searchParams);
+      expect(await screen.findByRole("combobox", { name: "Search runs" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Investigate these runs" })).not.toBeInTheDocument();
+      view.unmount();
+    }
+    renderFiltered("?agent=support_triage_agent");
+    await user.click(await screen.findByRole("button", { name: "Investigate these runs" }));
+    expect(onInvestigate).toHaveBeenCalledWith({ agent: "support_triage_agent", lookbackHours: 24 });
+  });
+
   it("loads the next page only once the list scrolls near its end, then stops at the last page", async () => {
     vi.mocked(agentTraceListCall)
       .mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" })

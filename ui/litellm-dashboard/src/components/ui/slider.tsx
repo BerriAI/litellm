@@ -2,7 +2,15 @@ import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 
 import { cn } from "@/lib/cva.config";
 
-function Slider({ className, defaultValue, value, min = 0, max = 100, ...props }: SliderPrimitive.Root.Props) {
+function Slider({
+  className,
+  defaultValue,
+  value,
+  min = 0,
+  max = 100,
+  thumbLabel,
+  ...props
+}: SliderPrimitive.Root.Props & { thumbLabel?: string }) {
   const _values = Array.isArray(value) ? value : Array.isArray(defaultValue) ? defaultValue : [min, max];
 
   return (
@@ -30,6 +38,7 @@ function Slider({ className, defaultValue, value, min = 0, max = 100, ...props }
           <SliderPrimitive.Thumb
             data-slot="slider-thumb"
             key={index}
+            getAriaLabel={thumbLabel === undefined ? undefined : () => thumbLabel}
             className="block size-4 shrink-0 rounded-full border border-primary bg-card shadow-sm ring-ring/50 transition-[color,box-shadow] select-none hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
           />
         ))}

@@ -6,7 +6,7 @@ import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { InvestigationInput } from "../investigationSchema";
-import type { ScopeOptions } from "../useMatchingActivity";
+import { useDropPicks, type ScopeOptions } from "../useMatchingActivity";
 
 export function MetadataFilters({ attributes, keys }: Pick<ScopeOptions, "attributes" | "keys">) {
   const id = useId();
@@ -15,6 +15,7 @@ export function MetadataFilters({ attributes, keys }: Pick<ScopeOptions, "attrib
     register,
     formState: { errors },
   } = useFormContext<InvestigationInput>();
+  const dropPicks = useDropPicks();
   const { fields, append, remove } = useFieldArray({ control, name: "selection.filters", keyName: "fieldId" });
   const filters = useWatch({ control, name: "selection.filters" });
   return (
@@ -23,7 +24,7 @@ export function MetadataFilters({ attributes, keys }: Pick<ScopeOptions, "attrib
         <div key={field.fieldId} className="space-y-2">
           <div className="flex gap-2">
             <Input
-              {...register(`selection.filters.${index}.key`)}
+              {...register(`selection.filters.${index}.key`, { onChange: dropPicks })}
               aria-label={`Metadata key ${index + 1}`}
               list={`${id}-keys`}
               placeholder="Metadata key"
@@ -32,7 +33,10 @@ export function MetadataFilters({ attributes, keys }: Pick<ScopeOptions, "attrib
               variant="ghost"
               size="icon"
               aria-label={`Remove condition ${index + 1}`}
-              onClick={() => remove(index)}
+              onClick={() => {
+                dropPicks();
+                remove(index);
+              }}
             >
               <X className="size-4" />
             </Button>
@@ -43,7 +47,7 @@ export function MetadataFilters({ attributes, keys }: Pick<ScopeOptions, "attrib
             </p>
           )}
           <Input
-            {...register(`selection.filters.${index}.value`)}
+            {...register(`selection.filters.${index}.value`, { onChange: dropPicks })}
             aria-label={`Metadata value ${index + 1}`}
             list={`${id}-values-${index}`}
             placeholder="Equals"
