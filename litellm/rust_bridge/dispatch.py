@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Generic, TypeAlias, TypeVar
 
+from litellm.analytics import track_async, track_sync
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
@@ -73,7 +74,7 @@ class PublicDispatch(Generic[RequestT]):
             return runtime.run(
                 self.context(native_request),
                 binding=binding,
-                native=lambda hook: native(hook, native_request, args, kwargs),
+                native=track_sync(lambda hook: native(hook, native_request, args, kwargs), self.route.value),
                 python=python,
                 rules=selected_rules,
             )
@@ -85,7 +86,7 @@ class PublicDispatch(Generic[RequestT]):
         return runtime.run(
             self.context(request),
             binding=binding,
-            native=lambda hook: native(hook, request, args, kwargs),
+            native=track_sync(lambda hook: native(hook, request, args, kwargs), self.route.value),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )
@@ -106,7 +107,7 @@ class PublicDispatch(Generic[RequestT]):
             return await runtime.arun(
                 self.context(native_request),
                 binding=binding,
-                native=lambda hook: native(hook, native_request, args, kwargs),
+                native=track_async(lambda hook: native(hook, native_request, args, kwargs), self.route.value),
                 python=python,
                 rules=selected_rules,
             )
@@ -118,7 +119,7 @@ class PublicDispatch(Generic[RequestT]):
         return await runtime.arun(
             self.context(request),
             binding=binding,
-            native=lambda hook: native(hook, request, args, kwargs),
+            native=track_async(lambda hook: native(hook, request, args, kwargs), self.route.value),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )

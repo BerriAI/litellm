@@ -6,11 +6,14 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from copy import copy
 from datetime import datetime
 from logging import Formatter
 from typing import Final, TextIO
 from urllib.parse import unquote
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -439,9 +442,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
                 ),
             )
             for key, value in record.__dict__.items()
-            if key not in _STANDARD_RECORD_ATTRS
-            and key != _REDACTED_RECORD_ATTR
-            and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
+            if key not in _NON_EXTRA_RECORD_ATTRS and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
         )
         if redact
         else ()
@@ -711,13 +712,38 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR, "_litellm_native_origin"}
+_RECORD_ATTRIBUTES: Final = TypeAdapter(Mapping[str, object])
+
+
+def diagnostic_snapshot(record: logging.LogRecord) -> tuple[str, str]:
+    snapshot: Final = copy(record)
+    attributes: Final = _RECORD_ATTRIBUTES.validate_python(snapshot.__dict__)
+    fields: Final = {
+        "source.target": snapshot.name,
+        "source.timestamp": snapshot.created,
+        "source.language": "python",
+        "logger.name": snapshot.name,
+        "python.levelno": snapshot.levelno,
+        "python.levelname": snapshot.levelname,
+        "python.created": snapshot.created,
+        "code.filepath": snapshot.pathname,
+        "code.lineno": snapshot.lineno,
+        "code.function": snapshot.funcName,
+        "exception.stacktrace": snapshot.exc_text or _render_exception(snapshot),
+        "stack": snapshot.stack_info,
+        "session_id": session_id_var.get(),
+        "trace_id": trace_id_var.get(),
+        "extra": {key: value for key, value in attributes.items() if key not in _NON_EXTRA_RECORD_ATTRS},
+    }
+    return _render_message(snapshot), safe_dumps(fields)
+
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
