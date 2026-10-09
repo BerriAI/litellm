@@ -117,7 +117,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        client::OcrRoute,
+        OcrRoute,
         types::LiteLLMOcrRequest,
         wire::{OcrWireRequest, decode_request},
     };
