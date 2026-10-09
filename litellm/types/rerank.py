@@ -6,11 +6,13 @@ https://docs.cohere.com/reference/rerank
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import ReadOnly, Required, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 
-class RerankRequest(BaseModel):
+
+class RerankRequest(LiteLLMBaseModel):
     model: str
     query: str
     top_n: int | None = None
@@ -28,7 +30,7 @@ class RerankRequest(BaseModel):
     max_tokens_per_query: int | None = None
 
 
-class HostedVLLMRerankTruncationParams(BaseModel):
+class HostedVLLMRerankTruncationParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     truncate_prompt_tokens: int | None = None
@@ -77,13 +79,21 @@ class RerankResponseResult(TypedDict, total=False):
     document: RerankResponseDocument
 
 
-class RerankResponse(BaseModel):
+class RerankResponse(LiteLLMBaseModel):
     id: str | None = None
     results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __getitem__(self, key):
         return self.__dict__[key]

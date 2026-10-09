@@ -131,12 +131,12 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                 }
               }}
             />
-          ) : providerModels.length > 0 ? (
+          ) : providerModels.length > 0 && !(typeof control.value === "string" && control.value !== "") ? (
             <MultiSelect
               id={control.id}
               placeholder="Select models"
               emptyText="No models found"
-              value={(control.value as string[] | undefined) ?? []}
+              value={Array.isArray(control.value) ? control.value : []}
               onValueChange={(value: string[]) => {
                 control.onChange(value);
                 handleModelChange(value);

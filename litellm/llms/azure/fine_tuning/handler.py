@@ -8,7 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.fine_tuning.handler import (
     OpenAIFineTuningAPI,
-    _litellm_fine_tuning_job_from_response,
+    litellm_fine_tuning_job_from_response,
 )
 from litellm.types.utils import LiteLLMFineTuningJob
 
@@ -37,7 +37,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         openai_client: AsyncOpenAI | AsyncAzureOpenAI,
     ) -> LiteLLMFineTuningJob:
         response: Final = await openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     async def acancel_fine_tuning_job(
         self,
@@ -45,7 +45,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         openai_client: AsyncOpenAI | AsyncAzureOpenAI,
     ) -> LiteLLMFineTuningJob:
         response: Final = await openai_client.fine_tuning.jobs.cancel(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     async def aretrieve_fine_tuning_job(
         self,
@@ -53,7 +53,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         openai_client: AsyncOpenAI | AsyncAzureOpenAI,
     ) -> LiteLLMFineTuningJob:
         response: Final = await openai_client.fine_tuning.jobs.retrieve(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def create_fine_tuning_job(
         self,
@@ -96,7 +96,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
 
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
         response: Final = cast(OpenAI, openai_client).fine_tuning.jobs.create(**create_fine_tuning_job_data)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def cancel_fine_tuning_job(
         self,
@@ -136,7 +136,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             )
 
         response: Final = cast(OpenAI, openai_client).fine_tuning.jobs.cancel(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def retrieve_fine_tuning_job(
         self,
@@ -176,7 +176,7 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
             )
 
         response: Final = cast(OpenAI, openai_client).fine_tuning.jobs.retrieve(fine_tuning_job_id=fine_tuning_job_id)
-        return _litellm_fine_tuning_job_from_response(response, is_azure=True)
+        return litellm_fine_tuning_job_from_response(response, is_azure=True)
 
     def get_openai_client(
         self,

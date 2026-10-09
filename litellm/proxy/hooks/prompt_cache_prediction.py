@@ -7,11 +7,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.anthropic.prompt_cache_prediction import PromptPrefix, parse_observed_cache
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -20,7 +22,7 @@ if TYPE_CHECKING:
 _RETENTION_SECONDS: Final = 86_400
 
 
-class CacheObservation(BaseModel):
+class CacheObservation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -64,19 +66,19 @@ async def _read_exact(cache: DualCache, scope: str, fingerprint: str) -> CacheOb
     return observation if observation.fingerprint == fingerprint else None
 
 
-class _Metadata(BaseModel):
+class _Metadata(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     user_api_key_hash: str = Field(min_length=1)
 
 
-class _Logged(BaseModel):
+class _Logged(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     status: Literal["success"]
     model_id: str = Field(min_length=1)
     metadata: _Metadata
 
 
-class _Event(BaseModel):
+class _Event(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True, arbitrary_types_allowed=True)
     call_type: Literal["anthropic_messages"]
     custom_llm_provider: Literal["anthropic"]
@@ -94,6 +96,7 @@ class PromptCacheObserver(CustomLogger):
         self.cache = internal_usage_cache.dual_cache
         self.clock = clock
 
+    @with_service_target("prompt_cache_predictions")
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:

@@ -56,7 +56,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         litellm_params_obj: Final = GenericLiteLLMParams.model_validate(litellm_params)
 
         # Get Azure auth headers (api-key or Authorization)
-        azure_headers = BaseAzureLLM._base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
+        azure_headers = BaseAzureLLM.base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
 
         # Merge Azure auth headers
         headers.update(azure_headers)

@@ -50,7 +50,7 @@ class TestApplyToolsetScope:
 
     @pytest.mark.asyncio
     async def test_restricts_to_toolset_servers_and_tools(self):
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         toolset_perms = {
             "server-a": ["tool1", "tool2"],
@@ -66,7 +66,7 @@ class TestApplyToolsetScope:
                 mcp_servers=["server-a", "server-b", "server-c"],
                 mcp_toolsets=["toolset-123"],
             )
-            result = await _apply_toolset_scope(auth, "toolset-123")
+            result = await apply_toolset_scope(auth, "toolset-123")
 
         op = result.object_permission
         assert op is not None
@@ -92,7 +92,7 @@ class TestApplyToolsetScope:
     @pytest.mark.asyncio
     async def test_admin_creates_object_permission_when_none(self):
         """Admin key with object_permission=None can access any toolset."""
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         toolset_perms = {"server-a": ["tool1"]}
         with patch(
@@ -105,7 +105,7 @@ class TestApplyToolsetScope:
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 object_permission=None,
             )
-            result = await _apply_toolset_scope(auth, "toolset-123")
+            result = await apply_toolset_scope(auth, "toolset-123")
 
         op = result.object_permission
         assert op is not None
@@ -116,7 +116,7 @@ class TestApplyToolsetScope:
     async def test_team_granted_toolset_is_served_to_a_key_without_its_own_grant(self):
         """A team key whose own row carries no toolset grant is admitted to the toolset its team
         holds (LIT-6029), scoped to that toolset's servers and tools."""
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         toolset_perms = {"server-a": ["tool1"]}
         auth = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission=None)
@@ -125,7 +125,7 @@ class TestApplyToolsetScope:
             "global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
-            result = await _apply_toolset_scope(auth, "toolset-123", granted=_granted_through_team("toolset-123"))
+            result = await apply_toolset_scope(auth, "toolset-123", granted=_granted_through_team("toolset-123"))
 
         assert result.mcp_toolset_id == "toolset-123"
         assert result.object_permission is not None
@@ -138,7 +138,7 @@ class TestApplyToolsetScope:
         team-granted toolset is not capped by the user's own row: the row stays intact and the toolset
         rides along as mcp_toolset_id (LIT-6029)."""
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         session = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-1")
         own_row = LiteLLM_ObjectPermissionTable(object_permission_id="user-op", mcp_servers=["server-own"])
@@ -151,7 +151,7 @@ class TestApplyToolsetScope:
             "global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
-            result = await _apply_toolset_scope(
+            result = await apply_toolset_scope(
                 session, "toolset-123", acting_user=AsyncMock(return_value=admitted), granted=granted
             )
 
@@ -163,13 +163,13 @@ class TestApplyToolsetScope:
 
     @pytest.mark.asyncio
     async def test_a_gateway_admitted_user_without_the_toolset_in_any_source_is_denied(self):
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
         admitted.mcp_admitted_user_subject = True
         granted = AsyncMock(return_value=frozenset({"toolset-other"}))
         with pytest.raises(HTTPException) as exc_info:
-            await _apply_toolset_scope(admitted, "toolset-123", granted=granted)
+            await apply_toolset_scope(admitted, "toolset-123", granted=granted)
 
         assert exc_info.value.status_code == 403
         granted.assert_awaited_once_with(admitted)
@@ -178,7 +178,7 @@ class TestApplyToolsetScope:
     async def test_a_resource_scoped_admitted_user_is_denied_a_team_toolset_on_another_server(self):
         """A gateway bearer scoped to server-own (RFC 8707 resource) cannot open a team toolset whose
         servers lie outside that resource, even though the team grants it (Devin Review 4150024267)."""
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
         admitted.mcp_admitted_user_subject = True
@@ -192,14 +192,14 @@ class TestApplyToolsetScope:
             new=resolve,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _apply_toolset_scope(admitted, "toolset-123", granted=granted)
+                await apply_toolset_scope(admitted, "toolset-123", granted=granted)
 
         assert exc_info.value.status_code == 403
         resolve.assert_awaited_once_with(toolset_ids=["toolset-123"], requires_fresh_policy=True)
 
     @pytest.mark.asyncio
     async def test_a_resource_scoped_admitted_user_opens_a_toolset_inside_its_resource(self):
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
         admitted.mcp_admitted_user_subject = True
@@ -211,7 +211,7 @@ class TestApplyToolsetScope:
             "global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
-            result = await _apply_toolset_scope(admitted, "toolset-123", granted=granted)
+            result = await apply_toolset_scope(admitted, "toolset-123", granted=granted)
 
         assert result.mcp_toolset_id == "toolset-123"
         assert result.mcp_session_resource_server_id == "server-team"
@@ -219,12 +219,12 @@ class TestApplyToolsetScope:
 
     @pytest.mark.asyncio
     async def test_team_grant_for_another_toolset_does_not_admit_a_key_to_this_one(self):
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         auth = _make_auth(mcp_toolsets=[])
         auth.team_id = "team-a"
         with pytest.raises(HTTPException) as exc_info:
-            await _apply_toolset_scope(auth, "toolset-123", granted=_granted_through_team("toolset-other"))
+            await apply_toolset_scope(auth, "toolset-123", granted=_granted_through_team("toolset-other"))
 
         assert exc_info.value.status_code == 403
 
@@ -233,11 +233,11 @@ class TestApplyToolsetScope:
         """Non-admin key with object_permission=None is denied (no grants configured)."""
         from starlette.exceptions import HTTPException
 
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         auth = UserAPIKeyAuth(api_key="sk-test", object_permission=None)
         with pytest.raises(HTTPException) as exc_info:
-            await _apply_toolset_scope(auth, "toolset-123")
+            await apply_toolset_scope(auth, "toolset-123")
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -248,7 +248,7 @@ class TestApplyToolsetScope:
         toolset path, which replaces mcp_servers and would drop the sentinel."""
         from starlette.exceptions import HTTPException
 
-        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         op = LiteLLM_ObjectPermissionTable(
             object_permission_id="test",
@@ -266,7 +266,7 @@ class TestApplyToolsetScope:
             new=resolve,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _apply_toolset_scope(auth, "toolset-123")
+                await apply_toolset_scope(auth, "toolset-123")
 
         assert exc_info.value.status_code == 403
         resolve.assert_not_awaited()
@@ -786,17 +786,17 @@ class TestMCPActiveToolsetContextVar:
     """Tests for _mcp_active_toolset_id ContextVar — clients cannot inject it."""
 
     def test_contextvar_default_is_none(self):
-        from litellm.proxy._experimental.mcp_server.server import _mcp_active_toolset_id
+        from litellm.proxy._experimental.mcp_server.server import mcp_active_toolset_id
 
-        assert _mcp_active_toolset_id.get() is None
+        assert mcp_active_toolset_id.get() is None
 
     def test_contextvar_set_and_reset(self):
-        from litellm.proxy._experimental.mcp_server.server import _mcp_active_toolset_id
+        from litellm.proxy._experimental.mcp_server.server import mcp_active_toolset_id
 
-        token = _mcp_active_toolset_id.set("toolset-abc")
-        assert _mcp_active_toolset_id.get() == "toolset-abc"
-        _mcp_active_toolset_id.reset(token)
-        assert _mcp_active_toolset_id.get() is None
+        token = mcp_active_toolset_id.set("toolset-abc")
+        assert mcp_active_toolset_id.get() == "toolset-abc"
+        mcp_active_toolset_id.reset(token)
+        assert mcp_active_toolset_id.get() is None
 
     @pytest.mark.asyncio
     async def test_client_header_is_stripped_in_scope(self):

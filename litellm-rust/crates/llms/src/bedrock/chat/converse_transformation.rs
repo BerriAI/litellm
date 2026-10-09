@@ -385,7 +385,7 @@ fn converse_body(conversation: &Conversation, optional_params: &Map<String, Valu
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": <&'static str>::from(turn.role),
                 "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
             })
         })

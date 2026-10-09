@@ -6,24 +6,34 @@ Tests PII detection and masking for different message formats
 import asyncio
 import copy
 import json
+import os
 import re
+from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 from aiohttp import web
+from aiohttp.client_proto import ResponseHandler
 from aiohttp.test_utils import TestServer
 import pytest
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 
 import litellm
+from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-    _OPTIONAL_PresidioPIIMasking,
+    PresidioPerRequestConfig,
+    OPTIONAL_PresidioPIIMasking,
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 from litellm.exceptions import BlockedPiiEntityError
 
@@ -77,7 +87,7 @@ def _make_mock_session_iterator(json_response, status=200, content_type="applica
 @pytest.fixture
 def presidio_guardrail():
     """Create a Presidio guardrail instance for testing"""
-    return _OPTIONAL_PresidioPIIMasking(
+    return OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=False,
         pii_entities_config={
@@ -635,7 +645,7 @@ async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mo
     causing the model's response to contain anonymization tokens (e.g. <PERSON>)
     instead of the real output.
     """
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         logging_only=True,
         pii_entities_config={PiiEntityType.PHONE_NUMBER: PiiAction.MASK},
@@ -674,7 +684,7 @@ async def test_presidio_sets_guardrail_information_in_request_data():
     This validates that add_standard_logging_guardrail_information_to_request_data
     correctly sets the guardrail information that will be used for logging.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         output_parse_pii=True,
         mock_testing=True,
@@ -732,7 +742,7 @@ async def test_request_data_flows_to_apply_guardrail():
     This validates the fix where guardrail translation handler passes data
     as request_data to apply_guardrail so guardrails can store metadata for logging.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         output_parse_pii=True,
         mock_testing=True,
@@ -772,7 +782,7 @@ async def test_output_masking_apply_to_output_only(mock_user_api_key):
     Ensure output masking runs when apply_to_output is enabled.
     """
 
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK},
@@ -839,8 +849,8 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
     import litellm.proxy.guardrails.guardrail_initializers as gi
 
-    monkeypatch.setattr(presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
-    monkeypatch.setattr(gi, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
+    monkeypatch.setattr(presidio_mod, "OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
+    monkeypatch.setattr(gi, "OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
 
     # input-only
     created.clear()
@@ -979,7 +989,7 @@ async def test_analyze_text_with_empty_string():
 
     Should return empty list without making API call to Presidio.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test:5002/",
         presidio_anonymizer_api_base="http://test:5001/",
         output_parse_pii=False,
@@ -1012,7 +1022,7 @@ async def test_analyze_text_error_dict_handling():
     When Presidio returns {'error': 'No text provided'}, should handle gracefully
     instead of crashing with TypeError.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://mock-presidio:5002/",
         presidio_anonymizer_api_base="http://mock-presidio:5001/",
         output_parse_pii=False,
@@ -1041,7 +1051,7 @@ async def test_analyze_text_string_response_handling():
     When Presidio returns a string (e.g. error message from websearch/hosted models),
     should handle gracefully instead of crashing with TypeError about mapping vs str.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://mock-presidio:5002/",
         presidio_anonymizer_api_base="http://mock-presidio:5001/",
         output_parse_pii=False,
@@ -1066,7 +1076,7 @@ async def test_analyze_text_invalid_response_raises_when_block_configured():
     When pii_entities_config has BLOCK and Presidio returns invalid response,
     should raise GuardrailRaisedException (fail-closed) rather than silently allowing content.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://mock-presidio:5002/",
         presidio_anonymizer_api_base="http://mock-presidio:5001/",
         output_parse_pii=False,
@@ -1093,7 +1103,7 @@ async def test_analyze_text_invalid_response_raises_when_mask_configured():
     When pii_entities_config has MASK and Presidio returns invalid response,
     should raise GuardrailRaisedException (fail-closed) because PII masking is expected.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://mock-presidio:5002/",
         presidio_anonymizer_api_base="http://mock-presidio:5001/",
         output_parse_pii=False,
@@ -1122,7 +1132,7 @@ async def test_analyze_text_list_with_non_dict_items():
     When Presidio returns a list containing strings (malformed response),
     should skip invalid items and return parsed valid ones.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://mock-presidio:5002/",
         presidio_anonymizer_api_base="http://mock-presidio:5001/",
         output_parse_pii=False,
@@ -1207,7 +1217,7 @@ def test_filter_drops_low_score_detection():
     """
     Detections below the configured score threshold should be removed.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
@@ -1221,7 +1231,7 @@ def test_filter_preserves_high_score_detection():
     """
     Detections meeting the score threshold should be preserved.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
@@ -1236,7 +1246,7 @@ def test_no_thresholds_returns_all():
     """
     With no thresholds configured, all detections are kept.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True)
     analyze_results = [
         {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.1, "start": 0, "end": 4},
         {
@@ -1255,7 +1265,7 @@ def test_entity_specific_threshold_only_applies_to_that_entity():
     """
     Entity-specific thresholds do not affect other entity types.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
@@ -1279,7 +1289,7 @@ def test_filter_uses_default_all_threshold():
     """
     Default ALL threshold applies to any entity without a specific override.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_score_thresholds={"ALL": 0.75},
     )
@@ -1302,7 +1312,7 @@ def test_entity_specific_overrides_default_threshold():
     """
     Entity-specific threshold should override the ALL default.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_score_thresholds={
             "ALL": 0.8,
@@ -1330,7 +1340,7 @@ async def test_anonymize_skips_when_no_detections_after_filter():
     """
     When all detections are filtered out, anonymize_text should return the original text.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
@@ -1356,7 +1366,7 @@ def test_blocking_respects_threshold_filter():
     """
     Entities filtered out by score should not trigger blocking, but high-score detections should.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.9},
@@ -1376,7 +1386,7 @@ def test_update_in_memory_applies_score_thresholds():
     """
     update_in_memory_litellm_params should refresh score thresholds.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True)
     assert guardrail.presidio_score_thresholds == {}
 
     params = LitellmParams(
@@ -1455,7 +1465,7 @@ async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
     gracefully handle raw bytes in the stream instead of crashing with
     'bytes' object has no attribute 'id'.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "redacted"},
@@ -1488,7 +1498,7 @@ def test_entity_deny_list_filters_detections():
     """
     Verify presidio_entities_deny_list removes matching entity types.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_entities_deny_list=["US_DRIVER_LICENSE"],
     )
@@ -1508,7 +1518,7 @@ def test_deny_list_and_score_threshold_combined():
     """
     Verify deny list + score threshold work together correctly.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_entities_deny_list=["US_DRIVER_LICENSE"],
         presidio_score_thresholds={"ALL": 0.8},
@@ -1535,7 +1545,7 @@ async def test_analyze_text_non_json_content_type_fail_closed():
     Test that analyze_text raises GuardrailRaisedException when Presidio health
     endpoint returns text/html and fail-closed is enabled.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         pii_entities_config={"PERSON": PiiAction.BLOCK},
@@ -1566,7 +1576,7 @@ async def test_analyze_text_non_json_content_type_fail_open():
     Test that analyze_text returns empty list when Presidio returns text/html
     and fail-closed is NOT enabled.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         mock_testing=False,
@@ -1593,7 +1603,7 @@ async def test_analyze_text_http_error_status():
     """
     Test that analyze_text handles 5xx HTTP errors properly.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         pii_entities_config={"PERSON": PiiAction.BLOCK},
@@ -1622,7 +1632,7 @@ async def test_anonymize_text_non_json_content_type():
     """
     Test that anonymize_text raises Exception for non-JSON responses.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         mock_testing=False,
@@ -1650,7 +1660,7 @@ async def test_anonymize_text_http_error_status():
     """
     Test that anonymize_text raises Exception on HTTP error.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         mock_testing=False,
@@ -1681,7 +1691,7 @@ async def test_pii_tokens_stored_in_metadata_not_top_level(presidio_guardrail):
     providers like Anthropic, which reject unknown fields with
     'pii_tokens: Extra inputs are not permitted'.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
         pii_entities_config={
@@ -1740,7 +1750,7 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
     Regression test: _process_response_for_pii must read pii_tokens from
     data['metadata']['pii_tokens'] and correctly unmask the response.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -1783,7 +1793,7 @@ def test_event_hook_auto_expansion_for_all_string_hooks(initial_hook):
     'post_call' to event_hook regardless of the initial string hook value,
     not just when it's 'pre_call'.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
         event_hook=initial_hook,
@@ -1795,7 +1805,7 @@ def test_event_hook_auto_expansion_for_all_string_hooks(initial_hook):
 
 def test_event_hook_no_expansion_when_already_post_call():
     """post_call alone should stay as-is — no expansion needed."""
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
         event_hook="post_call",
@@ -1810,7 +1820,7 @@ async def test_metadata_none_does_not_crash():
     Regression test: if metadata is explicitly None in request_data,
     the guardrail must not crash with TypeError on the write or read path.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -1856,7 +1866,7 @@ def test_unmask_exact_match_with_sequential_tokens():
     Normal unmasking: LLM echoes numbered tokens verbatim → original PII restored.
     """
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     pii_tokens = {
@@ -1864,7 +1874,7 @@ def test_unmask_exact_match_with_sequential_tokens():
         "<PHONE_NUMBER_1>": "555-123-4567",
     }
     text = "Hello <PERSON_1>, your number is <PHONE_NUMBER_1>."
-    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
     assert result == "Hello John Smith, your number is 555-123-4567."
 
 
@@ -1873,7 +1883,7 @@ def test_unmask_multiple_same_entity_type():
     Two phone numbers get distinct numbered tokens and unmask correctly.
     """
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     pii_tokens = {
@@ -1881,7 +1891,7 @@ def test_unmask_multiple_same_entity_type():
         "<PHONE_NUMBER_2>": "555-222-0000",
     }
     text = "Call <PHONE_NUMBER_1> or <PHONE_NUMBER_2>."
-    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
     assert result == "Call 555-111-0000 or 555-222-0000."
 
 
@@ -1891,7 +1901,7 @@ def test_unmask_graceful_degradation():
     in the output — clean and readable, not garbage hex.
     """
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     pii_tokens = {
@@ -1899,7 +1909,7 @@ def test_unmask_graceful_degradation():
     }
     # LLM paraphrased instead of echoing the token
     text = "I see you provided a name."
-    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, pii_tokens)
     # No change — no garbage, just clean text
     assert result == text
 
@@ -1915,7 +1925,7 @@ async def test_anonymize_text_multiple_items_position_correctness():
     Regression test: when multiple PII items exist, coordinates reference the
     ORIGINAL text. Processing in reverse order prevents coordinate drift.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         mock_testing=False,
@@ -1982,7 +1992,7 @@ async def test_anthropic_native_response_unmasking():
     Anthropic native dict responses (type='message') should be unmasked
     when output_parse_pii is enabled.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -2029,7 +2039,7 @@ async def test_anthropic_native_response_masking():
     Anthropic native dict responses should be masked when
     apply_to_output is enabled.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
     )
@@ -2068,7 +2078,7 @@ async def test_anthropic_native_response_non_text_blocks_untouched():
     Non-text blocks (tool_use, thinking) in Anthropic responses
     should be left untouched during unmasking.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -2120,7 +2130,7 @@ async def test_streaming_bytes_chunks_are_yielded_not_discarded():
     through the streaming hook, not silently discarded.
     """
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
     )
@@ -2148,7 +2158,7 @@ async def test_streaming_unmask_path_bytes_passthrough():
     """
     Bytes chunks in the unmasking path should also pass through.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -2180,7 +2190,7 @@ async def test_apply_to_output_streaming_unknown_events_passthrough():
     Regression test: /v1/responses-style event objects (neither bytes nor
     ModelResponseStream) must be preserved in order and not dropped.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
     )
@@ -2224,7 +2234,7 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
     a buffered ModelResponseStream chunk followed by unknown responses-style
     events should be preserved, and masking skip should be visible via warnings.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
     )
@@ -2281,7 +2291,7 @@ async def test_apply_guardrail_unmask_on_response(output_parse_pii: bool) -> Non
     When input_type is 'response' and pii_tokens exist, apply_guardrail
     should unmask text instead of masking it.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         output_parse_pii=output_parse_pii,
         mock_testing=True,
@@ -2319,7 +2329,7 @@ async def test_standalone_scans_without_restoration_tokens(input_type: Literal["
     """
     Standalone callbacks retain scanning without tokens, including MCP results.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         event_hook="post_mcp_call",
         output_parse_pii=True,
@@ -2372,7 +2382,7 @@ async def test_apply_to_output_streaming_chat_chunks_are_masked_as_one_response(
     Structured chat completion chunks are buffered, assembled and masked as a
     whole, so a card number split across deltas cannot reach the caller.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "my card is <CREDIT_CARD>"},
@@ -2403,7 +2413,7 @@ async def test_apply_to_output_streaming_bytes_after_chat_chunks_are_passed_thro
     Once structured chunks have been buffered, a trailing bytes frame belongs to
     the same stream and must be forwarded rather than treated as a new SSE stream.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "hello"},
@@ -2435,7 +2445,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
     bytes. Output masking must run over the whole content block so a card
     number split across text_delta events cannot reach the caller.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<CREDIT_CARD>"},
@@ -2485,7 +2495,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_forwarded_unchanged():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "Hello world"},
@@ -2535,7 +2545,7 @@ def _gemini_sse(text: str) -> bytes:
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incrementally_until_upstream_aborts():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2564,7 +2574,7 @@ async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incremen
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_first_frame_split_across_transport_chunks_is_still_masked():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2631,7 +2641,7 @@ def _anthropic_stream_head() -> list[bytes]:
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_first_frame_split_inside_a_utf8_character_is_still_masked():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2674,7 +2684,7 @@ async def test_apply_to_output_streaming_anthropic_first_frame_split_inside_a_ut
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_stream_led_by_sse_comment_keepalive_is_still_masked():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2711,7 +2721,7 @@ async def test_apply_to_output_streaming_anthropic_stream_led_by_sse_comment_kee
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_stream_led_by_data_less_ping_event_is_still_masked():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2748,7 +2758,7 @@ async def test_apply_to_output_streaming_anthropic_stream_led_by_data_less_ping_
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_leading_keepalive_is_forwarded_before_upstream_data_arrives():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2788,7 +2798,7 @@ async def test_apply_to_output_streaming_leading_keepalive_is_forwarded_before_u
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_leading_comments_over_the_frame_cap_are_still_masked():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2829,7 +2839,7 @@ async def test_apply_to_output_streaming_leading_comments_over_the_frame_cap_are
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_comment_only_stream_is_forwarded_unchanged():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2851,7 +2861,7 @@ async def test_apply_to_output_streaming_comment_only_stream_is_forwarded_unchan
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2882,7 +2892,7 @@ async def test_apply_to_output_streaming_gemini_first_frame_split_across_transpo
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_unterminated_first_frame_is_released_once_it_exceeds_the_cap():
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
@@ -2917,7 +2927,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_pr
     must surface as an error to the caller: replaying the unscanned frames
     would hand over whatever PII the model generated.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         presidio_analyzer_api_base="http://127.0.0.1:9",
@@ -2967,7 +2977,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_block_action_raises
     A BLOCK on generated PII must refuse the streaming /v1/messages response the
     same way it refuses the non streaming one, not replay the raw frames.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         apply_to_output=True,
         mock_testing=False,
         presidio_analyzer_api_base="http://test-analyzer/",
@@ -3020,7 +3030,7 @@ async def test_apply_to_output_streaming_propagates_upstream_error_when_nothing_
     An upstream guardrail that rejects the stream before the first chunk must
     surface as an error to the caller, not as an empty 200 stream.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<CREDIT_CARD>"},
@@ -3047,7 +3057,7 @@ async def test_output_parse_pii_streaming_responses_events_passthrough(
     Regression test: when output_parse_pii=True and pii_tokens exist, /v1/responses
     streaming events must pass through instead of being dropped.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -3096,7 +3106,7 @@ async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
     )
     from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -3156,7 +3166,7 @@ async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
     chunks must still be forwarded (in order) instead of being dropped at the
     saw_non_chat_chunk early return.
     """
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -3241,7 +3251,7 @@ async def test_anonymize_text_uses_correct_positions_no_parse_pii():
         ],
     }
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         mock_testing=False,
@@ -3315,7 +3325,7 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
         ],
     }
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         mock_testing=False,
@@ -3367,7 +3377,7 @@ def test_unmask_sse_bytes_chunk_replaces_text_delta():
     }
     chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
 
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     parsed = json.loads(decoded.split("data: ", 1)[1].strip())
@@ -3382,7 +3392,7 @@ def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
     # message_start event — no delta
     event = {"type": "message_start", "message": {"id": "msg_01", "role": "assistant"}}
     chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
     assert result == chunk
 
     # input_json_delta — should not be touched
@@ -3392,19 +3402,19 @@ def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
         "delta": {"type": "input_json_delta", "partial_json": '{"name": "<PERSON_1>"}'},
     }
     chunk2 = ("data: " + json.dumps(event2) + "\n\n").encode("utf-8")
-    result2 = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk2, pii_tokens)
+    result2 = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk2, pii_tokens)
     assert result2 == chunk2
 
 
 def test_unmask_sse_bytes_chunk_handles_malformed_json():
     chunk = b"data: {not valid json}\n\n"
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
 
 
 def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
     chunk = b"\xff\xfe invalid utf-8"
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
 
 
@@ -3419,7 +3429,7 @@ def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
     }
     chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
 
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     assert "Jos\\u" not in decoded
@@ -3438,7 +3448,7 @@ def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
     }
     crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
 
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(crlf_chunk, pii_tokens)
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(crlf_chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
@@ -3450,7 +3460,7 @@ def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
 async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
     import json
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -3486,7 +3496,7 @@ async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
 
 @pytest.mark.asyncio
 async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key):
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         output_parse_pii=True,
     )
@@ -3511,7 +3521,7 @@ def test_new_entities_pass_through_analyze_payload():
     """
     import json
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(
+    guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         pii_entities_config={
             PiiEntityType.DE_TAX_ID: PiiAction.MASK,
@@ -3631,7 +3641,7 @@ def _make_marker_session_iterator(
 
 
 def _chunking_guardrail(chunk_size_bytes=100, **kwargs):
-    return _OPTIONAL_PresidioPIIMasking(
+    return OPTIONAL_PresidioPIIMasking(
         presidio_analyzer_api_base="http://test-analyzer/",
         presidio_anonymizer_api_base="http://test-anonymizer/",
         presidio_analyze_chunk_size_bytes=chunk_size_bytes,
@@ -3648,7 +3658,7 @@ def _oversized_marker_text():
 
 def test_split_text_for_analysis_offsets_and_byte_budget():
     text = " ".join(f"word{i}" for i in range(200))
-    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=100, overlap_chars=20)
+    chunks = OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=100, overlap_chars=20)
     assert len(chunks) > 1
     for offset, chunk in chunks:
         assert len(chunk.encode("utf-8")) <= 100
@@ -3663,7 +3673,7 @@ def test_split_text_for_analysis_offsets_and_byte_budget():
 
 def test_split_text_for_analysis_multibyte_characters():
     text = "émoji🙂 çafé " * 120
-    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=64, overlap_chars=8)
+    chunks = OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=64, overlap_chars=8)
     assert len(chunks) > 1
     for offset, chunk in chunks:
         assert len(chunk.encode("utf-8")) <= 64
@@ -3673,7 +3683,7 @@ def test_split_text_for_analysis_multibyte_characters():
 
 def test_split_text_for_analysis_under_budget_returns_single_chunk():
     text = "short text"
-    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=100, overlap_chars=20)
+    chunks = OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=100, overlap_chars=20)
     assert chunks == [(0, text)]
 
 
@@ -3802,18 +3812,18 @@ async def test_analyze_text_chunked_failure_stays_fail_closed():
 def test_presidio_analyze_chunk_size_default_and_validation():
     from litellm.constants import DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True)
     assert guardrail.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
 
-    nonpositive = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=-5)
+    nonpositive = OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=-5)
     assert nonpositive.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
 
-    custom = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=1234)
+    custom = OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=1234)
     assert custom.presidio_analyze_chunk_size_bytes == 1234
 
 
 def test_update_in_memory_applies_analyze_chunk_size():
-    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True)
     params = LitellmParams(
         guardrail="presidio",
         mode="pre_call",
@@ -3824,8 +3834,8 @@ def test_update_in_memory_applies_analyze_chunk_size():
 
 
 def test_update_in_memory_keeps_output_masker_from_unmasking():
-    masker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True, output_parse_pii=False)
-    unmasker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    masker = OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True, output_parse_pii=False)
+    unmasker = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
     params = LitellmParams(guardrail="presidio", mode="pre_call", output_parse_pii=True)
 
     masker.update_in_memory_litellm_params(params)
@@ -3841,7 +3851,7 @@ def test_merge_drops_truncated_same_type_fragment_from_overlap():
     numbered-token rewriter and double-counts entities."""
     truncated = {"entity_type": "IP_ADDRESS", "start": 10, "end": 21, "score": 0.6}
     full_local = {"entity_type": "IP_ADDRESS", "start": 5, "end": 18, "score": 0.95}
-    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+    merged = OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
         text_chunks=[(0, "x" * 21), (5, "x" * 25)],
         chunk_results=[[truncated], [full_local]],
     )
@@ -3853,7 +3863,7 @@ def test_merge_drops_truncated_same_type_fragment_from_overlap():
 def test_merge_exact_duplicate_keeps_higher_score():
     low = {"entity_type": "EMAIL_ADDRESS", "start": 3, "end": 9, "score": 0.4}
     high = {"entity_type": "EMAIL_ADDRESS", "start": 0, "end": 6, "score": 0.9}
-    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+    merged = OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
         text_chunks=[(0, "x" * 9), (3, "x" * 9)],
         chunk_results=[[low], [high]],
     )
@@ -3866,7 +3876,7 @@ def test_merge_preserves_cross_type_overlap():
     (e.g. URL inside EMAIL_ADDRESS); the chunk merge must not drop those."""
     email = {"entity_type": "EMAIL_ADDRESS", "start": 0, "end": 20, "score": 1.0}
     url = {"entity_type": "URL", "start": 5, "end": 20, "score": 0.5}
-    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+    merged = OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
         text_chunks=[(0, "x" * 25)],
         chunk_results=[[email, url]],
     )
@@ -3876,7 +3886,7 @@ def test_merge_preserves_cross_type_overlap():
 def test_update_in_memory_coerces_invalid_chunk_size():
     from litellm.constants import DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=99_000)
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=99_000)
     params = LitellmParams(
         guardrail="presidio",
         mode="pre_call",
@@ -3887,7 +3897,7 @@ def test_update_in_memory_coerces_invalid_chunk_size():
 
 
 def test_split_text_handles_chunk_size_below_char_width():
-    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
+    chunks = OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
         text="\U0001f642\U0001f642", chunk_size_bytes=3, overlap_chars=8
     )
     assert all(chunk for _, chunk in chunks)
@@ -3964,7 +3974,7 @@ def test_split_text_accounts_for_json_body_expansion():
 
     text = "これは個人情報テストです。" * 200  # 3-byte UTF-8 chars, 6-byte escapes
     budget = 1000
-    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=budget, overlap_chars=8)
+    chunks = OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=budget, overlap_chars=8)
     assert len(chunks) > 1
     for offset, chunk in chunks:
         assert len(json_module.dumps(chunk).encode("utf-8")) - 2 <= budget
@@ -4155,7 +4165,7 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
     the history lose their binding. The analyzer and anonymizer are an in-process fake
     handed to the guardrail through its api_base settings."""
     async with TestServer(_fake_presidio_app()) as server:
-        guardrail = _OPTIONAL_PresidioPIIMasking(
+        guardrail = OPTIONAL_PresidioPIIMasking(
             presidio_analyzer_api_base=str(server.make_url("/")),
             presidio_anonymizer_api_base=str(server.make_url("/")),
             pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
@@ -4276,7 +4286,7 @@ async def test_restoration_never_contacts_presidio(has_tokens: bool) -> None:
 async def test_standalone_restoration_preserves_post_call_selection(event_hook: str | list[str]) -> None:
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 
-    callback: Final = _OPTIONAL_PresidioPIIMasking(
+    callback: Final = OPTIONAL_PresidioPIIMasking(
         event_hook=event_hook,
         default_on=True,
         output_parse_pii=True,
@@ -4288,3 +4298,535 @@ async def test_standalone_restoration_preserves_post_call_selection(event_hook: 
         data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
     )
     assert response.choices[0].message.content == "Jane"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "presidio-analyzer-s3pa:10000",
+        "https://presidio-analyzer-s3pa:10000",
+        "http://presidio-analyzer-s3pa:10000",
+    ],
+)
+def test_validate_environment_missing_http(base_url):
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    env_vars = {
+        "PRESIDIO_ANALYZER_API_BASE": f"{base_url}/analyze",
+        "PRESIDIO_ANONYMIZER_API_BASE": f"{base_url}/anonymize",
+    }
+    with patch.dict(os.environ, env_vars):
+        pii_masking.validate_environment()
+
+        expected_url = base_url
+        if not (base_url.startswith("https://") or base_url.startswith("http://")):
+            expected_url = "http://" + base_url
+
+        assert (
+            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
+        ), "Got={}, Expected={}".format(
+            pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
+        )
+        assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
+
+
+@pytest.mark.asyncio
+async def test_output_parsing():
+    """
+    - have presidio pii masking - mask an input message
+    - make llm completion call
+    - have presidio pii masking - output parse message
+    - assert that no masked tokens are in the input message
+    """
+    litellm.set_verbose = True
+    litellm.output_parse_pii = True
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    initial_message = [
+        {
+            "role": "user",
+            "content": "hello world, my name is Jane Doe. My number is: 034453334",
+        }
+    ]
+
+    filtered_message = [
+        {
+            "role": "user",
+            "content": "hello world, my name is <PERSON>. My number is: <PHONE_NUMBER>",
+        }
+    ]
+
+    response = mock_completion(
+        model="gpt-5-mini",
+        messages=filtered_message,
+        mock_response="Hello <PERSON>! How can I assist you today?",
+    )
+    new_response = await pii_masking.async_post_call_success_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        data={
+            "messages": [
+                {"role": "system", "content": "You are an helpfull assistant"}
+            ],
+            "metadata": {
+                "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
+            },
+        },
+        response=response,
+    )
+
+    assert (
+        new_response.choices[0].message.content
+        == "Hello Jane Doe! How can I assist you today?"
+    )
+
+
+input_a_anonymizer_results = {
+    "text": "hello world, my name is <PERSON>. My number is: <PHONE_NUMBER>",
+    "items": [
+        {
+            "start": 48,
+            "end": 62,
+            "entity_type": "PHONE_NUMBER",
+            "text": "<PHONE_NUMBER>",
+            "operator": "replace",
+        },
+        {
+            "start": 24,
+            "end": 32,
+            "entity_type": "PERSON",
+            "text": "<PERSON>",
+            "operator": "replace",
+        },
+    ],
+}
+
+
+input_b_anonymizer_results = {
+    "text": "My name is <PERSON>, who are you? Say my name in your response",
+    "items": [
+        {
+            "start": 11,
+            "end": 19,
+            "entity_type": "PERSON",
+            "text": "<PERSON>",
+            "operator": "replace",
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_input_a():
+    """
+    Tests to see if correct parts of sentence anonymized
+    """
+    pii_masking = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
+    )
+
+    _api_key = "sk-98765"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello world, my name is Jane Doe. My number is: 23r323r23r2wwkl",
+                }
+            ]
+        },
+        call_type="completion",
+    )
+
+    assert "<PERSON>" in new_data["messages"][0]["content"]
+    assert "<PHONE_NUMBER>" in new_data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_input_b():
+    """
+    Tests to see if correct parts of sentence anonymized
+    """
+    pii_masking = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
+    )
+
+    _api_key = "sk-98765"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "My name is Jane Doe, who are you? Say my name in your response",
+                }
+            ]
+        },
+        call_type="completion",
+    )
+
+    assert "<PERSON>" in new_data["messages"][0]["content"]
+    assert "<PHONE_NUMBER>" not in new_data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    pii_masking = OPTIONAL_PresidioPIIMasking(
+        logging_only=True,
+        mock_testing=True,
+        mock_redacted_text=input_b_anonymizer_results,
+    )
+
+    _api_key = "sk-98765"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    test_messages = [
+        {
+            "role": "user",
+            "content": "My name is Jane Doe, who are you? Say my name in your response",
+        }
+    ]
+
+    assert (
+        pii_masking.should_run_guardrail(
+            data={"messages": test_messages},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_presidio_language_configuration():
+    """Test that presidio_language parameter is properly set and used in analyze requests"""
+    litellm.turn_on_debug()
+
+    presidio_guardrail_de = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_language="de",
+        mock_testing=True,
+    )
+
+    test_text = "Meine Telefonnummer ist +49 30 12345678"
+
+    analyze_request = presidio_guardrail_de._get_presidio_analyze_request_payload(
+        text=test_text, presidio_config=None, request_data={}
+    )
+
+    assert analyze_request["language"] == "de"
+    assert analyze_request["text"] == test_text
+
+    presidio_guardrail_es = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, presidio_language="es", mock_testing=True
+    )
+
+    test_text_es = "Mi número de teléfono es +34 912 345 678"
+
+    analyze_request_es = presidio_guardrail_es._get_presidio_analyze_request_payload(
+        text=test_text_es, presidio_config=None, request_data={}
+    )
+
+    assert analyze_request_es["language"] == "es"
+    assert analyze_request_es["text"] == test_text_es
+
+    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, mock_testing=True
+    )
+
+    test_text_en = "My phone number is +1 555-123-4567"
+
+    analyze_request_default = (
+        presidio_guardrail_default._get_presidio_analyze_request_payload(
+            text=test_text_en, presidio_config=None, request_data={}
+        )
+    )
+
+    assert analyze_request_default["language"] == "en"
+    assert analyze_request_default["text"] == test_text_en
+
+
+@pytest.mark.asyncio
+async def test_presidio_language_configuration_with_per_request_override():
+    """Test that per-request language configuration overrides the default configured language"""
+    litellm.turn_on_debug()
+
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, presidio_language="de", mock_testing=True
+    )
+
+    test_text = "Test text with PII"
+
+    presidio_config = PresidioPerRequestConfig(language="fr")
+
+    analyze_request = presidio_guardrail._get_presidio_analyze_request_payload(
+        text=test_text, presidio_config=presidio_config, request_data={}
+    )
+
+    assert analyze_request["language"] == "fr"
+    assert analyze_request["text"] == test_text
+
+    analyze_request_default = presidio_guardrail._get_presidio_analyze_request_payload(
+        text=test_text, presidio_config=None, request_data={}
+    )
+
+    assert analyze_request_default["language"] == "de"
+    assert analyze_request_default["text"] == test_text
+
+
+_CARD_NUMBER: Final = "4111-1111-1111-1111"
+_EMAIL: Final = "test@example.com"
+_BLOCK_CARD_MASK_EMAIL: Final = {
+    PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,
+    PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
+}
+
+
+class _PresidioAnonymizeRequest(TypedDict):
+    text: ReadOnly[str]
+
+
+class _PresidioAnonymizeReply(TypedDict):
+    text: ReadOnly[str]
+    items: ReadOnly[tuple[()]]
+
+
+_ANALYZE_REQUEST: Final = TypeAdapter(PresidioAnalyzeRequest)
+_ANONYMIZE_REQUEST: Final = TypeAdapter(_PresidioAnonymizeRequest)
+
+
+def _card_and_email_spans(text: str) -> tuple[PresidioAnalyzeResponseItem, ...]:
+    return tuple(
+        PresidioAnalyzeResponseItem(
+            entity_type=entity_type,
+            start=text.index(value),
+            end=text.index(value) + len(value),
+            score=1.0,
+            analysis_explanation=None,
+        )
+        for entity_type, value in (("CREDIT_CARD", _CARD_NUMBER), ("EMAIL_ADDRESS", _EMAIL))
+        if value in text
+    )
+
+
+class _InMemoryPresidioTransport(asyncio.Transport):
+    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+        super().__init__()
+        self._protocol: Final = protocol
+        self._analyzed: Final = analyzed
+        self._received = b""
+        self._closing = False
+
+    def write(self, data: bytes | bytearray | memoryview) -> None:
+        self._received += bytes(data)
+        head, separator, body = self._received.partition(b"\r\n\r\n")
+        if not separator:
+            return
+        request_line, *header_lines = head.decode().split("\r\n")
+        headers: Final = {name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)}
+        if len(body) < int(headers.get("content-length", "0")):
+            return
+        self._received = b""
+        reply: Final = json.dumps(self._reply(request_line.split(" ")[1], body)).encode()
+        response: Final = (
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+            + f"Content-Length: {len(reply)}\r\n\r\n".encode()
+            + reply
+        )
+        asyncio.get_running_loop().call_soon(self._protocol.data_received, response)
+
+    def _reply(self, path: str, body: bytes) -> tuple[PresidioAnalyzeResponseItem, ...] | _PresidioAnonymizeReply:
+        if path == "/analyze":
+            analyze_request: Final = _ANALYZE_REQUEST.validate_json(body)
+            self._analyzed.put_nowait(analyze_request)
+            return _card_and_email_spans(analyze_request.get("text") or "")
+        assert path == "/anonymize", path
+        return _PresidioAnonymizeReply(text=_ANONYMIZE_REQUEST.validate_json(body)["text"], items=())
+
+    def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview]) -> None:
+        self.write(b"".join(bytes(chunk) for chunk in list_of_data))
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def close(self) -> None:
+        if not self._closing:
+            self._closing = True
+            asyncio.get_running_loop().call_soon(self._protocol.connection_lost, None)
+
+    def abort(self) -> None:
+        self.close()
+
+    def get_extra_info(self, name: str, default: object = None) -> object:
+        return default
+
+    def can_write_eof(self) -> bool:
+        return False
+
+    def get_write_buffer_size(self) -> int:
+        return 0
+
+    def pause_reading(self) -> None:
+        return None
+
+    def resume_reading(self) -> None:
+        return None
+
+
+class _InMemoryPresidioConnector(aiohttp.BaseConnector):
+    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+        super().__init__()
+        self._analyzed: Final = analyzed
+
+    async def _create_connection(  # pyright: ignore[reportImplicitOverride]  # aiohttp's connector extension point
+        self, req: aiohttp.ClientRequest, traces: Sequence[object], timeout: aiohttp.ClientTimeout
+    ) -> ResponseHandler:
+        protocol: Final = ResponseHandler(asyncio.get_running_loop())
+        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed))
+        return protocol
+
+
+def _drain(analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> tuple[PresidioAnalyzeRequest, ...]:
+    return tuple(analyzed.get_nowait() for _ in range(analyzed.qsize()))
+
+
+def _guardrail_with_in_memory_presidio(
+    analyzed: asyncio.Queue[PresidioAnalyzeRequest],
+) -> OPTIONAL_PresidioPIIMasking:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
+        presidio_analyzer_api_base="http://presidio-analyzer.test/",
+        presidio_anonymizer_api_base="http://presidio-anonymizer.test/",
+    )
+    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    return guardrail
+
+
+@pytest.mark.asyncio
+async def test_check_pii_raises_blocked_entity_for_card() -> None:
+    text: Final = f"My credit card number is {_CARD_NUMBER} and my email is {_EMAIL}"
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.check_pii(text=text, output_parse_pii=True, presidio_config=None, request_data={})
+    finally:
+        await guardrail._close_http_session()
+
+    analyze_requests: Final = _drain(analyzed)
+    assert len(analyze_requests) == 1
+    assert analyze_requests[0].get("text") == text
+    assert set(analyze_requests[0].get("entities") or ()) == set(_BLOCK_CARD_MASK_EMAIL)
+    assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
+    assert excinfo.value.guardrail_name == guardrail.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_raises_blocked_entity_for_card_message(
+    mock_user_api_key: UserAPIKeyAuth, mock_cache: DualCache
+) -> None:
+    user_text: Final = f"My credit card is {_CARD_NUMBER} and my email is {_EMAIL}."
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key,
+                cache=mock_cache,
+                data={
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": user_text},
+                    ],
+                    "model": "gpt-5-mini",
+                },
+                call_type="completion",
+            )
+    finally:
+        await guardrail._close_http_session()
+
+    analyze_requests: Final = _drain(analyzed)
+    assert user_text in [payload.get("text") for payload in analyze_requests]
+    assert all(set(payload.get("entities") or ()) == set(_BLOCK_CARD_MASK_EMAIL) for payload in analyze_requests)
+    assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
+    assert excinfo.value.guardrail_name == guardrail.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PRESIDIO_ANALYZER_API_BASE", "http://localhost:5002")
+    monkeypatch.setenv("PRESIDIO_ANONYMIZER_API_BASE", "http://localhost:5001")
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrails_config: Final = [
+        {
+            "pii_masking": {
+                "callbacks": ["presidio"],
+                "default_on": True,
+                "logging_only": True,
+            }
+        }
+    ]
+    assert len(litellm.guardrail_name_config_map) == 0
+    initialize_guardrails(
+        guardrails_config=guardrails_config,
+        premium_user=True,
+        config_file_path="",
+        litellm_settings={"guardrails": guardrails_config},
+    )
+    assert len(litellm.guardrail_name_config_map) == 1
+
+    pii_masking_obj: Final = next(
+        (c for c in litellm.callbacks if isinstance(c, OPTIONAL_PresidioPIIMasking)),
+        None,
+    )
+    assert pii_masking_obj is not None
+    assert hasattr(pii_masking_obj, "logging_only")
+    assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
+    assert pii_masking_obj.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.logging_only
+    )
+
+
+async def _one_session(guardrail: OPTIONAL_PresidioPIIMasking) -> aiohttp.ClientSession:
+    async with guardrail._get_session_iterator() as session:
+        return session
+
+
+@pytest.mark.asyncio
+async def test_get_session_iterator_reuses_one_session_on_main_thread(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    sessions: Final = tuple([await _one_session(presidio_guardrail) for _ in range(10)])
+    assert all(session is sessions[0] for session in sessions)
+    assert sessions[0] is presidio_guardrail._http_session
+    await presidio_guardrail._close_http_session()
+
+
+def test_get_session_iterator_reuses_one_session_per_background_loop(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    async def collect_and_close() -> tuple[aiohttp.ClientSession, ...]:
+        collected: Final = tuple([await _one_session(presidio_guardrail) for _ in range(10)])
+        await collected[0].close()
+        return collected
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        sessions: Final = pool.submit(asyncio.run, collect_and_close()).result()
+    assert len(sessions) == 10
+    assert all(session is sessions[0] for session in sessions)
+    assert presidio_guardrail._http_session is None
