@@ -2,6 +2,7 @@ import traceback
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
@@ -61,8 +62,12 @@ class PassThroughStreamContext:
     start_time: datetime
 
 
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _litellm_params(litellm_logging_obj: LiteLLMLoggingObj) -> Mapping[str, object]:
-    return litellm_logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Logging.litellm_params is untyped
+    litellm_params: Final[object] = getattr(litellm_logging_obj, "litellm_params", None)
+    return litellm_params if isinstance(litellm_params, Mapping) else _NO_LITELLM_PARAMS  # pyright: ignore[reportUnknownVariableType]  # Logging.litellm_params is untyped
 
 
 class PassThroughStreamingHandler:
