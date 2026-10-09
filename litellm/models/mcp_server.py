@@ -6,14 +6,16 @@ Canonical definition for ``litellm_mcpservertable``. Re-exported from
 """
 
 import enum
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, field_validator
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool, parse_pinned_tools
 
 
 class MCPEnvVarScope(str, enum.Enum):
@@ -48,6 +50,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_MCPServerTable record"""
 
     server_id: str
+    is_config: bool = Field(default=False, description="Whether this server is defined in config and is read-only.")
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
@@ -66,13 +69,14 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     allowed_tools: list[str] = Field(default_factory=list)
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, PinnedMCPTool] | None = None
     extra_headers: list[str] = Field(default_factory=list)
     mcp_info: MCPInfo | None = None
     static_headers: dict[str, str] | None = None
     env_vars: list[MCPEnvVar] | None = None
-    status: Literal["healthy", "unhealthy", "unknown"] | None = Field(
+    status: Literal["healthy", "reachable", "unhealthy", "unknown"] | None = Field(
         default="unknown",
-        description="Health status: 'healthy', 'unhealthy', 'unknown'",
+        description="Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)",
     )
     last_health_check: datetime | None = None
     health_check_error: str | None = None
@@ -107,6 +111,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = None
     approval_status: str | None = Field(
         default="active",
         description="Approval status: 'pending_review', 'active', 'rejected'",
@@ -115,3 +120,17 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
     review_notes: str | None = None
+
+    @field_validator("pinned_tools", mode="before")
+    @classmethod
+    def decode_stored_pinned_tools(cls, value: object) -> dict[str, PinnedMCPTool] | None:
+        return parse_pinned_tools(value)
+
+    @field_validator("static_headers", "env", mode="before")
+    @classmethod
+    def decode_stored_secret_map(cls, value: object, info: ValidationInfo) -> Mapping[str, str] | None:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decode_secret_map
+
+        if value is None and info.field_name == "env":
+            return MappingProxyType({})
+        return decode_secret_map(value, key=info.field_name or "secret map")

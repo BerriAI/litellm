@@ -28,6 +28,27 @@ const additionalFields = [
 
 const teamMemberConfig = { title: "Edit Member", showEmail: true, showUserId: true, roleOptions, additionalFields };
 
+const tempBudgetConfig = {
+  ...teamMemberConfig,
+  additionalFields: [
+    ...additionalFields,
+    { name: "temp_budget_increase", label: "Temporary Budget Increase (USD)", type: "numerical" as const, step: 0.01 },
+    { name: "temp_budget_expiry", label: "Temporary Budget Expiry (UTC)", type: "utc-datetime" as const },
+  ],
+};
+
+const TEMP_BUDGET_PAIR_MESSAGE = "Set both a temporary budget increase and its expiry, or neither";
+
+const cappedMember = { user_id: "u1", user_email: "a@b.com", role: "user", max_budget_in_team: 10 };
+
+const tempBudgetMember = {
+  user_id: "u1",
+  user_email: "a@b.com",
+  role: "user",
+  temp_budget_increase: 25,
+  temp_budget_expiry: "2030-01-02T03:04:00Z",
+};
+
 const orgMemberConfig = { title: "Edit Member", showEmail: true, showUserId: true, roleOptions };
 
 type Member = Record<string, unknown>;
@@ -240,6 +261,50 @@ describe("EditMembership submit payload", () => {
     save();
 
     await waitFor(() => expect(onSubmit).not.toHaveBeenCalled());
+  });
+
+  it("submits a typed temporary increase with its expiry as a UTC ISO timestamp", async () => {
+    renderEdit(tempBudgetConfig, cappedMember);
+
+    fireEvent.change(screen.getByLabelText("Temporary Budget Increase (USD)"), { target: { value: "25" } });
+    fireEvent.change(screen.getByLabelText("Temporary Budget Expiry (UTC)"), { target: { value: "2030-01-02T03:04" } });
+
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted().max_budget_in_team).toBe(10);
+    expect(submitted().temp_budget_increase).toBe("25");
+    expect(submitted().temp_budget_expiry).toBe("2030-01-02T03:04:00.000Z");
+  });
+
+  it("seeds a stored temporary budget into the controls and clears both to null when the operator blanks them", async () => {
+    renderEdit(tempBudgetConfig, tempBudgetMember);
+
+    expect(screen.getByLabelText("Temporary Budget Increase (USD)")).toHaveValue(25);
+    expect(screen.getByLabelText("Temporary Budget Expiry (UTC)")).toHaveValue("2030-01-02T03:04");
+
+    fireEvent.change(screen.getByLabelText("Temporary Budget Increase (USD)"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Temporary Budget Expiry (UTC)"), { target: { value: "" } });
+
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted().temp_budget_increase).toBeNull();
+    expect(submitted().temp_budget_expiry).toBeNull();
+  });
+
+  it.each([
+    ["Temporary Budget Increase (USD)", "25"],
+    ["Temporary Budget Expiry (UTC)", "2030-01-02T03:04"],
+  ])("blocks submission when only %s is set", async (label, value) => {
+    renderEdit(tempBudgetConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+    save();
+
+    expect(await screen.findByText(TEMP_BUDGET_PAIR_MESSAGE)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("clears the fields once the submit handler resolves", async () => {

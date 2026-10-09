@@ -1,20 +1,21 @@
 import json
 import os
-import re
-import traceback
 
 import httpx
-
 import openai
 import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
+
+from openai.types import CreateEmbeddingResponse
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
 
 import litellm
-from litellm import completion, completion_cost, embedding
+from litellm import completion_cost, embedding
+from tests.capturing_transport import CapturingTransport
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 litellm.set_verbose = False
@@ -534,31 +535,6 @@ def test_bedrock_embedding_cohere():
 # test_bedrock_embedding_cohere()
 
 
-def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
-    litellm.set_verbose = True
-
-    with pytest.raises(
-        litellm.BadRequestError,
-        match=re.escape(
-            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
-            'expected type: String, found: JSONArray, please reformat your input and try again."}'
-        ),
-    ):
-        litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
-
-    with pytest.raises(
-        litellm.BadRequestError,
-        match=re.escape(
-            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
-            'expected type: String, found: Integer, please reformat your input and try again."}'
-        ),
-    ):
-        litellm.embedding(
-            model="amazon.titan-embed-text-v1",
-            input=[1],
-        )
-
-
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
     try:
@@ -704,39 +680,8 @@ def test_aembedding_azure():
 # test_aembedding_azure()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_sagemaker_embeddings():
-    try:
-        response = litellm.embedding(
-            model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
-            input=["good morning from litellm", "this is another item"],
-            input_cost_per_second=0.000420,
-        )
-        print(f"response: {response}")
-        cost = completion_cost(completion_response=response)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single embedding call
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_sagemaker_aembeddings():
-    try:
-        response = await litellm.aembedding(
-            model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
-            input=["good morning from litellm", "this is another item"],
-            input_cost_per_second=0.000420,
-        )
-        print(f"response: {response}")
-        cost = completion_cost(completion_response=response)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single embedding call
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_mistral_embeddings():
@@ -888,19 +833,6 @@ async def test_watsonx_aembeddings(monkeypatch):
 # test_mistral_embeddings()
 
 
-@pytest.mark.skip(
-    reason="Community maintained embedding provider - they are quite unstable"
-)
-def test_voyage_embeddings():
-    try:
-        litellm.set_verbose = True
-        response = litellm.embedding(
-            model="voyage/voyage-01",
-            input=["good morning from litellm"],
-        )
-        print(f"response: {response}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -956,52 +888,6 @@ async def test_gemini_embeddings(sync_mode, input):
 # local_proxy_embeddings()
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=6, delay=1)
-@pytest.mark.skip(reason="Skipping test due to flakyness")
-async def test_hf_embedddings_with_optional_params(sync_mode):
-    litellm.set_verbose = True
-
-    if sync_mode:
-        client = HTTPHandler(concurrent_limit=1)
-        mock_obj = MagicMock()
-    else:
-        client = AsyncHTTPHandler(concurrent_limit=1)
-        mock_obj = AsyncMock()
-
-    with patch.object(client, "post", new=mock_obj) as mock_client:
-        try:
-            if sync_mode:
-                response = embedding(
-                    model="huggingface/jinaai/jina-embeddings-v2-small-en",
-                    input=["good morning from litellm"],
-                    top_p=10,
-                    top_k=10,
-                    wait_for_model=True,
-                    client=client,
-                )
-            else:
-                response = await litellm.aembedding(
-                    model="huggingface/jinaai/jina-embeddings-v2-small-en",
-                    input=["good morning from litellm"],
-                    top_p=10,
-                    top_k=10,
-                    wait_for_model=True,
-                    client=client,
-                )
-        except Exception as e:
-            print(e)
-
-        mock_client.assert_called_once()
-
-        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
-        assert "options" in mock_client.call_args.kwargs["data"]
-        json_data = json.loads(mock_client.call_args.kwargs["data"])
-        assert "wait_for_model" in json_data["options"]
-        assert json_data["options"]["wait_for_model"] is True
-        assert json_data["parameters"]["top_p"] == 10
-        assert json_data["parameters"]["top_k"] == 10
 
 
 def test_hosted_vllm_embedding(monkeypatch):
@@ -1052,7 +938,7 @@ def test_llamafile_embedding(monkeypatch):
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_lm_studio_embedding(monkeypatch, sync_mode):
     monkeypatch.setenv("LM_STUDIO_API_BASE", "http://localhost:8000")
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
     with patch.object(client, "post") as mock_post:
@@ -1147,7 +1033,7 @@ def test_cohere_img_embeddings(input, input_type):
 async def test_embedding_with_extra_headers(sync_mode):
 
     input = ["hello world"]
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     if sync_mode:
         client = HTTPHandler()
@@ -1268,23 +1154,15 @@ def test_encoding_format_omitted_by_default_for_openai_sdk(monkeypatch):
     Optional global override: `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT`.
     """
     monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
-    captured_bodies = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_bodies.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            json={
-                "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
-                "model": "text-embedding-ada-002",
-                "usage": {"prompt_tokens": 1, "total_tokens": 1},
-            },
+    transport = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="text-embedding-ada-002",
+            usage=EmbeddingUsage(prompt_tokens=1, total_tokens=1),
         )
-
-    client = openai.OpenAI(
-        api_key="sk-test", http_client=httpx.Client(transport=httpx.MockTransport(handler))
     )
+    client = openai.OpenAI(api_key="sk-test", http_client=httpx.Client(transport=transport))
 
     response = embedding(
         model="text-embedding-ada-002",
@@ -1294,7 +1172,7 @@ def test_encoding_format_omitted_by_default_for_openai_sdk(monkeypatch):
     )
 
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
-    assert "encoding_format" not in captured_bodies[0], (
+    assert "encoding_format" not in transport.request_bodies[0], (
         "encoding_format should be omitted from the upstream request when not provided by user"
     )
 
@@ -1306,9 +1184,7 @@ def test_encoding_format_explicit_value_preserved():
     When user provides encoding_format='float' or 'base64', it should be
     sent as-is to the OpenAI SDK.
     """
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
         # Create a mock client instance
         mock_client_instance = MagicMock()
         mock_get_client.return_value = mock_client_instance

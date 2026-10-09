@@ -1,13 +1,13 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
+.PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc test-unit-proxy-root \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
+	test-rust-extension rust-sqlx-prepare lens-dev \
 	info lint lint-inner lint-dev lint-checks format \
-	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
-	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
-	lint-test-quality lint-test-quality-budget-update \
+	lint-basedpyright lint-e2e-basedpyright lint-type-discipline \
+	lint-ruff-strict lint-gate lint-test-quality \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
 	lint-install lint-fetch-base bootstrap
@@ -30,36 +30,40 @@ help:
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
-	@echo "  make lint-e2e-basedpyright - Run basedpyright over tests/e2e (zero errors allowed)"
-	@echo "  make lint-basedpyright-budget-update - Ratchet basedpyright limits down by what this branch fixed"
+	@echo "  make lint-e2e-basedpyright - Run basedpyright over tests/e2e and tests/e2e_harness (zero errors allowed)"
 	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
-	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
-	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
-	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
-	@echo "  make lint-test-quality  - Gate the test suite against test-quality-budget.json"
-	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + test quality + basedpyright)"
+	@echo "  make lint-ruff-strict   - Gate each strict ruff rule's codebase total against its merge-base count"
+	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches the default branch, simulates the merge)"
+	@echo "  make lint-test-quality  - Gate the test suite's TQ counts against their merge-base counts"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
-	@echo "  make test-unit          - Run unit tests (tests/test_litellm)"
+	@echo "  make test-unit          - Run unit tests (tests/unit and tests/test_litellm)"
 	@echo "  make test-unit-llms     - Run LLM provider tests (~225 files)"
 	@echo "  make test-unit-proxy-guardrails - Run proxy guardrails+mgmt tests (~51 files)"
 	@echo "  make test-unit-proxy-core - Run proxy auth+client+db+hooks tests (~52 files)"
 	@echo "  make test-unit-proxy-misc - Run proxy misc tests (~77 files)"
+	@echo "  make test-unit-proxy-root - Run proxy root-file tests (tests/unit/proxy/test_*.py)"
 	@echo "  make test-unit-integrations - Run integration tests (~60 files)"
 	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
 	@echo "  make test-unit-root     - Run root-level tests (~34 files)"
-	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
-	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
+	@echo "  make test-proxy-unit-a  - Run tests/unit/proxy (a-o)"
+	@echo "  make test-proxy-unit-b  - Run tests/unit/proxy (p-z)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
+	@echo "  make lens-dev           - Run proxy + Lens worker + hot-reload dashboard (ARGS=\"--seed large --seed-logs\", LENS_DEV_PROXY_PORT, LENS_DEV_UI_PORT)"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
+BASE_REF ?=
+export BASE_REF
+RESOLVE_BASE = python3 scripts/default_branch.py --base "$(BASE_REF)"
 
 # Machine-wide slot queue for the heavy targets below; python3 + stdlib only, so
 # it runs before any venv exists. See scripts/gate_slot_lock.py.
@@ -67,7 +71,7 @@ GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
-LINT_DEP_BASE ?= lint-fetch-base
+LINT_DEP_BASE ?=
 LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
@@ -130,14 +134,12 @@ format: install-dev
 format-check: install-dev
 	cd litellm && $(UV_RUN) ruff format --check --exclude '/enterprise/' . && cd ..
 
-# Single fetch of the PR base so the delta-based gates below share one network round
-# trip instead of each re-fetching when chained from `lint`.
 lint-fetch-base:
-	git fetch origin litellm_internal_staging
+	@$(RESOLVE_BASE)
 
-# Mirror test-linting.yml's lint job environment: the proxy-dev group plus a generated
+# Mirror test-linting.yml's python job environment: the proxy-dev group plus a generated
 # Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
-# budget gate itself no longer measures here (scripts/type_check_gate.py provisions its
+# basedpyright gate itself no longer measures here (scripts/type_check_gate.py provisions its
 # own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
 # gen:api and the running proxy need.
 lint-install:
@@ -147,10 +149,12 @@ lint-install:
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
-# recursively, so 'litellm/*.py' covers nested modules and the top-level files that
-# CI's 'litellm/**/*.py' skips, which makes this target a superset of the CI step.
+# recursively, so 'litellm/*.py' covers top-level files and nested modules alike,
+# the same set CI's ':(glob)litellm/**/*.py' selects.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	@files=$$(git diff --name-only --diff-filter=ACMR origin/litellm_internal_staging...HEAD -- 'litellm/*.py' | grep -v '^litellm/enterprise/' || true); \
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	changed=$$(git diff --name-only --diff-filter=ACMR "$$base_ref...HEAD" -- 'litellm/*.py') && \
+	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' || true) || exit $$?; \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \
 	else \
@@ -159,6 +163,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python scripts/check_mcp_operation_boundary.py
 	cd litellm && $(UV_RUN) ruff check . && cd ..
 	$(UV_RUN) ruff check --config ruff-tests.toml tests
 
@@ -167,7 +172,9 @@ lint-ruff: $(LINT_DEP_INSTALL)
 # https://github.com/astral-sh/ruff/discussions/10977
 # https://github.com/astral-sh/ruff/discussions/4049
 lint-format-changed: install-dev
-	@git diff origin/main --unified=0 --no-color -- '*.py' | \
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	diff=$$(git diff "$$base_ref" --unified=0 --no-color -- '*.py') && \
+	printf '%s\n' "$$diff" | \
 	perl -ne '\
 		if (/^diff --git a\/(.*) b\//) { $$file = $$1; } \
 		if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { \
@@ -182,61 +189,46 @@ lint-format-changed: install-dev
 		done
 
 lint-ruff-dev: install-dev
-	@tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
+	@base_ref=$$($(RESOLVE_BASE)) || exit $$?; \
+	tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
 	cd litellm && \
 	($(UV_RUN) ruff check . --output-format=pylint || true) > "$$tmpfile" && \
-	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/main && \
+	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch="$$base_ref" && \
 	cd .. ; \
 	rm -f "$$tmpfile"
 
 lint-ruff-FULL-dev: install-dev
-	@files=$$(git diff --name-only origin/main -- '*.py'); \
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	files=$$(git diff --name-only "$$base_ref" -- '*.py') || exit $$?; \
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/type_check_gate.py --base "$(BASE_REF)"
 
 lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
-	$(UV_RUN) basedpyright tests/e2e
+	$(UV_RUN) basedpyright tests/e2e tests/e2e_harness
 
-# Type-discipline budget (mutable collections / casts / type guards / kwargs /
+# Type-discipline gate (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.
 lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/type_discipline_gate.py --base "$(BASE_REF)"
 
-# Test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes,
+# Test-quality gate (zero-assert / mock-echo tests, sys.path.insert, raw env writes,
 # litellm module-global mutation, credential-gated skips, conftest snapshot
 # inventory), counted across tests/ the same delta-vs-base way.
 lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/test_quality_gate.py --base origin/litellm_internal_staging
-
-# --update lowers each limit by what this branch fixed since its branch point, so
-# it needs the base ref fetched to resolve the merge-base.
-lint-basedpyright-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/type_check_gate.py --update
+	$(UV_RUN) python scripts/test_quality_gate.py --base "$(BASE_REF)"
 
 lint-format: format-check
 
-lint-ruff-budget: install-dev
-	$(UV_RUN) python scripts/ruff_strict_gate.py
+lint-ruff-strict: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
 # Strict gate, invoked the same way CI does in test-linting.yml so a local pass
 # means the CI check will pass too.
 lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
-
-lint-ruff-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/ruff_strict_gate.py --update
-
-lint-type-discipline-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/type_discipline_gate.py --update
-
-lint-test-quality-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/test_quality_gate.py --update
-
-# Ratchet all budgets in one shot (ruff strict + type-discipline + test quality + basedpyright)
-lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-test-quality-budget-update lint-basedpyright-budget-update
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
 check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -244,19 +236,20 @@ check-circular-imports: $(LINT_DEP_INSTALL)
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
-# Combined linting, isomorphic to test-linting.yml's lint job so a local pass means a
+# Combined linting, isomorphic to test-linting.yml's python job so a local pass means a
 # green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
-# type-discipline / basedpyright budgets as a delta vs the base, then the circular-import
+# type-discipline / basedpyright gates as a delta vs the base, then the circular-import
 # and import-safety checks. Steps that compare against the base resolve it the same way CI
-# does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
+# does (merge-base with origin's current default branch). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
 lint:
 	@$(GATE_SLOT_LOCK) $(MAKE) lint-inner
 
-lint-inner: lint-install lint-fetch-base
-	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
+lint-inner: lint-install
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	$(MAKE) BASE_REF="$$base_ref" -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
 lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
 
@@ -267,8 +260,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # is staged (warning about changed files left unstaged); with nothing staged it falls
 # back to the working tree's diff against the merge base with the base branch, so a
 # fresh merge commit or an unstaged working tree still gets checked. Mirrors
-# test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
-# check-ui-api-types.yml (API-type drift), skipping any whose files aren't in scope.
+# test-linting.yml (Python, UI, and API types), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
 check:
 	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
@@ -281,43 +273,66 @@ pre-commit:
 	@$(MAKE) check
 
 # Testing targets
+test-rust-extension:
+	@temporary=$$(mktemp -d) && \
+	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
+	$(UV) build --python 3.12 --wheel --out-dir "$$temporary/wheels" && \
+	set -- "$$temporary"/wheels/*.whl && \
+	[ "$$#" -eq 1 ] && \
+	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
+	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
+	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
+		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
+		litellm.rust_bridge._native && \
+	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+
+rust-sqlx-prepare:
+	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
+
+lens-dev:
+	./scripts/lens_dev.sh $(ARGS)
+
 test: install-test-deps
 	$(UV_RUN) pytest tests/
 
 test-unit: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4
+	$(UV_RUN) pytest tests/unit tests/test_litellm -x -vv -n 4
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/guardrails tests/unit/proxy/management_endpoints tests/unit/proxy/management_helpers --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-core: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/auth tests/unit/proxy/client tests/unit/proxy/db tests/unit/proxy/hooks tests/unit/proxy/policy_engine --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-misc: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/agent_endpoints tests/unit/proxy/anthropic_endpoints tests/unit/proxy/common_utils --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py tests/unit/proxy/discovery_endpoints tests/unit/proxy/experimental tests/unit/proxy/google_endpoints tests/unit/proxy/health_endpoints tests/unit/proxy/image_endpoints tests/unit/proxy/middleware --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py tests/unit/proxy/openai_files_endpoint tests/unit/proxy/pass_through_endpoints tests/unit/proxy/prompts tests/unit/proxy/public_endpoints tests/unit/proxy/response_api_endpoints tests/unit/proxy/shutdown tests/unit/proxy/spend_tracking --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py tests/unit/proxy/ui_crud_endpoints tests/unit/proxy/vector_store_endpoints tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py --tb=short -vv -n 4 --durations=20
+
+test-unit-proxy-root: install-test-deps
+	$(UV_RUN) pytest tests/unit/proxy/test_*.py --ignore=tests/unit/proxy/test_aproxy_startup.py --ignore=tests/unit/proxy/test_credential_slot_registry.py --ignore=tests/unit/proxy/test_custom_callback_input.py --ignore=tests/unit/proxy/test_custom_logger_s3_gcs.py --ignore=tests/unit/proxy/test_custom_tokenizer_bug.py --ignore=tests/unit/proxy/test_db_schema_changes.py --ignore=tests/unit/proxy/test_deprecated_key_grace_period.py --ignore=tests/unit/proxy/test_get_favicon.py --ignore=tests/unit/proxy/test_get_image.py --ignore=tests/unit/proxy/test_prisma_client_backoff_retry.py --ignore=tests/unit/proxy/test_prompt_test_endpoint.py --ignore=tests/unit/proxy/test_proxy_config_unit_test.py --ignore=tests/unit/proxy/test_proxy_custom_auth.py --ignore=tests/unit/proxy/test_proxy_reject_logging.py --ignore=tests/unit/proxy/test_proxy_server.py --ignore=tests/unit/proxy/test_proxy_setting_guardrails.py --ignore=tests/unit/proxy/test_proxy_token_counter.py --ignore=tests/unit/proxy/test_proxy_utils.py --ignore=tests/unit/proxy/test_reducto_ocr_route.py --ignore=tests/unit/proxy/test_response_polling_pre_call_checks.py --ignore=tests/unit/proxy/test_server_root_path.py --ignore=tests/unit/proxy/test_ui_path_detection.py --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py --ignore=tests/unit/proxy/test_update_spend.py --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/integrations --tb=short -vv -n 4 --durations=20
 
 test-unit-core-utils: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/litellm_core_utils --tb=short -vv -n 2 --durations=20
 
 test-unit-other: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/caching tests/unit/responses tests/unit/secret_managers tests/unit/vector_stores tests/unit/a2a_protocol tests/unit/completion_extras tests/unit/containers tests/unit/enterprise tests/unit/experimental_mcp_client tests/unit/google_genai tests/unit/images tests/unit/interactions tests/unit/router_strategy tests/unit/router_utils tests/unit/types --tb=short -vv -n 4 --durations=20
 
 test-unit-root: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/test_*.py tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
 
-# Proxy unit tests (tests/proxy_unit_tests split alphabetically)
+# Proxy unit tests (tests/unit/proxy split alphabetically)
 test-proxy-unit-a: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy --ignore-glob='tests/unit/proxy/test_[p-z]*.py' --tb=short -vv -n 2 --durations=20
 
 test-proxy-unit-b: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/test_[p-z]*.py tests/unit/skills --tb=short -vv -n 2 --durations=20
 
 test-integration: install-test-deps
 	$(UV_RUN) pytest tests/ -k "not test_litellm"

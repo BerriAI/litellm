@@ -79,6 +79,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
     });
 
+    it("should map edenai slug and EDENAI enum key to the Eden AI display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("edenai");
+      expect(fromSlug.displayName).toBe(Providers.EDENAI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.EDENAI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("EDENAI");
+      expect(fromEnumKey.displayName).toBe(Providers.EDENAI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.EDENAI]);
+    });
+
     it("should resolve the BedrockMantle enum key to the Bedrock Mantle logo", () => {
       // The Add Model dropdown passes the provider_map key ("BedrockMantle"),
       // not the slug ("bedrock_mantle"). Unlike "Bedrock", the key does not
@@ -87,6 +98,16 @@ describe("provider_info_helpers", () => {
       const result = getProviderLogoAndName("BedrockMantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
+    it("should map the chatgpt slug and CHATGPT enum key to the ChatGPT Subscription name and OpenAI logo", () => {
+      const fromSlug = getProviderLogoAndName("chatgpt");
+      expect(fromSlug.displayName).toBe("ChatGPT Subscription");
+      expect(fromSlug.logo).toContain("openai_small");
+
+      const fromEnumKey = getProviderLogoAndName("CHATGPT");
+      expect(fromEnumKey.displayName).toBe("ChatGPT Subscription");
+      expect(fromEnumKey.logo).toContain("openai_small");
     });
 
     it("should handle provider values case-insensitively", () => {
@@ -121,6 +142,13 @@ describe("provider_info_helpers", () => {
       expect(provider_map.NVIDIA_RIVA).toBe("nvidia_riva");
       expect(result.logo).toBe(providerLogoMap[Providers.NVIDIA_RIVA]);
       expect(result.logo).toBeTruthy();
+    });
+
+    it("should resolve the qwen_ai_platform slug and Qwen_AI_Platform enum key to the Qianwen AI Platform display name", () => {
+      expect(getProviderLogoAndName("qwen_ai_platform").displayName).toBe("Qianwen AI Platform");
+      expect(getProviderLogoAndName("Qwen_AI_Platform").displayName).toBe("Qianwen AI Platform");
+      expect(getProviderLogoAndName("qwencloud").displayName).toBe("QwenCloud");
+      expect(getProviderLogoAndName("qwen_ai_platform").logo).toBe(providerLogoMap[Providers.Qwen_AI_Platform]);
     });
 
     it("should return provider value as display name when no mapping exists", () => {
@@ -166,6 +194,7 @@ describe("provider_info_helpers", () => {
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
+        Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -180,6 +209,31 @@ describe("provider_info_helpers", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
     });
+
+    it("should resolve the Tencent provider to its bundled logo", () => {
+      const { logo } = getProviderLogoAndName("tencent");
+      expect(logo).toContain("tencent");
+    });
+
+    it("should resolve the typesafe slug and TypeSafe enum key to the TypeSafe name and bundled logo", () => {
+      const fromSlug = getProviderLogoAndName("typesafe");
+      expect(fromSlug.displayName).toBe(Providers.TypeSafe);
+      expect(fromSlug.logo).toContain("typesafe");
+
+      const fromEnumKey = getProviderLogoAndName("TypeSafe");
+      expect(fromEnumKey.displayName).toBe(Providers.TypeSafe);
+      expect(fromEnumKey.logo).toBe(fromSlug.logo);
+    });
+
+    it("should resolve the strands_decider slug and StrandsDecider enum key to the Strands Decider name and bundled logo", () => {
+      const fromSlug = getProviderLogoAndName("strands_decider");
+      expect(fromSlug.displayName).toBe("Strands Decider");
+      expect(fromSlug.logo).toContain("strands");
+
+      const fromEnumKey = getProviderLogoAndName("StrandsDecider");
+      expect(fromEnumKey.displayName).toBe(Providers.StrandsDecider);
+      expect(fromEnumKey.logo).toBe(fromSlug.logo);
+    });
   });
 
   describe("getPlaceholder", () => {
@@ -193,6 +247,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return an edenai model placeholder for EDENAI provider", () => {
+      expect(getPlaceholder(Providers.EDENAI)).toBe("edenai/openai/gpt-mini-latest");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
@@ -270,6 +328,19 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
+      expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
+    });
+
+    it("should return a tencent/ placeholder for the Tencent provider", () => {
+      expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
+    });
+
+    it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
+      expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
+      expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
@@ -365,6 +436,38 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("vertex_ai/text-bison");
       expect(result).toContain("vertex_ai_beta/something");
       expect(result).not.toContain("anthropic-native");
+    });
+
+    it("should list sail models when called with the 'Sail' provider key", () => {
+      const modelMap = {
+        "sail/openai/gpt-oss-120b": { litellm_provider: "sail" },
+        "sagemaker-model": { litellm_provider: "sagemaker" },
+      };
+      expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
+    });
+
+    it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
+      const modelMap = {
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+      };
+      expect(getProviderModels("TypeSafe" as Providers, modelMap)).toEqual([
+        "typesafe/jev-latest",
+        "typesafe/jev-preview",
+      ]);
+    });
+
+    it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {
+      const modelMap = {
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
+      };
+      expect(getProviderModels("StrandsDecider" as Providers, modelMap)).toEqual([
+        "strands_decider/strands-decider-2B-hobson-v19",
+      ]);
     });
 
     it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {

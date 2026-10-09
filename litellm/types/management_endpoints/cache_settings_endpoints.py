@@ -4,10 +4,10 @@ Types and field definitions for cache settings management endpoints
 
 from typing import Any, Final
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class CacheSettingsField(BaseModel):
+class CacheSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
     field_value: Any
@@ -235,6 +235,51 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         field_description="Enable SSL hostname verification",
         field_default=None,
         ui_field_name="SSL Check Hostname",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_auth",
+        field_type="Boolean",
+        field_value=None,
+        field_description="Enable AWS ElastiCache IAM authentication",
+        field_default=False,
+        ui_field_name="AWS IAM Authentication",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_user_name",
+        field_type="String",
+        field_value=None,
+        field_description="AWS ElastiCache IAM user name",
+        field_default=None,
+        ui_field_name="AWS IAM User Name",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_cache_name",
+        field_type="String",
+        field_value=None,
+        field_description="AWS ElastiCache cache name",
+        field_default=None,
+        ui_field_name="AWS IAM Cache Name",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_region",
+        field_type="String",
+        field_value=None,
+        field_description="AWS region for ElastiCache IAM authentication",
+        field_default=None,
+        ui_field_name="AWS IAM Region",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_serverless",
+        field_type="Boolean",
+        field_value=None,
+        field_description="The ElastiCache cache is serverless rather than a self-designed cluster",
+        field_default=False,
+        ui_field_name="AWS IAM Serverless Cache",
         redis_type=None,
     ),
 ]

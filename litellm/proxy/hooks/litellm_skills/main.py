@@ -29,6 +29,10 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
+
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -78,6 +82,22 @@ class _ChatChoice(Protocol):
 class _ChatCompletion(Protocol):
     @property
     def choices(self) -> Sequence[_ChatChoice]: ...
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CodeExecutionToolArgs(TypedDict, total=False):
+    code: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeneratedFileEntry(TypedDict):
+    name: ReadOnly[str]
+    mime_type: ReadOnly[str]
+    content_base64: ReadOnly[str]
+
+
+_TOOL_CALL_ARGS_ADAPTER: Final = TypeAdapter(_CodeExecutionToolArgs)
+_EXEC_RESULT_FILES_ADAPTER: Final = TypeAdapter(Sequence[_GeneratedFileEntry])
 
 
 def _first_choice(response: _ChatCompletion) -> _ChatChoice:
@@ -493,7 +513,6 @@ class SkillsInjectionHook(CustomLogger):
 
         Returns the final response with generated files inline.
         """
-        import litellm
         from litellm.llms.litellm_proxy.skills.code_execution import (
             LiteLLMInternalTools,
         )
@@ -620,7 +639,7 @@ class SkillsInjectionHook(CustomLogger):
 
             # Collect generated files
             if exec_result.get("files"):
-                files: Final[Sequence[Mapping[str, str]]] = exec_result["files"]
+                files: Final = _EXEC_RESULT_FILES_ADAPTER.validate_python(exec_result["files"])
                 for f in files:
                     generated_files.append(
                         {
@@ -723,7 +742,6 @@ print('No executable skill module found')
 
         Returns the final response with generated files inline.
         """
-        import litellm
         from litellm.llms.litellm_proxy.skills.code_execution import (
             LiteLLMInternalTools,
         )
@@ -834,7 +852,7 @@ print('No executable skill module found')
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
-            args: Final[Mapping[str, str]] = json.loads(tool_call.function.arguments)
+            args: Final = _TOOL_CALL_ARGS_ADAPTER.validate_python(json.loads(tool_call.function.arguments))
             code: Final[str] = args.get("code", "")
 
             verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
@@ -850,7 +868,7 @@ print('No executable skill module found')
             # Collect generated files
             if exec_result.get("files"):
                 tool_result += "\n\nGenerated files:"
-                files: Final[Sequence[Mapping[str, str]]] = exec_result["files"]
+                files: Final = _EXEC_RESULT_FILES_ADAPTER.validate_python(exec_result["files"])
                 for f in files:
                     file_content = base64.b64decode(f["content_base64"])
                     generated_files.append(
@@ -913,11 +931,3 @@ print('No executable skill module found')
         verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
 
         return response
-
-
-# Global instance for registration
-skills_injection_hook: Final = SkillsInjectionHook()
-
-import litellm
-
-litellm.logging_callback_manager.add_litellm_callback(skills_injection_hook)

@@ -90,20 +90,21 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         drop_params: bool,
     ) -> dict:
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
+        image_config: Final[dict[str, str]] = {}
 
         for key, value in image_edit_optional_params.items():
             if key in supported_params:
                 if key == "size":
                     if "image_config" not in mapped_params:
-                        mapped_params["image_config"] = {}
-                    mapped_params["image_config"]["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
+                        mapped_params["image_config"] = image_config
+                    image_config["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
                 elif key == "quality":
                     image_size = self._map_quality_to_image_size(cast(str, value))
                     if image_size:
                         if "image_config" not in mapped_params:
-                            mapped_params["image_config"] = {}
-                        mapped_params["image_config"]["image_size"] = image_size
+                            mapped_params["image_config"] = image_config
+                        image_config["image_size"] = image_size
                 else:
                     mapped_params[key] = value
 
@@ -333,20 +334,20 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             cost: Final = usage_data.get("cost")
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
-                    model_response._hidden_params = {}
-                if "additional_headers" not in model_response._hidden_params:
-                    model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost
+                    model_response.hidden_params = {}
+                additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+                    dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
                 )
+                additional_headers["llm_provider-x-litellm-response-cost"] = float(cost)
 
             cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
-                if "response_cost_details" not in model_response._hidden_params:
-                    model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
+                response_cost_details: Final = cast(  # cast-ok: provider cost details are stored as a mutable mapping
+                    dict[str, object], model_response.hidden_params.setdefault("response_cost_details", {})
+                )
+                response_cost_details.update(cost_details)
 
-        model_response._hidden_params["model"] = response_json.get("model", model)
+        model_response.hidden_params["model"] = response_json.get("model", model)
 
     def _read_image_bytes(self, image: FileTypes) -> bytes:
         """Read raw bytes from various image input types."""

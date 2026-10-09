@@ -72,7 +72,7 @@ def rfc7638_thumbprint(public_key: "ec.EllipticCurvePublicKey") -> str:
     """RFC 7638: SHA-256 over the lexicographically member-ordered, whitespace-free JSON
     rendering of the thumbprint members, base64url-encoded without padding."""
     canonical: Final = json.dumps(
-        dict(sorted(_jwk_thumbprint_members(public_key).items())),  # mutable-ok: json.dumps needs a real dict
+        dict(sorted(_jwk_thumbprint_members(public_key).items())),
         separators=(",", ":"),
     )
     return base64.urlsafe_b64encode(hashlib.sha256(canonical.encode()).digest()).rstrip(b"=").decode("ascii")
@@ -97,7 +97,7 @@ def jwks_document_json(pem: str) -> str:
     key: Final = load_es256_private_key(pem)
     jwks: Final = build_jwks(key.public_key())
     return json.dumps(
-        {"keys": [dict(jwk) for jwk in jwks["keys"]]},  # mutable-ok: json.dumps needs real dicts/lists
+        {"keys": [dict(jwk) for jwk in jwks["keys"]]},
         indent=2,
     )
 
@@ -111,5 +111,5 @@ def sign_es256_jwt(pem: str, claims: Mapping[str, object]) -> str:
         raise ImportError(MISSING_SIGNING_DEPENDENCIES_MESSAGE) from e
     key: Final = load_es256_private_key(pem)
     kid: Final = rfc7638_thumbprint(key.public_key())
-    headers: Final = {"kid": kid}  # mutable-ok: PyJWT requires a real dict, not a Mapping
-    return jwt.encode(dict(claims), key, algorithm=ALG, headers=headers)  # mutable-ok: PyJWT requires a real dict
+    headers: Final = {"kid": kid}
+    return jwt.encode(dict(claims), key, algorithm=ALG, headers=headers)

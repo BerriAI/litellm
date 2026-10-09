@@ -13,16 +13,17 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
+from itertools import chain
 from math import inf
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 from urllib.parse import unquote, unquote_plus, urlencode, urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -43,6 +44,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenExchangeSpec,
     TokenTransportError,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -85,7 +87,7 @@ _CREDENTIAL_CHARS: Final = re.compile(r"[^A-Za-z0-9._~+/=-]")
 _SENTINEL_BODY_MESSAGES: Final = frozenset({_OVERSIZED_BODY_MESSAGE, _NON_OBJECT_BODY_MESSAGE})
 
 
-class _TokenExchangeResponse(BaseModel):
+class _TokenExchangeResponse(LiteLLMBaseModel):
     access_token: str
     expires_in: int | None = None
     token_type: str | None = None
@@ -183,11 +185,12 @@ def _shares_a_credential_run(rendered: str, compacted_secret: str) -> bool:
     compacted_candidates: Final = tuple(
         _CREDENTIAL_CHARS.sub("", candidate) for candidate in (rendered, unquote(rendered), unquote_plus(rendered))
     )
-    return any(
-        compacted[start : start + run] in compacted_secret
-        for compacted in compacted_candidates
-        for start in range(len(compacted) - run + 1)
-    )
+    windows: Final = chain.from_iterable(_character_runs(candidate, run) for candidate in compacted_candidates)
+    return any(window in compacted_secret for window in windows)
+
+
+def _character_runs(compacted: str, run: int) -> Iterator[str]:
+    return (compacted[start : start + run] for start in range(len(compacted) - run + 1))
 
 
 def _redact_body_text(body_text: str) -> str:
@@ -208,10 +211,7 @@ def _redact_body_text(body_text: str) -> str:
 
 def _format_oauth_error_fields(body: Mapping[str, object]) -> str:
     fields: Final = tuple(
-        f"{name}: {_format_oauth_error_value(value)}"
-        for name in _OAUTH_ERROR_FIELDS
-        for value in (body.get(name),)
-        if value is not None
+        f"{name}: {_format_oauth_error_value(body[name])}" for name in _OAUTH_ERROR_FIELDS if body.get(name) is not None
     )
     return "; ".join(fields) if fields else _NO_OAUTH_FIELDS_MESSAGE
 
@@ -221,10 +221,7 @@ def _format_oauth_error_value(value: object) -> str:
     own ``{"type": ..., "message": ...}`` envelope there; render that rather than a dict repr."""
     if isinstance(value, Mapping):
         nested: Final = tuple(
-            f"{str(part)[:_REDACTION_CAP]}"
-            for key in _NESTED_ERROR_FIELDS
-            for part in (value.get(key),)
-            if part is not None
+            str(value[key])[:_REDACTION_CAP] for key in _NESTED_ERROR_FIELDS if value.get(key) is not None
         )
         if nested:
             return " - ".join(nested)
@@ -334,13 +331,13 @@ def _read_assertion(fetch: AssertionSource, ref: str) -> SecretStr | AssertionSo
 def _serialize_body(spec: TokenExchangeSpec, assertion: SecretStr) -> bytes:
     if spec.body_encoding == "json":
         return json.dumps(
-            {  # mutable-ok: transient body dict consumed inline by the serializer
+            {
                 **spec.static_body,
                 spec.assertion_field: assertion.get_secret_value(),
             }
         ).encode()
     return urlencode(
-        {  # mutable-ok: transient body dict consumed inline by the serializer
+        {
             **spec.static_body,
             spec.assertion_field: assertion.get_secret_value(),
         }
@@ -420,7 +417,7 @@ class _HttpxSyncTokenPoster:
             response: Final[httpx.Response | None] = self._handler_instance().post(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.post is legacy-untyped; the result is validated below
                 url,
                 content=content,
-                headers=dict(headers),  # mutable-ok: HTTPHandler.post requires a concrete dict
+                headers=dict(headers),
                 timeout=timeout,
             )
         except httpx.HTTPStatusError as e:
@@ -440,7 +437,7 @@ class _ServiceLoggingHooks(Protocol):
 
 
 _HooksCoroFactory: TypeAlias = Callable[
-    [_ServiceLoggingHooks],  # mutable-ok: Callable param-list syntax, not a list
+    [_ServiceLoggingHooks],
     Coroutine[object, object, None],
 ]
 
@@ -467,7 +464,7 @@ class ServiceLoggingMetricsSink:
         self._service_logging_factory: Final = service_logging_factory
         self._service_logging: _ServiceLoggingHooks | None = None
         self._executor: Executor | None = executor
-        self._queued: int = 0  # rebind-ok: backlog depth, guarded by _lock
+        self._queued: int = 0
 
     def _service_logging_instance(self) -> _ServiceLoggingHooks:
         with self._lock:
@@ -663,8 +660,8 @@ class JwtBearerTokenExchangeEngine:
         contended entry cannot grow the stack one frame per failed leader."""
         while True:
             with self._lock:
-                entry = self._get_or_create_entry_locked(spec)  # rebind-ok: re-read per follower round
-                decision = self._classify_and_arm_locked(entry)  # rebind-ok: re-read per follower round
+                entry = self._get_or_create_entry_locked(spec)
+                decision = self._classify_and_arm_locked(entry)
             match decision:
                 case _Serve(token=token):
                     self._report_cache_hit()
@@ -678,7 +675,7 @@ class JwtBearerTokenExchangeEngine:
                 case _Lead(call_type=call_type):
                     return self._lead(spec, entry, call_type)
                 case _Follow():
-                    followed = self._await_leader(spec, entry)  # rebind-ok: one leader wait per round
+                    followed = self._await_leader(spec, entry)
                     if followed is not None:
                         return followed
                 case _:

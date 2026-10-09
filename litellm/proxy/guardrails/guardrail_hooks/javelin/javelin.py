@@ -44,7 +44,7 @@ class JavelinGuardrail(CustomGuardrail):
         application: str | None = None,
         **kwargs,
     ):
-        f"""
+        """
         Initialize the JavelinGuardrail class.
 
         This calls: {api_base}/{api_version}/guardrail/{guardrail_name}/apply
@@ -111,6 +111,7 @@ class JavelinGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=dict(request),
+                timeout=self.timeout,
             )
             verbose_proxy_logger.debug("Javelin Guardrail: Javelin guard API response: %s", response.json())
             response_data: Final = response.json()

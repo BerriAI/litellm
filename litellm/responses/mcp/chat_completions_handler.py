@@ -1,10 +1,12 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import logging
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from typing_extensions import TypedDict, Unpack
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -41,8 +43,8 @@ def _add_mcp_metadata_to_response(
         # For streaming, store MCP metadata in _hidden_params
         # CustomStreamWrapper._add_mcp_metadata_to_final_chunk() will automatically
         # add it to the final chunk's delta.provider_specific_fields
-        if not hasattr(response, "_hidden_params"):
-            response._hidden_params = {}
+        if not hasattr(response, HIDDEN_PARAMS_ATTR):
+            set_hidden_params(response, {})
 
         mcp_metadata: Final = {}
         if openai_tools:
@@ -53,7 +55,10 @@ def _add_mcp_metadata_to_response(
             mcp_metadata["mcp_call_results"] = tool_results
 
         if mcp_metadata:
-            response._hidden_params["mcp_metadata"] = mcp_metadata
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+            )
+            hidden_params["mcp_metadata"] = mcp_metadata
         return
 
     if not isinstance(response, ModelResponse):
@@ -106,7 +111,7 @@ async def acompletion_with_mcp(
     (
         mcp_tools_with_litellm_proxy,
         other_tools,
-    ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+    ) = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
 
     if not mcp_tools_with_litellm_proxy:
         # No MCP tools, proceed with regular completion
@@ -114,10 +119,11 @@ async def acompletion_with_mcp(
             model=model,
             messages=messages,
             tools=tools,
+            _skip_mcp_handler=True,
             **kwargs,
         )
 
-    context: Final = MCPRequestContext.resolve(kwargs=kwargs, tools=tools)
+    context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
     user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth
     request_tags: Final = list(context.request_tags) if context.request_tags else None
     mcp_auth_header: Final = context.mcp_auth_header
@@ -129,16 +135,17 @@ async def acompletion_with_mcp(
     (
         deduplicated_mcp_tools,
         tool_server_map,
-    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+    ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=context.litellm_trace_id,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=request_tags,
+        raw_headers=raw_headers,
     )
 
-    openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
+    openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(
         deduplicated_mcp_tools,
         target_format="chat",
     )
@@ -147,7 +154,7 @@ async def acompletion_with_mcp(
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
 
     # Determine if we should auto-execute tools
-    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
     )
 
@@ -424,14 +431,15 @@ async def acompletion_with_mcp(
                 if isinstance(complete_response, ModelResponse):
                     self.complete_response = complete_response
                     # Extract tool calls from complete response
-                    self.tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(
+                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(
                         response=complete_response
                     )
 
                     if self.tool_calls:
                         # Execute tool calls
-                        self.tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+                        self.tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
                             tool_server_map=self.tool_server_map,
+                            served_tools=deduplicated_mcp_tools,
                             tool_calls=self.tool_calls,
                             user_api_key_auth=self.user_api_key_auth,
                             mcp_auth_header=self.mcp_auth_header,
@@ -441,6 +449,7 @@ async def acompletion_with_mcp(
                             litellm_call_id=self.litellm_call_id,
                             litellm_trace_id=self.litellm_trace_id,
                             request_tags=self.request_tags,
+                            guardrail_context=context.guardrail_context,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -452,7 +461,7 @@ async def acompletion_with_mcp(
                     return
 
                 # Create follow-up messages with tool results
-                follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
+                follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
                     original_messages=self.messages,
                     response=self.complete_response,
                     tool_results=self.tool_results,
@@ -592,7 +601,7 @@ async def acompletion_with_mcp(
         return initial_response
 
     # Extract tool calls from response
-    tool_calls: Final = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(response=initial_response)
+    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response)
 
     if not tool_calls:
         _add_mcp_metadata_to_response(
@@ -602,9 +611,10 @@ async def acompletion_with_mcp(
         return initial_response
 
     # Execute tool calls
-    tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
+        served_tools=deduplicated_mcp_tools,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
@@ -613,6 +623,7 @@ async def acompletion_with_mcp(
         litellm_call_id=context.litellm_call_id,
         litellm_trace_id=context.litellm_trace_id,
         request_tags=request_tags,
+        guardrail_context=context.guardrail_context,
     )
 
     if not tool_results:
@@ -624,7 +635,7 @@ async def acompletion_with_mcp(
         return initial_response
 
     # Create follow-up messages with tool results
-    follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
+    follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
         original_messages=messages,
         response=initial_response,
         tool_results=tool_results,

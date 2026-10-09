@@ -23,13 +23,15 @@ from typing import Final
 import httpx
 from fastapi import FastAPI
 from prometheus_client import CollectorRegistry, multiprocess
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.base import LiteLLMBaseModel
 
 METRICS_PATH: Final = "/metrics"
+HEALTH_PATH: Final = "/health"
 PID_HEADER: Final = "x-litellm-metrics-pid"
 _PARENT_POLL_INTERVAL_SECONDS: Final = 1.0
 _STARTUP_TIMEOUT_SECONDS: Final = 30.0
@@ -38,7 +40,7 @@ _STARTUP_PROBE_TIMEOUT_SECONDS: Final = 1.0
 _WILDCARD_TO_LOOPBACK: Final = MappingProxyType({"0.0.0.0": "127.0.0.1", "::": "::1"})
 
 
-class _CliArgs(BaseModel):
+class _CliArgs(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     host: str
@@ -76,6 +78,10 @@ def build_metrics_app(multiproc_dir: str) -> FastAPI:
     multiprocess.MultiProcessCollector(registry, path=multiproc_dir)
     app: Final = FastAPI(title="LiteLLM Prometheus metrics", docs_url=None, redoc_url=None, openapi_url=None)
     app.mount(METRICS_PATH, _add_pid_header(make_metrics_asgi_app(registry)))
+
+    @app.get(HEALTH_PATH)
+    def health() -> dict[str, str]:
+        return {"status": "healthy", "multiproc_dir": multiproc_dir}
 
     return app
 

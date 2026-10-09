@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import re
+from collections import deque
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict
 
-from pydantic import ValidationError
+import anyio
+from anyio import to_process
+from anyio.lowlevel import RunVar
+from pydantic import JsonValue, ValidationError
 from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
+from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -29,8 +38,88 @@ if TYPE_CHECKING:
 MCP_TOOL_SEARCH_SETTINGS_KEY: Final[str] = "mcp_tool_search"
 MCP_TOOL_SEARCH_TOOL_NAME: Final[str] = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: Final[str] = "mcp_tool_call"
+MCP_PROXY_SEARCH_TOOL_NAME: Final[str] = "search_tools"
+MCP_PROXY_SCHEMA_TOOL_NAME: Final[str] = "get_tool_schema"
+MCP_PROXY_CALL_TOOL_NAME: Final[str] = "call_tool"
+MCP_PROXY_TOOL_NAMES: Final = frozenset(
+    (MCP_PROXY_SEARCH_TOOL_NAME, MCP_PROXY_SCHEMA_TOOL_NAME, MCP_PROXY_CALL_TOOL_NAME)
+)
 AGENT_SEARCH_TOOL_NAME: Final[str] = "agent_search"
-VIRTUAL_TOOL_NAMES: Final = frozenset((MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME))
+SKILL_SEARCH_TOOL_NAME: Final[str] = "skill_search"
+VIRTUAL_TOOL_NAMES: Final = frozenset(
+    (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME, SKILL_SEARCH_TOOL_NAME)
+)
+
+_SCHEMA_VALIDATION_LIMITER: Final = RunVar[anyio.CapacityLimiter]("mcp_schema_validation_limiter")
+_MAX_VALIDATION_DEPTH: Final = 64
+_MAX_VALIDATION_NODES: Final = 10_000
+_MAX_VALIDATION_CHARACTERS: Final = 1_048_576
+_VALIDATION_TIMEOUT_SECONDS: Final = 30
+
+
+def _validation_nodes(value: JsonValue | Mapping[str, JsonValue]) -> Iterator[tuple[int, int]]:
+    pending: Final[deque[Iterator[JsonValue | Mapping[str, JsonValue]]]] = deque((iter((value,)),))
+    while pending:
+        try:
+            node, depth = next(pending[-1]), len(pending) - 1
+        except StopIteration:
+            pending.pop()
+            continue
+        yield depth, len(node) if isinstance(node, str) else 0
+        if depth > _MAX_VALIDATION_DEPTH:
+            continue
+        if isinstance(node, Mapping):
+            pending.append(chain(node.keys(), node.values()))
+        elif isinstance(node, list):
+            pending.append(iter(node))
+
+
+def _validation_limit_error(schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]) -> str | None:
+    nodes: Final = tuple(
+        islice(chain(_validation_nodes(schema), _validation_nodes(arguments)), _MAX_VALIDATION_NODES + 1)
+    )
+    if len(nodes) > _MAX_VALIDATION_NODES or any(depth > _MAX_VALIDATION_DEPTH for depth, _ in nodes):
+        return "Tool schema or arguments exceed validation size or depth limits"
+    if sum(size for _, size in nodes) > _MAX_VALIDATION_CHARACTERS:
+        return "Tool schema or arguments exceed validation size or depth limits"
+    return None
+
+
+def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]) -> str | None:
+    from jsonschema import validate
+    from jsonschema.exceptions import SchemaError
+    from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+    from referencing import Registry
+    from referencing.exceptions import Unresolvable
+
+    try:
+        validate(instance=arguments, schema=dict(schema), registry=Registry())
+    except JsonSchemaValidationError as exc:
+        return f"Invalid arguments: {exc.message}"
+    except (SchemaError, Unresolvable, RecursionError, re.error):
+        return "Unable to validate tool arguments against the supplied schema"
+    return None
+
+
+async def _tool_argument_validation_error(
+    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
+) -> str | None:
+    limit_error: Final = _validation_limit_error(schema, arguments)
+    if limit_error is not None:
+        return limit_error
+    existing: Final = _SCHEMA_VALIDATION_LIMITER.get(None)
+    limiter: Final = existing if existing is not None else anyio.CapacityLimiter(4)
+    if existing is None:
+        _SCHEMA_VALIDATION_LIMITER.set(limiter)
+    try:
+        with anyio.fail_after(_VALIDATION_TIMEOUT_SECONDS):
+            return await to_process.run_sync(
+                _validate_tool_arguments, schema, arguments, cancellable=True, limiter=limiter
+            )
+    except TimeoutError:
+        return "Tool argument validation exceeded its time limit"
+    except anyio.BrokenWorkerProcess:
+        return "Tool argument validation worker failed"
 
 
 def coerce_top_k(value: Any, default: int = 5) -> int:
@@ -45,6 +134,29 @@ class ToolSearchResult(TypedDict, total=False):
     description: Required[ReadOnly[str]]
     inputSchema: Required[ReadOnly[Mapping[str, object]]]
     score: ReadOnly[float]
+
+
+class MCPProxySearchResult(TypedDict, total=False):
+    tool_id: Required[ReadOnly[str]]
+    name: Required[ReadOnly[str]]
+    description: Required[ReadOnly[str]]
+    score: ReadOnly[float]
+
+
+class MCPProxySchemaResult(MCPProxySearchResult, total=False):
+    inputSchema: Required[ReadOnly[Mapping[str, object]]]
+    outputSchema: ReadOnly[Mapping[str, object]]
+
+
+class MCPProxyToolIdentity(TypedDict):
+    server_id: ReadOnly[str]
+    tool_name: ReadOnly[str]
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolSearchHit:
+    tool: Tool
+    score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,11 +177,66 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+    }
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema, "score": score}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+        "score": score,
+    }
+
+
+_MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
+
+
+def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
+    identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
+    return tool.model_copy(update={"meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}})
+
+
+def _mcp_proxy_identity(tool: Tool) -> MCPProxyToolIdentity:
+    identity: Final = None if tool.meta is None else tool.meta.get(_MCP_PROXY_IDENTITY_META_KEY)
+    if not isinstance(identity, Mapping):
+        raise TypeError("MCP proxy tool identity is missing")
+    server_id: Final = identity.get("server_id")
+    tool_name: Final = identity.get("tool_name")
+    if not isinstance(server_id, str) or not isinstance(tool_name, str):
+        raise TypeError("MCP proxy tool identity is invalid")
+    resolved: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool_name}
+    return resolved
+
+
+def mcp_proxy_tool_id(tool: Tool) -> str:
+    identity: Final = _mcp_proxy_identity(tool)
+    return hashlib.sha256(f"{identity['server_id']}\0{identity['tool_name']}".encode()).hexdigest()[:32]
+
+
+def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
+    base: Final[MCPProxySearchResult] = {
+        "tool_id": mcp_proxy_tool_id(hit.tool),
+        "name": hit.tool.name,
+        "description": hit.tool.description or "",
+    }
+    return {**base, "score": hit.score} if hit.score is not None else base
+
+
+def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
+    base: Final[MCPProxySchemaResult] = {
+        "tool_id": mcp_proxy_tool_id(tool),
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+    }
+    if tool.output_schema is None:
+        return base
+    return {**base, "outputSchema": tool.output_schema}
 
 
 def _tool_text(tool: Tool) -> str:
@@ -103,6 +270,38 @@ def search_tools(query: str, tools: Sequence[Tool], top_k: int = 5) -> tuple[Too
     return tuple(_tool_result(tool) for _, tool in _top_hits(tools, scores, minimum=1.0, limit=top_k))
 
 
+async def rank_mcp_tools(
+    query: str,
+    tools: Sequence[Tool],
+    top_k: int,
+    settings: MCPToolSearchSettings,
+    ranker: SemanticToolRanker | None,
+) -> tuple[MCPToolSearchHit, ...] | EmbeddingFailed:
+    core, rest = _split_core_tools(tools, settings.core_tools)
+    core_hits: Final = tuple(MCPToolSearchHit(tool) for tool in core)
+    if not query:
+        return core_hits
+    limit: Final = min(top_k, settings.top_k)
+    if ranker is None:
+        scores: Final = tuple(_keyword_score(query, tool) for tool in rest)
+        return (
+            *core_hits,
+            *(MCPToolSearchHit(tool) for _, tool in _top_hits(rest, scores, minimum=1.0, limit=limit)),
+        )
+    semantic_scores: Final = await ranker.index.scores(
+        query, tuple(_tool_text(tool) for tool in rest), ranker.embed, ranker.embedding_model
+    )
+    if isinstance(semantic_scores, EmbeddingFailed):
+        return semantic_scores
+    return (
+        *core_hits,
+        *(
+            MCPToolSearchHit(tool, score)
+            for score, tool in _top_hits(rest, semantic_scores, settings.similarity_threshold, limit)
+        ),
+    )
+
+
 async def search_mcp_tools(
     query: str,
     tools: Sequence[Tool],
@@ -110,21 +309,12 @@ async def search_mcp_tools(
     settings: MCPToolSearchSettings,
     ranker: SemanticToolRanker | None,
 ) -> tuple[ToolSearchResult, ...] | EmbeddingFailed:
-    """Core tools the caller can access come first, then up to `top_k` ranked matches from the remaining tools."""
-    core, rest = _split_core_tools(tools, settings.core_tools)
-    limit: Final = min(top_k, settings.top_k)
-    core_results: Final = tuple(_tool_result(tool) for tool in core)
-    if ranker is None:
-        return (*core_results, *search_tools(query, rest, limit))
-    if not query:
-        return core_results
-    scores: Final = await ranker.index.scores(
-        query, tuple(_tool_text(tool) for tool in rest), ranker.embed, ranker.embedding_model
+    hits: Final = await rank_mcp_tools(query, tools, top_k, settings, ranker)
+    if isinstance(hits, EmbeddingFailed):
+        return hits
+    return tuple(
+        _scored_result(hit.tool, hit.score) if hit.score is not None else _tool_result(hit.tool) for hit in hits
     )
-    if isinstance(scores, EmbeddingFailed):
-        return scores
-    hits: Final = _top_hits(rest, scores, minimum=settings.similarity_threshold, limit=limit)
-    return (*core_results, *(_scored_result(tool, score) for score, tool in hits))
 
 
 class _ToolParamSchema(TypedDict, total=False):
@@ -146,7 +336,7 @@ class VirtualToolDefinition(TypedDict):
 
 
 def _json_array(*items: str) -> Sequence[str]:
-    return list(items)  # mutable-ok: jsonschema's metaschema only accepts a JSON array for required
+    return list(items)
 
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
@@ -199,16 +389,74 @@ _AGENT_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
 }
 
 
+_SKILL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": SKILL_SEARCH_TOOL_NAME,
+    "description": "Find registered skills by describing what you need in natural language. Returns the best "
+    "matching skills you can access, ranked by semantic similarity, each with its skill_id, display_title, "
+    "description, and score.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What you need the skill to do, in natural language."},
+            "top_k": {
+                "type": "integer",
+                "description": "Maximum number of skills to return.",
+                "default": DEFAULT_SKILL_SEARCH_TOP_K,
+            },
+        },
+        "required": _json_array("query"),
+    },
+}
+
+
+_MCP_PROXY_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": MCP_PROXY_SEARCH_TOOL_NAME,
+    "description": "Search accessible MCP tools by describing what you need. Returns opaque tool IDs.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "What the tool should do."}},
+        "required": _json_array("query"),
+    },
+}
+
+_MCP_PROXY_SCHEMA_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": MCP_PROXY_SCHEMA_TOOL_NAME,
+    "description": "Return the complete schema for an accessible MCP tool ID.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {"tool_id": {"type": "string", "description": "Opaque ID from search_tools."}},
+        "required": _json_array("tool_id"),
+    },
+}
+
+_MCP_PROXY_CALL_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": MCP_PROXY_CALL_TOOL_NAME,
+    "description": "Call an accessible MCP tool by opaque ID with schema-valid arguments.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "tool_id": {"type": "string", "description": "Opaque ID from search_tools."},
+            "arguments": {"type": "object", "description": "Arguments validated against the selected tool schema."},
+        },
+        "required": _json_array("tool_id"),
+    },
+}
+
+
 def get_virtual_tool_definitions() -> tuple[VirtualToolDefinition, ...]:
-    return (_MCP_TOOL_SEARCH_DEFINITION, _MCP_TOOL_CALL_DEFINITION, _AGENT_SEARCH_DEFINITION)
+    return (_MCP_TOOL_SEARCH_DEFINITION, _MCP_TOOL_CALL_DEFINITION, _AGENT_SEARCH_DEFINITION, _SKILL_SEARCH_DEFINITION)
+
+
+def get_mcp_proxy_tool_definitions() -> tuple[VirtualToolDefinition, ...]:
+    return (_MCP_PROXY_SEARCH_DEFINITION, _MCP_PROXY_SCHEMA_DEFINITION, _MCP_PROXY_CALL_DEFINITION)
 
 
 def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
-        isError=is_error,
+        content=[TextContent(type="text", text=text)],
+        is_error=is_error,
     )
 
 
@@ -223,7 +471,7 @@ async def handle_agent_search(query: str, top_k: int, user_api_key_dict: UserAPI
     )
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
     from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     await check_feature_access_for_user(user_api_key_dict, "agents")
     outcome: Final = await search_agents(
@@ -234,12 +482,46 @@ async def handle_agent_search(query: str, top_k: int, user_api_key_dict: UserAPI
         embedding_model=litellm.agent_search_embedding_model,
         index=global_agent_search_index,
         user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
     )
     match outcome:
         case AgentSearchHits(hits):
             results: Final = tuple(agent_search_result(hit).model_dump() for hit in hits)
             return _text_tool_result(json.dumps(results), is_error=False)
         case AgentSearchNotConfigured(reason) | AgentSearchEmbeddingFailed(reason):
+            return _text_tool_result(reason, is_error=True)
+        case _:
+            assert_never(outcome)
+
+
+async def handle_skill_search(query: str, top_k: int, user_api_key_dict: UserAPIKeyAuth) -> CallToolResult:
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+    from litellm.llms.litellm_proxy.skills.skill_search import (
+        MAX_SKILL_SEARCH_TOP_K,
+        SkillSearchEmbeddingFailed,
+        SkillSearchHits,
+        SkillSearchNotConfigured,
+        global_skill_search_index,
+        search_skills,
+        skill_search_result,
+    )
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
+
+    outcome: Final = await search_skills(
+        query=query,
+        skills=await LiteLLMSkillsHandler.list_skills_for_search(user_api_key_dict),
+        top_k=min(max(top_k, 1), MAX_SKILL_SEARCH_TOP_K),
+        router=llm_router,
+        embedding_model=litellm.skill_search_embedding_model,
+        index=global_skill_search_index,
+        user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    match outcome:
+        case SkillSearchHits(hits):
+            results: Final = tuple(skill_search_result(hit).model_dump() for hit in hits)
+            return _text_tool_result(json.dumps(results), is_error=False)
+        case SkillSearchNotConfigured(reason) | SkillSearchEmbeddingFailed(reason):
             return _text_tool_result(reason, is_error=True)
         case _:
             assert_never(outcome)
@@ -256,8 +538,10 @@ async def handle_mcp_tool_search(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
+    )
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     settings: Final = mcp_tool_search_settings()
     if isinstance(settings, ValidationError):
@@ -271,7 +555,7 @@ async def handle_mcp_tool_search(
         )
     ranker: Final = (
         SemanticToolRanker(
-            embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict),
+            embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
             embedding_model=settings.embedding_model,
             index=global_mcp_tool_search_index,
         )
@@ -293,6 +577,94 @@ async def handle_mcp_tool_search(
     return _text_tool_result(json.dumps(results), is_error=False)
 
 
+async def handle_mcp_proxy_tool(
+    name: str,
+    arguments: dict[str, JsonValue],  # mutable-ok: MCP dispatcher passes mutable JSON call arguments
+    user_api_key_dict: UserAPIKeyAuth,
+    client_ip: str | None = None,
+    mcp_servers: list[str] | None = None,  # mutable-ok: preserve MCP scope container for existing resolver
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,  # mutable-ok: preserve forwarded headers
+    oauth2_headers: dict[str, str] | None = None,  # mutable-ok: preserve forwarded headers
+    raw_headers: dict[str, str] | None = None,  # mutable-ok: preserve request headers
+    litellm_logging_obj: LiteLLMLoggingObj | None = None,
+) -> CallToolResult:
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
+    )
+
+    listing: Final = await _list_mcp_tools(
+        user_api_key_auth=user_api_key_dict,
+        mcp_servers=mcp_servers,
+        client_ip=client_ip,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        mcp_proxy_mode=True,
+    )
+    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}
+
+    if name == MCP_PROXY_SEARCH_TOOL_NAME:
+        llm_router: Final = proxy_server.llm_router
+        proxy_logging_obj: Final = proxy_server.proxy_logging_obj
+        settings: Final = mcp_tool_search_settings()
+        if isinstance(settings, ValidationError):
+            return _text_tool_result(str(settings), is_error=True)
+        if settings.embedding_model is not None and llm_router is None:
+            return _text_tool_result(
+                f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY}.embedding_model needs a model_list so it can be called",
+                is_error=True,
+            )
+        ranker: Final = (
+            SemanticToolRanker(
+                embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict, proxy_logging_obj),
+                embedding_model=settings.embedding_model,
+                index=global_mcp_tool_search_index,
+            )
+            if settings.embedding_model is not None and llm_router is not None
+            else None
+        )
+        results: Final = await rank_mcp_tools(str(arguments.get("query", "")), listing.tools, 5, settings, ranker)
+        if isinstance(results, EmbeddingFailed):
+            return _text_tool_result(results.reason, is_error=True)
+        return _text_tool_result(json.dumps(tuple(_proxy_search_result(hit) for hit in results)), is_error=False)
+
+    tool_id: Final = arguments.get("tool_id")
+    tool: Final = tools_by_id.get(tool_id) if isinstance(tool_id, str) else None
+    if tool is None:
+        return _text_tool_result("Unknown or unauthorized tool_id", is_error=True)
+
+    if name == MCP_PROXY_SCHEMA_TOOL_NAME:
+        return _text_tool_result(json.dumps(_proxy_schema_result(tool)), is_error=False)
+    if name != MCP_PROXY_CALL_TOOL_NAME:
+        raise HTTPException(status_code=400, detail=f"Unknown MCP proxy tool: {name}")
+
+    tool_arguments: Final = arguments.get("arguments", {})
+    if not isinstance(tool_arguments, dict):
+        return _text_tool_result("arguments must be an object", is_error=True)
+    validation_error: Final = await _tool_argument_validation_error(tool.input_schema, tool_arguments)
+    if validation_error is not None:
+        return _text_tool_result(validation_error, is_error=True)
+
+    return await handle_mcp_tool_call(
+        tool_name=_mcp_proxy_identity(tool)["tool_name"],
+        arguments=tool_arguments,
+        user_api_key_dict=user_api_key_dict,
+        requested_server_id=_mcp_proxy_identity(tool)["server_id"],
+        client_ip=client_ip,
+        mcp_servers=mcp_servers,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        litellm_logging_obj=litellm_logging_obj,
+    )
+
+
 async def handle_mcp_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
@@ -304,10 +676,13 @@ async def handle_mcp_tool_call(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
+    requested_server_id: str | None = None,
+    guardrail_context: Mapping[str, object] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
         execute_mcp_tool,
+        raise_denied_scoped_mcp_access,
     )
 
     allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
@@ -315,6 +690,12 @@ async def handle_mcp_tool_call(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+    if mcp_servers and not allowed_mcp_servers:
+        await raise_denied_scoped_mcp_access(
+            requested_names=mcp_servers,
+            user_api_key_auth=user_api_key_dict,
+            client_ip=client_ip,
+        )
 
     # Reject before dispatch when the key has no accessible servers; otherwise an
     # unprefixed local tool name would fall through to the local registry in
@@ -324,7 +705,7 @@ async def handle_mcp_tool_call(
 
         raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
-    return await execute_mcp_tool(
+    result: Final = await execute_mcp_tool(
         name=tool_name,
         arguments=arguments,
         allowed_mcp_servers=allowed_mcp_servers,
@@ -334,5 +715,9 @@ async def handle_mcp_tool_call(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        client_ip=client_ip,
         litellm_logging_obj=litellm_logging_obj,
+        requested_server_id=requested_server_id,
+        guardrail_context=guardrail_context,
     )
+    return complete_call_tool_result(result, WireCompat.LEGACY)

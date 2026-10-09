@@ -121,12 +121,8 @@ async def named_credential_wif_fields(
     fields would see none and allow the write. This reads both and returns the union, so the gate
     refuses whenever either side says the credential is server-owned.
     """
-    in_memory: Final = tuple(
-        name
-        for credential in litellm.credential_list
-        if credential.credential_name == credential_name
-        for name in server_owned_wif_fields_named(credential.credential_values)
-    )
+    matching: Final = tuple(c for c in litellm.credential_list if c.credential_name == credential_name)
+    in_memory: Final = tuple(chain.from_iterable(server_owned_wif_fields_named(c.credential_values) for c in matching))
     if prisma_client is None:
         return in_memory
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)

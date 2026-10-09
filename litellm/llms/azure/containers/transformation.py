@@ -30,7 +30,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(
+        return BaseAzureLLM.base_validate_azure_environment(
             headers=headers,
             litellm_params=GenericLiteLLMParams(api_key=api_key),
         )
@@ -76,7 +76,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
         api_version_from_base: Final = self._extract_api_version(api_base)
         if api_version_from_base:
             effective_params["api_version"] = api_version_from_base
-        return BaseAzureLLM._get_base_azure_url(
+        return BaseAzureLLM.get_base_azure_url(
             api_base=self._normalize_api_base(api_base),
             litellm_params=effective_params,
             route="/openai/containers",

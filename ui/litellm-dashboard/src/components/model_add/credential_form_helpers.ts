@@ -1,5 +1,3 @@
-import { Providers } from "../provider_info_helpers";
-
 interface CredentialFormAdapter {
   getFieldValue: (field: string) => unknown;
   resetFields: () => void;
@@ -23,15 +21,33 @@ interface CredentialFormAdapter {
  * The credential name is preserved because it's a user-supplied label
  * that shouldn't reset just because the admin re-selected a provider.
  */
+const restrictedFields: readonly string[] = ["credential_name", "display_name", "custom_llm_provider"];
+
+export const buildCredential = (values: Record<string, unknown>, credentialValues: Record<string, unknown>) => ({
+  credential_name: values.credential_name as string,
+  ...(values.display_name !== undefined ? { display_name: values.display_name as string | null } : {}),
+  credential_values: credentialValues,
+  credential_info: {
+    custom_llm_provider: values.custom_llm_provider as string,
+  },
+});
+
+export const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));
+
 export function resetCredentialFormOnProviderChange(
   form: CredentialFormAdapter,
-  newProvider: Providers,
-  setSelectedProvider: (p: Providers) => void,
+  newProvider: string | null,
+  setSelectedProvider: (p: string | null) => void,
 ): void {
   const preservedName = form.getFieldValue("credential_name");
+  const preservedDisplayName = form.getFieldValue("display_name");
   form.resetFields();
   if (preservedName !== undefined) {
     form.setFieldValue("credential_name", preservedName);
+  }
+  if (preservedDisplayName !== undefined) {
+    form.setFieldValue("display_name", preservedDisplayName);
   }
   setSelectedProvider(newProvider);
   form.setFieldValue("custom_llm_provider", newProvider);

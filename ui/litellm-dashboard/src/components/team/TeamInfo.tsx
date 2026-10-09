@@ -1,6 +1,8 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { invalidateTeamQueries } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
@@ -17,14 +19,14 @@ import {
 } from "@/components/networking";
 import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { numberOrNull } from "@/lib/forms/numberOrNull";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
-import { modelGroupHref } from "@/utils/entityLinks";
+import { modelGroupHref, modelOrAccessGroupHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -46,11 +48,26 @@ import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import GuardrailsSelect from "./GuardrailsSelect";
+import {
+  type CallerEditAccess,
+  parseTeamEditAccess,
+  TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
+  TEAM_ADMIN_EDITING_DISABLED_TITLE,
+  type TeamAdminSettingsChanges,
+} from "./teamAdminEditAccess";
+import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
+import {
+  ModelBudgetUsage,
+  ModelMaxBudget,
+  ModelMaxBudgetField,
+  modelMaxBudgetToEntries,
+} from "../key_team_helpers/ModelMaxBudgetEditor";
+import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
@@ -89,6 +106,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
+import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
@@ -101,12 +119,25 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
+import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
+import {
+  isValidThreshold,
+  TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
+  teamMemberBudgetAlertEmailsFromRows,
+  teamMemberBudgetAlertRowsFromMetadata,
+  teamMemberBudgetAlertSummary,
+} from "./teamMemberBudgetAlertEmails";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
+import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
+import { useMemberBudgetReset } from "./useMemberBudgetReset";
+import { fetchClient } from "@/lib/http/api";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
   "secret_manager_settings",
   "soft_budget_alerting_emails",
+  TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
   "model_tpm_limit",
   "model_rpm_limit",
   "default_estimated_output_tokens",
@@ -124,8 +155,14 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
   "access-group": "success",
 };
 
-const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
-  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
+const teamModelBadgeHref = (
+  badge: TeamModelBadge,
+  accessGroupNames: ReadonlySet<string> | undefined,
+): string | undefined => {
+  if (badge.kind === "direct") return modelOrAccessGroupHref(badge.label, accessGroupNames);
+  if (badge.kind === "access-group") return modelGroupHref(badge.label);
+  return undefined;
+};
 
 export type McpGrantResolution =
   | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
@@ -231,10 +268,13 @@ export const retainedMcpToolPermissions = (
 export const mcpUnresolvableSaveError = (reason: string): string =>
   `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
 
+export type TeamMemberBudgetSource = components["schemas"]["TeamMemberResetBudgetResponse"]["budget_source"];
+
 export interface TeamMembership {
   user_id: string;
   team_id: string;
-  budget_id: string;
+  budget_id: string | null;
+  budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
   litellm_budget_table: {
@@ -248,6 +288,8 @@ export interface TeamMembership {
     budget_duration: string | null;
     budget_reset_at: string | null;
     allowed_models?: string[] | null;
+    temp_budget_increase?: number | null;
+    temp_budget_expiry?: string | null;
   };
 }
 
@@ -263,9 +305,12 @@ export interface TeamData {
     metadata: Record<string, any>;
     tpm_limit: number | null;
     rpm_limit: number | null;
+    tpd_limit?: number | null;
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
+    model_max_budget?: StoredModelMaxBudget | null;
+    model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
     models: string[];
     blocked: boolean;
     spend: number;
@@ -286,8 +331,9 @@ export interface TeamData {
     guardrails?: string[];
     policies?: string[];
     object_permission?: ObjectPermission | null;
+    caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
-      max_budget: number;
+      max_budget: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -304,7 +350,6 @@ export interface TeamInfoProps {
   accessToken: string | null;
   is_team_admin: boolean;
   is_proxy_admin: boolean;
-  is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
@@ -326,13 +371,29 @@ const teamUpdateFieldsSchema = z.object({
   team_member_key_duration: z.string().optional(),
   team_member_tpm_limit: numericInputSchema,
   team_member_rpm_limit: numericInputSchema,
+  team_member_max_budget_alert_emails: z
+    .array(z.object({ threshold: z.number().nullable(), emails: z.string() }))
+    .superRefine((rows, ctx) => {
+      rows.forEach((row, index) => {
+        if (!isValidThreshold(row.threshold)) {
+          ctx.addIssue({ code: "custom", message: "Enter a whole number from 1 to 100", path: [index, "threshold"] });
+        } else if (rows.filter((other) => other.threshold === row.threshold).length > 1) {
+          ctx.addIssue({ code: "custom", message: "Duplicate threshold", path: [index, "threshold"] });
+        }
+      });
+    })
+    .optional(),
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
+  tpd_limit: numericInputSchema,
   modelLimits: z
     .array(
       z.object({
-        model: z.string().min(1, "Missing model"),
+        model: z
+          .string()
+          .nullable()
+          .refine((model) => Boolean(model), "Missing model"),
         tpm: z.number().nullish(),
         rpm: z.number().nullish(),
       }),
@@ -371,6 +432,7 @@ const teamUpdateFieldsSchema = z.object({
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
+  object_permission_skills: z.array(z.string()).optional(),
   organization_id: z.string().nullish(),
   logging_settings: z.array(z.unknown()).optional(),
   secret_manager_settings: z.string().optional(),
@@ -388,6 +450,7 @@ const TEAM_MEMBER_SETTINGS_FIELDS = [
   "team_member_key_duration",
   "team_member_tpm_limit",
   "team_member_rpm_limit",
+  "team_member_max_budget_alert_emails",
 ] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 
@@ -403,9 +466,11 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
   team_member_rpm_limit: undefined,
+  team_member_max_budget_alert_emails: [],
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
+  tpd_limit: undefined,
   modelLimits: [],
   default_estimated_output_tokens: undefined,
   default_estimated_output_tokens_per_model: "",
@@ -419,6 +484,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   mcp_tool_permissions: {},
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
+  object_permission_skills: [],
   organization_id: null,
   logging_settings: [],
   secret_manager_settings: "",
@@ -451,9 +517,11 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
+  team_member_max_budget_alert_emails: [...teamMemberBudgetAlertRowsFromMetadata(info.metadata)],
   budget_duration: info.budget_duration,
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
+  tpd_limit: info.tpd_limit,
   modelLimits: Array.from(
     new Set([
       ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -485,6 +553,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     accessGroups: info.object_permission?.agent_access_groups || [],
   },
   object_permission_search_tools: info.object_permission?.search_tools || [],
+  object_permission_skills: info.object_permission?.skills || [],
   organization_id: info.organization_id,
   logging_settings: info.metadata?.logging || [],
   secret_manager_settings: info.metadata?.secret_manager_settings
@@ -511,7 +580,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken,
   is_team_admin,
   is_proxy_admin,
-  is_org_admin = false,
   userModels,
   editTeam,
   premiumUser = false,
@@ -535,6 +603,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     append: appendModelLimit,
     remove: removeModelLimit,
   } = useFieldArray({ control: form.control, name: "modelLimits" });
+  const {
+    fields: memberBudgetAlertRows,
+    append: appendMemberBudgetAlertRow,
+    remove: removeMemberBudgetAlertRow,
+  } = useFieldArray({ control: form.control, name: "team_member_max_budget_alert_emails" });
   const [teamMemberSettingsOpen, setTeamMemberSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
@@ -552,9 +625,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
+  const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole, userId } = useAuthorized();
+  const { userRole } = useAuthorized();
+  const accessGroupNames = useModelAccessGroupNames();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
@@ -563,14 +638,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: userOrganizations = [] } = useOrganizations();
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
-
-  // Check if user is org admin for this team's organization
-  const isOrgAdminForTeam = useMemo(() => {
-    const teamOrgId = teamData?.team_info?.organization_id;
-    if (!teamOrgId || !userId) return false;
-    const org = userOrganizations.find((o) => o.organization_id === teamOrgId);
-    return org?.members?.some((m: any) => m.user_id === userId && m.user_role === "org_admin") ?? false;
-  }, [teamData, userOrganizations, userId]);
 
   // Models currently selected in the team edit form, used to scope the per-model
   // rate limit dropdown to models this team actually has access to.
@@ -595,15 +662,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [watchedModels, teamData, userModels]);
 
-  const isTeamAdminFromTeamData = useMemo(
-    () =>
-      teamData?.team_info?.members_with_roles?.some(
-        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
-      ) ?? false,
-    [teamData, userId],
-  );
-
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
+  const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
+  const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
@@ -617,9 +677,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const startEditing = () => {
     form.reset(teamFormValues());
+    setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
+  };
+
+  const openSettingsEditor = (modelAliases: Record<string, string>) => {
+    if (teamEditAccess.kind === "team_admin_disabled") {
+      toast.error(TEAM_ADMIN_EDITING_DISABLED_TITLE, { description: TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION });
+      return;
+    }
+    setTeamModelAliases(modelAliases);
+    startEditing();
   };
 
   const applyKillSwitchToGuardrails = (checked: boolean) => {
@@ -650,6 +720,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshTeamData = async () => {
+    if (!accessToken) return;
+    try {
+      setTeamData(await teamInfoCall(accessToken, teamId));
+    } catch {
+      toast.fromError("Failed to load team information");
     }
   };
 
@@ -776,6 +855,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         rpm_limit: values.rpm_limit,
         budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
+        temp_budget_increase: values.temp_budget_increase,
+        temp_budget_expiry: values.temp_budget_expiry,
       };
       toast.dismiss(); // Remove all existing toasts
 
@@ -841,6 +922,52 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setMemberToDelete(null);
   };
 
+  const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
+    await teamUpdateCall(token, updateData);
+    void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+    void invalidateTeamQueries(queryClient);
+    setIsEditing(false);
+  };
+
+  const memberBudgetReset = useMemberBudgetReset({
+    saveTeam: async (updateData) => {
+      if (!accessToken) return;
+      setIsTeamSaving(true);
+      try {
+        await persistTeamUpdate(accessToken, updateData);
+      } finally {
+        setIsTeamSaving(false);
+      }
+    },
+    resetMemberBudgets: async (bulkTeamId, userIds) => {
+      const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
+        params: { path: { team_id: bulkTeamId } },
+        body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
+      });
+      return data?.data ?? [];
+    },
+    refreshTeamData,
+  });
+
+  const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
+  useEffect(() => {
+    dismissMemberBudgetReset();
+  }, [teamId, dismissMemberBudgetReset]);
+
+  const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
+    if (!accessToken) return;
+    setIsTeamSaving(true);
+    try {
+      await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+      toast.success("Team settings updated successfully");
+      await fetchTeamInfo();
+    } catch (error) {
+      console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
+    }
+  };
+
   const handleTeamUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
@@ -861,14 +988,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const sanitizeNumeric = (v: any) => {
-        if (v === null || v === undefined) return null;
-        if (typeof v === "string" && v.trim() === "") return null;
-        if (typeof v === "number" && Number.isNaN(v)) return null;
-        return v;
-      };
-
-      const estimatedOutputTokens = sanitizeNumeric(values.default_estimated_output_tokens);
+      const estimatedOutputTokens = numberOrNull(values.default_estimated_output_tokens);
 
       let estimatedOutputTokensPerModel: Record<string, number> | undefined;
       if (typeof values.default_estimated_output_tokens_per_model === "string") {
@@ -905,16 +1025,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
           : {};
 
+      const memberBudgetAlertEmails =
+        values.team_member_max_budget_alert_emails !== undefined
+          ? teamMemberBudgetAlertEmailsFromRows(values.team_member_max_budget_alert_emails)
+          : info.metadata?.[TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY];
+      const memberBudgetAlertEmailsMetadata =
+        memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
+          ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
+          : {};
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
         models: normalizeTeamModelSelection(values.models),
-        tpm_limit: sanitizeNumeric(values.tpm_limit),
-        rpm_limit: sanitizeNumeric(values.rpm_limit),
+        tpm_limit: numberOrNull(values.tpm_limit),
+        rpm_limit: numberOrNull(values.rpm_limit),
+        tpd_limit: numberOrNull(values.tpd_limit),
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
-        max_budget: values.max_budget,
-        soft_budget: sanitizeNumeric(values.soft_budget),
+        max_budget: numberOrNull(values.max_budget),
+        soft_budget: numberOrNull(values.soft_budget),
         budget_duration: values.budget_duration ?? null,
         metadata: {
           ...parsedMetadata,
@@ -923,7 +1053,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
-          ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: Number(estimatedOutputTokens) } : {}),
+          ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: estimatedOutputTokens } : {}),
           ...(estimatedOutputTokensPerModel !== undefined
             ? { default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel }
             : {}),
@@ -935,16 +1065,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   .filter((email: string) => email.length > 0)
               : values.soft_budget_alerting_emails || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
+          ...memberBudgetAlertEmailsMetadata,
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
 
-      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
-      if (values.team_member_budget !== undefined) {
-        updateData.team_member_budget = Number(values.team_member_budget);
+      const newTeamMemberBudget =
+        values.team_member_budget !== undefined ? numberOrNull(values.team_member_budget) : undefined;
+      if (newTeamMemberBudget !== undefined) {
+        updateData.team_member_budget = newTeamMemberBudget;
       }
 
       if (values.team_member_key_duration !== undefined) {
@@ -952,8 +1084,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
-        updateData.team_member_tpm_limit = sanitizeNumeric(values.team_member_tpm_limit);
-        updateData.team_member_rpm_limit = sanitizeNumeric(values.team_member_rpm_limit);
+        updateData.team_member_tpm_limit = numberOrNull(values.team_member_tpm_limit);
+        updateData.team_member_rpm_limit = numberOrNull(values.team_member_rpm_limit);
       }
 
       // Handle object_permission updates
@@ -1039,12 +1171,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
-      if (values.vector_stores && values.vector_stores.length > 0) {
+      if (values.vector_stores) {
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
       if (Array.isArray(values.object_permission_search_tools)) {
         updateData.object_permission.search_tools = values.object_permission_search_tools;
+      }
+
+      if (Array.isArray(values.object_permission_skills)) {
+        updateData.object_permission.skills = values.object_permission_skills;
       }
 
       // Pass access_group_ids to the update request
@@ -1060,6 +1196,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const previousModelAliases = info.litellm_model_table?.model_aliases ?? {};
       if (Object.keys(teamModelAliases).length > 0 || Object.keys(previousModelAliases).length > 0) {
         updateData.model_aliases = teamModelAliases;
+      }
+
+      const modelBudgets = modelMaxBudgetUpdate(teamModelMaxBudget, info.model_max_budget);
+      if (modelBudgets !== undefined) {
+        updateData.model_max_budget = modelBudgets;
       }
 
       // Handle router_settings - read fresh values from DOM at save time.
@@ -1081,12 +1222,28 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      await teamUpdateCall(accessToken, updateData);
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+      if (
+        typeof newTeamMemberBudget === "number" &&
+        shouldPromptMemberBudgetReset(
+          newTeamMemberBudget,
+          info.team_member_budget_table?.max_budget,
+          customBudgetUserIds,
+        )
+      ) {
+        const pendingReset = {
+          teamId,
+          updateData,
+          userIds: customBudgetUserIds,
+          newBudget: newTeamMemberBudget,
+        };
+        memberBudgetReset.prompt(pendingReset);
+        return;
+      }
 
+      await persistTeamUpdate(accessToken, updateData);
       toast.success("Team settings updated successfully");
-      setIsEditing(false);
-      fetchTeamInfo();
+      await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -1103,6 +1260,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const teamAdminSettingsEditor =
+    teamEditAccess.kind === "team_admin" ? (
+      <TeamAdminSettingsForm
+        initialValues={{ tpm_limit: info.tpm_limit, rpm_limit: info.rpm_limit, max_budget: info.max_budget }}
+        editableFields={teamEditAccess.editableFields}
+        mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
+        isSaving={isTeamSaving}
+        onCancel={() => setIsEditing(false)}
+        onSave={saveTeamAdminSettings}
+      />
+    ) : null;
 
   const inheritedMcpServers = computeInheritedGrants(
     info.access_group_mcp_server_ids,
@@ -1157,6 +1326,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <div className="mt-2">
               <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
               <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
+              <p>TPD (batch): {info.tpd_limit ?? "Unlimited"}</p>
               {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
@@ -1194,7 +1364,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <StatusBadge
                         tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
                         label={badge.label}
-                        href={teamModelBadgeHref(badge)}
+                        href={teamModelBadgeHref(badge, accessGroupNames)}
                       />
                     </span>
                   </SimpleTooltip>
@@ -1286,6 +1456,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           teamData={teamData}
           canEditTeam={canEditTeam}
           handleMemberDelete={handleMemberDelete}
+          onMemberSpendReset={refreshTeamData}
+          onMemberBudgetReset={refreshTeamData}
           setSelectedEditMember={setSelectedEditMember}
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}
@@ -1307,10 +1479,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             {canEditTeam && !isEditing && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                  startEditing();
-                }}
+                onClick={() => openSettingsEditor(info.litellm_model_table?.model_aliases ?? {})}
               >
                 <Pencil />
                 Edit Settings
@@ -1318,8 +1487,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             )}
           </div>
 
-          {isEditing && isGuardrailsLoading ? (
-            <div className="p-4">Loading...</div>
+          {isEditing && (teamAdminSettingsEditor !== null || isGuardrailsLoading) ? (
+            teamAdminSettingsEditor ?? <div className="p-4">Loading...</div>
           ) : isEditing ? (
             <TooltipProvider>
               <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
@@ -1456,7 +1625,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               showNeverResets
                               placeholder="Inherit team reset period"
                               value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
-                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
+                              onChange={(next) =>
+                                onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
+                              }
                             />
                           )}
                         </FormField>
@@ -1502,6 +1673,71 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} placeholder="e.g., 100" />
                           )}
                         </FormField>
+                        <Field>
+                          <FieldLabel>
+                            {labelWithHint(
+                              "Budget Alert Thresholds",
+                              "Email each member when their spend reaches a percentage of their team member budget. The member is always notified; add comma-separated addresses to notify others as well. Requires email alerting to be configured on the proxy.",
+                            )}
+                          </FieldLabel>
+                          {memberBudgetAlertRows.map((row, index) => (
+                            <div key={row.id} className="mb-2 flex items-start gap-2">
+                              <FormField
+                                control={form.control}
+                                name={`team_member_max_budget_alert_emails.${index}.threshold`}
+                                className="w-32"
+                              >
+                                {({ ref, value, onChange, ...field }) => (
+                                  <NumericalInput
+                                    {...field}
+                                    ref={ref}
+                                    value={value ?? ""}
+                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                      onChange(event.target.value === "" ? null : Number(event.target.value))
+                                    }
+                                    placeholder="% of budget"
+                                    min={1}
+                                    max={100}
+                                    step={1}
+                                  />
+                                )}
+                              </FormField>
+                              <FormField
+                                control={form.control}
+                                name={`team_member_max_budget_alert_emails.${index}.emails`}
+                                className="flex-1"
+                              >
+                                {({ ref, value, ...field }) => (
+                                  <UIInput
+                                    {...field}
+                                    ref={ref}
+                                    value={value ?? ""}
+                                    placeholder="Additional recipients, e.g. finance@example.com"
+                                  />
+                                )}
+                              </FormField>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Remove budget alert threshold"
+                                className="mt-1 text-destructive"
+                                onClick={() => removeMemberBudgetAlertRow(index)}
+                              >
+                                <CircleMinus className="size-4" />
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full border-dashed"
+                            onClick={() => appendMemberBudgetAlertRow({ threshold: null, emails: "" })}
+                          >
+                            <Plus className="size-4" />
+                            Add Budget Alert Threshold
+                          </Button>
+                        </Field>
                       </FieldGroup>
                     </CollapsibleContent>
                   </Collapsible>
@@ -1517,11 +1753,31 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
+                  <ModelMaxBudgetField
+                    premiumUser={premiumUser}
+                    value={teamModelMaxBudget}
+                    onChange={setTeamModelMaxBudget}
+                    availableModels={availableRateLimitModels}
+                    usage={info.model_max_budget_usage}
+                    hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
+                  />
+
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
                   <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="tpd_limit"
+                    label={labelWithHint(
+                      "Tokens per day Limit (TPD)",
+                      "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
+                    )}
+                  >
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
@@ -1686,25 +1942,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
-                  <FormField
-                    control={form.control}
-                    name="disable_global_guardrails"
-                    label={labelWithHint(
-                      "Disable all global guardrails",
-                      "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
-                    )}
-                  >
-                    {({ id, value, onChange }) => (
-                      <Switch
-                        id={id}
-                        checked={value === true}
-                        onCheckedChange={(checked) => {
-                          onChange(checked);
-                          applyKillSwitchToGuardrails(checked);
-                        }}
-                      />
-                    )}
-                  </FormField>
+                  {is_proxy_admin && (
+                    <FormField
+                      control={form.control}
+                      name="disable_global_guardrails"
+                      label={labelWithHint(
+                        "Disable all global guardrails",
+                        "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <Switch
+                          id={id}
+                          checked={value === true}
+                          onCheckedChange={(checked) => {
+                            onChange(checked);
+                            applyKillSwitchToGuardrails(checked);
+                          }}
+                        />
+                      )}
+                    </FormField>
+                  )}
 
                   {canViewPolicies && (
                     <FormField
@@ -1848,12 +2106,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </CollapsibleContent>
                   </Collapsible>
 
+                  <FormField
+                    control={form.control}
+                    name="object_permission_skills"
+                    label={labelWithHint(
+                      "Skills",
+                      "Enabled skills are visible to every team. Grant disabled (private) Claude Code plugins to this team here.",
+                    )}
+                  >
+                    {({ value, onChange }) => (
+                      <SkillSelector
+                        onChange={onChange}
+                        value={value}
+                        accessToken={accessToken || ""}
+                        placeholder="Select skills (optional)"
+                      />
+                    )}
+                  </FormField>
+
                   <FormField control={form.control} name="organization_id" label="Organization">
                     {({ id, value, onChange }) => (
                       <SearchSelect
                         inputId={id}
                         value={value ?? ""}
-                        onValueChange={(next) => onChange(next === "" ? null : next)}
+                        onValueChange={onChange}
                         options={userOrganizations.map((org) => ({
                           value: org.organization_id ?? "",
                           label: org.organization_alias || org.organization_id || "",
@@ -1924,7 +2200,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Models</p>
                 <div className="flex flex-wrap gap-2 mt-1">
                   {info.models.map((model, index) => (
-                    <BadgeLink key={index} href={modelGroupHref(model)}>
+                    <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)}>
                       {model}
                     </BadgeLink>
                   ))}
@@ -1935,7 +2211,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <p className="font-medium">Default Member Models</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {info.default_team_member_models.map((model, index) => (
-                      <BadgeLink key={index} href={modelGroupHref(model)}>
+                      <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)}>
                         {model}
                       </BadgeLink>
                     ))}
@@ -1966,6 +2242,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Rate Limits</p>
                 <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
                 <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
+                <div>TPD (batch): {info.tpd_limit ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
@@ -2002,6 +2279,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     : "No Limit"}
                 </div>
                 <div>Budget Reset: {info.budget_duration || "Never"}</div>
+                {modelMaxBudgetToEntries(info.model_max_budget as ModelMaxBudget | null | undefined).map(
+                  ({ model, budgetLimit, timePeriod }) => {
+                    const spent = model === null ? undefined : info.model_max_budget_usage?.[model]?.current_spend;
+                    return (
+                      <div key={model}>
+                        Per-Model Budget ({model}): ${budgetLimit ?? "?"} per {timePeriod}
+                        {spent !== undefined && `, spent $${spent}`}
+                      </div>
+                    );
+                  },
+                )}
                 {info.metadata?.soft_budget_alerting_emails &&
                   Array.isArray(info.metadata.soft_budget_alerting_emails) &&
                   info.metadata.soft_budget_alerting_emails.length > 0 && (
@@ -2020,6 +2308,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                 <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
                 <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
+                <div>Budget Alert Thresholds: {teamMemberBudgetAlertSummary(info.metadata).join("; ") || "None"}</div>
               </div>
               <div>
                 <p className="font-medium">Router Settings</p>
@@ -2197,6 +2486,33 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               type: "budget-duration" as const,
             },
             {
+              name: "temp_budget_increase",
+              label: (
+                <span>
+                  Temporary Budget Increase (USD){" "}
+                  <SimpleTooltip content="Extra USD added on top of the team member budget until the expiry below. The permanent budget is left unchanged and the increase stops applying at expiry.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 0.01,
+              min: 0,
+              placeholder: "Extra budget for this member until the expiry",
+            },
+            {
+              name: "temp_budget_expiry",
+              label: (
+                <span>
+                  Temporary Budget Expiry (UTC){" "}
+                  <SimpleTooltip content="When the temporary budget increase stops applying. Required whenever a temporary budget increase is set.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </span>
+              ),
+              type: "utc-datetime" as const,
+            },
+            {
               name: "tpm_limit",
               label: (
                 <span>
@@ -2267,6 +2583,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={handleDeleteCancel}
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
+      />
+
+      <ResetMemberBudgetsDialog
+        state={memberBudgetReset.state}
+        onReset={memberBudgetReset.reset}
+        onRetry={memberBudgetReset.retry}
+        onKeep={memberBudgetReset.keepCustom}
+        onDismiss={memberBudgetReset.dismiss}
       />
     </div>
   );

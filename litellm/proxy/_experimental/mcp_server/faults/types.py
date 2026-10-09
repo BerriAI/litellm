@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 MAX_WIRE_FIELD_CHARS: Final = 500
 """Bound on every upstream-derived string that crosses to a caller or into a log line."""
@@ -35,7 +37,7 @@ UPSTREAM_FAULT_CODES: Final[frozenset[str]] = frozenset({"server_error", "tempor
 they classify as upstream-reported faults and render on the 5xx their meaning implies."""
 
 
-class CallerRejected(BaseModel):
+class CallerRejected(LiteLLMBaseModel):
     """The upstream spoke the OAuth error contract and the failure is actionable by our caller
     (e.g. ``invalid_grant``: re-run authorization). The code and its bounded prose relay on the
     4xx status the code itself implies."""
@@ -47,7 +49,7 @@ class CallerRejected(BaseModel):
     error_uri: str | None = None
 
 
-class GatewayRejected(BaseModel):
+class GatewayRejected(LiteLLMBaseModel):
     """The upstream rejected the request for a cause only the gateway operator can address: the
     server's stored client credentials or a gateway capability gap. Not actionable by the caller:
     rendered as 502 with gateway-authored prose naming the code; the upstream's prose goes to
@@ -58,7 +60,7 @@ class GatewayRejected(BaseModel):
     code: str
 
 
-class UpstreamReportedFault(BaseModel):
+class UpstreamReportedFault(LiteLLMBaseModel):
     """The upstream blamed itself in the OAuth vocabulary. Rendered on the 5xx the code implies
     (``server_error`` 502, ``temporarily_unavailable`` 503) so blame and status agree."""
 
@@ -67,7 +69,7 @@ class UpstreamReportedFault(BaseModel):
     code: Literal["server_error", "temporarily_unavailable"]
 
 
-class UpstreamProtocolFault(BaseModel):
+class UpstreamProtocolFault(LiteLLMBaseModel):
     """The upstream broke the error contract: no JSON ``error`` field, an undecodable body, or a
     success response without a usable token. Rendered as 502 with a gateway-authored note; the
     upstream body never crosses to the caller."""
@@ -77,4 +79,12 @@ class UpstreamProtocolFault(BaseModel):
     note: str
 
 
-UpstreamOAuthFault: TypeAlias = CallerRejected | GatewayRejected | UpstreamReportedFault | UpstreamProtocolFault
+class UpstreamRegistrationRefused(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["upstream_registration_refused"] = "upstream_registration_refused"
+    status_code: Literal[401, 403]
+
+
+UpstreamOAuthFault: TypeAlias = (
+    CallerRejected | GatewayRejected | UpstreamReportedFault | UpstreamProtocolFault | UpstreamRegistrationRefused
+)

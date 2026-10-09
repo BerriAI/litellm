@@ -46,7 +46,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
 }) => {
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
   const [competitorMode, setCompetitorMode] = useState<"ai" | "manual">("ai");
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [competitorTags, setCompetitorTags] = useState<string[]>([]);
@@ -72,7 +72,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       });
       setParameterValues(initial);
       setCompetitorMode("ai");
-      setSelectedModel(undefined);
+      setSelectedModel(null);
       setCompetitorTags([]);
       setVariationsMap({});
       setIsGenerating(false);
@@ -297,7 +297,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                     <SearchSelect
                       options={availableModels.map((m) => ({ label: m, value: m }))}
                       value={selectedModel}
-                      onValueChange={(value) => setSelectedModel(value || undefined)}
+                      onValueChange={setSelectedModel}
                       placeholder={isLoadingModels ? "Loading models..." : "Select a model to generate names"}
                       emptyText="No models found"
                       disabled={isLoadingModels}

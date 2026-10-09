@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -47,6 +48,8 @@ if TYPE_CHECKING:
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -170,7 +173,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[str | bytes], model: str, speed: str | None
     ) -> ModelResponse | None:
         try:
-            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            return AnthropicPassthroughLoggingHandler.build_usage_only_response_from_chunks(
                 all_chunks=all_chunks, model=model, speed=speed
             )
         except Exception as e:  # noqa: BLE001  # the usage-only fallback must never raise out of failure logging
@@ -185,7 +188,7 @@ class AnthropicPassthroughLoggingHandler:
         speed: str | None,
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
-            assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
@@ -216,11 +219,14 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             speed=AnthropicPassthroughLoggingHandler._cost_relevant_speed(request_body),
         )
-        if response is None:
-            return None
-        AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
+        if not isinstance(response, ModelResponse):
+            return response
+        recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
         )
+        if recovered_usage is None:
+            return response
+        AnthropicPassthroughLoggingHandler._clear_placeholder_cost(response=response, usage=recovered_usage)
         return response
 
     @staticmethod
@@ -259,7 +265,9 @@ class AnthropicPassthroughLoggingHandler:
             )
         except Exception as e:  # noqa: BLE001  # an uncostable partial stream still bills its tokens, at zero cost
             verbose_proxy_logger.warning(
-                "Anthropic passthrough: could not cost the partial usage of a failed stream (model=%s): %s", model, e
+                "Anthropic passthrough: could not cost the partial usage of an interrupted stream (model=%s): %s",
+                model,
+                e,
             )
             return 0.0
 
@@ -338,10 +346,8 @@ class AnthropicPassthroughLoggingHandler:
                 if not line.startswith("data:"):
                     continue
                 try:
-                    data = json.loads(line[len("data:") :].strip())
+                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
                 except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":
@@ -359,7 +365,7 @@ class AnthropicPassthroughLoggingHandler:
         response: ModelResponse | TextCompletionResponse,
         all_chunks: Sequence[str | bytes],
         model: str,
-    ) -> None:
+    ) -> Usage | None:
         """
         An Anthropic stream interrupted before its terminal ``message_delta``
         (client disconnect) carries only the ``message_start`` ``output_tokens``
@@ -369,24 +375,24 @@ class AnthropicPassthroughLoggingHandler:
         untouched because their terminal ``message_delta`` short-circuits here.
         """
         if not isinstance(response, ModelResponse):
-            return
+            return None
         if not AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks):
-            return
+            return None
         usage: Final = getattr(response, "usage", None)
-        if usage is None:
-            return
+        if not isinstance(usage, Usage):
+            return None
         output_text: Final = get_content_from_model_response(response)
         if not output_text:
-            return
+            return None
         try:
             recovered_output_tokens = litellm.token_counter(model=model, text=output_text, count_response_tokens=True)
         except Exception:
             verbose_proxy_logger.warning(
                 "Could not re-tokenize interrupted stream output; keeping placeholder completion token count."
             )
-            return
+            return None
         if recovered_output_tokens <= (usage.completion_tokens or 0):
-            return
+            return None
         usage.completion_tokens = recovered_output_tokens
         usage.total_tokens = (usage.prompt_tokens or 0) + recovered_output_tokens
         # Anthropic costing reads completion_tokens_details.text_tokens, so the
@@ -395,6 +401,12 @@ class AnthropicPassthroughLoggingHandler:
         details: Final = getattr(usage, "completion_tokens_details", None)
         if details is not None and getattr(details, "text_tokens", None) is not None:
             details.text_tokens = recovered_output_tokens
+        return usage
+
+    @staticmethod
+    def _clear_placeholder_cost(response: ModelResponse, usage: Usage) -> None:
+        usage.cost = None
+        response._hidden_params.pop("response_cost", None)  # pyright: ignore[reportPrivateUsage]  # no public accessor
 
     @staticmethod
     def _create_anthropic_response_logging_payload(
@@ -455,7 +467,7 @@ class AnthropicPassthroughLoggingHandler:
             return kwargs
 
     @staticmethod
-    def _handle_logging_anthropic_collected_chunks(
+    def handle_logging_anthropic_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -502,6 +514,8 @@ class AnthropicPassthroughLoggingHandler:
             "kwargs": kwargs,
         }
 
+    _handle_logging_anthropic_collected_chunks = handle_logging_anthropic_collected_chunks
+
     @staticmethod
     def _split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
         """
@@ -527,7 +541,7 @@ class AnthropicPassthroughLoggingHandler:
         return events
 
     @staticmethod
-    def _build_complete_streaming_response(
+    def build_complete_streaming_response(
         all_chunks: Sequence[str | bytes],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
@@ -564,6 +578,8 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             speed=speed,
         )
+
+    _build_complete_streaming_response = build_complete_streaming_response
 
     # Anthropic SSE block/delta types that the fast path is NOT allowed to
     # collapse -- their presence forces the unchanged legacy path so tool
@@ -763,7 +779,7 @@ class AnthropicPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _build_usage_only_response_from_chunks(
+    def build_usage_only_response_from_chunks(
         all_chunks: Sequence[str | bytes],
         model: str,
         speed: str | None = None,
@@ -881,6 +897,8 @@ class AnthropicPassthroughLoggingHandler:
             ],
             usage=usage_obj,
         )
+
+    _build_usage_only_response_from_chunks = build_usage_only_response_from_chunks
 
     @staticmethod
     def batch_creation_handler(

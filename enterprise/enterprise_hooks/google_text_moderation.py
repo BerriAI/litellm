@@ -16,7 +16,7 @@ from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
 
-class _ENTERPRISE_GoogleTextModeration(CustomLogger):
+class ENTERPRISE_GoogleTextModeration(CustomLogger):
     user_api_key_cache = None
     confidence_categories = [
         "toxic",
@@ -125,9 +125,10 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
                     )
             # Handle the response
             return data
+_ENTERPRISE_GoogleTextModeration = ENTERPRISE_GoogleTextModeration
 
 
-# google_text_moderation_obj = _ENTERPRISE_GoogleTextModeration()
+# google_text_moderation_obj = ENTERPRISE_GoogleTextModeration()
 # asyncio.run(
 #     google_text_moderation_obj.async_moderation_hook(
 #         data={"messages": [{"role": "user", "content": "Hey, how's it going?"}]}

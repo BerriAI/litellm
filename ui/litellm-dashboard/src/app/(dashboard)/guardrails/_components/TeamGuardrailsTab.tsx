@@ -17,7 +17,7 @@ import {
   InfoIcon,
   CircleHelp,
 } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import {
   listGuardrailSubmissions,
   approveGuardrailSubmission,
@@ -48,7 +48,10 @@ const GUARDRAIL_MODES = [
 ] as const;
 
 const submitGuardrailSchema = z.object({
-  team_id: z.string().min(1, "Select a team"),
+  team_id: z
+    .string()
+    .nullable()
+    .pipe(z.string({ error: "Select a team" }).min(1, "Select a team")),
   guardrail_name: z.string().min(1, "Enter a guardrail name"),
   mode: z.string().min(1, "Select a mode"),
   api_base: z.string().min(1, "Enter the API base URL").refine(isValidUrl, "Must be a valid URL"),

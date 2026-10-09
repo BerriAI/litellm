@@ -27,7 +27,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         self,
         model_to_use: str,
         messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, Any]] | None = None,
@@ -47,7 +47,6 @@ class AnthropicTokenCounter(BaseTokenCounter):
             TokenCountResponse with token count, or None if counting fails
         """
         from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
-        from litellm.llms.anthropic.wif import aget_anthropic_wif_token
 
         if not messages:
             return None
@@ -55,23 +54,22 @@ class AnthropicTokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
         api_base: Final = litellm_params.get("api_base")
-        static_key: Final = AnthropicModelInfo.get_api_key(litellm_params.get("api_key"))
-        auth_token_configured: Final = AnthropicModelInfo.get_auth_token() is not None
 
         try:
-            api_key: Final = (
-                static_key
-                if static_key or auth_token_configured
-                else await aget_anthropic_wif_token(litellm_params, api_base, model_to_use)
+            auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+                api_key=litellm_params.get("api_key"),
+                api_base=api_base,
+                litellm_params=litellm_params,
+                allow_workload_identity=True,
             )
-            if not api_key:
+            if auth_header is None:
                 verbose_logger.warning("No Anthropic credential found for token counting")
                 return None
 
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
-                api_key=api_key,
+                auth_header=auth_header,
                 api_base=api_base,
                 tools=tools,
                 system=system,

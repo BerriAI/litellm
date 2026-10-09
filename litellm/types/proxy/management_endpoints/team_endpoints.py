@@ -1,6 +1,6 @@
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -8,18 +8,26 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     Member,
+    MemberDeleteRequest,
 )
+from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
 
+MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
-class GetTeamMemberPermissionsRequest(BaseModel):
+MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
+
+
+class GetTeamMemberPermissionsRequest(LiteLLMBaseModel):
     """Request to get the team member permissions for a team"""
 
     team_id: str
 
 
-class GetTeamMemberPermissionsResponse(BaseModel):
+class GetTeamMemberPermissionsResponse(LiteLLMBaseModel):
     """Response to get the team member permissions for a team"""
 
     team_id: str
@@ -27,7 +35,7 @@ class GetTeamMemberPermissionsResponse(BaseModel):
     The team id that the permissions are for
     """
 
-    team_member_permissions: list[str] | None = []
+    team_member_permissions: list[str] | None = Field(default=[])
     """
     The team member permissions currently set for the team
     """
@@ -38,14 +46,14 @@ class GetTeamMemberPermissionsResponse(BaseModel):
     """
 
 
-class UpdateTeamMemberPermissionsRequest(BaseModel):
+class UpdateTeamMemberPermissionsRequest(LiteLLMBaseModel):
     """Request to update the team member permissions for a team"""
 
     team_id: str
     team_member_permissions: list[str]
 
 
-class BulkUpdateTeamMemberPermissionsRequest(BaseModel):
+class BulkUpdateTeamMemberPermissionsRequest(LiteLLMBaseModel):
     """Request to bulk-update team member permissions across teams."""
 
     permissions: list[KeyManagementRoutes]
@@ -58,7 +66,7 @@ class BulkUpdateTeamMemberPermissionsRequest(BaseModel):
     """When True, update all teams. Mutually exclusive with team_ids."""
 
 
-class BulkUpdateTeamMemberPermissionsResponse(BaseModel):
+class BulkUpdateTeamMemberPermissionsResponse(LiteLLMBaseModel):
     """Response for bulk team member permissions update."""
 
     message: str
@@ -77,7 +85,7 @@ class TeamListItem(LiteLLM_TeamTable):
     access_group_agent_ids: list[str] | None = None
 
 
-class TeamListResponse(BaseModel):
+class TeamListResponse(LiteLLMBaseModel):
     """Response to get the list of teams"""
 
     teams: list[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable]
@@ -87,7 +95,7 @@ class TeamListResponse(BaseModel):
     total_pages: int
 
 
-class BulkTeamMemberAddRequest(BaseModel):
+class BulkTeamMemberAddRequest(LiteLLMBaseModel):
     """Request for bulk team member addition"""
 
     team_id: str
@@ -96,7 +104,7 @@ class BulkTeamMemberAddRequest(BaseModel):
     max_budget_in_team: float | None = None
 
 
-class TeamMemberAddResult(BaseModel):
+class TeamMemberAddResult(LiteLLMBaseModel):
     """Result of a single team member add operation"""
 
     user_id: str | None = None
@@ -107,7 +115,7 @@ class TeamMemberAddResult(BaseModel):
     updated_team_membership: dict[str, Any] | None = None
 
 
-class BulkTeamMemberAddResponse(BaseModel):
+class BulkTeamMemberAddResponse(LiteLLMBaseModel):
     """Response for bulk team member add operations"""
 
     team_id: str
@@ -118,6 +126,88 @@ class BulkTeamMemberAddResponse(BaseModel):
     updated_team: dict[str, Any] | None = None
 
 
+class TeamMemberRef(MemberDeleteRequest):
+    """One member, named by exactly one of `user_id` or `user_email`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def one_identifier(self) -> "TeamMemberRef":
+        if self.user_id is not None and self.user_email is not None:
+            raise ValueError("Each member must be identified by exactly one of user_id or user_email")
+        return self
+
+
+class BulkTeamMemberDeleteRequest(LiteLLMBaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberRef, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
+
+
+class TeamMemberDeleteResult(LiteLLMBaseModel):
+    """Outcome for one requested member, in request order."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+
+
+class BulkTeamMemberDeleteResponse(ResourceResponse[tuple[TeamMemberDeleteResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order."""
+
+
+class TeamMemberBudgetPatch(TeamMemberRef):
+    """One member's per-member limits, merge-patch style: a field left out of the row is
+    untouched, a field sent as null is cleared, and clearing the last limit drops the
+    member back to the team default."""
+
+    max_budget_in_team: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+    @field_validator("budget_duration")
+    @classmethod
+    def persistable_budget_duration(cls, value: str | None) -> str | None:
+        error: Final = budget_duration_error(value)
+        if error is not None:
+            raise ValueError(error)
+        return value
+
+
+class BulkTeamMemberBudgetUpdateRequest(LiteLLMBaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_update`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberBudgetPatch, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES)
+
+
+class TeamMemberBudgetUpdateResult(LiteLLMBaseModel):
+    """Outcome for one requested member, in request order, carrying the limits in force
+    after the write rather than the ones that were asked for."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+    budget_id: str | None = None
+    max_budget: float | None = None
+    max_budget_source: Literal["member", "team_default"] | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+
+class BulkTeamMemberBudgetUpdateResponse(ResourceResponse[tuple[TeamMemberBudgetUpdateResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberBudgetUpdateResult` per requested member, in request order."""
+
+
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     """Response for GET /team/{team_id}/members/me — caller's own membership row."""
 
@@ -126,7 +216,7 @@ class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     team_alias: str | None = None
 
 
-class TeamMetadataFieldSchema(BaseModel):
+class TeamMetadataFieldSchema(LiteLLMBaseModel):
     """One declared team metadata field from ``general_settings.team_metadata_schema``.
 
     Advisory only: the UI uses it to prepopulate the team metadata form.
@@ -139,13 +229,13 @@ class TeamMetadataFieldSchema(BaseModel):
     label: str | None = None
 
 
-class TeamMetadataSchemaResponse(BaseModel):
+class TeamMetadataSchemaResponse(LiteLLMBaseModel):
     """Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured."""
 
     fields: tuple[TeamMetadataFieldSchema, ...]
 
 
-class TeamUserSpendRow(BaseModel):
+class TeamUserSpendRow(LiteLLMBaseModel):
     team_id: str
     team_alias: str | None = None
     user_id: str
@@ -160,7 +250,7 @@ class TeamUserSpendRow(BaseModel):
     failed_requests: int = 0
 
 
-class TeamUserSpendResponse(BaseModel):
+class TeamUserSpendResponse(LiteLLMBaseModel):
     start_date: str
     end_date: str
     results: tuple[TeamUserSpendRow, ...]

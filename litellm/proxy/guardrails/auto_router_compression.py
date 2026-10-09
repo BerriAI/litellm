@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router import Router
 
-COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr"})
+COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr", "typesafe"})
 _NO_COMPRESSION: Final = "none"
 
 # A ContextVar, not metadata: metadata reaches spend logs the caller can read, and a
@@ -80,17 +80,19 @@ def policy_from_litellm_params(litellm_params: Mapping[str, object]) -> AutoRout
 def policy_for_model(
     llm_router: "Router | None",
     model_alias: str,
-    team_id: str | None,
+    request_kwargs: Mapping[str, object],
     request_tags: Sequence[str],
 ) -> AutoRouterCompressionPolicy | None:
-    """The compression policy of the auto router marker `model_alias` resolves to.
+    """The compression policy of the auto router marker `model_alias` resolves to for this caller.
 
-    Pre-call arming and the routing hook both resolve through here, so an alias with
-    several tag-scoped markers cannot suppress under one and then route under another.
+    Pre-call arming and the routing hook both resolve through here, and here resolves through the
+    router's own request-scoped deployment lookup, so an alias with several tag-scoped markers
+    cannot suppress under one and then route under another, and a team router reached by its
+    public name carries its policy for every principal that can reach it.
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or ()
+    deployments: Final = llm_router.deployments_for_request(model_alias, request_kwargs)
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
@@ -106,17 +108,6 @@ def policy_for_model(
     # Lazy, so the first marker carrying a policy wins and the rest are never read.
     candidates: Final = (policy_from_litellm_params(params) for params in (*tag_matched, *untagged))
     return next((policy for policy in candidates if policy is not None), None)
-
-
-def team_id_from_request(request_kwargs: Mapping[str, object]) -> str | None:
-    """The caller's team id, from whichever metadata bucket this surface writes to."""
-    for meta_key in ("metadata", "litellm_metadata"):
-        meta = request_kwargs.get(meta_key)
-        if isinstance(meta, Mapping):
-            team_id = meta.get("user_api_key_team_id")
-            if isinstance(team_id, str):
-                return team_id
-    return None
 
 
 def _compression_guardrail_classes() -> tuple[type, ...]:
@@ -166,14 +157,14 @@ async def arm_pre_call(
         return
 
     from litellm.router_strategy.tag_based_routing import (
-        _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # used in router.py and budget_limiter.py too
+        get_tags_from_request_kwargs,
     )
 
     policy: Final = policy_for_model(
         llm_router=llm_router,
         model_alias=model_alias,
-        team_id=team_id_from_request(data),
-        request_tags=_get_tags_from_request_kwargs(data),
+        request_kwargs=data,
+        request_tags=get_tags_from_request_kwargs(data),
     )
     if policy is None:
         return
@@ -203,14 +194,14 @@ async def arm_pre_call(
         existing: Final = tuple(requested) if isinstance(requested, (list, tuple)) else ()
         if policy.model not in existing:
             # A list: litellm_pre_call_utils isinstance-checks this key and drops a tuple.
-            metadata["guardrails"] = [*existing, policy.model]  # mutable-ok: this key's contract is a list
+            metadata["guardrails"] = [*existing, policy.model]
 
 
 def _as_routing_messages(
     messages: Iterable[Mapping[str, object]],
 ) -> list[dict[str, object]]:  # mutable-ok: shape fixed by the pre-routing hook protocol
     """A fresh, independently mutable copy, the shape the pre-routing hook takes."""
-    return [dict(message) for message in messages]  # mutable-ok: shape fixed by the pre-routing hook protocol
+    return [dict(message) for message in messages]
 
 
 async def messages_for_routing(
@@ -257,7 +248,7 @@ async def messages_for_routing(
     model: Final = request_kwargs.get("model")
     # Throwaway: apply_guardrail writes stats here, so routing never double-counts into
     # extract_compression_saved_tokens.
-    stats_sink: Final = {"messages": messages, "model": model}  # mutable-ok: apply_guardrail writes its stats here
+    stats_sink: Final = {"messages": messages, "model": model}
     result: Final = await guardrail.apply_guardrail(
         inputs=inputs,
         request_data=stats_sink,

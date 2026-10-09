@@ -6,11 +6,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-core.workspace = true
-pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
-serde_json.workspace = true
+litellm-auth-types.workspace = true
+serde.workspace = true
+serde_yaml_ng = "0.10.0"
+strum.workspace = true
 thiserror.workspace = true
 
-[features]
-default = []
-python = ["dep:pyo3"]
+[dev-dependencies]
+rstest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

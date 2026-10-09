@@ -1,21 +1,36 @@
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import click
 import requests
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.proxy.common_utils.codex_model_catalog import (
+    CODEX_BASE_INSTRUCTIONS_PATH,
+    CodexCatalogRow,
+    CodexStockCatalog,
+    CodexStockModel,
+    codex_models_response_json,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
+from .claude_settings import ClaudeSettingsError, install_statusline_script
 from .cmd_quoting import quote_for_cmd
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
+    ListingFailure,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
@@ -60,6 +75,9 @@ _INSTALL_DOCS: Final[dict[str, str]] = {
 _HIDDEN_AGENTS: Final = frozenset({"pi"})
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
+CODEX_HOME_ENV: Final = "CODEX_HOME"
+CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
+_CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
 
 
 class AgentRunError(Exception):
@@ -116,6 +134,18 @@ def build_agent_env(
     return env
 
 
+def codex_proxy_provider(base_url: str) -> Mapping[str, str | bool]:
+    return MappingProxyType(
+        {
+            "name": "LiteLLM proxy",
+            "base_url": base_url.rstrip("/") + "/v1",
+            "wire_api": "responses",
+            "supports_websockets": False,
+            "requires_openai_auth": False,
+        }
+    )
+
+
 def _codex_proxy_args(base_url: str) -> list[str]:
     """Codex `-c` overrides that point it at the proxy.
 
@@ -125,21 +155,19 @@ def _codex_proxy_args(base_url: str) -> list[str]:
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
     """
-    root: Final = base_url.rstrip("/") + "/v1"
     provider: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
     return [
         "-c",
         f'model_provider="{CODEX_PROXY_PROVIDER}"',
-        "-c",
-        f'{provider}.name="LiteLLM proxy"',
-        "-c",
-        f'{provider}.base_url="{root}"',
+        *(
+            argument
+            for key, value in codex_proxy_provider(base_url).items()
+            for argument in ("-c", f"{provider}.{key}={json.dumps(value)}")
+        ),
         "-c",
         f'{provider}.env_key="{OPENAI_API_KEY_ENV}"',
         "-c",
-        f'{provider}.wire_api="responses"',
-        "-c",
-        f"{provider}.supports_websockets=false",
+        f"{provider}.http_headers={{}}",
     ]
 
 
@@ -165,7 +193,9 @@ def prepare_pi(
     """
     ids: Final = fetch_model_ids(base_url, api_key, get=get)
     if isinstance(ids, PiSyncError):
-        raise AgentRunError(ids.message)
+        raise AgentRunError(
+            f"{ids.message} pi would have nothing to run." if ids.kind is ListingFailure.EMPTY else ids.message
+        )
     limits: Final = fetch_model_limits(base_url, api_key, get=get)
     path: Final = models_json_path(base_env)
     error: Final = sync_models_json(path, base_url, ids, limits)
@@ -175,11 +205,51 @@ def prepare_pi(
     return ("--model", f"{PI_PROVIDER_NAME}/{ids[0]}")
 
 
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+_CODEX_STOP_HOOKS_DECLARED: Final = re.compile(
+    r"^\s*(\[\[\s*\"?hooks\"?\s*\.\s*\"?Stop\"?\s*\]\]|\"?hooks\"?(?:\s*\.\s*\"?Stop\"?)?\s*=|\[\s*\"?hooks\"?\s*\])",
+    re.MULTILINE,
+)
+
+
+def codex_config_path(base_env: Mapping[str, str]) -> Path:
+    return Path(base_env.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def codex_declares_stop_hooks(config_path: Path) -> bool:
+    """A config that cannot be read or decoded declares nothing we can see; Codex reports its own
+    TOML failure at launch, so the pre-check must not be the thing that stops `lite codex`."""
+    try:
+        return _CODEX_STOP_HOOKS_DECLARED.search(config_path.read_text(encoding="utf-8")) is not None
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def prepare_codex(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    install: Callable[[], str] = install_statusline_script,
+    warn: Callable[[str], None] = _warn,
+) -> tuple[str, ...]:
+    """A `-c hooks.Stop=` session flag replaces the user's whole Stop list, so their own hooks win over ours."""
+    if codex_declares_stop_hooks(codex_config_path(base_env)):
+        warn("litellm: your Codex config already declares hooks; not adding the routed-model Stop hook")
+        return ()
+    try:
+        command: Final = install()
+    except ClaudeSettingsError as e:
+        raise AgentRunError(str(e)) from e
+    return ("-c", f'hooks.Stop=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]')
+
+
 _Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
 
-_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType(
-    {"pi": prepare_pi}  # mutable-ok: MappingProxyType freezes the provider registry
-)
+_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType({"pi": prepare_pi, "codex": prepare_codex})
 
 
 def agent_launch_args(command: str, base_url: str) -> list[str]:
@@ -192,8 +262,8 @@ def agent_launch_args(command: str, base_url: str) -> list[str]:
     return builder(base_url) if builder else []
 
 
-class ListedModel(BaseModel):
-    """The fields of a /v1/models entry that an OpenCode model entry is built from."""
+class ListedModel(LiteLLMBaseModel):
+    """The fields of a /v1/models entry that an OpenCode or Codex model entry is built from."""
 
     id: str
     mode: str | None = None
@@ -201,12 +271,12 @@ class ListedModel(BaseModel):
     max_output_tokens: int | None = None
 
 
-class _ModelListing(BaseModel):
+class _ModelListing(LiteLLMBaseModel):
     data: tuple[ListedModel, ...]
 
 
 _MODEL_LISTING: Final = TypeAdapter(_ModelListing)
-_OPENCODE_CHAT_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
+_CHAT_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
 _NO_EXTRA_ENV: Final[Mapping[str, str]] = MappingProxyType({})
 
 
@@ -215,29 +285,63 @@ class ModelSyncSkipped:
     reason: str
 
 
-class _OpenCodeLimit(BaseModel):
+@dataclass(frozen=True, slots=True)
+class ModelSyncArgs:
+    """CLI args, placed before the user's own, that hand an agent the synced model list."""
+
+    args: tuple[str, ...]
+
+
+ModelSyncResult: TypeAlias = Mapping[str, str] | ModelSyncArgs | ModelSyncSkipped
+
+
+def _chat_models(models: Sequence[ListedModel]) -> tuple[ListedModel, ...]:
+    return tuple(m for m in models if m.mode is None or m.mode in _CHAT_MODES)
+
+
+def _fetch_model_listing(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response],
+) -> tuple[ListedModel, ...] | ModelSyncSkipped:
+    url: Final = base_url.rstrip("/") + "/v1/models"
+    try:
+        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
+    except requests.RequestException as e:
+        return ModelSyncSkipped(f"could not reach {url}: {e}")
+    if resp.status_code != 200:
+        return ModelSyncSkipped(f"{url} returned HTTP {resp.status_code}")
+    try:
+        listing: Final = _MODEL_LISTING.validate_json(resp.content)
+    except ValidationError:
+        return ModelSyncSkipped(f"{url} returned an unexpected body")
+    return listing.data
+
+
+class _OpenCodeLimit(LiteLLMBaseModel):
     context: int
     output: int
 
 
-class _OpenCodeModel(BaseModel):
+class _OpenCodeModel(LiteLLMBaseModel):
     name: str
     limit: _OpenCodeLimit | None = None
 
 
-class _OpenCodeProviderOptions(BaseModel):
+class _OpenCodeProviderOptions(LiteLLMBaseModel):
     baseURL: str
     apiKey: str
 
 
-class _OpenCodeProvider(BaseModel):
+class _OpenCodeProvider(LiteLLMBaseModel):
     npm: str
     name: str
     options: _OpenCodeProviderOptions
     models: Mapping[str, _OpenCodeModel]
 
 
-class _OpenCodeConfig(BaseModel):
+class _OpenCodeConfig(LiteLLMBaseModel):
     provider: Mapping[str, _OpenCodeProvider]
 
 
@@ -258,7 +362,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
     it never lands in the config text. OpenCode merges this inline config over
     the user's own files, leaving unrelated keys and providers untouched.
     """
-    chat_models: Final = tuple(m for m in models if m.mode is None or m.mode in _OPENCODE_CHAT_MODES)
+    chat_models: Final = _chat_models(models)
     provider: Final = _OpenCodeProvider(
         npm=OPENCODE_PROVIDER_NPM,
         name=OPENCODE_PROVIDER_NAME,
@@ -288,40 +392,176 @@ def opencode_model_sync_env(
     """
     if OPENCODE_CONFIG_CONTENT_ENV in base_env:
         return ModelSyncSkipped(f"{OPENCODE_CONFIG_CONTENT_ENV} is already set")
-    url: Final = base_url.rstrip("/") + "/v1/models"
+    listing: Final = _fetch_model_listing(base_url, api_key, get=get)
+    if isinstance(listing, ModelSyncSkipped):
+        return listing
+    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing)})
+
+
+def codex_model_catalog(
+    models: Sequence[ListedModel], stock: Sequence[CodexStockModel], instructions: str
+) -> str | None:
+    """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
+
+    Codex refuses an empty catalog, hence None instead of `{"models": []}`.
+    Passing a catalog replaces Codex's built-in one, so a proxy model the
+    installed Codex knows keeps that Codex's own entry and the proxy only
+    decides its place in the picker: the listing orders it, lists it even when
+    Codex hides it or keeps it off the API, and keeps Codex's upgrade nudge only
+    when the model it points at is served too. A model Codex does not know gets the fallback
+    entry, with the same base instructions Codex itself uses so the agent never
+    runs without a system prompt. The catalog is the one `/v1/models?client_version=...`
+    serves, built from the installed Codex's own entries instead of the proxy's vendored ones.
+    """
+    rows: Final = tuple(CodexCatalogRow(id=m.id, mode=m.mode, max_input_tokens=m.max_input_tokens) for m in models)
+    body: Final = codex_models_response_json(
+        rows, stock=MappingProxyType({m.slug: m for m in stock}), instructions=instructions, byte_limit=None
+    )
+    return body.json if body.listed else None
+
+
+def codex_model_catalog_path(env: Mapping[str, str], *, home: Callable[[], Path] = Path.home) -> Path:
+    override: Final = env.get(CODEX_HOME_ENV)
+    root: Final = Path(override) if override else home() / ".codex"
+    return root / CODEX_MODEL_CATALOG_FILENAME
+
+
+def _replace_file(path: Path, text: str) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        _ = tmp.write(text)
     try:
-        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
-    except requests.RequestException as e:
-        return ModelSyncSkipped(f"could not reach {url}: {e}")
-    if resp.status_code != 200:
-        return ModelSyncSkipped(f"{url} returned HTTP {resp.status_code}")
+        os.replace(tmp.name, path)
+    except OSError:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
+def _codex_debug_models(
+    binary: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | ModelSyncSkipped:
+    """What `codex debug models` prints with `args` in front, or why the installed Codex could not run it.
+
+    The command prints the catalog Codex would launch with, without touching
+    the network, so it lists the installed Codex's own models and parses a
+    catalog override the way a launch does. Releases before 0.130.0 have no
+    such command and are reported the same way. A batch shim goes through
+    cmd.exe exactly as the launch will.
+    """
+    name: Final = os.path.basename(binary)
+    command: Final = _windows_command(binary, (binary, *args, "debug", "models"))
     try:
-        listing: Final = _MODEL_LISTING.validate_json(resp.content)
-    except ValidationError:
-        return ModelSyncSkipped(f"{url} returned an unexpected body")
-    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing.data)})
+        completed: Final = run(
+            command,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
+    if completed.returncode == 0:
+        return completed.stdout
+    lines: Final = completed.stderr.strip().splitlines()
+    detail: Final = lines[0] if lines else "no output"
+    return ModelSyncSkipped(f"`{name} debug models` exited {completed.returncode}: {detail}")
+
+
+def _stock_codex_models(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> tuple[CodexStockModel, ...] | ModelSyncSkipped:
+    printed: Final = _codex_debug_models(binary, (), env, run=run)
+    if isinstance(printed, ModelSyncSkipped):
+        return printed
+    try:
+        return CodexStockCatalog.model_validate_json(printed).models
+    except ValidationError as e:
+        name: Final = os.path.basename(binary)
+        return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
+
+
+def codex_model_sync_args(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    *,
+    binary: str = "codex",
+    get: Callable[..., requests.Response] = requests.get,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    home: Callable[[], Path] = Path.home,
+    instructions_path: Path = CODEX_BASE_INSTRUCTIONS_PATH,
+) -> ModelSyncArgs | ModelSyncSkipped:
+    """`-c model_catalog_json=...` pointing Codex at the proxy's model list, or why it was skipped.
+
+    Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
+    must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
+    atomically replaced on every launch. The Codex at `binary` first lists its
+    own models, so the ones the proxy serves keep that Codex's entries, and then
+    reads the file back once before it is handed over. The key never lands in
+    the file. A failed fetch, read, listing, write or read-back is reported
+    rather than raised: Codex still launches with its built-in catalog and takes
+    a proxy model by name via -m, and a rejected file stays on disk to be looked
+    at.
+    """
+    listing: Final = _fetch_model_listing(base_url, api_key, get=get)
+    if isinstance(listing, ModelSyncSkipped):
+        return listing
+    try:
+        instructions: Final = instructions_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return ModelSyncSkipped(f"could not read {instructions_path}: {e}")
+    path: Final = codex_model_catalog_path(base_env, home=home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    stock: Final = _stock_codex_models(binary, base_env, run=run)
+    if isinstance(stock, ModelSyncSkipped):
+        return stock
+    catalog: Final = codex_model_catalog(listing, stock, instructions)
+    if catalog is None:
+        return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
+    try:
+        _replace_file(path, catalog)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    override: Final = f"model_catalog_json={json.dumps(str(path))}"
+    read_back: Final = _codex_debug_models(binary, ("-c", override), base_env, run=run)
+    if isinstance(read_back, ModelSyncSkipped):
+        return read_back
+    return ModelSyncArgs(("-c", override))
 
 
 def agent_model_sync_env(
-    command: str,
+    binary: str,
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
     skip_verify: bool,
     *,
     get: Callable[..., requests.Response] = requests.get,
-) -> Mapping[str, str] | ModelSyncSkipped:
-    """Extra env an agent needs to see the proxy's model list.
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ModelSyncResult:
+    """Extra env or args an agent needs to see the proxy's model list.
 
-    Only OpenCode needs one: Claude Code discovers models through
-    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY and Codex takes the model by name.
-    skip_verify means the caller wants no pre-launch proxy call at all, so the
-    listing is skipped too rather than hanging on an offline proxy.
+    binary is the resolved path the launch will run (`codex.cmd` on a Windows
+    npm install). OpenCode takes the list as env, Codex as a `-c` override that
+    binary has read back first; Claude Code discovers models itself through
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY. skip_verify means the caller
+    wants no pre-launch proxy call at all, so the listing is skipped too rather
+    than hanging on an offline proxy.
     """
-    if os.path.basename(command) != "opencode":
+    agent: Final = os.path.splitext(os.path.basename(binary))[0]
+    if agent not in ("opencode", "codex"):
         return _NO_EXTRA_ENV
     if skip_verify:
         return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
+    if agent == "codex":
+        return codex_model_sync_args(base_env, base_url, api_key, binary=binary, get=get, run=run)
     return opencode_model_sync_env(base_env, base_url, api_key, get=get)
 
 
@@ -440,10 +680,6 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
-def _warn(message: str) -> None:
-    click.echo(message, err=True)
-
-
 def run_agent(
     base_url: str,
     api_key: str,
@@ -453,9 +689,7 @@ def run_agent(
     base_env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
-    sync_models: Callable[[str, Mapping[str, str], str, str, bool], Mapping[str, str] | ModelSyncSkipped] = (
-        agent_model_sync_env
-    ),
+    sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
     warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
@@ -482,7 +716,7 @@ def run_agent(
         verify(base_url, api_key)
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
-    synced: Final = sync_models(command[0], env_before_sync, base_url, api_key, skip_verify)
+    synced: Final = sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
 
@@ -492,10 +726,11 @@ def run_agent(
     env: Final = MappingProxyType(
         {
             **build_agent_env(env_before_sync, base_url, api_key, profiles),
-            **(_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced),
+            **(synced if isinstance(synced, Mapping) else _NO_EXTRA_ENV),
         }
     )
-    extra_args: Final = (*agent_launch_args(command[0], base_url), *prepared_args)
+    synced_args: Final = synced.args if isinstance(synced, ModelSyncArgs) else ()
+    extra_args: Final = (*agent_launch_args(command[0], base_url), *synced_args, *prepared_args)
     if reattach_terminal is not None:
         reattach_terminal()
     launcher(binary, [command[0], *extra_args, *command[1:]], env)
@@ -535,7 +770,7 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
 
-    display_name, _ = agent_profile(binary)
+    display_name, _profiles = agent_profile(binary)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
 
     try:

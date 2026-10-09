@@ -34,16 +34,25 @@ writer's connection params (pool size, timeouts, pgbouncer mode) for the
 ones the reader URL does not pin itself.
 """
 
+import _ssl
+import hashlib
 import os
+import socket
+import ssl
+import struct
+import sys
+import tempfile
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Final, cast
+from typing import Annotated, Final, Protocol, TypeAlias, cast
 
 from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.token_auth import (
     AZURE_POSTGRESQL_AUTH_ENV_VAR,
     DEFAULT_POSTGRES_PORT,
@@ -64,6 +73,9 @@ DISABLE_PREPARED_STATEMENTS_ENV_VAR: Final = "DATABASE_DISABLE_PREPARED_STATEMEN
 DisablePreparedStatementsFlag = Annotated[
     bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR))
 ]
+MAX_IDLE_CONNECTION_LIFETIME_ENV_VAR: Final = "DATABASE_MAX_IDLE_CONNECTION_LIFETIME"
+DATABASE_SSLMODE_ENV_VAR: Final = "DATABASE_SSLMODE"
+DATABASE_SSLROOTCERT_ENV_VAR: Final = "DATABASE_SSLROOTCERT"
 
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
@@ -125,21 +137,101 @@ def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) 
 
 
 LIBPQ_VERIFY_SSLMODES: Final[frozenset[str]] = frozenset({"verify-ca", "verify-full"})
+PRISMA_TLS_PARAM_KEYS: Final[frozenset[str]] = frozenset({"sslmode", "sslcert", "sslaccept"})
+PEM_CERT_HEADER: Final = b"-----BEGIN CERTIFICATE-----"
+PG_SSL_REQUEST: Final = struct.pack("!ii", 8, 80877103)
+TLS_PROBE_TIMEOUT_SECONDS: Final = 10.0
+
+RootCertResolver: TypeAlias = Callable[[str, str, int], str]
 
 
-def translate_libpq_ssl_params(url: str) -> str:
+class _VerifiedChainSource(Protocol):
+    def get_verified_chain(self) -> Sequence[_ssl.Certificate] | None: ...
+
+
+def _verified_chain_der(tls: ssl.SSLSocket) -> tuple[bytes, ...]:
+    if sys.version_info >= (3, 13):
+        return tuple(tls.get_verified_chain())
+    legacy: Final = cast(  # cast-ok: the stub omits _sslobj, the C object has get_verified_chain since 3.10
+        "_VerifiedChainSource | None",
+        tls._sslobj,  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # public API only from 3.13
+    )
+    chain: Final = () if legacy is None else legacy.get_verified_chain() or ()
+    return tuple(cert.public_bytes(_ssl.ENCODING_DER) for cert in chain)
+
+
+def _server_trust_anchor(cafile: str, host: str, port: int) -> bytes | None:
+    try:
+        context: Final = ssl.create_default_context(cafile=cafile)
+        with socket.create_connection((host, port), timeout=TLS_PROBE_TIMEOUT_SECONDS) as raw:
+            raw.sendall(PG_SSL_REQUEST)
+            if raw.recv(1) != b"S":
+                return None
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                chain: Final = _verified_chain_der(tls)
+    except (OSError, ValueError):
+        return None
+    return chain[-1] if chain else None
+
+
+def pin_bundle_root(cert_path: str, host: str, port: int) -> str:
+    """Reduce a multi-root CA bundle to the one root that verifies ``host``.
+
+    Prisma's ``sslcert`` loads a single PEM certificate (native-tls
+    ``Certificate::from_pem``), so pointing it at a bundle such as the AWS RDS
+    global bundle trusts only the first of its 108 regional roots and the
+    handshake fails with "unable to get local issuer certificate" for every
+    other region. A single-certificate file is returned as is. For a bundle,
+    one verifying handshake (chain and hostname, whole bundle as trust store)
+    identifies the trust anchor the server actually chains to, which is
+    written to a single-certificate file for Prisma. If the probe fails the
+    bundle path is returned unchanged, so Prisma fails closed exactly as
+    before rather than trusting anything the bundle would not.
+    """
+    try:
+        if Path(cert_path).read_bytes().count(PEM_CERT_HEADER) < 2:
+            return cert_path
+    except OSError:
+        return cert_path
+    root: Final = _server_trust_anchor(cert_path, host, port)
+    if root is None:
+        return cert_path
+    pinned: Final = Path(tempfile.gettempdir()) / f"litellm-sslcert-{hashlib.sha256(root).hexdigest()[:16]}.pem"
+    return str(pinned) if _replace_file(pinned, ssl.DER_cert_to_PEM_cert(root)) else cert_path
+
+
+def _replace_file(target: Path, content: str) -> bool:
+    """Write ``content`` to a private temp file and rename it over ``target``, so
+    readers never see a partial file and a symlink planted at ``target`` is
+    replaced rather than followed."""
+    try:
+        fd, staged = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.")
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+        os.replace(staged, target)
+    except OSError:
+        Path(staged).unlink(missing_ok=True)
+        return False
+    return True
+
+
+def translate_libpq_ssl_params(url: str, resolve_root_cert: RootCertResolver = pin_bundle_root) -> str:
     """Rewrite libpq's certificate-verification params into Prisma's dialect.
 
     Prisma's engine only knows ``sslmode=disable|prefer|require``, ``sslcert``
-    (the CA bundle) and ``sslaccept=strict``. It silently discards
+    (a single CA certificate) and ``sslaccept=strict``. It silently discards
     ``sslrootcert`` and downgrades ``sslmode=verify-ca`` / ``verify-full`` to
     ``prefer``, so a URL copied from libpq / RDS docs connects over TLS with no
     certificate check at all. ``verify-ca`` and ``verify-full`` both become
     ``require`` (Prisma has no CA-only mode), ``sslrootcert`` becomes
-    ``sslcert``, and either one turns on ``sslaccept=strict`` (chain and
-    hostname), matching libpq where a root cert makes ``require`` verify.
-    Prisma params the operator pinned themselves win; anything else is left
-    untouched.
+    ``sslcert`` (run through ``resolve_root_cert``, which pins a multi-root
+    bundle down to the server's root), and either one turns on
+    ``sslaccept=strict`` (chain and hostname), matching libpq where a root
+    cert makes ``require`` verify. Prisma params the operator pinned
+    themselves win; anything else is left untouched.
     """
     parsed: Final = urllib.parse.urlsplit(url)
     pairs: Final = tuple(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
@@ -153,11 +245,47 @@ def translate_libpq_ssl_params(url: str) -> str:
         if key != "sslrootcert"
     )
     root_cert: Final = tuple(
-        ("sslcert", value) for key, value in pairs if key == "sslrootcert" and "sslcert" not in keys
+        ("sslcert", resolve_root_cert(value, parsed.hostname or "", parsed.port or int(DEFAULT_POSTGRES_PORT)))
+        for key, value in pairs
+        if key == "sslrootcert" and "sslcert" not in keys
     )
     strict: Final = () if "sslaccept" in keys else (("sslaccept", "strict"),)
     query: Final = urllib.parse.urlencode(translated + root_cert + strict)
     return urllib.parse.urlunsplit(parsed._replace(query=query))
+
+
+def postgres_connection_budget_message(writer_limit: str, reader_limit: str | None, num_workers: str) -> str:
+    """The startup line that states this pod's worst-case Postgres connection demand.
+
+    Prisma's ``connection_limit`` is per query engine, and every uvicorn worker
+    owns one engine per configured database (writer, plus the reader when
+    ``DATABASE_URL_READ_REPLICA`` is set). The limits are read off the final URLs,
+    so a reader that pins its own ``connection_limit`` or an operator override in
+    ``database_extra_connection_params`` is counted at its real value. The
+    server-side cap is shared by every pod, so the number an operator has to keep
+    under ``max_connections`` minus ``superuser_reserved_connections`` is
+    pods x workers x the per-worker sum, not one engine's limit.
+    """
+    try:
+        workers: Final = max(1, int(num_workers))
+        writer: Final = int(writer_limit)
+        reader: Final = int(reader_limit) if reader_limit is not None else 0
+    except ValueError:
+        return (
+            "LiteLLM Proxy: Postgres connection budget per pod = workers x (writer connection_limit + reader "
+            f"connection_limit) (workers={num_workers!r}, writer={writer_limit!r}, reader={reader_limit!r}); "
+            "keep pods x that figure under max_connections minus superuser_reserved_connections"
+        )
+    engines: Final = (
+        f"(writer connection_limit {writer} + reader connection_limit {reader})"
+        if reader_limit is not None
+        else f"writer connection_limit {writer}"
+    )
+    per_pod: Final = workers * (writer + reader)
+    return (
+        f"LiteLLM Proxy: Postgres connection budget per pod = {workers} worker(s) x {engines} = up to {per_pod} "
+        "connections; keep pods x that figure under max_connections minus superuser_reserved_connections"
+    )
 
 
 def reader_shareable_params(params: Mapping[str, str | int | float]) -> Mapping[str, str | int | float]:
@@ -169,6 +297,29 @@ def connection_params_from_url(url: str) -> Mapping[str, str | int | float]:
     """Return the connection params on ``url`` that the read replica shares."""
     return reader_shareable_params(
         MappingProxyType({key: value for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)})
+    )
+
+
+# A re-minted token URL replaces a URL to the same database, so unlike the
+# reader allowlist it may also carry ``options``: that is where the server-side
+# timeouts (statement, lock, idle-in-transaction) live, and a refresh that
+# dropped them would leave the replacement engine's sessions unbounded.
+TOKEN_REFRESH_PARAM_KEYS: Final[frozenset[str]] = CONNECTION_PARAM_KEYS | PRISMA_TLS_PARAM_KEYS | frozenset({"options"})
+
+
+def token_refresh_params_from_url(url: str) -> Mapping[str, str | int | float]:
+    """Return the params a re-minted token URL carries over from the URL it replaces.
+
+    The pool and timeout params, Prisma's TLS params (already translated from
+    libpq spelling) and the ``options`` string, so a refreshed URL keeps verifying
+    the server and bounding its sessions the way the first one did.
+    """
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)
+            if key in TOKEN_REFRESH_PARAM_KEYS
+        }
     )
 
 
@@ -217,6 +368,12 @@ class DatabaseURLSettings(BaseSettings):
     disable_prepared_statements: DisablePreparedStatementsFlag = Field(
         default=False, validation_alias=DISABLE_PREPARED_STATEMENTS_ENV_VAR
     )
+    max_idle_connection_lifetime: int | None = Field(
+        default=None, validation_alias=MAX_IDLE_CONNECTION_LIFETIME_ENV_VAR
+    )
+
+    database_sslmode: str | None = Field(default=None, validation_alias=DATABASE_SSLMODE_ENV_VAR)
+    database_sslrootcert: str | None = Field(default=None, validation_alias=DATABASE_SSLROOTCERT_ENV_VAR)
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -259,14 +416,43 @@ class DatabaseURLSettings(BaseSettings):
             azure_postgresql_auth=self.azure_postgresql_auth,
         )
 
+    def tls_params(self) -> Mapping[str, str]:
+        """``sslmode`` / ``sslrootcert`` query params for every URL assembled from the discrete vars.
+
+        A root cert on its own means ``verify-full``: under libpq's default
+        ``prefer`` the CA would never be consulted, and PgBouncer would dial
+        Postgres unverified with the bundle loaded.
+        """
+        sslmode: Final = self.database_sslmode or ("verify-full" if self.database_sslrootcert else None)
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("sslmode", sslmode),
+                    ("sslrootcert", self.database_sslrootcert),
+                )
+                if value
+            }
+        )
+
     def build_writer_url(self) -> str | None:
         """Return the writer URL to set, or ``None`` to leave it as-is.
 
         Raises ``RuntimeError`` (naming the offending vars) when token auth is
         enabled but a required field is missing — the proxy cannot recover
         from this and a clear startup error beats a Prisma connect failure.
+        A ``DATABASE_URL`` the supervisor pointed at the in-container PgBouncer
+        is kept even under token auth: the pooler renews the token upstream.
         """
+        assembled: Final = self._assemble_writer_url()
+        if assembled is None:
+            return None
+        return add_missing_query_params(assembled, self.tls_params())
+
+    def _assemble_writer_url(self) -> str | None:
         auth: Final = self.token_auth()
+        if auth is not None and database_url_is_pooled():
+            return None
         if auth is not None:
             missing: Final = tuple(
                 env
@@ -313,6 +499,12 @@ class DatabaseURLSettings(BaseSettings):
         pre-existing ``DATABASE_URL_READ_REPLICA``. Reader fields fall back
         to the writer's values.
         """
+        assembled: Final = self._assemble_reader_url()
+        if assembled is None:
+            return None
+        return add_missing_query_params(assembled, self.tls_params())
+
+    def _assemble_reader_url(self) -> str | None:
         if not self.database_host_read_replica:
             return None  # reader is opt-in
         if self.database_url_read_replica:
@@ -452,6 +644,12 @@ class DatabaseURLSettings(BaseSettings):
                 url = os.environ.get(env_var)
                 if url:
                     os.environ[env_var] = add_missing_query_params(url, MappingProxyType({"pgbouncer": "true"}))
+
+        lifetime_params: Final = idle_lifetime_params(self.max_idle_connection_lifetime)
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            url = os.environ.get(env_var)
+            if url:
+                os.environ[env_var] = add_missing_query_params(url, lifetime_params)
 
         # The reader inherits the writer's connection params (pool size, timeouts,
         # pgbouncer mode). Without this the reader pool ignores the configured cap

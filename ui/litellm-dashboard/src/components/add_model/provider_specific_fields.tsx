@@ -13,12 +13,15 @@ import {
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
-import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
-import { provider_map, Providers } from "../provider_info_helpers";
+import { ProviderCredentialFieldMetadata } from "../networking";
+import { Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import type { ProviderFieldValidators } from "../model_add/credential_federation";
 
 interface ProviderSpecificFieldsProps {
-  selectedProvider: Providers;
+  selectedProvider: string | null;
+  hiddenFieldKeys?: readonly string[];
+  fieldValidators?: ProviderFieldValidators;
 }
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
@@ -40,11 +43,6 @@ interface ProviderCredentialField {
   type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[];
   defaultValue?: string;
-}
-
-export interface CredentialValues {
-  key: string;
-  value: string;
 }
 
 const getApiVersionFromApiBase = (apiBase: string): string | null => {
@@ -83,41 +81,13 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
   };
 };
 
-// In-memory cache of provider credential fields keyed by provider display name.
-// This lets us reuse the data across multiple mounts and also supports
-// non-React helpers like createCredentialFromModel.
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
-export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
-  const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
-  if (!enumKey) {
-    throw new Error(`Provider ${provider} not found in provider_map`);
-  }
-  const providerDisplayName = Providers[enumKey as keyof typeof Providers];
-  const providerFields = providerFieldsByDisplayName[providerDisplayName] || [];
-  const credentialValues: object = {};
-
-  // Go through each field defined for this provider
-  providerFields.forEach((field) => {
-    const value = modelData.litellm_params[field.key];
-    if (value !== undefined) {
-      (credentialValues as Record<string, string>)[field.key] = value.toString();
-    }
-  });
-
-  const credential: CredentialItem = {
-    credential_name: `${provider}-credential-${Math.floor(Math.random() * 1000000)}`,
-    credential_values: credentialValues,
-    credential_info: {
-      custom_llm_provider: provider,
-      description: `Credential for ${provider}. Created from model ${modelData.model_name}`,
-    },
-  };
-
-  return credential;
-};
-
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  hiddenFieldKeys,
+  fieldValidators,
+}) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
@@ -167,7 +137,8 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     Object.assign(providerFieldsByDisplayName, cacheEntries);
   }, [cacheEntries]);
 
-  const allFields = React.useMemo(() => {
+  const providerFields = React.useMemo(() => {
+    if (selectedProvider === null) return [];
     // First try to resolve from the in-memory cache. We support both the
     // enum/display-name form and the raw provider slug (e.g. "petals").
     const cachedFields =
@@ -200,6 +171,11 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     }
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
+
+  const allFields = React.useMemo(
+    () => (hiddenFieldKeys ? providerFields.filter((field) => !hiddenFieldKeys.includes(field.key)) : providerFields),
+    [providerFields, hiddenFieldKeys],
+  );
 
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
   const lastInferredApiVersionRef = React.useRef<string | null>(null);
@@ -322,12 +298,17 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         </p>
       )}
       {allFields.map((field) => (
-        <React.Fragment key={field.key}>
+        <React.Fragment key={`${selectedProvider}:${field.key}`}>
           <MountedFormField
             label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
             required={field.required}
-            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
+            rules={{
+              validate: {
+                ...(field.required ? { required: requiredRule("Required") } : {}),
+                ...(fieldValidators?.[field.key] ? { provider: fieldValidators[field.key] } : {}),
+              },
+            }}
             className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
           >
             {(control) => renderFieldControl(field, control)}

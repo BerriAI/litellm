@@ -17,48 +17,6 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
-### UNIT TESTS FOR LEAST BUSY LOGGING ###
-
-
-def test_model_added():
-    test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
-    kwargs = {
-        "litellm_params": {
-            "metadata": {
-                "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/gpt-4.1-mini",
-            },
-            "model_info": {"id": "1234"},
-        }
-    }
-    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
-    request_count_api_key = f"gpt-3.5-turbo_request_count"
-    assert test_cache.get_cache(key=request_count_api_key) is not None
-
-
-def test_get_available_deployments():
-    test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
-    model_group = "gpt-3.5-turbo"
-    deployment = "azure/gpt-4.1-mini"
-    kwargs = {
-        "litellm_params": {
-            "metadata": {
-                "model_group": model_group,
-                "deployment": deployment,
-            },
-            "model_info": {"id": "1234"},
-        }
-    }
-    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
-    request_count_api_key = f"{model_group}_request_count"
-    assert test_cache.get_cache(key=request_count_api_key) is not None
-
-
-# test_get_available_deployments()
-
-
 @pytest.mark.parametrize("async_test", [True, False])
 @pytest.mark.asyncio
 async def test_router_get_available_deployments(async_test):
@@ -104,15 +62,20 @@ async def test_router_get_available_deployments(async_test):
     router.leastbusy_logger.test_flag = True
 
     model_group = "azure-model"
-    request_count_dict = {1: 10, 2: 54, 3: 100}
-    cache_key = f"{model_group}_request_count"
+    request_count_dict = {"1": 10, "2": 54, "3": 100}
+    cache_keys = {
+        deployment_id: f"{model_group}_request_count:{deployment_id}"
+        for deployment_id in request_count_dict
+    }
     if async_test is True:
-        await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
+        for deployment_id, count in request_count_dict.items():
+            await router.cache.async_set_cache(key=cache_keys[deployment_id], value=count)
         deployment = await router.async_get_available_deployment(
             model=model_group, messages=None, request_kwargs={}
         )
     else:
-        router.cache.set_cache(key=cache_key, value=request_count_dict)
+        for deployment_id, count in request_count_dict.items():
+            router.cache.set_cache(key=cache_keys[deployment_id], value=count)
         deployment = router.get_available_deployment(model=model_group, messages=None)
     print(f"deployment: {deployment}")
     assert deployment["model_info"]["id"] == "1"
@@ -124,15 +87,18 @@ async def test_router_get_available_deployments(async_test):
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
-    return_dict = router.cache.get_cache(key=cache_key)
-
     # wait 2 seconds
     time.sleep(2)
 
+    return_dict = {
+        deployment_id: router.cache.get_cache(key=cache_key)
+        for deployment_id, cache_key in cache_keys.items()
+    }
+
     assert router.leastbusy_logger.logged_success == 1
-    assert return_dict[1] == 10
-    assert return_dict[2] == 54
-    assert return_dict[3] == 100
+    assert return_dict["1"] == 10
+    assert return_dict["2"] == 54
+    assert return_dict["3"] == 100
 
 
 ## Test with Real calls ##
@@ -192,9 +158,11 @@ async def test_router_atext_completion_streaming():
     await asyncio.sleep(random.uniform(0, 2))
     await router.atext_completion(model=model, prompt=prompt, stream=True)
 
-    cache_key = f"{model}_request_count"
     ## check if calls equally distributed
-    cache_dict = router.cache.get_cache(key=cache_key)
+    cache_dict = {
+        deployment_id: router.cache.get_cache(key=f"{model}_request_count:{deployment_id}")
+        for deployment_id in ("1", "2", "3")
+    }
     for k, v in cache_dict.items():
         assert v == 1, f"Failed. K={k} called v={v} times, cache_dict={cache_dict}"
 
@@ -259,8 +227,10 @@ async def test_router_completion_streaming():
     await asyncio.sleep(random.uniform(0, 2))
     await router.acompletion(model=model, messages=messages, stream=True)
 
-    cache_key = f"{model}_request_count"
     ## check if calls equally distributed
-    cache_dict = router.cache.get_cache(key=cache_key)
+    cache_dict = {
+        deployment_id: router.cache.get_cache(key=f"{model}_request_count:{deployment_id}")
+        for deployment_id in ("1", "2", "3")
+    }
     for k, v in cache_dict.items():
         assert v == 1, f"Failed. K={k} called v={v} times, cache_dict={cache_dict}"

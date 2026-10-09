@@ -52,7 +52,14 @@ vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
+  getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
 }));
+
+const { bulkUpdatePOST } = vi.hoisted(() => ({ bulkUpdatePOST: vi.fn() }));
+vi.mock("@/lib/http/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/http/api")>();
+  return { ...actual, fetchClient: { ...actual.fetchClient, POST: bulkUpdatePOST } };
+});
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
@@ -68,11 +75,17 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
   useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
-  useAllProxyModels: vi.fn(),
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useAllProxyModels: vi.fn(),
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
   useTeam: vi.fn(),
 }));
 
@@ -219,16 +232,18 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
-import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAllProxyModels, useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { teamKeys, teamsTableKeys, useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
+const mockUseModelAccessGroupNames = vi.mocked(useModelAccessGroupNames);
 const mockUseKeys = vi.mocked(useKeys);
 const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
@@ -236,6 +251,7 @@ const mockUseCurrentUser = vi.mocked(useCurrentUser);
 const mockUseMCPServers = vi.mocked(useMCPServers);
 const mockUseMCPToolsets = vi.mocked(useMCPToolsets);
 const mockUseAccessGroups = vi.mocked(useAccessGroups);
+const mockUseUISettings = vi.mocked(useUISettings);
 
 const createMockTeamData = (overrides = {}) => ({
   team_id: "123",
@@ -278,6 +294,7 @@ const createMockTeamData = (overrides = {}) => ({
 });
 
 const seedDefaultMocks = () => {
+  mockUseModelAccessGroupNames.mockReturnValue(new Set());
   mockUseAllProxyModels.mockReturnValue({
     data: { data: [] },
     isLoading: false,
@@ -303,6 +320,10 @@ const seedDefaultMocks = () => {
     ],
     isLoading: false,
     isError: false,
+  } as any);
+  mockUseUISettings.mockReturnValue({
+    data: { values: {} },
+    isLoading: false,
   } as any);
   mockUseKeys.mockReturnValue({
     data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
@@ -343,6 +364,35 @@ describe("TeamInfoView", () => {
   });
 
   describe("display and rendering", () => {
+    it("links direct model chips to their matching access-group or model filter", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ models: ["repro-access-group", "gpt-4.1"] }),
+      );
+      mockUseModelAccessGroupNames.mockReturnValue(new Set(["repro-access-group"]));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+      expect(screen.getByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?model_group=gpt-4\.1$/),
+      );
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+      expect(within(settings).getByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?model_group=gpt-4\.1$/),
+      );
+    });
+
     it("should render", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
@@ -655,19 +705,9 @@ describe("TeamInfoView", () => {
       });
     });
 
-    it("shows edit tabs when the fetched team data marks the session user as team admin, even without the is_team_admin prop", async () => {
+    it("shows edit tabs when the proxy reports the session user may edit, even without the is_team_admin prop", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({
-          members_with_roles: [
-            {
-              user_id: "user-1",
-              user_email: "admin@test.com",
-              role: "admin",
-              spend: 0,
-              budget_id: "budget1",
-            },
-          ],
-        }),
+        createMockTeamData({ caller_edit_access: { kind: "team_admin_disabled" } }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
@@ -1139,6 +1179,26 @@ describe("TeamInfoView", () => {
       });
     });
 
+    it("invalidates the cached team list and team detail queries after saving team settings", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      const tableKey = teamsTableKeys.list({ page: 1, limit: 10 });
+      const detailKey = teamKeys.detail("123");
+      testQueryClient.setQueryData(tableKey, { teams: [], total: 0 });
+      testQueryClient.setQueryData(detailKey, { team_id: "123" });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(testQueryClient.getQueryState(tableKey)?.isInvalidated).toBe(true));
+      expect(testQueryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
+    });
+
     const openSettingsEditorForTeam = async (
       user: ReturnType<typeof userEvent.setup>,
       teamOverrides: Record<string, unknown>,
@@ -1379,7 +1439,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
 
-    it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {
+    it("should show declared keys as fixed labels and submit the edited value", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
         data: [
@@ -1400,16 +1460,18 @@ describe("TeamInfoView", () => {
       await openSettingsEditor(user);
 
       await waitFor(() => {
-        expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-          "cost_center",
-          "department",
-          "app_name",
+        expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+          "Cost Center",
+          "Application Name",
         ]);
       });
-      expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "department",
+      ]);
+      expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-OLD");
 
-      await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
+      await user.clear(screen.getByLabelText("Cost Center"));
+      fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -1608,6 +1670,99 @@ describe("TeamInfoView", () => {
     });
   });
 
+  describe("per-model budgets", () => {
+    const teamWithModelBudget = () =>
+      createMockTeamData({
+        models: ["gpt-4"],
+        model_max_budget: { "gpt-4": { max_budget: 5, budget_duration: "1d" } },
+        model_max_budget_usage: { "gpt-4": { current_spend: 1.25, budget_limit: 5, time_period: "1d" } },
+      });
+
+    const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+    };
+
+    const savedPayload = async () => {
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+    };
+
+    it("shows the stored per-model budget and its current spend in the read-only settings view", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      expect(await screen.findByText("Per-Model Budget (gpt-4): $5 per 1d, spent $1.25")).toBeInTheDocument();
+    });
+
+    it("seeds the editor from the stored budget and keeps it read-only without an enterprise license", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={false} />);
+
+      await openSettingsEditor(user);
+
+      expect(screen.getByPlaceholderText("Max spend ($)")).toHaveValue(5);
+      expect(screen.getByPlaceholderText("Max spend ($)")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
+    });
+
+    it("leaves model_max_budget out of a save that did not touch it", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await openSettingsEditor(user);
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await savedPayload()).not.toHaveProperty("model_max_budget");
+    });
+
+    it("sends the edited cap for the model", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await openSettingsEditor(user);
+      fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "2.5" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect((await savedPayload()).model_max_budget).toEqual({ "gpt-4": { budget_limit: 2.5, time_period: "1d" } });
+    });
+
+    it("sends an empty model_max_budget when the last row is removed, so the stored cap is cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await openSettingsEditor(user);
+      await user.click(screen.getByRole("button", { name: "Remove model budget" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect((await savedPayload()).model_max_budget).toEqual({});
+    });
+  });
+
   describe("team member settings", () => {
     it("should populate Default Key Duration from the team's stored metadata", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1769,6 +1924,112 @@ describe("TeamInfoView", () => {
       });
     });
   });
+
+  describe("team admin edit access", () => {
+    const teamAdminProps = { ...defaultProps, is_proxy_admin: false, is_team_admin: true };
+
+    beforeEach(() => {
+      authState.userRole = "Internal User";
+    });
+
+    it("tells a team admin to ask a proxy admin when the proxy reports no team field is enabled for them", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "team_admin_disabled" } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(toast.error).toHaveBeenCalledWith("Team admins cannot edit team settings on this proxy", {
+        description: "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields.",
+      });
+      expect(screen.queryByLabelText("Team Name")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    it("gives a team admin only the fields the proxy enabled and sends only those on save", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          tpm_limit: 1000,
+          caller_edit_access: { kind: "team_admin", editable_fields: ["tpm_limit"] },
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const tpmInput = await screen.findByLabelText("Tokens per minute Limit (TPM)");
+      expect(tpmInput).toHaveValue(1000);
+      expect(screen.queryByLabelText("Team Name")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Requests per minute Limit (RPM)")).not.toBeInTheDocument();
+
+      fireEvent.change(tpmInput, { target: { value: "5000" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toStrictEqual({ team_id: "123", tpm_limit: 5000 });
+      expect(toast.success).toHaveBeenCalledWith("Team settings updated successfully");
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("prefills the RPM limit and budget a team admin may edit with the team's stored values", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          rpm_limit: 50,
+          max_budget: 20,
+          caller_edit_access: { kind: "team_admin", editable_fields: ["rpm_limit", "max_budget"] },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Requests per minute Limit (RPM)")).toHaveValue(50);
+      expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(20);
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+    });
+
+    it("opens the form when the proxy reports unrestricted access although the props only mark a team admin", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "unrestricted" } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("never gates a proxy admin on the team admin field list", async () => {
+      authState.userRole = "Admin";
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "unrestricted" } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("TeamInfoView - which team member fields reach the update payload depends on the open sections", () => {
@@ -1891,6 +2152,43 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("team_member_budget_duration");
   });
 
+  it("sends a null team_member_budget when Default Budget is cleared, instead of a $0 cap", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "" } });
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({
+      team_member_budget: null,
+      team_member_tpm_limit: 11,
+      team_member_rpm_limit: 22,
+    });
+  });
+
+  it("keeps a member default with no dollar cap uncapped when Team Member Settings is saved", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { max_budget: null, budget_duration: "30d", tpm_limit: null, rpm_limit: 60 });
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({ team_member_budget: null, team_member_rpm_limit: 60 });
+  });
+
+  it("sends a typed Default Budget as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "12.5" } });
+    const payload = await save(user);
+
+    expect(payload.team_member_budget).toBe(12.5);
+  });
+
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
@@ -1967,6 +2265,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     models: ["gpt-4"],
     tpm_limit: 1000,
     rpm_limit: 1000,
+    tpd_limit: null,
     model_tpm_limit: {},
     model_rpm_limit: {},
     max_budget: 100,
@@ -1990,6 +2289,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     agents: [],
     agent_access_groups: [],
     vector_stores: ["vs-1"],
+    skills: [],
   };
 
   it("leaves every team member key out of the request body for an untouched save with both sections closed", async () => {
@@ -2052,6 +2352,60 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(objectPermission.agent_access_groups).toStrictEqual([]);
   });
 
+  it("resends the stored skills when the selector is left untouched", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], object_permission: { skills: ["private-skill"] } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.skills).toStrictEqual(["private-skill"]);
+  });
+
+  it("sends an empty skills array after the last skill chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], object_permission: { skills: ["private-skill"] } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    await user.click(within(screen.getByLabelText("private-skill")).getByRole("button"));
+    expect(screen.queryByLabelText("private-skill")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.skills).toStrictEqual([]);
+  });
+
+  it("sends an empty vector_stores array after the last vector store chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(within(screen.getByLabelText("vs-1")).getByRole("button"));
+    expect(screen.queryByLabelText("vs-1")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.vector_stores).toStrictEqual([]);
+  });
+
   it("resends every stored value once both sections are opened", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
@@ -2076,7 +2430,104 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(wireBody(payload)).toStrictEqual(expected);
   });
 
-  it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
+  const openEditorWithMemberBudgetAlerts = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        team_member_budget_table: { max_budget: 42 },
+        metadata: { team_member_max_budget_alert_emails: { "50": [], "100": ["finance@test.com"] } },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const memberBudgetAlertEmails = (payload: Record<string, unknown>) =>
+    (wireBody(payload).metadata as Record<string, unknown>).team_member_max_budget_alert_emails;
+
+  it("resends the stored team member budget alert thresholds when the section stays closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toStrictEqual({ "50": [], "100": ["finance@test.com"] });
+  });
+
+  it("sends the edited team member budget alert thresholds as a percent to recipients map", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const thresholds = screen.getAllByPlaceholderText("% of budget");
+    const recipients = screen.getAllByPlaceholderText(/Additional recipients/);
+    expect(thresholds.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["50", "100"]);
+    expect(recipients.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["", "finance@test.com"]);
+
+    fireEvent.change(thresholds[0], { target: { value: "75" } });
+    fireEvent.change(recipients[0], { target: { value: " lead@test.com, finance@test.com " } });
+    await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+    fireEvent.change(screen.getAllByPlaceholderText("% of budget")[2], { target: { value: "90" } });
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toStrictEqual({
+      "75": ["lead@test.com", "finance@test.com"],
+      "100": ["finance@test.com"],
+      "90": [],
+    });
+  });
+
+  it("drops the team member budget alert thresholds key once every row is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const removeButtons = screen.getAllByRole("button", { name: "Remove budget alert threshold" });
+    await user.click(removeButtons[1]);
+    await user.click(removeButtons[0]);
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toBeUndefined();
+  });
+
+  it("blocks the save when a team member budget alert threshold is above 100", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const threshold = screen.getAllByPlaceholderText("% of budget")[0] as HTMLInputElement;
+    fireEvent.change(threshold, { target: { value: "150" } });
+    expect(threshold.validity.rangeOverflow).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).not.toHaveBeenCalled());
+  });
+
+  it("refuses to save a team member budget alert row with no threshold", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findByText("Enter a whole number from 1 to 100");
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("carries every typed value to the update payload, with numeric fields as numbers", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
@@ -2099,8 +2550,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const payload = await save(user);
 
     expect(payload.team_alias).toBe("Renamed Team");
-    expect(payload.soft_budget).toBe("9.5");
-    expect(payload.tpm_limit).toBe("555");
+    expect(payload.soft_budget).toBe(9.5);
+    expect(payload.tpm_limit).toBe(555);
     expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
       "a@test.com",
       "b@test.com",
@@ -2700,5 +3151,52 @@ describe("TeamInfo MCP permission retention", () => {
     );
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
     errorToast.mockRestore();
+  });
+});
+
+describe("TeamInfoView - disable_global_guardrails switch gating", () => {
+  beforeEach(() => {
+    seedDefaultMocks();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    authState.userRole = "Admin";
+  });
+
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
+  const openEditForm = async () => {
+    const user = userEvent.setup({ delay: null });
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("hides the Disable all global guardrails switch from a non-admin", async () => {
+    authState.userRole = "Internal User";
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} />);
+    await openEditForm();
+
+    expect(screen.queryByRole("switch", { name: /Disable all global guardrails/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Disable all global guardrails switch to a proxy admin", async () => {
+    renderWithProviders(<TeamInfoView {...props} />);
+    await openEditForm();
+
+    expect(await screen.findByRole("switch", { name: /Disable all global guardrails/i })).toBeInTheDocument();
   });
 });

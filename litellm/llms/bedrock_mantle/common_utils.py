@@ -14,19 +14,16 @@ global state.
 
 import re
 from collections.abc import Mapping
-from typing import Final
+from functools import partial
+from typing import Final, Literal
 
-from botocore.exceptions import (
-    CredentialRetrievalError,
-    NoCredentialsError,
-    PartialCredentialsError,
-    ProfileNotFound,
-)
-
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
+from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
+BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
 
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
@@ -36,10 +33,17 @@ def resolve_mantle_bearer_token(api_key: str | None) -> str | None:
     return api_key or get_secret_str("BEDROCK_MANTLE_API_KEY") or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
 
+def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
+    head, sep, tail = model.partition("/")
+    if sep and head in BEDROCK_REGIONS:
+        return head, tail
+    return None, model
+
+
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         return region
     api_base: Final = params.get("api_base")
     base: Final = (api_base if isinstance(api_base, str) else None) or get_secret_str("BEDROCK_MANTLE_API_BASE")
@@ -55,7 +59,7 @@ def resolve_mantle_region(params: Mapping[str, object]) -> str:
     )
 
 
-class BedrockMantleAuthMixin:
+class BedrockMantleAuthMixin(SignsRequestsWithAWS):
     _aws_signer: BaseAWSLLM
 
     @staticmethod
@@ -63,7 +67,7 @@ class BedrockMantleAuthMixin:
         return resolve_mantle_bearer_token(api_key)
 
     @staticmethod
-    def _resolve_region(params: dict) -> str:
+    def _resolve_region(params: Mapping[str, object]) -> str:
         return resolve_mantle_region(params)
 
     def sign_request(
@@ -78,32 +82,39 @@ class BedrockMantleAuthMixin:
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:
         bearer: Final = self._resolve_bearer_token(api_key)
-        if not bearer:
-            # Pin the credential-scope region to the region of the actual signing URL
-            # so the SigV4 scope and URL host can never disagree, even when a stale
-            # api_base and aws_region_name point at different regions.
-            host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
-            optional_params = {
-                **optional_params,
-                "aws_region_name": (
-                    host_match.group(1)
-                    if host_match
-                    else self._resolve_region({**optional_params, "api_base": api_base})
-                ),
-            }
-            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+        sign: Final[partial[tuple[dict[str, str | bytes], bytes | None]]] = partial(
+            self._aws_signer._sign_request,
+            service_name="bedrock",
+            request_data=request_data,
+            api_base=api_base,
+            api_key=bearer,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+        if bearer:
+            return sign(headers=headers, optional_params=optional_params)
+        ensure_optional_import("botocore")
+        from botocore.exceptions import (
+            CredentialRetrievalError,
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+        )
+
+        # Pin the credential-scope region to the region of the actual signing URL
+        # so the SigV4 scope and URL host can never disagree, even when a stale
+        # api_base and aws_region_name point at different regions.
+        host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
+        optional_params = {
+            **optional_params,
+            "aws_region_name": (
+                host_match.group(1) if host_match else self._resolve_region({**optional_params, "api_base": api_base})
+            ),
+        }
+        headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
-            return self._aws_signer._sign_request(
-                service_name="bedrock",
-                headers=headers,
-                optional_params=optional_params,
-                request_data=request_data,
-                api_base=api_base,
-                api_key=bearer,
-                model=model,
-                stream=stream,
-                fake_stream=fake_stream,
-            )
+            return sign(headers=headers, optional_params=optional_params)
         except (
             NoCredentialsError,
             PartialCredentialsError,
@@ -118,6 +129,14 @@ class BedrockMantleAuthMixin:
             ) from e
 
 
+def is_mantle_claude_model(model: str) -> bool:
+    return "claude" in model.lower()
+
+
+def mantle_health_check_mode(model: str) -> Literal["anthropic_messages"] | None:
+    return "anthropic_messages" if is_mantle_claude_model(model) else None
+
+
 def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     """Whether a Bedrock Mantle model can serve the native Responses API.
 
@@ -130,7 +149,7 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{model}", {})
+    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
     if "/v1/responses" in (entry.get("supported_endpoints") or []):
         return True
     return entry.get("mode") == "responses"
@@ -147,5 +166,5 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     the base for the model's whole OpenAI-compatible surface, so both the chat and
     responses configs derive from it -- there is no separate model-name rule.
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{model}", {})
+    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"

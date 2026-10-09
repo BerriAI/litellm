@@ -4,30 +4,27 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 
 import json
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
-
-class _PrismaModelDb(Protocol):
-    @property
-    def litellm_proxymodeltable(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]: ...
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
-class _PrismaClientView(Protocol):
-    @property
-    def db(self) -> _PrismaModelDb: ...
+class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ProxyModelTable"]):
+    table_name = "litellm_proxymodeltable"
 
 
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
@@ -39,11 +36,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return wrap_table_actions_for_config_sync(
-            actions=client.db.litellm_proxymodeltable,
-            table_name="litellm_proxymodeltable",
-        )
+        return _ProxyModelTableRepository(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_ProxyModelTable]:
@@ -71,22 +64,26 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
                 decrypted[key] = value
         return decrypted
 
-    def _to_model(self, record: Any) -> LiteLLM_ProxyModelTable | None:
+    def _to_model(self, record: DbRecord | None) -> LiteLLM_ProxyModelTable | None:
         """Convert a database record to a Model with decryption."""
         if record is None:
             return None
 
-        data: Final = record.dict() if hasattr(record, "dict") else dict(record)
+        data: Final = dict(record_to_dict(record))
 
-        if isinstance(data.get("litellm_params"), str):
-            data["litellm_params"] = json.loads(data["litellm_params"])
-        if isinstance(data.get("model_info"), str):
-            data["model_info"] = json.loads(data["model_info"])
+        litellm_params: Final = data.get("litellm_params")
+        if isinstance(litellm_params, str):
+            data["litellm_params"] = json.loads(litellm_params)
+        model_info: Final = data.get("model_info")
+        if isinstance(model_info, str):
+            data["model_info"] = json.loads(model_info)
 
         if data.get("litellm_params"):
-            data["litellm_params"] = self._decrypt_litellm_params(data["litellm_params"])
+            data["litellm_params"] = self._decrypt_litellm_params(
+                _LITELLM_PARAMS.validate_python(data["litellm_params"])
+            )
 
-        return LiteLLM_ProxyModelTable(**data)
+        return LiteLLM_ProxyModelTable.model_validate(data)
 
     async def find_by_id(self, model_id: str, id_field: str = "model_id") -> LiteLLM_ProxyModelTable | None:
         return await super().find_by_id(model_id, id_field)
@@ -108,9 +105,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     async def find_all_except(self, model_id: str) -> Sequence[LiteLLM_ProxyModelTable]:
         """Find every model except the row currently being updated."""
-        records: Final = await self.table.find_many(
-            where=MappingProxyType({"model_id": MappingProxyType({"not": model_id})})
-        )
+        records: Final = await self.table.find_many(where={"model_id": {"not": model_id}})
         return tuple(self._to_model_list(records))
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:

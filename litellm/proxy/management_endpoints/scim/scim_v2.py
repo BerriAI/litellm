@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
 
 from fastapi import (
@@ -22,7 +23,7 @@ from fastapi import (
     Request,
     Response,
 )
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -44,9 +45,16 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_key_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    safe_get_request_headers,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
@@ -56,10 +64,11 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
-from litellm.proxy.utils import (
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
-    _premium_user_check,
+    _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_exception_on_proxy,
+    premium_user_check,
 )
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
@@ -71,6 +80,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
@@ -246,7 +256,7 @@ class ScimUserData(TypedDict):
     roles: list[SCIMMultiValuedAttribute] | None
 
 
-class GroupMemberExtractionResult(BaseModel):
+class GroupMemberExtractionResult(LiteLLMBaseModel):
     """Result of extracting and processing group members.
 
     ``all_member_ids`` is deduped order-preserving; ``existing_member_ids`` is not,
@@ -261,8 +271,10 @@ class GroupMemberExtractionResult(BaseModel):
 scim_router: Final = APIRouter(
     prefix="/scim/v2",
     tags=["✨ SCIM v2 (Enterprise Only)"],
-    dependencies=[Depends(_premium_user_check)],
+    dependencies=[Depends(premium_user_check)],
 )
+
+SCIM_MAX_PAGE_SIZE: Final = 100
 
 
 # Helper functions for common operations
@@ -579,7 +591,6 @@ async def _users_named_by_member_value(
     subject: Final = value.strip()
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
         where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
         take=take,
     )
@@ -601,11 +612,11 @@ async def _accounts_named_by_member_value(value: str, prisma_client: PrismaClien
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     users: Final = _table(UserRepository(prisma_client))
     rows: Final = await users.find_many(
-        where={  # mutable-ok: Prisma filter
-            "OR": [  # mutable-ok: Prisma filter
-                {"user_id": value},  # mutable-ok: Prisma filter
-                {"sso_user_id": subject},  # mutable-ok: Prisma filter
-                {"user_email": email},  # mutable-ok: Prisma filter
+        where={
+            "OR": [
+                {"user_id": value},
+                {"sso_user_id": subject},
+                {"user_email": email},
             ],
         },
         take=2,
@@ -1041,7 +1052,7 @@ async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
         )
 
     for key_row in affected_keys:
-        await _delete_cache_key_object(
+        await delete_cache_key_object(
             hashed_token=key_row.token,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -1542,7 +1553,7 @@ async def get_service_provider_config(request: Request):
         "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
         request.method,
         request.url,
-        _safe_get_request_headers(request),
+        safe_get_request_headers(request),
     )
     meta: Final = {
         "resourceType": "ServiceProviderConfig",
@@ -1572,12 +1583,13 @@ def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
 )
 async def get_users(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=0),
     filter: str | None = Query(None),
 ):
     """
     Get a list of users according to SCIM v2 protocol
     """
+    page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
         startIndex,
@@ -1607,7 +1619,7 @@ async def get_users(
         users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -1623,7 +1635,7 @@ async def get_users(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_users)),
+            itemsPerPage=len(scim_users),
             Resources=scim_users,
         )
 
@@ -1801,6 +1813,9 @@ async def update_user(
             where={"user_id": user_id},
             data=update_data,
         )
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if client_set_active:
             new_active: Final = _scim_active_value(metadata)
@@ -1863,6 +1878,10 @@ async def delete_user(
 
         # Delete user
         await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
+
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         return Response(status_code=204)
     except Exception as e:
@@ -2104,7 +2123,7 @@ def _handle_multi_valued_attribute_update(path: str, op_type: str, value: object
     except ValidationError:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Invalid value for {base}: expected a list of objects with a 'value' sub-attribute"},
+            detail={"error": f"Invalid value for {base}: expected a list of objects or strings"},
         )
 
     dumped: Final = [attr.model_dump(exclude_none=True) for attr in attrs]
@@ -2372,6 +2391,9 @@ async def patch_user(
             where={"user_id": user_id},
             data=update_data,
         )
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if new_active is not None and new_active != (True if prev_active is None else prev_active):
             await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
@@ -2399,12 +2421,13 @@ class _TeamWhereConditions(TypedDict, total=False):
 )
 async def get_groups(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=0),
     filter: str | None = Query(None),
 ):
     """
     Get a list of groups according to SCIM v2 protocol
     """
+    page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
         startIndex,
@@ -2425,7 +2448,7 @@ async def get_groups(
         teams: Final = await _table(TeamRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -2462,7 +2485,7 @@ async def get_groups(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_groups)),
+            itemsPerPage=len(scim_groups),
             Resources=scim_groups,
         )
 
@@ -2694,6 +2717,75 @@ async def delete_group(
         raise handle_exception_on_proxy(e)
 
 
+GROUP_PATCH_READ_ONLY_ATTRIBUTES: Final = frozenset({"id", "schemas", "meta"})
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _pathless_group_resource(op: SCIMPatchOperation) -> Mapping[str, object] | None:
+    """The partial Group resource a path-less op carries, or None when the op names a path.
+
+    RFC 7644 Section 3.5.2 lets ``add`` and ``replace`` omit ``path`` and send the
+    attributes to apply as an object (what Okta Push Groups does on a rename);
+    ``remove`` always needs a path (Section 3.5.2.2).
+    """
+    if op.path:
+        return None
+    resource: Final = _json_object_fields(op.value)
+    if op.op != "remove" and resource is not None:
+        return resource
+    detail: Final[_ScimErrorDetail] = {
+        "error": (
+            "A remove operation requires a 'path' (RFC 7644 Section 3.5.2.2)"
+            if op.op == "remove"
+            else f"A {op.op} operation without a 'path' requires an object 'value' (RFC 7644 Section 3.5.2)"
+        )
+    }
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _group_patch_attribute_values(op: SCIMPatchOperation) -> tuple[tuple[str, object], ...]:
+    """The (attribute, value) pairs an operation applies, one per key of a path-less value."""
+    resource: Final = _pathless_group_resource(op)
+    if resource is None:
+        return (((op.path or "").lower(), op.value),)
+    return tuple(
+        (key.lower(), value)
+        for key, value in resource.items()
+        if key and key.lower() not in GROUP_PATCH_READ_ONLY_ATTRIBUTES
+    )
+
+
+def _replaces_members(op: SCIMPatchOperation) -> bool:
+    if op.op != "replace":
+        return False
+    return any(attribute.startswith("members") for attribute, _ in _group_patch_attribute_values(op))
+
+
+def _patched_group_snapshot(
+    existing_snapshot: Mapping[str, object],
+    pathless_resources: Sequence[Mapping[str, object]],
+    mirrored_values: Sequence[tuple[str, object | None]],
+) -> dict[str, object]:
+    """The ``scim_data`` snapshot after a PATCH: the path-less resources merged over the
+    existing snapshot in operation order (``members`` live in members_with_roles), then
+    each attribute in ``mirrored_values`` set to what the whole operation list left on
+    the team, so a later path op wins over an earlier path-less value; ``None`` drops it.
+    """
+    pathless_items: Final = (
+        (key, value)
+        for key, value in chain.from_iterable(resource.items() for resource in pathless_resources)
+        if key.lower() != "members"
+    )
+    mirrored_keys: Final = frozenset(key.lower() for key, _ in mirrored_values)
+    kept: Final = (
+        (key, value)
+        for key, value in chain(existing_snapshot.items(), pathless_items)
+        if key.lower() not in mirrored_keys
+    )
+    refreshed: Final = ((key, value) for key, value in mirrored_values if value is not None)
+    return dict(chain(kept, refreshed))
+
+
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team: LiteLLM_TeamTable, prisma_client: PrismaClient
 ) -> tuple[dict[str, object], set[str], set[str] | None]:
@@ -2711,11 +2803,24 @@ async def _process_group_patch_operations(
     conditional on what the id turns out to be and leave members we should never
     have admitted - the phantom users this endpoint used to create for nested
     groups - impossible to clean up.
+
+    A path-less op carries a partial Group resource: each attribute applies as if
+    sent with that path, and its attributes other than ``members`` (the roster
+    lives in members_with_roles) are merged in operation order into the
+    ``scim_data`` snapshot the PUT path writes, whose displayName and externalId
+    then mirror what the whole operation list left on the team. An empty metadata
+    key left behind by an earlier path-less op (stored whole under ``""``) is
+    dropped.
     """
     update_data: Final[dict[str, object]] = {}
+    stored_metadata: Final[dict[str, object] | None] = existing_team.metadata
+    existing_metadata: Final = _json_object_fields(stored_metadata) or _NO_FIELDS
+    pathless_resources: Final = tuple(
+        resource for resource in map(_pathless_group_resource, patch_ops.Operations) if resource is not None
+    )
 
-    # Create a fresh copy of existing metadata to avoid Prisma issues
-    metadata: Final = {**(existing_team.metadata or {}), SCIM_MANAGED_TEAM_METADATA_KEY: True}
+    kept_metadata_items: Final = ((key, value) for key, value in existing_metadata.items() if key)
+    metadata: Final = dict(chain(kept_metadata_items, ((SCIM_MANAGED_TEAM_METADATA_KEY, True),)))
 
     # Track member changes. members_with_roles is the source of truth for team
     # membership; the legacy `members` column is not populated by team creation
@@ -2725,58 +2830,69 @@ async def _process_group_patch_operations(
     current_members: Final = set(await _get_team_member_user_ids_from_team(existing_team))
     final_members = current_members.copy()
 
-    # Process each patch operation
     for op in patch_ops.Operations:
-        path = (op.path or "").lower()
-        value = op.value
-        op_type = op.op
+        for attribute, value in _group_patch_attribute_values(op):
+            op_type = op.op
 
-        if path == "displayname":
-            if op_type == "remove":
-                update_data["team_alias"] = None
-            else:
-                update_data["team_alias"] = str(value)
-        elif path == "externalid":
-            if op_type == "remove":
-                metadata.pop("externalId", None)
-            else:
-                metadata["externalId"] = str(value)
-        elif path.startswith("members"):
-            # Handle member operations
-            patched_members = (
-                _parse_member_entries(value)
-                if value is not None
-                else tuple(
-                    SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
+            if attribute == "displayname":
+                if op_type == "remove":
+                    update_data["team_alias"] = None
+                else:
+                    update_data["team_alias"] = str(value)
+            elif attribute == "externalid":
+                if op_type == "remove":
+                    metadata.pop("externalId", None)
+                else:
+                    metadata["externalId"] = str(value)
+            elif attribute.startswith("members"):
+                patched_members = (
+                    _parse_member_entries(value)
+                    if value is not None
+                    else tuple(
+                        SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
+                    )
                 )
+
+                if op_type == "remove":
+                    final_members = final_members - await _member_ids_to_drop(
+                        patched_members, frozenset(final_members), prisma_client
+                    )
+                else:
+                    member_result = await _resolve_group_member_ids(
+                        members=patched_members,
+                        created_via="scim_group_patch",
+                        prisma_client=prisma_client,
+                    )
+                    if op_type == "replace":
+                        final_members = set(member_result.all_member_ids)
+                    elif op_type == "add":
+                        final_members = final_members | set(member_result.all_member_ids)
+            elif op_type == "remove":
+                metadata.pop(attribute, None)
+            else:
+                metadata[attribute] = value
+
+    if pathless_resources:
+        applied_attributes: Final = frozenset(
+            attribute for attribute, _ in chain.from_iterable(map(_group_patch_attribute_values, patch_ops.Operations))
+        )
+        mirrored_values: Final = tuple(
+            (snapshot_key, final_value)
+            for attribute, snapshot_key, final_value in (
+                ("displayname", "displayName", update_data.get("team_alias")),
+                ("externalid", "externalId", metadata.get("externalId")),
             )
-
-            if op_type == "remove":
-                final_members = final_members - await _member_ids_to_drop(
-                    patched_members, frozenset(final_members), prisma_client
-                )
-            else:
-                member_result = await _resolve_group_member_ids(
-                    members=patched_members,
-                    created_via="scim_group_patch",
-                    prisma_client=prisma_client,
-                )
-                if op_type == "replace":
-                    final_members = set(member_result.all_member_ids)
-                elif op_type == "add":
-                    final_members = final_members | set(member_result.all_member_ids)
-        else:
-            # Handle other generic metadata
-            if op_type == "remove":
-                metadata.pop(path, None)
-            else:
-                metadata[path] = value
+            if attribute in applied_attributes
+        )
+        metadata[SCIM_TEAM_DATA_METADATA_KEY] = _patched_group_snapshot(
+            existing_snapshot=_json_object_fields(existing_metadata.get(SCIM_TEAM_DATA_METADATA_KEY)) or _NO_FIELDS,
+            pathless_resources=pathless_resources,
+            mirrored_values=mirrored_values,
+        )
 
     update_data["metadata"] = metadata
 
-    member_replace_present: Final = any(
-        op.op == "replace" and (op.path or "").lower().startswith("members") for op in patch_ops.Operations
-    )
+    member_replace_present: Final = any(map(_replaces_members, patch_ops.Operations))
     replace_target: Final = set(final_members) if member_replace_present else None
 
     return update_data, final_members, replace_target
@@ -2918,7 +3034,7 @@ async def patch_group(
         if updated_team is None:
             raise HTTPException(
                 status_code=404,
-                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+                detail={"error": f"Group not found with ID: {group_id}"},
             )
 
         # Convert to SCIM format and return

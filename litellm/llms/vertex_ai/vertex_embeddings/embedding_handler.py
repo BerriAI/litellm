@@ -7,8 +7,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.vertex_ai.vertex_ai_non_gemini import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -65,8 +65,6 @@ class VertexEmbedding(VertexBase):
                 litellm_params=litellm_params,
             )
 
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -85,7 +83,6 @@ class VertexEmbedding(VertexBase):
             stream=False,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -103,7 +100,7 @@ class VertexEmbedding(VertexBase):
         if timeout:
             _client_params["timeout"] = timeout
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params=_client_params)
+            client = get_httpx_client(params=_client_params)
         else:
             client = client
         ## LOGGING
@@ -160,7 +157,6 @@ class VertexEmbedding(VertexBase):
         """
         Async embedding implementation
         """
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -179,7 +175,6 @@ class VertexEmbedding(VertexBase):
             stream=False,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )

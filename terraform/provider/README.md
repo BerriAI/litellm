@@ -79,6 +79,7 @@ Here's an example of creating an API key with various options:
 
 ```hcl
 resource "litellm_key" "example_key" {
+  key_type             = "llm_api"
   models               = ["gpt-4", "claude-3.5-sonnet"]
   max_budget           = 100.0
   user_id              = "user123"
@@ -103,9 +104,12 @@ resource "litellm_key" "example_key" {
   permissions          = {
     can_create_keys = "true"
   }
-  model_max_budget     = {
-    "gpt-4" = 50.0
-  }
+  model_max_budget     = jsonencode({
+    "gpt-4" = {
+      budget_limit = 50.0
+      time_period  = "30d"
+    }
+  })
   model_rpm_limit      = {
     "claude-3.5-sonnet" = 30
   }
@@ -120,6 +124,7 @@ resource "litellm_key" "example_key" {
 
 The <code>litellm_key</code> resource supports the following options:
 
+- <code>key_type</code>: Choose the key's default route access
 - <code>models</code>: List of allowed models for this key
 - <code>max_budget</code>: Maximum budget for the key
 - <code>user_id</code> and <code>team_id</code>: Associate the key with a user and team

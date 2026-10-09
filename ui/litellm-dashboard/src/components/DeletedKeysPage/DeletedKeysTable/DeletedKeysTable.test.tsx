@@ -5,9 +5,11 @@ import { renderWithProviders } from "../../../../tests/test-utils";
 import { DeletedKeysTable } from "./DeletedKeysTable";
 import { DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const makeDeletedKey = (overrides: Partial<DeletedKeyResponse> = {}): DeletedKeyResponse =>
   ({
-    token: "sk-1234567890abcdef",
+    token: "sk-9876543210fedcba",
     token_id: "key-1",
     key_name: "test-key",
     key_alias: "Test Key Alias",
@@ -43,7 +45,7 @@ it("should display key information", () => {
   renderWithProviders(<DeletedKeysTable {...defaultProps} />);
 
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-  expect(screen.getByText("sk-1234567890abcdef")).toBeInTheDocument();
+  expect(screen.getByText("sk-9876543210fedcba")).toBeInTheDocument();
   expect(screen.getByText("user@example.com")).toBeInTheDocument();
 });
 
@@ -85,4 +87,20 @@ it("should show the empty state when there are no deleted keys", () => {
   renderWithProviders(<DeletedKeysTable {...defaultProps} keys={[]} totalCount={0} />);
 
   expect(screen.getByText("No deleted keys found")).toBeInTheDocument();
+});
+
+it("links the owner, creator and deleter cells to their user detail pages", () => {
+  renderWithProviders(<DeletedKeysTable {...defaultProps} keys={[makeDeletedKey({ deleted_by: "deleter-1" })]} />);
+
+  expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
+  expect(screen.getByRole("link", { name: "creator-1" })).toHaveAttribute("href", "/ui/users?user=creator-1");
+  expect(screen.getByRole("link", { name: "deleter-1" })).toHaveAttribute("href", "/ui/users?user=deleter-1");
+});
+
+it("leaves the default_user_id placeholder unlinked", () => {
+  const placeholderKey = makeDeletedKey({ user_id: "default_user_id", created_by: "default_user_id" });
+  renderWithProviders(<DeletedKeysTable {...defaultProps} keys={[placeholderKey]} />);
+
+  expect(screen.getAllByText("default_user_id")).toHaveLength(2);
+  expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
 });

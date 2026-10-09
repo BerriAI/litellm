@@ -28,6 +28,9 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   repelloai: "repelloai.png",
   straiker: "straiker.svg",
   alice: "alice.svg",
+  agent_365: "microsoft_azure.svg",
+  llm_shield_proxy: "llm_shield_proxy.svg",
+  conduct: "conduct.png",
 };
 
 describe("guardrail_garden_data logos", () => {
@@ -42,7 +45,7 @@ describe("guardrail_garden_data logos", () => {
 
   it("uses the LiteLLM logo for every content filter card", () => {
     for (const card of LITELLM_CONTENT_FILTER_CARDS) {
-      expect(card.logo, `card ${card.id}`).toContain("litellm_logo.jpg");
+      expect(card.logo, `card ${card.id}`).toContain("litellm_monogram.svg");
     }
   });
 

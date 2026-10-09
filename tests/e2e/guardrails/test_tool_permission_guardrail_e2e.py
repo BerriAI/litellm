@@ -25,11 +25,13 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, UnknownApiError
+from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
 from guardrails_client import (
     GuardrailsClient,
     ToolPermissionParamsBody,
     ToolPermissionRuleBody,
     poll_until_blocked,
+    poll_until_guardrail_applied,
 )
 from lifecycle import ResourceManager
 from models import ChatResponse, ChatTool, ChatToolFunction
@@ -84,8 +86,8 @@ def _register_tool_permission(client: GuardrailsClient, resources: ResourceManag
     resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
 
-def _applied_guardrails(outcome: StreamingResponse) -> str:
-    return outcome.headers.get("x-litellm-applied-guardrails", "")
+def _applied_guardrails(outcome: StreamingResponse) -> tuple[str, ...]:
+    return tuple(name.strip() for name in outcome.headers.get("x-litellm-applied-guardrails", "").split(","))
 
 
 def _tool_call_names(response: ChatResponse) -> tuple[str, ...]:
@@ -100,6 +102,15 @@ def _tool_call_names(response: ChatResponse) -> tuple[str, ...]:
 
 class TestToolPermissionPreCall:
     @pytest.mark.covers("guardrail.tool_permission.pre_call.blocks", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pre_call_blocks_tool_outside_the_allow_list(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -134,6 +145,15 @@ class TestToolPermissionPreCall:
                 pytest.fail(f"tool_permission let a tool outside the allow-list through; got {result}")
 
     @pytest.mark.covers("guardrail.tool_permission.pre_call.allows", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pre_call_allows_permitted_tool(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -144,14 +164,17 @@ class TestToolPermissionPreCall:
         name = f"e2e-toolperm-allow-{unique_marker()}"
         _register_tool_permission(client, resources, name=name)
 
-        outcome = client.chat_raw(
-            scoped_key,
-            MODEL,
-            TOOL_PROMPT,
-            guardrails=[name],
-            max_tokens=128,
-            tools=[ALLOWED_TOOL],
-            tool_choice="required",
+        outcome = poll_until_guardrail_applied(
+            lambda: client.chat_raw(
+                scoped_key,
+                MODEL,
+                TOOL_PROMPT,
+                guardrails=[name],
+                max_tokens=128,
+                tools=[ALLOWED_TOOL],
+                tool_choice="required",
+            ),
+            name,
         )
 
         assert outcome.ok, f"the permitted tool must be served, got {outcome.status_code}: {outcome.body[:400]}"

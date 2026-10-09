@@ -10,7 +10,7 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -32,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
     get_ssl_configuration,
+    http2_enabled,
 )
 
 
@@ -87,8 +88,8 @@ class OpenAIError(BaseLLMException):
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
     e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
-    data: dict[str, Any],
-) -> dict[str, Any]:
+    data: Mapping[str, object],
+) -> dict[str, object]:
     """
     Helper function to read OpenAI UnprocessableEntityError and drop the params that raised an error from the error message.
 
@@ -223,7 +224,7 @@ class BaseOpenAILLM:
     def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
         """Whether litellm may close an SDK client built around ``http_client``.
 
-        ``get_async_http_client`` / ``get_sync_http_client`` hand back
+        ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
         ``litellm.aclient_session`` / ``litellm.client_session`` when the caller
         configured one. The SDK's ``close()`` closes whatever http client it was
         given, so an SDK client wrapping one of those shared sessions must never be
@@ -301,7 +302,7 @@ class BaseOpenAILLM:
             return _AZURE_OPENAI_INIT_PARAMS
 
     @staticmethod
-    def get_async_http_client(
+    def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient | None:
         if litellm.aclient_session is not None:
@@ -314,7 +315,7 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
-        transport: Final = AsyncHTTPHandler._create_async_transport(
+        transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
@@ -323,12 +324,20 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             verify=ssl_config,
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
+            http2=http2_enabled(),
         )
 
+    @classmethod
+    def get_async_http_client(
+        cls,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> httpx.AsyncClient | None:
+        return cls._get_async_http_client(shared_session)
+
     @staticmethod
-    def get_sync_http_client() -> httpx.Client | None:
+    def _get_sync_http_client() -> httpx.Client | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
@@ -343,7 +352,12 @@ class BaseOpenAILLM:
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
+            http2=http2_enabled(),
         )
+
+    @classmethod
+    def get_sync_http_client(cls) -> httpx.Client | None:
+        return cls._get_sync_http_client()
 
 
 class OpenAICredentials(NamedTuple):

@@ -17,7 +17,7 @@ from typing import Final, TypeAlias
 from litellm.llms.base_llm.auth.identity_source import InternalIssuerSource, ref_for_error_message
 from litellm.llms.base_llm.auth.jwt_signing import jwks_document_json, sign_es256_jwt
 
-SigningKeyReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
+SigningKeyReader: TypeAlias = Callable[[str], str | None]
 
 
 def _default_signing_key_reader(ref: str) -> str | None:

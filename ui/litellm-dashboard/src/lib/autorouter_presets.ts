@@ -1,3 +1,4 @@
+import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
 import {
   ComplexityRouterConfigPayload,
   hydrateTierLabels,
@@ -13,10 +14,18 @@ import {
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import { hydrateCustomDimensions } from "@/components/add_model/custom_dimensions";
+import {
+  hydrateDimensionWeights,
+  hydrateTierBoundaries,
+  hydrateTokenThresholds,
+  hydrateReasoningOverrideMinScore,
+} from "@/components/add_model/heuristic_scoring_knobs";
 import {
   TierModelParams,
   TierModelParamsByTier,
   hydrateTierModelParams,
+  normalizeTierModels,
 } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
@@ -58,12 +67,36 @@ export const normalizeModelName = (model: string): string => model.replace(/(\d)
 export interface DeploymentModelRef {
   modelGroup: string;
   underlyingModels: readonly string[];
+  provider?: string;
 }
 
 export interface ModelAvailability {
   modelGroups: Set<string>;
   underlyingIndex: Map<string, readonly string[]>;
+  nativeUnderlyingIndex: Map<string, readonly string[]>;
 }
+
+const NATIVE_MODEL_PROVIDERS: readonly (readonly [RegExp, string])[] = [
+  [/^(gpt-|o\d|text-embedding-)/, "openai"],
+  [/^claude-/, "anthropic"],
+  [/^gemini-/, "gemini"],
+  [/^deepseek-/, "deepseek"],
+  [/^muse-/, "meta"],
+  [/^kimi-/, "moonshot"],
+  [/^grok-/, "xai"],
+];
+
+const nativeModelProvider = (model: string): string | undefined =>
+  NATIVE_MODEL_PROVIDERS.find(([pattern]) => pattern.test(model))?.[1];
+
+const routingProvider = (model: string): string => {
+  if (model.includes("/")) return model.split("/")[0];
+  const native = nativeModelProvider(model);
+  return native === "openai" || native === "anthropic" ? native : "";
+};
+
+const deploymentProvider = (deployment: DeploymentModelRef): string =>
+  deployment.provider ?? routingProvider(deployment.underlyingModels[0] ?? "");
 
 const normalizeUnderlyingModel = (model: string): string | null => {
   if (model.includes("*")) return null;
@@ -100,32 +133,42 @@ export const buildModelAvailability = (
   deployments: readonly DeploymentModelRef[],
 ): ModelAvailability => {
   const groups = new Set(modelGroups);
+  const deploymentGroups = new Set(deployments.map((deployment) => deployment.modelGroup));
+  const deploymentProviders = new Map<string, Set<string>>();
+  for (const deployment of deployments) {
+    const providers = deploymentProviders.get(deployment.modelGroup) ?? new Set<string>();
+    providers.add(deploymentProvider(deployment));
+    deploymentProviders.set(deployment.modelGroup, providers);
+  }
   const literalEntries = deployments
     .filter((deployment) => groups.has(deployment.modelGroup))
     .flatMap((deployment) =>
       deployment.underlyingModels
         .map(normalizeUnderlyingModel)
-        .filter((key): key is string => key !== null)
-        .map((key) => ({ key, modelGroup: deployment.modelGroup })),
+        .map((key) => ({ key, modelGroup: deployment.modelGroup, sourceGroup: deployment.modelGroup })),
     );
   // Mirrors get_known_models_from_wildcard: a bare "*" model_name expands via its underlying
   // wildcard (or not at all), and a wildcard without a "/" expands to nothing.
-  const wildcardPatterns = Array.from(
-    new Set(
-      deployments
-        .flatMap((deployment) =>
-          deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup],
-        )
-        .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/")),
-    ),
+  const wildcardPatterns = deployments.flatMap((deployment) =>
+    (deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup])
+      .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/"))
+      .map((pattern) => ({ pattern, sourceGroup: deployment.modelGroup })),
   );
   const wildcardEntries = Array.from(groups)
-    .filter((group) => !group.includes("*") && wildcardPatterns.some((pattern) => matchesWildcard(pattern, group)))
-    .map((group) => ({ key: normalizeUnderlyingModel(group), modelGroup: group }))
-    .filter((entry): entry is { key: string; modelGroup: string } => entry.key !== null);
+    .filter((group) => !group.includes("*") && !deploymentGroups.has(group))
+    .flatMap((group) =>
+      wildcardPatterns
+        .filter(({ pattern }) => matchesWildcard(pattern, group))
+        .map(({ sourceGroup }) => ({ key: normalizeUnderlyingModel(group), modelGroup: group, sourceGroup })),
+    );
   const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
+  const providersByGroup = new Map<string, Set<string>>();
   for (const entry of entries) {
+    const providers = providersByGroup.get(entry.modelGroup) ?? new Set<string>();
+    for (const provider of deploymentProviders.get(entry.sourceGroup) ?? []) providers.add(provider);
+    providersByGroup.set(entry.modelGroup, providers);
+    if (entry.key === null) continue;
     const groupsForKey = grouped.get(entry.key) ?? new Set<string>();
     groupsForKey.add(entry.modelGroup);
     grouped.set(entry.key, groupsForKey);
@@ -133,13 +176,23 @@ export const buildModelAvailability = (
   const underlyingIndex = new Map(
     Array.from(grouped, ([key, groupsForKey]) => [key, Array.from(groupsForKey).sort()] as const),
   );
-  return { modelGroups: groups, underlyingIndex };
+  const nativeUnderlyingIndex = new Map(
+    Array.from(underlyingIndex, ([key, matches]) => [
+      key,
+      matches.filter((group) => {
+        const native = nativeModelProvider(key);
+        const providers = providersByGroup.get(group);
+        return native !== undefined && providers?.size === 1 && providers.has(native);
+      }),
+    ]),
+  );
+  return { modelGroups: groups, underlyingIndex, nativeUnderlyingIndex };
 };
 
 export const deploymentRefsFromModelInfo = (
   rows: readonly {
     model_name?: string | null;
-    litellm_params?: { model?: string | null; base_model?: string | null } | null;
+    litellm_params?: { model?: string | null; base_model?: string | null; custom_llm_provider?: string | null } | null;
     model_info?: { base_model?: string | null } | null;
   }[],
 ): DeploymentModelRef[] =>
@@ -149,17 +202,27 @@ export const deploymentRefsFromModelInfo = (
       row.litellm_params?.base_model,
       row.model_info?.base_model,
     ].filter((model): model is string => Boolean(model));
-    return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
+    const provider = row.litellm_params?.custom_llm_provider || routingProvider(row.litellm_params?.model ?? "");
+    return row.model_name && underlyingModels.length > 0
+      ? [{ modelGroup: row.model_name, underlyingModels, provider }]
+      : [];
   });
 
-export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;
-  if (modelGroups.has(requiredModel)) return requiredModel;
+  if (modelGroups.has(requiredModel)) return [requiredModel];
   const normalized = normalizeModelName(requiredModel);
-  const groupMatch = Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
-  if (groupMatch !== undefined) return groupMatch;
+  const groupMatches = Array.from(modelGroups).filter((available) => normalizeModelName(available) === normalized);
+  if (groupMatches.length > 0) return groupMatches;
   const key = normalizeUnderlyingModel(requiredModel);
-  return key === null ? undefined : underlyingIndex.get(key)?.[0];
+  return key === null ? [] : underlyingIndex.get(key) ?? [];
+};
+
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+  const key = normalizeUnderlyingModel(requiredModel);
+  const nativeMatches = key === null ? [] : availability.nativeUnderlyingIndex.get(key) ?? [];
+  const matches = resolveAvailableModels(requiredModel, availability);
+  return matches.find((model) => nativeMatches.includes(model)) ?? nativeMatches[0] ?? matches[0];
 };
 
 export const getMissingModels = (
@@ -241,8 +304,9 @@ export const buildPresetPrefill = (
   config: ComplexityRouterConfigPayload,
   availability: ModelAvailability,
 ): PresetPrefill => {
+  const classifier = hydrateOssClassifier(config);
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
-  const resolveTier = (models: string[]): string[] => models.map(resolve);
+  const resolveTier = (models: string | string[]): string[] => normalizeTierModels(models).map(resolve);
   // Params key on the model name the preset spells while every tier entry is rewritten to the
   // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
   // serializeTierModelConfigs drops them for naming a model the tier no longer holds.
@@ -273,11 +337,12 @@ export const buildPresetPrefill = (
       },
       tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
-      classifier_type: config.classifier_type,
-      classifier_llm_config: config.classifier_llm_config && {
-        ...config.classifier_llm_config,
-        model: resolve(config.classifier_llm_config.model),
-      },
+      ...classifier,
+      heuristic_v2_success_threshold: config.heuristic_v2_success_threshold,
+      classifier_llm_config:
+        classifier.classifier_type !== "jev" && config.classifier_llm_config
+          ? { ...config.classifier_llm_config, model: resolve(config.classifier_llm_config.model) }
+          : undefined,
       classifier_context_window_size: config.classifier_context_window_size,
       classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
@@ -293,8 +358,16 @@ export const buildPresetPrefill = (
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      dimension_weights: hydrateDimensionWeights(config.dimension_weights),
+      custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
+      tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
+      token_thresholds: hydrateTokenThresholds(config.token_thresholds),
+      reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
       enable_context_window_escalation: config.enable_context_window_escalation,
       context_window_escalation_buffer: config.context_window_escalation_buffer,
+      cache_aware_routing: config.cache_aware_routing,
+      cache_aware_routing_output_tokens: config.cache_aware_routing_output_tokens,
+      cache_aware_routing_timeout_ms: config.cache_aware_routing_timeout_ms,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),
