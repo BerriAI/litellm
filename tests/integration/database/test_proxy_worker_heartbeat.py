@@ -30,6 +30,7 @@ async def heartbeat_database(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[t
                 / "litellm-proxy-extras/litellm_proxy_extras/migrations/20261009120000_proxy_worker_expiry/migration.sql"
             )
             await client.db.execute_raw(migration.read_text())
+            await client.db.execute_raw(migration.read_text())
             yield client, url
         finally:
             await client.disconnect()

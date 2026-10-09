@@ -1,1 +1,1 @@
-ALTER TABLE "LiteLLM_ProxyWorkerHeartbeat" ADD COLUMN "expires_at" TIMESTAMP(3);
+ALTER TABLE "LiteLLM_ProxyWorkerHeartbeat" ADD COLUMN IF NOT EXISTS "expires_at" TIMESTAMP(3);
