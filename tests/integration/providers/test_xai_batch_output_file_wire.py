@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Final
@@ -150,7 +151,22 @@ def _upstream_paths(gateway: Gateway, scenario_id: str) -> tuple[str, ...]:
     )
 
 
-def test_xai_batch_output_file_reports_results_size_and_is_never_looked_up_as_a_file(gateway: Gateway) -> None:
+def _results_reads(gateway: Gateway, batch: _XAIBatch, raw_batch_id: str) -> int:
+    return sum(path.endswith(f"/{raw_batch_id}/results") for path in _upstream_paths(gateway, batch.upstream.scenario_id))
+
+
+def _stable_results_reads(gateway: Gateway, batch: _XAIBatch, raw_batch_id: str) -> int:
+    def _read_twice() -> tuple[int, int]:
+        first: Final = _results_reads(gateway, batch, raw_batch_id)
+        time.sleep(3)
+        return first, _results_reads(gateway, batch, raw_batch_id)
+
+    return eventually(_read_twice, lambda reads: reads[0] == reads[1], seconds=30)[1]
+
+
+def test_xai_batch_output_file_is_sized_by_the_batch_job_and_never_downloaded_or_looked_up_on_read(
+    gateway: Gateway,
+) -> None:
     with gateway.scenario() as scenario:
         batch: Final = _create_xai_batch(scenario)
         raw_batch_id: Final = XAI_BATCH_ID.replace("$REQUEST_ID", batch.upstream.scenario_id)
@@ -159,6 +175,15 @@ def test_xai_batch_output_file_reports_results_size_and_is_never_looked_up_as_a_
         retrieved: Final = JSON_OBJECT.validate_json(retrieved_response.content)
         assert retrieved["status"] == "completed", retrieved
         output_id: Final = string_value(retrieved["output_file_id"])
+
+        first_read: Final = gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key)
+        assert first_read.status_code == 200, first_read.text
+        first_detail: Final = JSON_OBJECT.validate_json(first_read.content)
+        assert (first_detail["id"], first_detail["purpose"], first_detail["filename"]) == (
+            output_id,
+            "batch_output",
+            f"{raw_batch_id}_results.jsonl",
+        ), first_detail
 
         content: Final = gateway.request("GET", f"/v1/files/{output_id}/content", key=batch.owner_key)
         assert content.status_code == 200, content.text
@@ -170,29 +195,28 @@ def test_xai_batch_output_file_reports_results_size_and_is_never_looked_up_as_a_
             ("req-2", "second"),
         ], lines
 
-        details: Final = tuple(gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key) for _ in range(3))
-        assert all(response.status_code == 200 for response in details), [response.text for response in details]
-        detail: Final = JSON_OBJECT.validate_json(details[-1].content)
-        assert (detail["id"], detail["purpose"], detail["filename"], detail["bytes"]) == (
-            output_id,
-            "batch_output",
-            f"{raw_batch_id}_results.jsonl",
-            len(content.content),
-        ), detail
-        assert "litellm_details_fallback" not in detail, detail
-
-        listed: Final = eventually(
-            lambda: gateway.request("GET", "/v1/files", key=batch.owner_key, params={"purpose": "batch_output"}).json()[
-                "data"
-            ],
-            lambda values: any(value.get("id") == output_id for value in values),
-            seconds=30,
+        sized: Final = eventually(
+            lambda: JSON_OBJECT.validate_json(
+                gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key).content
+            ),
+            lambda detail: detail.get("bytes") == len(content.content),
+            seconds=60,
         )
-        listed_output: Final = next(value for value in listed if value.get("id") == output_id)
+        assert (sized["filename"], "litellm_details_fallback" in sized) == (f"{raw_batch_id}_results.jsonl", False)
+
+        settled_reads: Final = _stable_results_reads(gateway, batch, raw_batch_id)
+        reads: Final = (
+            *(gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key) for _ in range(3)),
+            gateway.request("GET", f"/v1/batches/{batch.batch_id}", key=batch.owner_key),
+            gateway.request("GET", "/v1/files", key=batch.owner_key, params={"purpose": "batch_output"}),
+        )
+        assert all(response.status_code == 200 for response in reads), [response.text for response in reads]
+        listed_output: Final = next(value for value in reads[-1].json()["data"] if value.get("id") == output_id)
         assert (listed_output["filename"], listed_output["bytes"]) == (
             f"{raw_batch_id}_results.jsonl",
             len(content.content),
         ), listed_output
+        assert _results_reads(gateway, batch, raw_batch_id) == settled_reads
 
         file_lookups: Final = tuple(
             path for path in _upstream_paths(gateway, batch.upstream.scenario_id) if "/v1/files/batch_" in path
@@ -200,7 +224,9 @@ def test_xai_batch_output_file_reports_results_size_and_is_never_looked_up_as_a_
         assert file_lookups == (), f"xAI batch id was looked up as a file: {file_lookups}"
 
 
-def test_xai_batch_output_file_recovers_its_details_once_results_become_available(gateway: Gateway) -> None:
+def test_xai_batch_output_file_answers_at_once_while_results_are_unavailable_and_is_sized_once_they_return(
+    gateway: Gateway,
+) -> None:
     with gateway.scenario() as scenario:
         batch: Final = _create_xai_batch(scenario, results_status=503)
         raw_batch_id: Final = XAI_BATCH_ID.replace("$REQUEST_ID", batch.upstream.scenario_id)
@@ -208,21 +234,28 @@ def test_xai_batch_output_file_recovers_its_details_once_results_become_availabl
         assert retrieved_response.status_code == 200, retrieved_response.text
         output_id: Final = string_value(JSON_OBJECT.validate_json(retrieved_response.content)["output_file_id"])
 
+        started: Final = time.monotonic()
         unavailable: Final = gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key)
+        elapsed: Final = time.monotonic() - started
         assert unavailable.status_code == 200, unavailable.text
-        assert JSON_OBJECT.validate_json(unavailable.content)["bytes"] == 0, unavailable.text
+        unavailable_detail: Final = JSON_OBJECT.validate_json(unavailable.content)
+        assert (unavailable_detail["filename"], unavailable_detail["bytes"]) == (
+            f"{raw_batch_id}_results.jsonl",
+            0,
+        ), unavailable_detail
+        assert elapsed < 5, elapsed
 
         register_scenario(batch.upstream.scenario_id, _xai_routes())
+        content: Final = gateway.request("GET", f"/v1/files/{output_id}/content", key=batch.owner_key)
+        assert content.status_code == 200, content.text
         recovered: Final = eventually(
             lambda: JSON_OBJECT.validate_json(
                 gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key).content
             ),
-            lambda detail: detail.get("filename") == f"{raw_batch_id}_results.jsonl",
-            seconds=30,
+            lambda detail: detail.get("bytes") == len(content.content),
+            seconds=60,
         )
-        content: Final = gateway.request("GET", f"/v1/files/{output_id}/content", key=batch.owner_key)
-        assert content.status_code == 200, content.text
-        assert (recovered["purpose"], recovered["bytes"]) == ("batch_output", len(content.content)), recovered
+        assert (recovered["purpose"], recovered["filename"]) == ("batch_output", f"{raw_batch_id}_results.jsonl")
 
         file_lookups: Final = tuple(
             path for path in _upstream_paths(gateway, batch.upstream.scenario_id) if "/v1/files/batch_" in path
@@ -230,7 +263,7 @@ def test_xai_batch_output_file_recovers_its_details_once_results_become_availabl
         assert file_lookups == (), f"xAI batch id was looked up as a file: {file_lookups}"
 
 
-def test_xai_batch_output_file_registered_by_the_poller_reuses_the_downloaded_results(gateway: Gateway) -> None:
+def test_xai_batch_output_file_registered_by_the_batch_job_first_carries_the_downloaded_size(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         batch: Final = _create_xai_batch(scenario)
         raw_batch_id: Final = XAI_BATCH_ID.replace("$REQUEST_ID", batch.upstream.scenario_id)

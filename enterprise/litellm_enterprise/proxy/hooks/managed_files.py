@@ -194,6 +194,13 @@ def _is_transient_file_retrieve_error(error: Exception) -> bool:
     return isinstance(error, (httpx.TransportError, APIConnectionError, asyncio.TimeoutError))
 
 
+def _with_measured_size(file_object: OpenAIFileObject, size_bytes: int | None) -> OpenAIFileObject:
+    """Fill a file object whose provider reported no size (0 bytes) with a size measured elsewhere."""
+    if not size_bytes or file_object.bytes:
+        return file_object
+    return file_object.model_copy(update={"bytes": size_bytes})
+
+
 def _proxy_llm_router() -> Router | None:
     import litellm.proxy.proxy_server as proxy_server_module
 
@@ -836,9 +843,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         stored: LiteLLM_ManagedFileTable,
         file_object: OpenAIFileObject,
     ) -> None:
-        if not await ManagedFileRepository(self.prisma_client).update_file_object(stored.unified_file_id, file_object):
+        stored_size: Final = stored.file_object.bytes if stored.file_object is not None else None
+        sized_file_object: Final = _with_measured_size(file_object, stored_size)
+        if not await ManagedFileRepository(self.prisma_client).update_file_object(
+            stored.unified_file_id, sized_file_object
+        ):
             return
-        refreshed_row: Final = stored.model_copy(update={"file_object": file_object})
+        refreshed_row: Final = stored.model_copy(update={"file_object": sized_file_object})
         await self.internal_usage_cache.async_set_cache(
             key=stored.unified_file_id,
             value=refreshed_row.model_dump(),
@@ -885,6 +896,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
             return
         if stored_object is not None and not stored_object.litellm_details_fallback:
+            if stored_file is not None and size_bytes and not stored_object.bytes:
+                await self._save_refreshed_file_object(stored_file, _with_measured_size(stored_object, size_bytes))
             return
 
         fallback_written_recently: Final = (
@@ -925,12 +938,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if stored_file is not None:
-            await self._save_refreshed_file_object(stored_file, file_object)
+            await self._save_refreshed_file_object(stored_file, _with_measured_size(file_object, size_bytes))
             return
 
         await self.store_unified_file_id(
             file_id=unified_file_id,
-            file_object=file_object,
+            file_object=_with_measured_size(file_object, size_bytes),
             litellm_parent_otel_span=litellm_parent_otel_span,
             model_mappings={model_id: provider_file_id} if model_id else {},
             user_api_key_dict=owner,
@@ -1942,7 +1955,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
                     await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
-                    return _public_file_object(refreshed_file_object, file_id)
+                    return _public_file_object(_with_measured_size(refreshed_file_object, file_object.bytes), file_id)
                 except Exception as error:
                     verbose_logger.warning(
                         "Failed to refresh batch file object for "

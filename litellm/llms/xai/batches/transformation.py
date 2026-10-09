@@ -6,6 +6,7 @@ xAI batches carry request counters, not a status, and no output file: results ar
 """
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -85,22 +86,19 @@ def is_xai_batch_results_id(file_id: str) -> bool:
     return file_id.startswith(XAI_BATCH_ID_PREFIX)
 
 
-def xai_batch_output_file_id(batch: LiteLLMBatch) -> str:
+def xai_batch_results_file_object(batch: LiteLLMBatch) -> OpenAIFileObject:
+    """Describe a completed batch's results as a file without downloading them, so the size is a 0 placeholder."""
     if batch.output_file_id is None:
         raise xai_batches_error(
             f"xAI batch {batch.id} has no results file until it completes (status={batch.status})", 404, _EMPTY_HEADERS
         )
-    return batch.output_file_id
-
-
-def xai_batch_results_file_object(output_file_id: str, created_at: int, size_bytes: int) -> OpenAIFileObject:
     return OpenAIFileObject(
-        id=output_file_id,
+        id=batch.output_file_id,
         object="file",
         purpose="batch_output",
-        filename=f"{output_file_id}_results.jsonl",
-        bytes=size_bytes,
-        created_at=created_at,
+        filename=f"{batch.output_file_id}_results.jsonl",
+        bytes=0,
+        created_at=int(time.time()),
         status="processed",
     )
 
