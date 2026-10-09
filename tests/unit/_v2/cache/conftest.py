@@ -1,0 +1,1 @@
+from tests._support.native_isolation import isolate_ocr_test_state as isolate_ocr_test_state

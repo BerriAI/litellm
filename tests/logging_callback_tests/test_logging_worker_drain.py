@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Final
 
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from tests._support.child_interpreter import run_child_interpreter
 
 CANARY_MODULE: Final = Path(__file__).with_name("logging_worker_drain_canary.py")
 CANARY_RUN: Final = (

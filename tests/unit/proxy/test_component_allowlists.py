@@ -71,7 +71,7 @@ from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from tests._support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:

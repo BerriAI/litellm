@@ -7,10 +7,12 @@ present. The parity cases need the extension and are skipped when it is not buil
 from __future__ import annotations
 
 import json
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import Final
 
 import pytest
+import tiktoken
+from tokenizers import Tokenizer as ReferenceTokenizer
 
 import litellm
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
@@ -18,8 +20,8 @@ from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
 from litellm.rust_bridge import token_counter as bridge
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
-from litellm.rust_bridge._native import Tokenizer
 from litellm.utils import claude_json_str
+from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
 
 MODEL: Final = "claude-sonnet-4-5-20250929"
 CL100K_MODEL: Final = "gpt-4"
@@ -83,6 +85,7 @@ def fake_tokenizers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tokenizer_dispatch, "native_anthropic", lambda: anthropic)
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 async def test_native_count_returns_typed_count_and_reuses_one_counter(fake_tokenizers: None) -> None:
     factory: Final = _RecordingFactory()
@@ -99,6 +102,7 @@ async def test_native_count_returns_typed_count_and_reuses_one_counter(fake_toke
     assert json.loads(factory.counters[0].tokenizer.json or "")["model"]["type"] == "BPE"
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", ("cl100k_base", "o200k_base"))
 async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(
@@ -117,6 +121,7 @@ async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(
     assert factory.counters[0].bodies == [BODY, BODY]
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 async def test_each_tokenizer_gets_its_own_cached_counter(fake_tokenizers: None) -> None:
     factory: Final = _RecordingFactory()
@@ -199,14 +204,15 @@ def test_rust_tokenizer_declines_legacy_message_accounting_python_prices_differe
     assert bridge.rust_tokenizer(CL100K_MODEL) == "cl100k_base"
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.parametrize("model", (MODEL, CL100K_MODEL, O200K_MODEL, "gpt-5", "o3"))
-def test_rust_tokenizer_names_the_encoding_python_actually_counts_with(model: str) -> None:
+def test_rust_tokenizer_names_the_encoding_python_actually_counts_with(model: str, native: ModuleType) -> None:
     text: Final = (
         "Hello, world! camelCase ABCdef \u00e9\u00e8 12345 \u3053\u3093\u306b\u3061\u306f <|endoftext|>\r\n" * 9
     )
     python_count: Final = litellm.token_counter(model=model, text=text)
-    cl100k_count: Final = Tokenizer.from_tiktoken("cl100k_base").count(text)
-    o200k_count: Final = Tokenizer.from_tiktoken("o200k_base").count(text)
+    cl100k_count: Final = native.Tokenizer.from_tiktoken("cl100k_base").count(text)
+    o200k_count: Final = native.Tokenizer.from_tiktoken("o200k_base").count(text)
     assert cl100k_count != o200k_count
     match bridge.rust_tokenizer(model):
         case "cl100k_base":
@@ -214,7 +220,7 @@ def test_rust_tokenizer_names_the_encoding_python_actually_counts_with(model: st
         case "o200k_base":
             assert python_count == o200k_count
         case "anthropic":
-            assert python_count == Tokenizer.from_json(claude_json_str).count(text)
+            assert python_count == native.Tokenizer.from_json(claude_json_str).count(text)
             assert python_count not in {cl100k_count, o200k_count}
         case None:
             pytest.fail(f"{model} must have a Rust tokenizer")
@@ -307,13 +313,13 @@ PARITY_MODELS: Final[tuple[tuple[str, bridge.RustTokenizer], ...]] = (
 )
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("model", "tokenizer"), PARITY_MODELS)
 @pytest.mark.parametrize("request_body", PARITY_REQUESTS)
 async def test_native_count_matches_python_budget_counter(
-    request_body: dict[str, object], model: str, tokenizer: bridge.RustTokenizer
+    request_body: dict[str, object], model: str, tokenizer: bridge.RustTokenizer, native: ModuleType
 ) -> None:
-    native: Final = pytest.importorskip("litellm.rust_bridge._native")
     body: Final = json.dumps(request_body).replace(MODEL, model)
     parsed: Final = json.loads(body)
 
@@ -322,16 +328,16 @@ async def test_native_count_matches_python_budget_counter(
     assert counted.input_tokens == count_input_tokens_for_model(request_body=parsed, model=model)
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("model", "tokenizer"), ((CL100K_MODEL, "cl100k_base"), (O200K_MODEL, "o200k_base")))
 async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
-    model: str, tokenizer: bridge.RustTokenizer
+    model: str, tokenizer: bridge.RustTokenizer, native: ModuleType
 ) -> None:
     """Python encodes tiktoken text in fixed-size chunks (drift of up to one token per chunk boundary); Rust does not."""
-    native: Final = pytest.importorskip("litellm.rust_bridge._native")
     text: Final = "x " * 20_000
     body: Final = {"model": model, "messages": [{"role": "user", "content": text}]}
-    encoding: Final = Tokenizer.from_tiktoken(tokenizer)
+    encoding: Final = native.Tokenizer.from_tiktoken(tokenizer)
     exact: Final = 3 + encoding.count("user") + encoding.count(text) + 3
     chunks: Final = -(-len(text) // TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS)
 
@@ -356,14 +362,31 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 )
 
 
+@pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", TOKENIZERS)
 @pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
 async def test_native_declines_shapes_python_prices_differently(
-    request_body: dict[str, object], tokenizer: bridge.RustTokenizer
+    request_body: dict[str, object], tokenizer: bridge.RustTokenizer, native: ModuleType
 ) -> None:
-    native: Final = pytest.importorskip("litellm.rust_bridge._native")
     raw, _ = _counted(request_body, MODEL_BY_TOKENIZER[tokenizer])
 
     with pytest.raises(native.RustBridgeDeclined):
         await bridge.native_count(native.TokenCounter, tokenizer, raw)
+
+
+@pytest.mark.requires_rust_extension
+@pytest.mark.parametrize("configured", (False, True))
+@pytest.mark.asyncio
+async def test_fast_count_preserves_huggingface_configuration(configured: bool, native: ModuleType) -> None:
+    reference: Final = ReferenceTokenizer.from_str(TOKENIZER_JSON)
+    if configured:
+        reference.enable_truncation(max_length=3)
+        reference.enable_padding(pad_id=0, pad_token="[UNK]", length=5)
+    tokenizer: Final = native.Tokenizer.from_json(reference.to_str())
+    counter: Final = native.TokenCounter.from_tokenizer(tokenizer, fast=True)
+    for text in ("", "Hello", "Hello World Hello World", "[BOS] Hello"):
+        expected: Final = len(reference.encode(text))
+        assert tokenizer.count(text, fast=True) == tokenizer.count(text) == expected
+        result: Final = await counter.acount_request(json.dumps({"prompt": text}).encode())
+        assert result["input_tokens"] == expected

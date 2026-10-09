@@ -24,7 +24,28 @@ GROUPS: Final = MappingProxyType(
     }
 )
 GITHUB_FILES: Final = frozenset(
-    {"tests/integration/database/test_roi_observed.py", "tests/integration/mcp/test_interactions.py"}
+    {
+        "tests/integration/database/test_roi_observed.py",
+        "tests/integration/mcp/test_interactions.py",
+        "tests/integration/observability/test_trace_query_api.py",
+        "tests/integration/sdk/native/test_fork_guard_sdk.py",
+        "tests/integration/sdk/native/test_inference_sdk.py",
+        "tests/integration/sdk/native/test_legacy_cache_sdk.py",
+        "tests/integration/sdk/native/test_messages_callbacks_sdk.py",
+        "tests/integration/sdk/native/test_messages_request_shaping_sdk.py",
+        "tests/integration/sdk/native/test_messages_secrets_sdk.py",
+        "tests/integration/sdk/native/test_ocr_callbacks_sdk.py",
+        "tests/integration/sdk/native/test_ocr_cohere_sdk.py",
+        "tests/integration/sdk/native/test_ocr_dispatch_sdk.py",
+        "tests/integration/sdk/native/test_ocr_guardrails_sdk.py",
+        "tests/integration/sdk/native/test_ocr_lifecycle_sdk.py",
+        "tests/integration/sdk/native/test_ocr_requests_sdk.py",
+        "tests/integration/sdk/native/test_ocr_secrets_sdk.py",
+        "tests/integration/sdk/native/test_secret_manager_sdk.py",
+        "tests/integration/sdk/native/test_tiktoken_encodings_sdk.py",
+        "tests/integration/sdk/native/test_trace_storage_sdk.py",
+        "tests/integration/sdk/native/test_v2_cache_sdk.py",
+    }
 )
 
 
