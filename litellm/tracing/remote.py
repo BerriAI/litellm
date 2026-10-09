@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final, NoReturn
@@ -192,12 +192,16 @@ class RemoteTraceStore:
         return json.dumps(await self._read({"operation": "query", "name": name, "parameters": dict(parameters)}))
 
 
-async def bounded_response(response: httpx.Response, limit: int) -> bytes:
+async def bounded_response(
+    response: httpx.Response, limit: int, *, reserve: Callable[[int], None] | None = None
+) -> bytes:
     from io import BytesIO
 
     with BytesIO() as buffer:
         async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
             if buffer.tell() + len(chunk) > limit:
                 raise RuntimeError("Lens response exceeds the size limit")
+            if reserve is not None:
+                reserve(len(chunk))
             buffer.write(chunk)
         return buffer.getvalue()

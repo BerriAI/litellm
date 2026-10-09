@@ -68,6 +68,8 @@ The embedded page uses the LiteLLM session without a second Lens login. The gate
 
 The adapter forwards Lens requests under `/lens` using the supported public contract. Lens implements the product behavior and owns its records. Keep ordinary inference authentication, model routing, spend accounting and gateway-owned storage unchanged when editing this integration
 
+The forwarding adapter allows up to 64 MiB per request or response body and 128 MiB of buffered payloads across concurrent Lens requests per gateway process. It holds that capacity until the response is sent, and releases it on errors or cancellation. When this capacity is full, Lens requests return HTTP 503 with `Retry-After: 1`. This budget covers the adapter's buffers; it does not limit total gateway memory or change inference admission
+
 Gateway telemetry delivery uses a bounded asynchronous queue and bounded retries. A Lens outage must not block ordinary inference; delivery can drop records after its retry or queue limit. Validate both the successful delivery path and the unavailable-service path when changing the relay
 
 The existing `clickhouse` callback remains an independent gateway spend writer. It uses `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE` and `AGENT_TRACING_RETENTION_DAYS`, and owns only `spend_logs` and its `_litellm_spend_migrations` ledger. Its existing schema-provisioning precondition is preserved: `ClickHouseBatchLogger` does not create tables automatically. The [native isolation qualification](evidence/lens-native-isolation.json) explicitly calls `await logger.storage.ensure_schema()` before exercising a fresh database. Lens provisions its own schema during startup separately

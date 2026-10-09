@@ -17,6 +17,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.lens.buffering import FORWARD_BUFFER_BUDGET, BodyReservation, BufferBudget, BufferedResponse
 from litellm.tracing.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
@@ -137,6 +138,8 @@ async def forward(
     connection: Connection | None,
     client: httpx.AsyncClient,
     now: int,
+    *,
+    budget: BufferBudget = FORWARD_BUFFER_BUDGET,
 ) -> Response:
     if connection is None:
         raise HTTPException(503, "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service")
@@ -158,29 +161,39 @@ async def forward(
         "accept": "application/json",
     }
     endpoint: Final = connection.remote.endpoint("/lens" + ("/" + quote(path, safe="/") if path else ""))
+    reservation: Final = BodyReservation(budget)
     try:
         async with client.stream(
             request.method,
             endpoint,
             params=tuple(request.query_params.multi_items()),
-            content=await request_body(request),
+            content=await request_body(request, reservation=reservation),
             headers=headers,
         ) as response:
-            body: Final = await bounded_response(response, MAX_RESPONSE_BYTES)
-            return Response(
+            body: Final = await bounded_response(response, MAX_RESPONSE_BYTES, reserve=reservation.reserve)
+            return BufferedResponse(
                 body,
                 status_code=response.status_code,
                 headers={name: value for name, value in response.headers.items() if name in _RESPONSE_HEADERS},
+                reservation=reservation,
             )
     except (httpx.HTTPError, RuntimeError) as error:
+        reservation.release()
         raise HTTPException(503, "Lens service is unavailable") from error
+    except BaseException:
+        reservation.release()
+        raise
 
 
-async def request_body(request: Request, limit: int = MAX_RESPONSE_BYTES) -> bytes:
+async def request_body(
+    request: Request, limit: int = MAX_RESPONSE_BYTES, reservation: BodyReservation | None = None
+) -> bytes:
     with BytesIO() as body:
         async for chunk in request.stream():
             if body.tell() + len(chunk) > limit:
                 raise HTTPException(413, "Lens request is too large")
+            if reservation is not None:
+                reservation.reserve(len(chunk))
             body.write(chunk)
         return body.getvalue()
 
