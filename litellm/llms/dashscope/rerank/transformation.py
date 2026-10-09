@@ -169,7 +169,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
             request["return_documents"] = optional_rerank_params["return_documents"]
         if optional_rerank_params.get("instruction") is None:
             return request
-        return dict(  # mutable-ok: rerank transport requires a JSON-serializable dict
+        return dict(
             request, instruct=optional_rerank_params["instruction"]
         )
 
