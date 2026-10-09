@@ -926,7 +926,7 @@ async def test_run_budget_stops_the_loop_and_leaves_the_backlog_for_the_next_run
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     started_at = time.monotonic()
-    result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, time.monotonic() + 0.25)
+    result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, time.monotonic() + 1.0)
     elapsed = time.monotonic() - started_at
 
     assert result.stop_reason == "budget_exhausted"
