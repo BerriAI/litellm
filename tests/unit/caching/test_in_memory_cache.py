@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -274,3 +275,79 @@ def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
     assert cache.get_cache("second") is None
     assert cache.get_cache("third") == "replacement"
     assert cache.get_cache("fourth") == "new"
+
+
+def test_in_memory_cache_refresh_ttl_extends_a_live_key_and_rejects_an_absent_or_expired_one() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(clock=clock)
+    cache.set_cache("live", "v", ttl=10)
+    cache.set_cache("stale", "v", ttl=10)
+    clock.return_value = 9.0
+    assert cache.refresh_ttl("live", 100) is True
+    assert cache.refresh_ttl("absent", 100) is False
+    clock.return_value = 11.0
+    assert cache.refresh_ttl("stale", 100) is False
+    assert cache.get_cache("stale") is None
+    assert cache.get_cache("live") == "v"
+    clock.return_value = 110.0
+    assert cache.get_cache("live") is None
+
+
+def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(max_size_in_memory=10, clock=clock)
+    cache.set_cache("pin", "v", ttl=60)
+    for tick in range(1, 1_001):
+        clock.return_value = float(tick)
+        assert cache.refresh_ttl("pin", 60) is True
+    assert len(cache.expiration_heap) <= 2
+    assert cache.get_cache("pin") == "v"
+
+
+def test_in_memory_cache_refreshing_a_pin_behind_a_live_neighbour_keeps_the_heap_bounded() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(max_size_in_memory=3, clock=clock)
+    cache.set_cache("neighbour", "v", ttl=3600)
+    cache.set_cache("pin", "v", ttl=3600)
+    for tick in range(1, 1_001):
+        clock.return_value = float(tick)
+        assert cache.refresh_ttl("pin", 3600) is True
+    assert len(cache.expiration_heap) <= 2 * len(cache.cache_dict)
+    cache.set_cache("third", "v", ttl=3600)
+    cache.set_cache("fourth", "v", ttl=3600)
+    assert cache.get_cache("neighbour") is None
+    assert cache.get_cache("pin") == "v"
+    assert cache.get_cache("third") == "v"
+    assert cache.get_cache("fourth") == "v"
+
+
+def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(max_size_in_memory=2, clock=clock)
+    cache.set_cache("first", "v", ttl=60)
+    cache.set_cache("second", "v", ttl=60)
+    clock.return_value = 30.0
+    assert cache.refresh_ttl("first", 60) is True
+    assert cache.get_cache("first") == "v"
+    assert cache.get_cache("second") == "v"
+
+
+def test_in_memory_cache_updating_a_present_key_in_a_full_cache_keeps_its_neighbours() -> None:
+    """A Redis-first pin read copies its hit into the local cache on every pinned request, so an
+    update that made room for a key already present would evict a live neighbour each turn."""
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock: Final = Clock()
+    cache: Final = InMemoryCache(max_size_in_memory=2, default_ttl=60, clock=clock)
+    cache.set_cache("pin", "SIMPLE", ttl=300)
+    cache.set_cache("neighbour", "kept", ttl=30)
+    cache.set_cache("pin", "COMPLEX", ttl=300)
+
+    assert cache.get_cache("neighbour") == "kept"
+    assert cache.get_cache("pin") == "COMPLEX"
+    assert len(cache.cache_dict) == 2

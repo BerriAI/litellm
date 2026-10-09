@@ -1611,3 +1611,80 @@ def test_call_stack_info_skips_native_lifecycle_frames():
         return native_drive()
 
     assert anthropic_messages() == "anthropic_messages <- test_call_stack_info_skips_native_lifecycle_frames"
+
+
+@pytest.fixture
+def get_cache_with_service_logger(redis_no_ping: None) -> Iterator[tuple[RedisCache, ServiceLogging]]:
+    service_logger = ServiceLogging(mock_testing=True)
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        yield RedisCache(host="127.0.0.1", port=6379, service_logger_obj=service_logger), service_logger
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_or_raise_reports_a_hit_to_the_service_success_hook(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    """The strict read serves the session pin on every pinned request, so a read that bypassed the
+    service hooks would drop that path's Redis latency from the service metrics and traces."""
+    cache, service_logger = get_cache_with_service_logger
+    client = MagicMock()
+    client.get = AsyncMock(return_value=b'"pinned"')
+
+    with patch.object(cache, "init_async_client", return_value=client):
+        assert await cache.async_get_cache_or_raise("lit9316") == "pinned"
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_async_success_hook == 1
+    assert service_logger.mock_testing_async_failure_hook == 0
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_or_raise_reports_a_failed_read_before_raising(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    cache, service_logger = get_cache_with_service_logger
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=OSError("redis unavailable"))
+
+    with patch.object(cache, "init_async_client", return_value=client), pytest.raises(OSError, match="redis unavailable"):
+        await cache.async_get_cache_or_raise("lit9316")
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+    assert service_logger.mock_testing_async_success_hook == 0
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_reports_an_undecodable_value_as_a_failed_read(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    """A value neither JSON nor a Python literal is swallowed into a miss, and the service hooks
+    must say the read failed, as they did before the GET and its decode shared one helper."""
+    cache, service_logger = get_cache_with_service_logger
+    client = MagicMock()
+    client.get = AsyncMock(return_value=b"not json and not a literal")
+
+    with patch.object(cache, "init_async_client", return_value=client):
+        assert await cache.async_get_cache("lit9316") is None
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+    assert service_logger.mock_testing_async_success_hook == 0
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_or_raise_reports_an_undecodable_value_as_a_failed_read(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    cache, service_logger = get_cache_with_service_logger
+    client = MagicMock()
+    client.get = AsyncMock(return_value=b"not json and not a literal")
+
+    with patch.object(cache, "init_async_client", return_value=client), pytest.raises((SyntaxError, ValueError)):
+        await cache.async_get_cache_or_raise("lit9316")
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+    assert service_logger.mock_testing_async_success_hook == 0
