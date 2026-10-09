@@ -749,6 +749,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Bespoke",
+    "provider_display_name": "Bespoke Nimble",
+    "litellm_provider": "bespoke",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "bespoke/nimble-latest"
+  },
+  {
     "provider": "BYTEZ",
     "provider_display_name": "Bytez",
     "litellm_provider": "bytez",
@@ -1882,6 +1910,34 @@
       }
     ],
     "default_model_placeholder": "jina_ai/"
+  },
+  {
+    "provider": "Laya",
+    "provider_display_name": "Laya",
+    "litellm_provider": "laya",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "laya/english"
   },
   {
     "provider": "LAMBDA_AI",

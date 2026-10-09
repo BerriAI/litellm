@@ -8989,6 +8989,10 @@ class ProviderConfigManager:
             return litellm.CloudflareDecisionsConfig()
         if provider == LlmProviders.STRANDS_DECIDER:
             return litellm.StrandsDeciderDecisionsConfig()
+        if provider == LlmProviders.LAYA:
+            return litellm.LayaDecisionsConfig()
+        if provider == LlmProviders.BESPOKE:
+            return litellm.BespokeDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
         return None

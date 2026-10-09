@@ -1681,6 +1681,12 @@ if TYPE_CHECKING:
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
     )
+    from .llms.laya.decisions.transformation import (
+        LayaDecisionsConfig as LayaDecisionsConfig,
+    )
+    from .llms.bespoke.decisions.transformation import (
+        BespokeDecisionsConfig as BespokeDecisionsConfig,
+    )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )

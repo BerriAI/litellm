@@ -12,6 +12,7 @@ import zlib
 from collections.abc import Mapping
 from hashlib import sha256
 from itertools import islice
+from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
@@ -39,14 +40,13 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 
+DECISIONS_UPSTREAM_PATHS: Final = MappingProxyType({"perplexity": "/v1/decisions", "typesafe": "/v1/systemone"})
+
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
 
 
-_CASES: Final = tuple(
-    pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name)
-    for case in CASES
-)
+_CASES: Final = tuple(pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in CASES)
 
 
 def _wav_bytes(seconds: float) -> bytes:
@@ -98,9 +98,9 @@ def _assert_stream_has_no_error(response_text: str) -> None:
         if payload == "[DONE]":
             continue
         parsed = JSON_OBJECT.validate_json(payload)
-        assert (
-            "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}
-        ), f"stream carried an error event: {parsed}"
+        assert "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}, (
+            f"stream carried an error event: {parsed}"
+        )
 
 
 def _replace_model(value: JsonValue, model_name: str) -> JsonValue:
@@ -132,11 +132,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
     with gateway.scenario() as scenario:
         expected: Final = case.expected
         team_id: Final = scenario.team() if isinstance(expected, ExactExpected) and expected.rollups else None
-        user_id: Final = (
-            scenario.user(team_id=team_id)
-            if team_id is not None
-            else None
-        )
+        user_id: Final = scenario.user(team_id=team_id) if team_id is not None else None
         key: Final = (
             scenario.key(team_id=team_id, user_id=user_id)
             if team_id is not None and user_id is not None
@@ -145,9 +141,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         passthrough_provider: Final = case.passthrough_provider
         scenario_id: Final = f"sc-{marker}-{sha256(key.encode()).hexdigest()[:12]}"
         scenario_handle: Final = (
-            register_scenario(scenario_id, case.response)
-            if passthrough_provider in {"gemini", "anthropic"}
-            else None
+            register_scenario(scenario_id, case.response) if passthrough_provider in {"gemini", "anthropic"} else None
         )
         if scenario_handle is not None:
             scenario.cleanups.callback(delete_scenario, scenario_handle)
@@ -171,13 +165,17 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         model_name: Final = (
             case.model
             if passthrough_provider in {"gemini", "anthropic"}
-            else deployment.model_name if deployment is not None else None
+            else deployment.model_name
+            if deployment is not None
+            else None
         )
         assert model_name is not None
         request_model: Final = (
             case.model.rsplit("/", 1)[-1]
             if passthrough_provider in {"gemini", "anthropic"}
-            else fallback_deployment.model_name if fallback_deployment is not None else model_name
+            else fallback_deployment.model_name
+            if fallback_deployment is not None
+            else model_name
         )
         base_request_values: Final = (
             _replace_model(case.request, request_model)
@@ -185,26 +183,18 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             else {**case.request, "model": model_name}
         )
         end_user_id: Final = (
-            f"end-user-{uuid.uuid4()}"
-            if isinstance(expected, ExactExpected) and expected.rollups
-            else None
+            f"end-user-{uuid.uuid4()}" if isinstance(expected, ExactExpected) and expected.rollups else None
         )
         request_headers: Final = (
             {
                 "x-pass-x-scripted-scenario": scenario_id,
-                **(
-                    {"x-goog-api-key": key}
-                    if passthrough_provider == "gemini"
-                    else {}
-                ),
+                **({"x-goog-api-key": key} if passthrough_provider == "gemini" else {}),
             }
             if passthrough_provider is not None
             else {}
         )
         request_path: Final = (
-            case.endpoint.replace("$MODEL", request_model)
-            if passthrough_provider is not None
-            else case.endpoint
+            case.endpoint.replace("$MODEL", request_model) if passthrough_provider is not None else case.endpoint
         )
         prior_response_id: Final = (
             _prime_prior_response(gateway, request_path, base_request_values, key)
@@ -219,11 +209,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                     if fallback_deployment is not None
                     else {}
                 ),
-                **(
-                    {"user": end_user_id, "cache": {"no-cache": True}}
-                    if end_user_id is not None
-                    else {}
-                ),
+                **({"user": end_user_id, "cache": {"no-cache": True}} if end_user_id is not None else {}),
                 **({"previous_response_id": prior_response_id} if prior_response_id is not None else {}),
             }
         )
@@ -272,19 +258,22 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             observed: Final = JSON_OBJECT.validate_json(
                 httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
             )
+            decisions_provider: Final = case.rates.litellm_provider
+            upstream_model: Final = case.litellm_model.removeprefix(f"{decisions_provider}/")
+            upstream_path: Final = f"/{scenario_id}{DECISIONS_UPSTREAM_PATHS[decisions_provider]}"
             decision_observations: Final = tuple(
                 value
                 for value in observed["requests"]
-                if isinstance(value, dict) and value.get("path") == f"/{scenario_id}/v1/decisions"
+                if isinstance(value, dict) and value.get("path") == upstream_path
             )
             assert decision_observations == (
                 {
-                    "path": f"/{scenario_id}/v1/decisions",
+                    "path": upstream_path,
                     "authorization": "Bearer sk-scripted-provider",
                     "method": "POST",
                     "api_key": "",
                     "body": {
-                        "model": "pplx-decider-v1-27b",
+                        "model": upstream_model,
                         "state": {"source": "cost-tracking"},
                         "questions": {
                             "is_defect": {

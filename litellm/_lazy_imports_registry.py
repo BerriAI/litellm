@@ -162,6 +162,8 @@ LLM_CONFIG_NAMES: Final = (
     "OpenRouterDecisionsConfig",
     "CloudflareDecisionsConfig",
     "StrandsDeciderDecisionsConfig",
+    "LayaDecisionsConfig",
+    "BespokeDecisionsConfig",
     "OpenAIDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
@@ -723,6 +725,8 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.strands_decider.decisions.transformation",
         "StrandsDeciderDecisionsConfig",
     ),
+    "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
+    "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",

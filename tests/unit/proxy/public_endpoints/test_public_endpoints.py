@@ -477,6 +477,31 @@ def test_strands_decider_provider_fields():
     assert fields_by_key["api_key"].field_type == "password"
 
 
+@pytest.mark.parametrize(
+    ("provider", "display_name", "litellm_provider", "model_placeholder"),
+    (
+        ("Laya", "Laya", LlmProviders.LAYA.value, "laya/english"),
+        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble-latest"),
+    ),
+)
+def test_oss_decisions_provider_fields(
+    provider: str, display_name: str, litellm_provider: str, model_placeholder: str
+) -> None:
+    entry: Final = _decisions_provider_entry(provider)
+
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == litellm_provider
+    assert entry.default_model_placeholder == model_placeholder
+
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
+
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
+
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",

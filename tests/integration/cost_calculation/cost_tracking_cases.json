@@ -64,6 +64,12 @@
       "mode": "evaluation",
       "output_cost_per_token": 0.0
     },
+    "typesafe/jev-latest": {
+      "input_cost_per_token": 4.2e-08,
+      "litellm_provider": "typesafe",
+      "mode": "evaluation",
+      "output_cost_per_token": 0.0
+    },
     "deepseek/deepseek-v4-chat": {
       "litellm_provider": "deepseek",
       "mode": "chat",
@@ -31239,6 +31245,47 @@
       "expected": {
         "spend": 1.468e-05,
         "input_cost": 1.468e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 367,
+        "completion_tokens": 3
+      }
+    },
+    {
+      "name": "typesafe/jev-latest-decisions",
+      "covers": "quota_management.spend_tracking.decisions_costs",
+      "model": "typesafe/jev-latest",
+      "endpoint": "/v1/systemone",
+      "request": {
+        "model": "$MODEL",
+        "state": {
+          "source": "cost-tracking"
+        },
+        "questions": {
+          "is_defect": {
+            "type": "noul",
+            "instructions": "Is this a defect?"
+          }
+        }
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "model": "jev-latest",
+          "answers": {
+            "is_defect": {
+              "type": "noul",
+              "noul": 0.9
+            }
+          },
+          "usage": {
+            "input_tokens": 367,
+            "output_tokens": 3
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.5414e-05,
+        "input_cost": 1.5414e-05,
         "output_cost": 0.0,
         "prompt_tokens": 367,
         "completion_tokens": 3

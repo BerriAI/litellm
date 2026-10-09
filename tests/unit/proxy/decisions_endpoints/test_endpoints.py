@@ -257,6 +257,58 @@ def test_proxy_decisions_dispatches_strands_decider(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+@pytest.mark.parametrize(
+    ("model", "env_base", "env_key"),
+    (
+        ("laya/english", "LAYA_API_BASE", "LAYA_API_KEY"),
+        ("bespoke/nimble-latest", "BESPOKE_API_BASE", "BESPOKE_API_KEY"),
+    ),
+    ids=("laya", "bespoke"),
+)
+def test_proxy_decisions_dispatches_oss_classifier_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    model: str,
+    env_base: str,
+    env_key: str,
+) -> None:
+    monkeypatch.delenv(env_base, raising=False)
+    monkeypatch.delenv(env_key, raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "oss-classifier",
+                "litellm_params": {
+                    "model": model,
+                    "api_base": "https://oss-decider.example",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post("https://oss-decider.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "oss-classifier",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _STRANDS_RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": model.partition("/")[2],
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert "authorization" not in upstream.calls[0].request.headers
+
+
 def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
