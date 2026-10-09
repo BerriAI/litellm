@@ -40,11 +40,7 @@ function BudgetLine({ label, spend, maxBudget, resetAt }: BudgetLineProps) {
         {resetText && <span className="text-muted-foreground"> · resets {resetText}</span>}
       </div>
       {budget !== null && budget > 0 && (
-        <Meter
-          value={spendValue}
-          max={budget}
-          aria-valuetext={`${label} ${spendText} of ${budgetText}`}
-        >
+        <Meter value={spendValue} max={budget} aria-valuetext={`${label} ${spendText} of ${budgetText}`}>
           <MeterTrack>
             <MeterIndicator tone={getSpendBudgetMeterTone((spendValue / budget) * 100)} />
           </MeterTrack>

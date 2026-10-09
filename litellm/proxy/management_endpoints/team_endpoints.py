@@ -5625,7 +5625,9 @@ def _team_member_default_budget_id(
     )
     if member_budget is not None and member_budget.max_budget is not None:
         return None
-    metadata: Final = cast("dict[str, object] | None", team.metadata)  # cast-ok: team metadata is stored as a JSON object
+    metadata: Final = cast(
+        "dict[str, object] | None", team.metadata
+    )  # cast-ok: team metadata is stored as a JSON object
     if metadata is None:
         return None
     budget_id: Final = metadata.get("team_member_budget_id")
@@ -5653,11 +5655,7 @@ def _team_list_caller_membership(
         now=now,
     )
     budget_reset_at: Final = (
-        member_budget_row.budget_reset_at
-        if member_budget_row is not None and member_budget_row.max_budget is not None
-        else default_budget_row.budget_reset_at
-        if max_budget is not None and default_budget_row is not None
-        else None
+        member_budget_row.budget_reset_at if member_budget_row is not None and max_budget is not None else None
     )
     return TeamListCallerMembership(
         spend=(membership_row.spend if membership_row is not None else 0.0) or 0.0,
@@ -5955,7 +5953,9 @@ async def list_team_v2(
         keys_count_by_team = await _get_keys_count_by_team(prisma_client, teams)
 
     # Convert Prisma models to response models with members_count and keys_count
-    team_list: Final = _convert_teams_to_response_models(teams, use_deleted_table, keys_count_by_team=keys_count_by_team)
+    team_list: Final = _convert_teams_to_response_models(
+        teams, use_deleted_table, keys_count_by_team=keys_count_by_team
+    )
 
     # Resolve resources inherited from access groups (single batch query)
     if not use_deleted_table:
