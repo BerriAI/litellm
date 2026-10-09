@@ -5,6 +5,7 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -33,7 +34,12 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
+from litellm.types.utils import (
+    AdapterCompletionStreamWrapper,
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -98,6 +104,21 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             assert_never(delta_type)
 
 
+# Bounds the arguments held back while several calls are opened together.
+_MAX_PENDING_ARGUMENT_CHARS: Final = 4 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _PendingCall:
+    """A tool call opened together with others whose arguments are still arriving."""
+
+    template: "ModelResponseStream"
+    call_id: str | None
+    name: str
+    index: int
+    arguments: str
+
+
 class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
@@ -123,6 +144,7 @@ class _CombinedChunkSplitter:
         self._sync_iter: Iterator[ModelResponseStream] | None = None
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
+        self._pending: Mapping[int, _PendingCall] = {}
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -221,6 +243,133 @@ class _CombinedChunkSplitter:
         return pieces
 
     @staticmethod
+    def _call_name(tool_call: object) -> str | None:
+        name: Final = _optional_attr(_optional_attr(tool_call, "function"), "name")
+        return name if isinstance(name, str) and name else None
+
+    @staticmethod
+    def _call_id(tool_call: object) -> str | None:
+        call_id: Final = _optional_attr(tool_call, "id")
+        return call_id if isinstance(call_id, str) else None
+
+    @staticmethod
+    def _call_arguments(tool_call: object) -> str:
+        arguments: Final = _optional_attr(_optional_attr(tool_call, "function"), "arguments")
+        return arguments if isinstance(arguments, str) else ""
+
+    @staticmethod
+    def _call_index(tool_call: object, position: int) -> int:
+        index: Final = _optional_attr(tool_call, "index")
+        return index if isinstance(index, int) else position
+
+    @staticmethod
+    def _is_complete_json(text: str) -> bool:
+        try:
+            json.loads(text)
+        except ValueError:
+            return False
+        return bool(text)
+
+    @staticmethod
+    def _chunk_with_calls(
+        chunk: "ModelResponseStream", calls: Sequence[object], *, keep_finish: bool
+    ) -> "ModelResponseStream":
+        """A copy of ``chunk`` whose only payload is ``calls``; ``chunk`` is not touched."""
+        choice: Final = chunk.choices[0]
+        delta: Final = Delta(role=_optional_attr(choice.delta, "role"), tool_calls=list(calls))
+        new_choice: Final = choice.model_copy(
+            update={"delta": delta, "finish_reason": choice.finish_reason if keep_finish else None}
+        )
+        return chunk.model_copy(update={"choices": [new_choice]})
+
+    def _tool_calls_of(self, chunk: "ModelResponseStream") -> tuple[object, ...]:
+        """The tool calls of a single-choice chunk; empty for any other shape."""
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1:
+            return ()
+        return tuple(_optional_attr_sequence(_optional_attr(choices[0], "delta"), "tool_calls"))
+
+    def _route_tool_calls(self, chunk: "ModelResponseStream") -> tuple["ModelResponseStream", ...]:
+        """Emit the chunk, or one chunk per tool call when it opens several at once.
+
+        Anthropic blocks are strictly sequential, so a call's arguments must be whole
+        when its block is written. Calls opened together with whole arguments are split
+        at once. If any argument is still incomplete, the calls are held and their
+        fragments gathered per index, then written in index order at the next chunk
+        that is not a fragment of them, or at the end of the stream.
+        """
+        calls: Final = self._tool_calls_of(chunk)
+        if not self._pending and len(calls) < 2:
+            return (chunk,)  # the common case: nothing held and at most one call
+        if self._pending and calls and all(self._extends_pending(call) for call in calls):
+            self._pending = self._with_fragments(calls)
+            return self._flush_pending() if self._pending_size() > _MAX_PENDING_ARGUMENT_CHARS else ()
+        return (*self._flush_pending(), *self._open_calls(chunk, calls))
+
+    def _extends_pending(self, tool_call: object) -> bool:
+        index: Final = _optional_attr(tool_call, "index")
+        return self._call_name(tool_call) is None and isinstance(index, int) and index in self._pending
+
+    def _with_fragments(self, calls: Sequence[object]) -> "Mapping[int, _PendingCall]":
+        return {
+            index: replace(
+                pending,
+                arguments=pending.arguments
+                + "".join(self._call_arguments(c) for c in calls if _optional_attr(c, "index") == index),
+            )
+            for index, pending in self._pending.items()
+        }
+
+    def _pending_size(self) -> int:
+        return sum(len(pending.arguments) for pending in self._pending.values())
+
+    def _flush_pending(self) -> tuple["ModelResponseStream", ...]:
+        """Write the held calls, one chunk each, in index order, and clear them."""
+        held: Final = tuple(self._pending[index] for index in sorted(self._pending))
+        self._pending = {}
+        return tuple(
+            self._chunk_with_calls(
+                pending.template,
+                [
+                    ChatCompletionDeltaToolCall(
+                        id=pending.call_id,
+                        index=pending.index,
+                        type="function",
+                        function=Function(name=pending.name, arguments=pending.arguments),
+                    )
+                ],
+                keep_finish=False,
+            )
+            for pending in held
+        )
+
+    def _open_calls(self, chunk: "ModelResponseStream", calls: Sequence[object]) -> tuple["ModelResponseStream", ...]:
+        indexes: Final = tuple(dict.fromkeys(self._call_index(call, pos) for pos, call in enumerate(calls)))
+        groups: Final = tuple(
+            tuple(call for pos, call in enumerate(calls) if self._call_index(call, pos) == index) for index in indexes
+        )
+        opened: Final = tuple(next((c for c in group if self._call_name(c)), None) for group in groups)
+        # Fewer than two distinct calls, or a fragment with no call to attach to: leave it alone.
+        if len(groups) < 2 or any(first is None for first in opened):
+            return (chunk,)
+        # An opening chunk over the bound is not held at all.
+        if sum(len(self._call_arguments(c)) for c in calls) > _MAX_PENDING_ARGUMENT_CHARS:
+            return (chunk,)
+        if all(self._is_complete_json("".join(self._call_arguments(c) for c in group)) for group in groups):
+            return tuple(self._chunk_with_calls(chunk, group, keep_finish=True) for group in groups)
+        self._pending = {
+            index: _PendingCall(
+                template=chunk,
+                call_id=self._call_id(first),
+                name=self._call_name(first) or "",
+                index=index,
+                arguments="".join(self._call_arguments(c) for c in group),
+            )
+            for index, group, first in zip(indexes, groups, opened)
+        }
+        return ()
+
+    @staticmethod
     def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
         """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
 
@@ -267,36 +416,47 @@ class _CombinedChunkSplitter:
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
 
+    def _expand(self, chunk: "ModelResponseStream") -> tuple["ModelResponseStream", ...]:
+        return tuple(
+            routed
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)
+            for routed in self._route_tool_calls(split_chunk)
+        )
+
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
 
     def __next__(self) -> "ModelResponseStream":
-        if self._buffer:
-            return self._buffer.popleft()
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
-        chunk: Final = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(
-            split_chunk
-            for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_by_payload_kind(combined_chunk)
-        )
+        # A chunk held back as part of several calls yields nothing yet, so keep pulling.
+        while not self._buffer:
+            try:
+                chunk = next(self._sync_iter)
+            except StopIteration:
+                self._buffer.extend(self._flush_pending())
+                if not self._buffer:
+                    raise
+                break
+            self._buffer.extend(self._expand(chunk))
         return self._buffer.popleft()
 
     def __aiter__(self) -> "AsyncIterator[ModelResponseStream]":
         return self
 
     async def __anext__(self) -> "ModelResponseStream":
-        if self._buffer:
-            return self._buffer.popleft()
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
-        chunk: Final = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(
-            split_chunk
-            for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_by_payload_kind(combined_chunk)
-        )
+        while not self._buffer:
+            try:
+                chunk = await self._async_iter.__anext__()
+            except StopAsyncIteration:
+                self._buffer.extend(self._flush_pending())
+                if not self._buffer:
+                    raise
+                break
+            self._buffer.extend(self._expand(chunk))
         return self._buffer.popleft()
 
 
