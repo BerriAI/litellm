@@ -578,6 +578,9 @@ jobs:
       - name: check_unsafe_enterprise_import
         run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
 
+      - name: check_telemetry_imports
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_telemetry_imports.py
+
       - name: ban_copy_deepcopy_kwargs
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 
