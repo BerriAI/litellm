@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { useFormContext } from "react-hook-form";
+import { chooseSelectOption } from "@/../tests/test-utils";
 import { Providers } from "../provider_info_helpers";
 import type { MountedFormValues } from "../common_components/MountedFormField";
 import { MountedFormHost } from "../../../tests/mounted-form-host";
@@ -109,6 +112,41 @@ vi.mock("../networking", async () => {
           },
         ],
       },
+      {
+        provider: "MICROSOFT_365_COPILOT",
+        provider_display_name: Providers.MICROSOFT_365_COPILOT,
+        litellm_provider: "microsoft_365_copilot",
+        default_model_placeholder: "microsoft_365_copilot/chat",
+        credential_fields: [
+          {
+            key: "token_exchange_endpoint",
+            label: "Token Endpoint URL",
+            placeholder: "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token",
+            field_type: "text",
+          },
+          {
+            key: "token_exchange_profile",
+            label: "Exchange Grant",
+            field_type: "select",
+            options: ["jwt_bearer_obo", "rfc8693"],
+            default_value: "jwt_bearer_obo",
+          },
+          { key: "client_id", label: "Client ID", field_type: "text" },
+          { key: "client_secret", label: "Client Secret", field_type: "password" },
+          {
+            key: "token_exchange_scope",
+            label: "Scope",
+            field_type: "text",
+            default_value: "https://graph.microsoft.com/.default",
+          },
+          {
+            key: "token_exchange_audience",
+            label: "Audience",
+            field_type: "text",
+          },
+          { key: "api_key", label: "Delegated Access Token", field_type: "password" },
+        ],
+      },
     ]),
   };
 });
@@ -142,6 +180,16 @@ const createQueryClient = () =>
 const VertexCredentialsProbe = () => {
   const { watch } = useFormContext<MountedFormValues>();
   return <output data-testid="vertex-credentials">{String(watch("vertex_credentials") ?? "")}</output>;
+};
+
+const ValidationForm = ({ children }: { readonly children: ReactNode }) => {
+  const form = useFormContext<MountedFormValues>();
+  return (
+    <form onSubmit={form.handleSubmit(() => {})}>
+      {children}
+      <button type="submit">Submit</button>
+    </form>
+  );
 };
 
 describe("ProviderSpecificFields", () => {
@@ -212,6 +260,7 @@ describe("ProviderSpecificFields", () => {
 
     const apiKeyLabel = await screen.findByLabelText("OpenAI API Key");
     expect(apiKeyLabel).toBeInTheDocument();
+    expect(screen.queryByLabelText("Auth Type:")).not.toBeInTheDocument();
 
     const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
     expect(apiBaseInput).toBeInTheDocument();
@@ -418,5 +467,193 @@ describe("ProviderSpecificFields", () => {
     await waitFor(() => {
       expect(apiVersionInput).toHaveValue("2025-01-01-preview");
     });
+  });
+
+  it("defaults Microsoft 365 Copilot to OAuth token exchange fields", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+      "OAuth token exchange (on-behalf-of)",
+    );
+    expect(screen.getByLabelText("Token Endpoint URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("Client ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Client Secret")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Delegated Access Token")).not.toBeInTheDocument();
+  });
+
+  it("offers a credential-only OAuth mode in model context", async () => {
+    const onCreateCredential = vi.fn();
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields
+            selectedProvider="MICROSOFT_365_COPILOT"
+            context="model"
+            onCreateCredential={onCreateCredential}
+          />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText("This auth type is saved as an LLM credential and attached to this model."),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create credential" }));
+    expect(onCreateCredential).toHaveBeenCalledWith("oauth_token_exchange");
+  });
+
+  it("hides credential-only auth modes from non-admin model forms", async () => {
+    const user = userEvent.setup();
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" context="model" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    const authTypeSelect = await screen.findByRole("combobox", { name: "Auth Type:" });
+    expect(authTypeSelect).toHaveTextContent("Static delegated access token");
+    await user.click(authTypeSelect);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Static delegated access token",
+    ]);
+
+    expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Client ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Client Secret")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Delegated Access Token")).toBeInTheDocument();
+  });
+
+  it("switches Microsoft 365 Copilot fields to a static delegated access token", async () => {
+    const user = userEvent.setup();
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByLabelText("Token Endpoint URL");
+    await chooseSelectOption(
+      user,
+      screen.getByRole("combobox", { name: "Auth Type:" }),
+      "Static delegated access token",
+    );
+
+    expect(await screen.findByLabelText("Delegated Access Token")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Client ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Client Secret")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Scope")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Audience")).not.toBeInTheDocument();
+  });
+
+  it("infers a static delegated token from a preloaded api_key", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost defaultValues={{ api_key: "delegated-token" }}>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+      "Static delegated access token",
+    );
+    expect(screen.getByLabelText("Delegated Access Token")).toHaveValue("delegated-token");
+    expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
+  });
+
+  it("re-infers the auth type when the selected provider changes", async () => {
+    const user = userEvent.setup();
+    const queryClient = createQueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost defaultValues={{ api_key: "delegated-token" }}>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "Auth Type:" }),
+      "OAuth token exchange (on-behalf-of)",
+    );
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost defaultValues={{ api_key: "delegated-token" }}>
+          <ProviderSpecificFields selectedProvider="OpenAI" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+    await screen.findByLabelText("OpenAI API Key");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost defaultValues={{ api_key: "delegated-token" }}>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+      "Static delegated access token",
+    );
+  });
+
+  it("requires only the required OAuth token exchange fields", async () => {
+    const user = userEvent.setup();
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ValidationForm>
+            <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" />
+          </ValidationForm>
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    const tokenEndpoint = await screen.findByLabelText("Token Endpoint URL");
+    const clientId = screen.getByLabelText("Client ID");
+    const clientSecret = screen.getByLabelText("Client Secret");
+    expect(tokenEndpoint).toBeInTheDocument();
+    expect(clientId).toBeInTheDocument();
+    expect(clientSecret).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect(await screen.findAllByText("Required")).toHaveLength(3);
+  });
+
+  it("does not render an Auth Type selector for OpenAI", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider="OpenAI" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByLabelText("OpenAI API Key");
+
+    expect(screen.queryByRole("combobox", { name: "Auth Type:" })).not.toBeInTheDocument();
   });
 });

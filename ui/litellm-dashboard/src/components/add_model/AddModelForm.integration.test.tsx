@@ -1,12 +1,22 @@
-import { fireEvent, renderHook, screen, waitFor, within, renderWithProviders } from "../../../tests/test-utils";
+import {
+  chooseSelectOption,
+  fireEvent,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+  renderWithProviders,
+} from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
-import { credentialCreateCall, type CredentialItem } from "../networking";
+import { credentialCreateCall, modelCreateCall, type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
 import AddModelForm from "./AddModelForm";
+import { handleAddModelSubmit } from "./handle_add_model_submit";
+import { toast } from "@/lib/toast";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
   ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
@@ -35,6 +45,7 @@ vi.mock("../networking", async () => {
     }),
     testConnectionRequest: vi.fn().mockResolvedValue({ status: "success" }),
     credentialCreateCall: vi.fn().mockResolvedValue({ success: true }),
+    modelCreateCall: vi.fn().mockResolvedValue({ success: true }),
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
       {
         provider: "OpenAI",
@@ -42,6 +53,27 @@ vi.mock("../networking", async () => {
         litellm_provider: "openai",
         default_model_placeholder: "gpt-3.5-turbo",
         credential_fields: [],
+      },
+      {
+        provider: "MICROSOFT_365_COPILOT",
+        provider_display_name: "Microsoft 365 Copilot",
+        litellm_provider: "microsoft_365_copilot",
+        default_model_placeholder: "microsoft_365_copilot/chat",
+        credential_fields: [
+          { key: "token_exchange_endpoint", label: "Token Endpoint URL", field_type: "text" },
+          {
+            key: "token_exchange_profile",
+            label: "Exchange Grant",
+            field_type: "select",
+            options: ["jwt_bearer_obo", "rfc8693"],
+            default_value: "jwt_bearer_obo",
+          },
+          { key: "client_id", label: "Client ID", field_type: "text" },
+          { key: "client_secret", label: "Client Secret", field_type: "password" },
+          { key: "token_exchange_scope", label: "Scope", field_type: "text" },
+          { key: "token_exchange_audience", label: "Audience", field_type: "text" },
+          { key: "api_key", label: "Delegated Access Token", field_type: "password" },
+        ],
       },
     ]),
   };
@@ -56,6 +88,27 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         litellm_provider: "openai",
         default_model_placeholder: "gpt-3.5-turbo",
         credential_fields: [],
+      },
+      {
+        provider: "MICROSOFT_365_COPILOT",
+        provider_display_name: "Microsoft 365 Copilot",
+        litellm_provider: "microsoft_365_copilot",
+        default_model_placeholder: "microsoft_365_copilot/chat",
+        credential_fields: [
+          { key: "token_exchange_endpoint", label: "Token Endpoint URL", field_type: "text" },
+          {
+            key: "token_exchange_profile",
+            label: "Exchange Grant",
+            field_type: "select",
+            options: ["jwt_bearer_obo", "rfc8693"],
+            default_value: "jwt_bearer_obo",
+          },
+          { key: "client_id", label: "Client ID", field_type: "text" },
+          { key: "client_secret", label: "Client Secret", field_type: "password" },
+          { key: "token_exchange_scope", label: "Scope", field_type: "text" },
+          { key: "token_exchange_audience", label: "Audience", field_type: "text" },
+          { key: "api_key", label: "Delegated Access Token", field_type: "password" },
+        ],
       },
     ],
     isLoading: false,
@@ -498,6 +551,128 @@ describe("AddModelForm", () => {
       await renderAsRole("org_admin", Providers.Anthropic);
 
       expect(screen.queryByRole("button", { name: "Use workload identity federation" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("credential-only provider auth types", () => {
+    const renderAsAdmin = async () => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const props = createTestProps();
+      props.selectedProvider = Providers.MICROSOFT_365_COPILOT;
+      renderWithProviders(<AddModelForm {...props} />);
+      await screen.findByText("Existing Credentials");
+      return props;
+    };
+
+    const submitModel = async (props: ReturnType<typeof createTestProps>) => {
+      const credentialName = props.form.getValues("litellm_credential_name");
+      const apiKey = props.form.getValues("api_key");
+      const modelValues = {
+        ...(credentialName ? { litellm_credential_name: credentialName } : {}),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        custom_llm_provider: "MICROSOFT_365_COPILOT",
+        model_mappings: [
+          {
+            public_name: "copilot-model",
+            litellm_model: "microsoft_365_copilot/chat",
+          },
+        ],
+      };
+      await handleAddModelSubmit(modelValues, "test-access-token", { resetFields: vi.fn() });
+    };
+
+    it("creates and attaches an OAuth exchange credential without mounting its fields on the model", async () => {
+      const user = userEvent.setup();
+      vi.mocked(credentialCreateCall).mockClear();
+      vi.mocked(modelCreateCall).mockClear();
+      const props = await renderAsAdmin();
+
+      await user.click(screen.getByRole("button", { name: "Create credential" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByPlaceholderText("Select a provider")).toHaveValue(Providers.MICROSOFT_365_COPILOT);
+      expect(within(dialog).getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+        "OAuth token exchange (on-behalf-of)",
+      );
+      await chooseSelectOption(
+        user,
+        within(dialog).getByRole("combobox", { name: "Exchange Grant" }),
+        "jwt_bearer_obo",
+      );
+      fireEvent.change(within(dialog).getByLabelText("Credential Name:"), { target: { value: "m365-obo" } });
+      fireEvent.change(within(dialog).getByLabelText("Token Endpoint URL"), {
+        target: { value: "https://login.example.test/token" },
+      });
+      fireEvent.change(within(dialog).getByLabelText("Client ID"), { target: { value: "client-id" } });
+      fireEvent.change(within(dialog).getByLabelText("Client Secret"), { target: { value: "client-secret" } });
+      fireEvent.change(within(dialog).getByLabelText("Scope"), { target: { value: "scope" } });
+      fireEvent.change(within(dialog).getByLabelText("Audience"), { target: { value: "audience" } });
+      await user.click(within(dialog).getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() =>
+        expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "m365-obo",
+          credential_values: {
+            token_exchange_endpoint: "https://login.example.test/token",
+            token_exchange_profile: "jwt_bearer_obo",
+            client_id: "client-id",
+            client_secret: "client-secret",
+            token_exchange_scope: "scope",
+            token_exchange_audience: "audience",
+          },
+          credential_info: { custom_llm_provider: Providers.MICROSOFT_365_COPILOT },
+        }),
+      );
+      expect(props.form.getValues("litellm_credential_name")).toBe("m365-obo");
+      expect(props.mountedValues()).not.toHaveProperty("token_exchange_endpoint");
+
+      props.handleOk.mockImplementation(async () => {
+        await submitModel(props);
+        return true;
+      });
+      await user.click(screen.getByRole("button", { name: "Add Model" }));
+      expect(props.handleOk).toHaveBeenCalledOnce();
+      await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
+      const modelPayload = vi.mocked(modelCreateCall).mock.calls[0][1];
+      expect(modelPayload.litellm_params).toMatchObject({ litellm_credential_name: "m365-obo" });
+      expect(Object.keys(modelPayload.litellm_params).some((key) => key.startsWith("token_exchange_"))).toBe(false);
+    });
+
+    it("blocks model creation when OAuth exchange has no credential", async () => {
+      const props = await renderAsAdmin();
+      const errorToast = vi.spyOn(toast, "error");
+
+      await userEvent.click(screen.getByRole("button", { name: "Add Model" }));
+
+      expect(props.handleOk).not.toHaveBeenCalled();
+      expect(errorToast).toHaveBeenCalledWith("Create or select a credential for this auth type");
+      errorToast.mockRestore();
+    });
+
+    it("keeps static delegated tokens inline in the model request", async () => {
+      const user = userEvent.setup();
+      vi.mocked(modelCreateCall).mockClear();
+      const props = await renderAsAdmin();
+      await chooseSelectOption(
+        user,
+        screen.getByRole("combobox", { name: "Auth Type:" }),
+        "Static delegated access token",
+      );
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Static delegated access token"),
+      );
+      fireEvent.change(screen.getByLabelText("Delegated Access Token"), { target: { value: "delegated-token" } });
+      props.handleOk.mockImplementation(async () => {
+        await submitModel(props);
+        return true;
+      });
+
+      await user.click(screen.getByRole("button", { name: "Add Model" }));
+      expect(props.handleOk).toHaveBeenCalledOnce();
+      await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
+      expect(vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params).toMatchObject({
+        api_key: "delegated-token",
+      });
     });
   });
 

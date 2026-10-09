@@ -5,6 +5,7 @@ import time
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -25,6 +26,7 @@ from litellm.router_utils.cooldown_handlers import (
     _should_run_cooldown_logic,
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
+    get_cooldown_deployments,
     mark_advisor_orchestration_failure,
     should_cooldown_based_on_allowed_fails_policy,
 )
@@ -32,6 +34,7 @@ from litellm.router_utils.fallback_event_handlers import (
     _trigger_cooldown_for_failed_deployment,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    get_deployment_failures_for_current_minute,
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
@@ -40,6 +43,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
 )
+from litellm.types.utils import CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1259,6 +1263,183 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
 
             call_kwargs = mock_set_cooldown.call_args[1]
             assert call_kwargs["time_to_cooldown"] == 20.0, "litellm_params.cooldown_time must still be honored"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestCallerScopedOAuthAuthFailureCooldown:
+    @staticmethod
+    def _router(
+        model_id: str,
+        litellm_params: dict[str, object],
+        allowed_fails_policy: dict[str, int] | None = None,
+    ) -> Router:
+        return _make_router(
+            model_list=[
+                {
+                    "model_name": "copilot",
+                    "litellm_params": {
+                        "model": "microsoft_365_copilot/chat",
+                        **litellm_params,
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        **(
+                            {"allowed_fails_policy": allowed_fails_policy}
+                            if allowed_fails_policy is not None
+                            else {}
+                        ),
+                    },
+                }
+            ]
+        )
+
+    @staticmethod
+    def _auth_exception(status: int) -> Exception:
+        if status == 401:
+            return litellm.AuthenticationError("caller assertion rejected", "microsoft_365_copilot", "copilot")
+        return litellm.PermissionDeniedError(
+            "caller assertion rejected",
+            "microsoft_365_copilot",
+            "copilot",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request("GET", "https://litellm.ai"),
+            ),
+        )
+
+    @staticmethod
+    def _callback(router: Router, model_id: str, exception: Exception) -> bool:
+        return router.deployment_callback_on_failure(
+            kwargs={
+                "exception": exception,
+                "litellm_params": {"model_info": {"id": model_id}},
+            },
+            completion_response=None,
+            start_time=0,
+            end_time=1,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", (401, 403))
+    async def test_inline_oauth_caller_auth_failure_does_not_cooldown(self, status: int) -> None:
+        model_id: Final = "inline-oauth"
+        router: Final = self._router(
+            model_id,
+            {
+                "token_exchange_endpoint": "https://identity.example.com/token",
+                "client_id": "copilot-client",
+                "client_secret": "copilot-secret",
+            },
+        )
+
+        result: Final = self._callback(router, model_id, self._auth_exception(status))
+
+        assert result is False
+        assert get_deployment_failures_for_current_minute(router, model_id) == 0
+        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", (401, 403))
+    async def test_named_oauth_credential_caller_auth_failure_does_not_cooldown(
+        self,
+        status: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        model_id: Final = "named-oauth"
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-oauth",
+                    credential_values={
+                        "token_exchange_endpoint": "https://identity.example.com/token",
+                        "client_id": "copilot-client",
+                        "client_secret": "copilot-secret",
+                    },
+                    credential_info={"custom_llm_provider": "microsoft_365_copilot"},
+                )
+            ],
+        )
+        router: Final = self._router(model_id, {"litellm_credential_name": "copilot-oauth"})
+
+        result: Final = self._callback(router, model_id, self._auth_exception(status))
+
+        assert result is False
+        assert get_deployment_failures_for_current_minute(router, model_id) == 0
+        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_api_key_deployment_still_cools_down_on_401(self) -> None:
+        model_id: Final = "api-key-only"
+        router: Final = self._router(model_id, {"api_key": "sk-test"})
+
+        self._callback(
+            router,
+            model_id,
+            litellm.AuthenticationError("upstream rejected the API key", "openai", "gpt-4o-mini"),
+        )
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 1
+        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", (429, 500))
+    async def test_oauth_deployment_still_cools_down_on_provider_failures(self, status: int) -> None:
+        model_id: Final = f"oauth-provider-{status}"
+        router: Final = self._router(
+            model_id,
+            {
+                "token_exchange_endpoint": "https://identity.example.com/token",
+                "client_id": "copilot-client",
+                "client_secret": "copilot-secret",
+            },
+            allowed_fails_policy={
+                "RateLimitErrorAllowedFails": 0,
+                "InternalServerErrorAllowedFails": 0,
+            },
+        )
+        exception: Final[Exception] = (
+            litellm.RateLimitError("rate limited", "microsoft_365_copilot", "copilot")
+            if status == 429
+            else litellm.InternalServerError("provider failed", "microsoft_365_copilot", "copilot")
+        )
+
+        self._callback(router, model_id, exception)
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 1
+        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+
+    @pytest.mark.parametrize("status", (401, 403))
+    def test_fallback_oauth_caller_auth_failure_does_not_cooldown(self, status: int) -> None:
+        model_id: Final = f"fallback-oauth-{status}"
+        router: Final = self._router(
+            model_id,
+            {
+                "token_exchange_endpoint": "https://identity.example.com/token",
+                "client_id": "copilot-client",
+                "client_secret": "copilot-secret",
+            },
+        )
+        exception: Final = self._auth_exception(status)
+        exception.failed_deployment_id = model_id
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 0
+        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_fallback_api_key_auth_failure_still_cools_down(self) -> None:
+        model_id: Final = "fallback-api-key"
+        router: Final = self._router(model_id, {"api_key": "sk-test"})
+        exception: Final = litellm.AuthenticationError("API key rejected", "openai", "gpt-4o-mini")
+        exception.failed_deployment_id = model_id
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 1
+        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestNewAllowedFailsPolicyFields:

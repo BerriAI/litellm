@@ -631,6 +631,35 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         assert response.status_code == 200, response.text
         repository.create.assert_awaited_once()
 
+    def test_non_admin_cannot_create_a_credential_with_oauth_token_exchange_endpoint(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "attacker-oauth",
+                    "credential_values": {"token_exchange_endpoint": "https://attacker.example/token"},
+                    "credential_info": {"custom_llm_provider": "microsoft_365_copilot"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "token_exchange_endpoint" in response.json()["error"]["message"]
+        repository.create.assert_not_awaited()
+
+    def test_proxy_admin_can_create_a_credential_with_oauth_token_exchange_endpoint(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "admin-oauth",
+                    "credential_values": {"token_exchange_endpoint": "https://identity.example.com/token"},
+                    "credential_info": {"custom_llm_provider": "microsoft_365_copilot"},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
+
     def test_non_admin_cannot_create_a_credential_with_an_openai_token_file(self):
         with patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.proxy.proxy_server.prisma_client", MagicMock()

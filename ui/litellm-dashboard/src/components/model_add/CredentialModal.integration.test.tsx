@@ -40,6 +40,26 @@ vi.mock("../networking", async () => {
           { key: "api_key", label: "Azure API Key", field_type: "password" },
         ],
       },
+      {
+        provider: "MICROSOFT_365_COPILOT",
+        provider_display_name: Providers.MICROSOFT_365_COPILOT,
+        litellm_provider: "microsoft_365_copilot",
+        credential_fields: [
+          { key: "token_exchange_endpoint", label: "Token Endpoint URL", field_type: "text" },
+          {
+            key: "token_exchange_profile",
+            label: "Exchange Grant",
+            field_type: "select",
+            options: ["jwt_bearer_obo", "rfc8693"],
+            default_value: "jwt_bearer_obo",
+          },
+          { key: "client_id", label: "Client ID", field_type: "text" },
+          { key: "client_secret", label: "Client Secret", field_type: "password" },
+          { key: "token_exchange_scope", label: "Scope", field_type: "text" },
+          { key: "token_exchange_audience", label: "Audience", field_type: "text" },
+          { key: "api_key", label: "Delegated Access Token", field_type: "password" },
+        ],
+      },
     ]),
   };
 });
@@ -84,6 +104,19 @@ const unknownSourceCredential: CredentialItem = {
   credential_info: { custom_llm_provider: "anthropic" },
 };
 
+const microsoftCopilotCredential: CredentialItem = {
+  credential_name: "microsoft-copilot",
+  credential_values: {
+    token_exchange_endpoint: "https://identity.example.com/stored-token",
+    token_exchange_profile: "jwt_bearer_obo",
+    client_id: "stored-client",
+    client_secret: "stored-secret",
+    token_exchange_scope: "https://graph.microsoft.com/.default",
+    token_exchange_audience: "https://graph.microsoft.com",
+  },
+  credential_info: { custom_llm_provider: "MICROSOFT_365_COPILOT" },
+};
+
 const renderModal = (props: Partial<React.ComponentProps<typeof CredentialModal>> = {}) => {
   const onSubmit = vi.fn();
   render(
@@ -109,6 +142,34 @@ const chooseProvider = async (user: ReturnType<typeof userEvent.setup>, provider
 };
 
 describe("CredentialModal with Anthropic workload identity federation", () => {
+  it("deletes stored exchange fields when switching to a static token", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: microsoftCopilotCredential });
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+      "OAuth token exchange (on-behalf-of)",
+    );
+    await screen.findByLabelText("Token Endpoint URL");
+    await chooseOption(user, /^Auth Type:/, "Static delegated access token");
+    fill("Delegated Access Token", "delegated-graph-token");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    expect(values).toEqual({
+      credential_name: "microsoft-copilot",
+      custom_llm_provider: "MICROSOFT_365_COPILOT",
+      api_key: "delegated-graph-token",
+    });
+    expect([...valuesToDelete].sort()).toEqual([
+      "client_id",
+      "client_secret",
+      "token_exchange_audience",
+      "token_exchange_endpoint",
+      "token_exchange_profile",
+      "token_exchange_scope",
+    ]);
+  });
+
   it("does not carry the previous provider's base URL into the Anthropic form or its payload", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal();

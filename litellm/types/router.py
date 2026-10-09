@@ -338,6 +338,10 @@ class ModelInfo(MirroredPricingParams):
 
 
 class CredentialLiteLLMParams(LiteLLMBaseModel):
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
+
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
@@ -421,28 +425,32 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     openai_identity_provider_id: str | None = None
     openai_service_account_id: str | None = None
     openai_identity_token_file: str | None = None
+    token_exchange_endpoint: str | None = None
+    token_exchange_profile: str | None = None
+    token_exchange_scope: str | None = None
+    token_exchange_audience: str | None = None
 
 
 def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
-    """Server-owned workload identity federation field names set in ``fields``.
+    """Server-owned federation or OAuth token-exchange field names set in ``fields``.
 
     ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
     which feeds the same resolution when referenced by name). Derived from
     ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
-    this stays correct when a new WIF field is added there.
+    this stays correct when a server-owned field is added there.
     """
     return tuple(name for name in _server_owned_wif_litellm_params if fields.get(name) is not None)
 
 
 def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
-    """Server-owned workload identity federation field names that appear in ``keys``, whatever
+    """Server-owned federation or OAuth token-exchange field names appearing in ``keys``, whatever
     value they carry.
 
     The write gates on credentials need this key-based sibling of ``server_owned_wif_fields_present``:
-    ``get_litellm_params`` forwards a WIF kwarg on key presence and the federation resolver rejects
-    a foreign variant's field by key, so a persisted ``{"anthropic_issuer_url": None}`` wedges every
-    deployment that references the credential even though no value is set. Pass a mapping (its keys
-    are tested) or a plain collection of key names.
+    ``get_litellm_params`` forwards a server-owned field on key presence, so a persisted
+    ``{"anthropic_issuer_url": None}`` can wedge every deployment that references the credential
+    even though no value is set. Pass a mapping (its keys are tested) or a plain collection of key
+    names.
     """
     return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
 
@@ -463,6 +471,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
+
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
     tpm: int | None = None
@@ -609,6 +621,10 @@ class LiteLLM_Params(GenericLiteLLMParams):
     LiteLLM Params with 'model' requirement - used for completions
     """
 
+    if TYPE_CHECKING:
+
+        def __init__(self, *, model: str, **data: object) -> None: ...  # kwargs-ok: provider fields vary by model
+
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
@@ -632,6 +648,10 @@ class LiteLLM_Params(GenericLiteLLMParams):
 class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
+    if TYPE_CHECKING:
+
+        def __init__(self, *, model: str | None = None, **data: object) -> None: ...  # kwargs-ok: per-provider
+
     model: str | None = None
 
 
@@ -1338,18 +1358,20 @@ class AdaptiveRouterPreferences(LiteLLMBaseModel):
 
 def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
-    server-owned workload identity federation field.
+    server-owned workload identity federation or OAuth token-exchange field.
 
     These are never settable inline on a client surface, with or without a client-side credential
     opt-in. Naming a stored credential that already holds them is the other way in and has its own
-    gate: ``_check_banned_params`` resolves ``litellm_credential_name`` and refuses a federated one.
+    gate: ``_check_banned_params`` resolves ``litellm_credential_name`` and refuses a credential
+    carrying one of these server-owned fields.
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
     for param in _server_owned_wif_litellm_params:
         if param in body:
             raise ValueError(
-                f"Rejected Request: {param} is a server-owned workload identity federation parameter "
+                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
+                "parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )

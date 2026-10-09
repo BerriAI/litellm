@@ -2136,6 +2136,84 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "MICROSOFT_365_COPILOT",
+    "provider_display_name": "Microsoft 365 Copilot",
+    "litellm_provider": "microsoft_365_copilot",
+    "credential_fields": [
+      {
+        "key": "token_exchange_endpoint",
+        "label": "Token Endpoint URL",
+        "placeholder": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token",
+        "tooltip": "Your IdP's OAuth 2.0 token endpoint. For Microsoft 365 Copilot this must be Microsoft Entra.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "token_exchange_profile",
+        "label": "Exchange Grant",
+        "placeholder": null,
+        "tooltip": "jwt_bearer_obo: on-behalf-of with the JWT bearer grant (Microsoft Entra). rfc8693: standard OAuth 2.0 token exchange.",
+        "required": false,
+        "field_type": "select",
+        "options": ["jwt_bearer_obo", "rfc8693"],
+        "default_value": "jwt_bearer_obo"
+      },
+      {
+        "key": "client_id",
+        "label": "Client ID",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "client_secret",
+        "label": "Client Secret",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "token_exchange_scope",
+        "label": "Scope",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://graph.microsoft.com/.default"
+      },
+      {
+        "key": "token_exchange_audience",
+        "label": "Audience",
+        "placeholder": null,
+        "tooltip": "Optional. Sent only with the rfc8693 grant.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "Delegated Access Token",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "microsoft_365_copilot/chat"
+  },
+  {
     "provider": "MistralAI",
     "provider_display_name": "Mistral AI",
     "litellm_provider": "mistral",

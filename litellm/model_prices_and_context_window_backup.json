@@ -78859,6 +78859,13 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "microsoft_365_copilot/chat": {
+        "litellm_provider": "microsoft_365_copilot",
+        "mode": "chat",
+        "supports_mid_conversation_system": true,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0
+    },
     "openrouter/inclusionai/ling-3.0-flash-sante": {
         "cache_read_input_token_cost": 8.4e-09,
         "input_cost_per_token": 4.2e-08,
