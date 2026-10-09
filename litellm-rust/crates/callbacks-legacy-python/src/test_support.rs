@@ -23,10 +23,10 @@ import sys
 import traceback
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_legacy_python'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host', 'litellm.rust_bridge.host.callbacks_legacy_python'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-legacy = sys.modules['litellm.rust_bridge.callbacks_legacy_python']
+legacy = sys.modules['litellm.rust_bridge.host.callbacks_legacy_python']
 CONTRACT = json.loads(python_contract)
 
 
