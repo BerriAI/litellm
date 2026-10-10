@@ -7686,7 +7686,7 @@ def trim_messages(
     model: str | None = None,
     trim_ratio: float = DEFAULT_TRIM_RATIO,
     return_response_tokens: bool = False,
-    max_tokens=None,
+    max_tokens: int | None = None,
 ):
     """
     Trim a list of messages to fit within a model's token limit.
@@ -7699,7 +7699,9 @@ def trim_messages(
         max_tokens: Instead of specifying a model or trim_ratio, you can specify this directly.
 
     Returns:
-        Trimmed messages and optionally the number of tokens available for response.
+        Trimmed messages. If return_response_tokens is True, a `(messages, response_tokens)` tuple instead,
+        whether or not anything had to be trimmed. `response_tokens` is None when there is no token limit to
+        measure against (unknown model and no `max_tokens`).
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
@@ -7717,7 +7719,9 @@ def trim_messages(
                 # if user did not specify max (input) tokens
                 # or passed an llm litellm does not know
                 # do nothing, just return messages
-                return messages
+                return (messages, None) if return_response_tokens else messages
+        # the caller's limit: `max_tokens` has the system message deducted from it further down
+        token_limit: Final = max_tokens
 
         system_message = ""
         for message in messages:
@@ -7742,7 +7746,14 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages + tool_messages
+            untrimmed_messages: Final[list[AllMessageValues]] = (  # mutable-ok: handed back to the caller as a list
+                messages + tool_messages
+            )
+            return (
+                (untrimmed_messages, token_limit - get_token_count(untrimmed_messages, model))
+                if return_response_tokens
+                else untrimmed_messages
+            )
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
@@ -7755,7 +7766,8 @@ def trim_messages(
             )
 
             if max_tokens == 0:  # the system messages are too long
-                return [system_message_event]
+                # the system message alone uses the whole limit, so nothing is left for the response
+                return ([system_message_event], 0) if return_response_tokens else [system_message_event]
 
             # Since all system messages are combined and trimmed to fit the max_tokens,
             # we remove all system messages from the messages list
@@ -7774,12 +7786,12 @@ def trim_messages(
 
         verbose_logger.debug("Final messages: %s, return_response_tokens: %s", final_messages, return_response_tokens)
         if return_response_tokens:  # if user wants token count with new trimmed messages
-            response_tokens: Final = max_tokens - get_token_count(final_messages, model)
+            response_tokens: Final = token_limit - get_token_count(final_messages, model)
             return final_messages, response_tokens
         return final_messages
     except Exception as e:  # [NON-Blocking, if error occurs just return final_messages
         verbose_logger.exception("Got exception while token trimming - %s", e)
-        return original_messages
+        return (original_messages, None) if return_response_tokens else original_messages
 
 
 from litellm.caching.in_memory_cache import InMemoryCache

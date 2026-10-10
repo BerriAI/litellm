@@ -7570,6 +7570,62 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
+def test_trim_messages_return_response_tokens_returns_a_tuple_when_nothing_is_trimmed():
+    messages = [
+        {"role": "system", "content": "This is a short system message"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = trim_messages(messages, model="gpt-4-0613", max_tokens=1000, return_response_tokens=True)
+
+    assert isinstance(result, tuple)
+    trimmed_messages, response_tokens = result
+    assert trimmed_messages == messages
+    assert response_tokens == 1000 - get_token_count(messages, model="gpt-4-0613")
+
+
+def test_trim_messages_return_response_tokens_counts_the_system_message_once():
+    max_tokens = 100
+    messages = [
+        {"role": "system", "content": "This is a short system message"},
+        {"role": "user", "content": "This is a long message that will not fit. " * 100},
+        {"role": "user", "content": "This is the last question"},
+    ]
+
+    trimmed_messages, response_tokens = trim_messages(
+        messages, model="gpt-4-0613", max_tokens=max_tokens, return_response_tokens=True
+    )
+
+    assert trimmed_messages[0]["role"] == "system"
+    assert response_tokens == max_tokens - get_token_count(trimmed_messages, model="gpt-4-0613")
+    assert response_tokens >= 0
+
+
+def test_trim_messages_return_response_tokens_returns_a_tuple_when_the_system_message_uses_the_whole_limit():
+    max_tokens = 30
+    messages = [
+        {"role": "system", "content": "This is a system message that is far too long. " * 50},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = trim_messages(messages, model="gpt-4-0613", max_tokens=max_tokens, return_response_tokens=True)
+
+    assert isinstance(result, tuple)
+    trimmed_messages, response_tokens = result
+    assert response_tokens == max_tokens - get_token_count(trimmed_messages, model="gpt-4-0613")
+
+
+def test_trim_messages_return_response_tokens_is_none_when_no_token_limit_is_known():
+    messages = [{"role": "user", "content": "hi"}]
+
+    trimmed_messages, response_tokens = trim_messages(
+        messages, model="a-model-litellm-does-not-know", return_response_tokens=True
+    )
+
+    assert trimmed_messages == messages
+    assert response_tokens is None
+
+
 @pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
