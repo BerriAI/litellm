@@ -1,13 +1,16 @@
 import asyncio
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.router_utils.common_utils import _is_proxy_admin_request
+from litellm.router_utils.common_utils import is_proxy_admin_request
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -61,7 +64,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
     if not isinstance(llm_router, litellm.Router):
         return
     deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
-    if llm_router._are_all_deployments_blocked(deployments):
+    if llm_router.are_all_deployments_blocked(deployments):
         raise litellm.PermissionDeniedError(
             message="Model is blocked",
             model=model_name,
@@ -90,6 +93,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
     "asearch": "/search",
+    "adecisions": "/decisions",
     "avideo_generation": "/videos",
     "avideo_list": "/videos",
     "avideo_status": "/videos/{video_id}",
@@ -142,6 +146,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
     "acreate_batch": "/batches",
+    "aretrieve_batch": "/batches",
 }
 
 
@@ -159,8 +164,45 @@ class ProxyModelNotFoundError(HTTPException):
 REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acompletion": ("messages",),
     "aembedding": ("input",),
+    "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
+
+REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "aspeech": ("input",),
+        "amoderation": ("input",),
+        "aimage_generation": ("prompt",),
+        "asearch": ("query",),
+        "atext_completion": ("prompt",),
+        "atranscription": ("file",),
+        "arerank": ("query", "documents"),
+        "acompact_responses": ("input",),
+        "anthropic_messages": ("messages", "max_tokens"),
+        "agenerate_content": ("contents",),
+        "aocr": ("document",),
+        "avector_store_search": ("query",),
+        "avector_store_file_create": ("file_id",),
+        "avector_store_file_update": ("attributes",),
+        "avideo_generation": ("prompt",),
+        "avideo_remix": ("prompt",),
+        "avideo_edit": ("prompt",),
+        "avideo_extension": ("prompt", "seconds"),
+        "avideo_create_character": ("name", "video"),
+        "acreate_container": ("name",),
+        "aupload_container_file": ("file",),
+        "acreate_agent": ("name",),
+        "acreate_interaction": ("input",),
+        "acreate_eval": ("data_source_config", "testing_criteria"),
+        "acreate_run": ("data_source",),
+    }
+)
+
+REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {"acreate_interaction": ("model", "agent")}
+)
+
+JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 class ProxyMissingRequiredParamError(ProxyException):
@@ -173,16 +215,119 @@ class ProxyMissingRequiredParamError(ProxyException):
         )
 
 
-def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    missing_param: Final = next(
+class ProxyMissingParamWithoutLoadedModelError(ProxyMissingRequiredParamError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class MissingBodyParam:
+    name: str
+    model_deployments_loaded: bool
+
+
+def _find_missing_required_body_param(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> MissingBodyParam | None:
+    one_of_params: Final = REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type)
+    if one_of_params is not None and all(data.get(param) is None for param in one_of_params):
+        return MissingBodyParam(name=one_of_params[0], model_deployments_loaded=True)
+    missing_merge_base_param: Final = next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
         None,
     )
+    if missing_merge_base_param is not None:
+        return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
+    missing_present_params: Final = tuple(
+        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+    )
+    if not missing_present_params:
+        return None
+    candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
+    router_default_litellm_params: Final = _router_default_litellm_params(route_type, data, llm_router)
+    missing_param: Final = next(
+        (
+            param
+            for param in missing_present_params
+            if router_default_litellm_params.get(param) is None
+            and not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+        ),
+        None,
+    )
+    if missing_param is None:
+        return None
+    return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
+
+
+_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = frozenset(
+    {"asearch", "acreate_agent", "acreate_eval", "acreate_run"}
+)
+
+
+def _router_default_litellm_params(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> Mapping[str, object]:
+    # Mirror exactly the defaults the dispatching router will merge at dispatch time:
+    # user_config requests dispatch on their own throwaway Router, and the listed route
+    # types (plus model-less direct dispatch) never pass through the router's merge.
+    user_config: Final[Mapping[str, object] | None] = (
+        data.get("user_config") if isinstance(data.get("user_config"), Mapping) else None
+    )
+    if user_config is not None:
+        defaults: Final[Mapping[str, object] | None] = user_config.get("default_litellm_params")
+        return defaults if isinstance(defaults, Mapping) else {}
+    model_name: Final = data.get("model")
+    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE or not isinstance(model_name, str) or not model_name:
+        return {}
+    router_defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
+    return router_defaults if isinstance(router_defaults, Mapping) else {}
+
+
+def _candidate_deployment_litellm_params(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> tuple[dict[str, object], ...]:
+    model_name: Final = data.get("model")
+    if llm_router is None or not isinstance(model_name, str):
+        return ()
+    deployments: Final = (
+        llm_router.get_model_list(
+            model_name=model_name,
+            team_id=get_team_id_from_data(dict(data)),
+        )
+        or ()
+    )
+    return tuple(
+        params for deployment in deployments if (params := _validated_deployment_litellm_params(deployment)) is not None
+    )
+
+
+def _validated_deployment_litellm_params(deployment: Mapping[str, object]) -> dict[str, object] | None:
+    try:
+        return JSON_OBJECT_ADAPTER.validate_python(deployment.get("litellm_params"))
+    except ValidationError:
+        return None
+
+
+def raise_if_required_body_param_missing(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> None:
+    missing_param: Final = _find_missing_required_body_param(route_type, data, llm_router)
     if missing_param is None:
         return
-    raise ProxyMissingRequiredParamError(
+    error_class: Final = (
+        ProxyMissingRequiredParamError
+        if missing_param.model_deployments_loaded
+        else ProxyMissingParamWithoutLoadedModelError
+    )
+    raise error_class(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        param=missing_param,
+        param=missing_param.name,
     )
 
 
@@ -190,7 +335,7 @@ class MockTestingParamsDisabledError(HTTPException):
     def __init__(self, params: tuple[str, ...]):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+            detail={
                 "error": (
                     f"Mock testing request params are disabled on this proxy: {', '.join(params)}. "
                     f"An admin can enable them by setting `general_settings.{MOCK_TESTING_CONFIG_KEY}: true` "
@@ -295,7 +440,9 @@ async def add_shared_session_to_data(data: dict) -> None:
                         "SESSION REUSE: Shared aiohttp session is None after re-check, recreating..."
                     )
                 try:
-                    new_session = await proxy_server._initialize_shared_aiohttp_session()
+                    new_session = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                        await proxy_server.initialize_shared_aiohttp_session()
+                    )
                 except Exception:
                     verbose_proxy_logger.exception("SESSION REUSE: Exception during shared session recreation")
                     new_session = None
@@ -371,6 +518,7 @@ RouteType = Literal[
     "avector_store_file_delete",
     "aocr",
     "asearch",
+    "adecisions",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -440,9 +588,13 @@ async def route_request(
             route_type=route_type,
             user_api_key_dict=user_api_key_dict,
         )
-    except ProxyModelNotFoundError as e:
+    except (ProxyModelNotFoundError, ProxyMissingParamWithoutLoadedModelError) as e:
         requested_model: Final = data.get("model", "")
-        if not e.retryable_with_model_read_through or not isinstance(requested_model, str) or not requested_model:
+        if (
+            (isinstance(e, ProxyModelNotFoundError) and not e.retryable_with_model_read_through)
+            or not isinstance(requested_model, str)
+            or not requested_model
+        ):
             raise
         from litellm.proxy import proxy_server
         from litellm.proxy.common_utils.registry_read_through import (
@@ -467,7 +619,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
-    raise_if_required_body_param_missing(route_type=route_type, data=data)
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
 
     await add_shared_session_to_data(data)
 
@@ -477,7 +629,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
-    is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
+    is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -526,9 +678,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "enable_tag_filtering",
         ]
 
-        # Merge override settings into data (only if not already set in request)
         for key in per_request_settings:
-            if key in override_settings and key not in data:
+            if override_settings.get(key) is not None and key not in data:
                 data[key] = override_settings[key]
 
         # Use main router with overridden kwargs
@@ -565,7 +716,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                         if (
                             deployment
                             and deployment.litellm_params
-                            and not llm_router._is_deployment_blocked(deployment)
+                            and not llm_router.is_deployment_blocked(deployment)
                         ):
                             deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
 
@@ -629,6 +780,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
+        if "model" not in data:
+            raise ProxyMissingRequiredParamError(
+                route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+                param="model",
+            )
         team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name

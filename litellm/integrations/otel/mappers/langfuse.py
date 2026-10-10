@@ -39,7 +39,7 @@ LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 
 class LangfuseMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
-        "langfuse.observation.type": lambda d: "generation",
+        "langfuse.observation.type": lambda _: "generation",
         "langfuse.observation.model.name": lambda d: d.request_model or None,
         "langfuse.observation.metadata.provider": lambda d: d.provider or None,
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
@@ -56,9 +56,13 @@ class LangfuseMapper:
         "presence_penalty": lambda rp: rp.presence_penalty,
         "seed": lambda rp: rp.seed,
     }
+    # Langfuse prices every key, and litellm's prompt/completion counts include cache and reasoning tokens
     _USAGE_FIELDS: dict[str, Callable[[LLMUsage], AttrValue | None]] = {
-        "input": lambda u: u.input_tokens,
-        "output": lambda u: u.output_tokens,
+        "input": lambda u: u.uncached_input_tokens,
+        "input_cached_tokens": lambda u: u.cache_read_input_tokens or None,
+        "input_cache_creation": lambda u: u.cache_creation_input_tokens or None,
+        "output": lambda u: u.non_reasoning_output_tokens,
+        "output_reasoning_tokens": lambda u: u.reasoning_tokens or None,
         "total": lambda u: u.total_tokens,
     }
 
@@ -68,7 +72,9 @@ class LangfuseMapper:
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
         LANGFUSE_OBSERVATION_INPUT: lambda d: serialize_messages(d.messages_in),
-        LANGFUSE_OBSERVATION_OUTPUT: lambda d: serialize_messages(output_messages(d)),
+        LANGFUSE_OBSERVATION_OUTPUT: lambda d: (
+            d.embedding_output.as_json() if d.embedding_output is not None else serialize_messages(output_messages(d))
+        ),
         "langfuse.observation.usage_details": lambda d: json_if(collect(LangfuseMapper._USAGE_FIELDS, d.usage)),
         "langfuse.observation.cost_details": lambda d: (
             json.dumps({"total": d.response_cost}) if d.response_cost is not None else None

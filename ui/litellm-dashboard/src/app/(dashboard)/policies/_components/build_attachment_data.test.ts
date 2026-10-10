@@ -80,6 +80,16 @@ describe("buildAttachmentData", () => {
     });
   });
 
+  describe("default", () => {
+    it.each(["global", "specific"] as const)("should send default: true for a %s scope", (scopeType) => {
+      expect(buildAttachmentData({ policy_name: "p", default: true }, scopeType).default).toBe(true);
+    });
+
+    it.each([undefined, false])("should omit default when it is %s", (value) => {
+      expect(buildAttachmentData({ policy_name: "p", default: value }, "specific")).not.toHaveProperty("default");
+    });
+  });
+
   describe("priority", () => {
     it.each(["global", "specific"] as const)("should include priority for a %s scope", (scopeType) => {
       expect(buildAttachmentData({ policy_name: "p", priority: 0 }, scopeType).priority).toBe(0);

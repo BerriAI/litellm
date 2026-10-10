@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import (
     assert_client_error,
     require_successful_call,
@@ -100,6 +101,15 @@ def _default_invoke() -> InvokeBody:
 
 class TestBedrockNative:
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_converse_returns_assistant(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -113,6 +123,15 @@ class TestBedrockNative:
         assert any(part.text.strip() for part in response.output.message.content)
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_converse_stream_returns_chunks(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -126,6 +145,15 @@ class TestBedrockNative:
         assert result.chunks > 0, "converse-stream returned no events"
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invoke_returns_message(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -138,6 +166,15 @@ class TestBedrockNative:
         assert any(part.text.strip() for part in response.content)
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_invoke_stream_returns_chunks(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -151,6 +188,15 @@ class TestBedrockNative:
         assert result.chunks > 0, "invoke stream returned no events"
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_converse_missing_messages_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -161,6 +207,15 @@ class TestBedrockNative:
         assert_client_error(result, "converse missing messages")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_converse_empty_messages_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -171,6 +226,14 @@ class TestBedrockNative:
         assert_client_error(result, "converse empty messages")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_converse_invalid_model_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         _, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -183,6 +246,15 @@ class TestBedrockNative:
         )
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invoke_missing_messages_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -193,6 +265,15 @@ class TestBedrockNative:
         assert_client_error(result, "invoke missing messages")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invoke_missing_max_tokens_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         result = proxy.transport.send(
@@ -206,6 +287,15 @@ class TestBedrockNative:
         assert_client_error(result, "invoke missing max_tokens")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invoke_invalid_temperature_returns_client_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:

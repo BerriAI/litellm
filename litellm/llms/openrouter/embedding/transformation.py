@@ -170,7 +170,9 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> OpenRouterException:
         """
         Get the error class for OpenRouter errors.
         """

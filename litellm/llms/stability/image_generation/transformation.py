@@ -6,9 +6,11 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -26,13 +28,14 @@ from litellm.types.llms.stability import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class StabilityImageGenerationConfig(BaseImageGenerationConfig):
@@ -207,7 +210,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -235,7 +238,8 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Check finish_reason
-        finish_reason: Final = response_data.get("finish_reason", "")
+        payload: Final = _JSON_OBJECT.validate_python(response_data)
+        finish_reason: Final = payload.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(
                 error_message="Content was filtered by Stability AI safety systems",
@@ -247,7 +251,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Extract image from response
-        image_b64: Final = response_data.get("image")
+        image_b64: Final = payload.get("image")
         if image_b64:
             model_response.data.append(
                 ImageObject(

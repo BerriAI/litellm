@@ -11,7 +11,7 @@ from io import BytesIO
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_SkillsTable
+from litellm.models.skills import LiteLLM_SkillsTable
 
 
 class SkillPromptInjectionHandler:
@@ -289,7 +289,7 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        input_schema: dict[str, Any] = {
+        input_schema: dict[str, object] = {
             "type": "object",
             "properties": {},
             "required": [],

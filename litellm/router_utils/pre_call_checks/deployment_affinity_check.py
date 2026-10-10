@@ -13,13 +13,19 @@ where routing to a consistent deployment is still beneficial.
 """
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import claim_affinity_pin, claim_affinity_pin_in_memory, set_local_affinity_pin
+from litellm.caching.affinity_cache import (
+    ROUTER_SESSION_PINS_TARGET,
+    claim_affinity_pin,
+    claim_affinity_pin_in_memory,
+    set_local_affinity_pin,
+)
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
@@ -79,6 +85,7 @@ class DeploymentAffinityCheck(CustomLogger):
         enable_responses_api_affinity: bool,
         enable_session_id_affinity: bool = False,
         model_group_affinity_config: dict[str, list[str]] | None = None,
+        is_priority_group: Callable[[str], bool] | None = None,
     ):
         super().__init__()
         self.cache = cache
@@ -87,6 +94,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_responses_api_affinity = enable_responses_api_affinity
         self.enable_session_id_affinity = enable_session_id_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
+        self.is_priority_group = is_priority_group
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -343,6 +351,7 @@ class DeploymentAffinityCheck(CustomLogger):
                 return deployment
         return None
 
+    @with_service_target(ROUTER_SESSION_PINS_TARGET)
     async def async_filter_deployments(
         self,
         model: str,
@@ -383,6 +392,9 @@ class DeploymentAffinityCheck(CustomLogger):
                             responses_model_id,
                         )
                         return [deployment]
+
+        if self.is_priority_group is not None and self.is_priority_group(model):
+            return typed_healthy_deployments
 
         stable_model_map_key: Final = self._get_stable_model_map_key_from_deployments(
             healthy_deployments=typed_healthy_deployments

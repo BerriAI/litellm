@@ -107,14 +107,14 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
             elif item.get("type") == "reasoning":
                 if "content" in item:
                     messages.append(
-                        {  # mutable-ok: append reasoning content
+                        {
                             "role": item.get("role") or "assistant",
                             "content": item["content"],
                         }
                     )
                 if isinstance(item.get("summary"), list):
                     messages.append(
-                        {  # mutable-ok: append reasoning summary
+                        {
                             "role": item.get("role") or "assistant",
                             "content": item["summary"],
                         }
@@ -197,7 +197,7 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
             elif isinstance(item, dict):
                 if _part_text(item) is not None:
                     visited += 1
-                    input_value[idx] = {**item, "text": visit(item["text"])}  # mutable-ok: rewrite text part in place
+                    input_value[idx] = {**item, "text": visit(item["text"])}
                 elif item.get("type") == "reasoning":
                     if "content" in item:
                         item["content"] = _rewrite_content(item["content"])

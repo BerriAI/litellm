@@ -6,7 +6,7 @@ import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.openai.chat.gpt_5_transformation import (
     OpenAIGPT5Config,
-    _get_effort_level,
+    get_effort_level,
     is_gpt_reasoning_series_name,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -76,7 +76,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         api_version: str = "",
     ) -> dict:
         reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
-        effective_effort: Final = _get_effort_level(reasoning_effort_value)
+        effective_effort: Final = get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
@@ -86,9 +86,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 non_default_params = non_default_params.copy()
                 optional_params = optional_params.copy()
-                if _get_effort_level(non_default_params.get("reasoning_effort")) == "none":
+                if get_effort_level(non_default_params.get("reasoning_effort")) == "none":
                     non_default_params.pop("reasoning_effort")
-                if _get_effort_level(optional_params.get("reasoning_effort")) == "none":
+                if get_effort_level(optional_params.get("reasoning_effort")) == "none":
                     optional_params.pop("reasoning_effort")
             else:
                 raise UnsupportedParamsError(
@@ -111,7 +111,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         )
 
         # Only drop reasoning_effort='none' for models that don't support it
-        result_effort: Final = _get_effort_level(result.get("reasoning_effort"))
+        result_effort: Final = get_effort_level(result.get("reasoning_effort"))
         if result_effort == "none" and not supports_none:
             result.pop("reasoning_effort")
 

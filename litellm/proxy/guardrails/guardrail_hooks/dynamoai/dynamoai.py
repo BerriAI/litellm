@@ -130,6 +130,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 url=self.api_url,
                 json=dict(payload),
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             response_json: Final = response.json()

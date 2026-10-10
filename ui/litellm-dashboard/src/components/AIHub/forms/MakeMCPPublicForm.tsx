@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
+import CodeBlock from "@/components/CodeBlock";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +30,11 @@ interface MakeMCPPublicFormProps {
   onSuccess: () => void;
 }
 
+interface PublicationSelection {
+  readonly catalog: MCPServerData[];
+  readonly serverIds: Set<string>;
+}
+
 const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   visible,
   onClose,
@@ -37,21 +43,28 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   onSuccess,
 }) => {
   const [currentStep, setCurrentStep] = useState(0);
-  const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
+  const [selection, setSelection] = useState<PublicationSelection | null>(null);
   const [loading, setLoading] = useState(false);
+  const selectedServers = selection?.serverIds ?? new Set<string>();
+  const hasPublicationMetadata = mcpHubData.every((server) => typeof server.mcp_info?.is_public_explicit === "boolean");
+  const canManagePublication = hasPublicationMetadata && selection?.catalog === mcpHubData;
+  const publicationYaml = [
+    "litellm_settings:",
+    "  public_mcp_hub_strict_whitelist: true",
+    selectedServers.size === 0
+      ? "  public_mcp_servers: []"
+      : `  public_mcp_servers:\n${Array.from(selectedServers, (id) => `    - ${JSON.stringify(id)}`).join("\n")}`,
+  ].join("\n");
 
   const handleClose = () => {
     setCurrentStep(0);
-    setSelectedServers(new Set());
+    setSelection(null);
     onClose();
   };
 
   const handleNext = () => {
+    if (!canManagePublication) return;
     if (currentStep === 0) {
-      if (selectedServers.size === 0) {
-        toast.fromError("Please select at least one MCP server to make public");
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -69,37 +82,32 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     } else {
       newSelection.delete(serverId);
     }
-    setSelectedServers(newSelection);
+    setSelection({ catalog: mcpHubData, serverIds: newSelection });
   };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       const allServerIds = mcpHubData.map((server) => server.server_id);
-      setSelectedServers(new Set(allServerIds));
+      setSelection({ catalog: mcpHubData, serverIds: new Set(allServerIds) });
     } else {
-      setSelectedServers(new Set());
+      setSelection({ catalog: mcpHubData, serverIds: new Set() });
     }
   };
 
-  // Initialize and preselect already public servers when modal opens
   useEffect(() => {
-    if (visible && mcpHubData.length > 0) {
-      // Extract server IDs from servers that are already public
-      const publicServerIds = mcpHubData
-        .filter((server) => server.mcp_info?.is_public === true)
-        .map((server) => server.server_id);
-
-      // Preselect servers that are already public
-      setSelectedServers(new Set(publicServerIds));
-    }
-  }, [visible]); // Only re-run when modal visibility changes, not when mcpHubData updates
-
-  const handleSubmit = async () => {
-    if (selectedServers.size === 0) {
-      toast.fromError("Please select at least one MCP server to make public");
+    if (!visible || !hasPublicationMetadata) {
+      setSelection(null);
       return;
     }
+    const publicServerIds = mcpHubData
+      .filter((server) => server.mcp_info.is_public_explicit === true)
+      .map((server) => server.server_id);
+    setSelection({ catalog: mcpHubData, serverIds: new Set(publicServerIds) });
+    setCurrentStep(0);
+  }, [visible, mcpHubData, hasPublicationMetadata]);
 
+  const handleSubmit = async () => {
+    if (!canManagePublication) return;
     setLoading(true);
     try {
       const serverIdsToMakePublic = Array.from(selectedServers);
@@ -107,12 +115,12 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
       // Make batch API call for all servers
       await makeMCPPublicCall(accessToken, serverIdsToMakePublic);
 
-      toast.success(`Successfully made ${serverIdsToMakePublic.length} MCP server(s) public!`);
+      toast.success("MCP Hub publication list updated");
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making MCP servers public:", error);
-      toast.fromError("Failed to make MCP servers public. Please try again.");
+      toast.fromError(error);
     } finally {
       setLoading(false);
     }
@@ -126,7 +134,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Select MCP Servers to Make Public</h3>
+          <h3 className="text-lg font-semibold">Select MCP Servers for the Hub</h3>
           <div className="flex items-center space-x-2">
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
@@ -141,8 +149,13 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
         </div>
 
         <p className="text-sm text-muted-foreground">
-          Select the MCP servers you want to be visible on the public model hub. Users will still require a valid
-          Virtual Key to use these servers.
+          Select the complete list of MCP servers to publish on the public hub. Uncheck a server to remove it from this
+          list, or uncheck all to clear it. Authentication and access permissions still apply
+        </p>
+
+        <p className="text-xs text-muted-foreground">
+          Legacy mode also lists servers with public IP access enabled. Set public_mcp_hub_strict_whitelist to true in
+          your configuration to use only the publication list
         </p>
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
@@ -160,16 +173,22 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                     className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-accent"
                   >
                     <Checkbox
+                      aria-label={`Publish ${server.server_name}`}
                       checked={selectedServers.has(server.server_id)}
                       onCheckedChange={(checked) => handleServerSelection(server.server_id, checked === true)}
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium break-words">{server.server_name}</p>
-                        {isPublic && <Badge>Public</Badge>}
+                        {isPublic && (
+                          <Badge>
+                            {server.mcp_info?.is_public_explicit === false ? "Listed by legacy mode" : "Listed"}
+                          </Badge>
+                        )}
                         <Badge variant="secondary">{server.transport}</Badge>
                         <Badge variant={statusVariant(server.status)}>{server.status || "unknown"}</Badge>
                       </div>
+                      <p className="text-xs font-mono text-muted-foreground mt-1 break-all">{server.server_id}</p>
                       <p className="text-xs text-muted-foreground mt-1 break-words">
                         {server.description || server.url}
                       </p>
@@ -193,6 +212,18 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
           </div>
         </div>
 
+        <details className="rounded-lg border p-3">
+          <summary className="cursor-pointer text-sm font-medium">Configure in YAML</summary>
+          <div className="mt-3 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Merge these settings into your proxy configuration and reload it. Entries use the server IDs shown above,
+              not names or aliases. For servers defined in YAML, pin server_id in each existing mcp_servers entry so the
+              publication list stays stable
+            </p>
+            <CodeBlock code={publicationYaml} language="yaml" />
+          </div>
+        </details>
+
         {selectedServers.size > 0 && (
           <div className="bg-info/10 border border-info/20 rounded-lg p-3">
             <p className="text-sm text-info">
@@ -207,19 +238,20 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Confirm Making MCP Servers Public</h3>
+        <h3 className="text-lg font-semibold">Confirm MCP Hub Publication</h3>
 
         <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
           <p className="text-sm text-warning">
-            <strong>Warning:</strong> Once you make these MCP servers public, anyone who can go to the{" "}
-            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
+            Anyone who can open <code>/ui/model_hub_table</code> can discover published servers. Explicitly published
+            server IDs also allow requests from public IPs. Authentication and access permissions still apply
           </p>
         </div>
 
         <div className="space-y-3">
-          <p className="font-medium">MCP Servers to be made public:</p>
+          <p className="font-medium">MCP servers in the publication list:</p>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
+              {selectedServers.size === 0 && <p className="text-sm">No explicitly published servers</p>}
               {Array.from(selectedServers).map((serverId) => {
                 const server = mcpHubData.find((s) => s.server_id === serverId);
                 return (
@@ -248,8 +280,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
         <div className="bg-info/10 border border-info/20 rounded-lg p-3">
           <p className="text-sm text-info">
-            Total: <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} will be
-            made public
+            Saving replaces the publication list with <strong>{selectedServers.size}</strong> MCP server
+            {selectedServers.size !== 1 ? "s" : ""}. Legacy mode may still list servers with public IP access enabled
           </p>
         </div>
       </div>
@@ -257,6 +289,15 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   };
 
   const renderStepContent = () => {
+    if (!hasPublicationMetadata) {
+      return (
+        <div role="alert" className="rounded-lg border border-warning/20 bg-warning/10 p-4 text-sm">
+          This proxy does not provide explicit publication status for every MCP server. Update the proxy to manage
+          visibility here, or edit litellm_settings.public_mcp_servers in its existing configuration
+        </div>
+      );
+    }
+    if (!canManagePublication) return <p role="status">Loading publication settings</p>;
     switch (currentStep) {
       case 0:
         return renderStep1Content();
@@ -276,15 +317,15 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedServers.size === 0}>
+            <Button onClick={handleNext} disabled={!canManagePublication}>
               Next
             </Button>
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} disabled={loading}>
+            <Button onClick={handleSubmit} disabled={loading || !canManagePublication}>
               {loading && <Loader2 className="size-4 animate-spin" />}
-              Make Public
+              Save Publication List
             </Button>
           )}
         </div>
@@ -296,7 +337,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1200px]">
         <DialogHeader>
-          <DialogTitle>Make MCP Servers Public</DialogTitle>
+          <DialogTitle>Manage MCP Hub Visibility</DialogTitle>
         </DialogHeader>
 
         <div>

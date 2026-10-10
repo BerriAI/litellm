@@ -61,7 +61,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
     apiBase = proxySettings.PROXY_BASE_URL;
   }
 
-  const effectiveApiKey = accessToken || "sk-1234";
+  const effectiveApiKey = accessToken || "<your-master-key>";
 
   // Generate code based on selected language and tab
   const generateCode = () => {

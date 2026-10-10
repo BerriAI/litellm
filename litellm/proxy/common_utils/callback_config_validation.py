@@ -5,20 +5,42 @@ Team callbacks arrive as a single ``AddTeamCallback``, key callbacks arrive as a
 per-integration checks here.
 """
 
+import math
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR
+
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
+_LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
+_LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
+_ARIZE_CALLBACK: Final = "arize"
+_ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
+_ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
+    {"arize_success_sampling_rate", "arize_error_sampling_rate"}
+)
 
 
-def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
+def callback_config_error(
+    callback_name: str | None, callback_vars: Mapping[str, str] | None, callback_type: str | None = None
+) -> str | None:
     if not callback_vars:
         return None
-    env_error: Final = _langfuse_environment_error(callback_vars)
-    if env_error is not None:
-        return env_error
+    arize_error: Final = _arize_sampling_rate_error(callback_name, callback_vars) or _arize_otlp_protocol_error(
+        callback_name, callback_vars, callback_type
+    )
+    if arize_error is not None:
+        return arize_error
+    langfuse_error: Final = _langfuse_environment_error(callback_vars) or _langfuse_span_scope_error(
+        callback_name, callback_vars
+    )
+    if langfuse_error is not None:
+        return langfuse_error
+    capture_error: Final = _capture_message_content_error(callback_name, callback_vars, callback_type)
+    if capture_error is not None:
+        return capture_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -44,6 +66,51 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
     return None
 
 
+def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    value: Final = callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    if value is None:
+        return None
+    if callback_name != _LANGFUSE_OTEL_CALLBACK:
+        return (
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} applies to the {_LANGFUSE_OTEL_CALLBACK} callback only, not {callback_name!r}"
+        )
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_langfuse_span_scope_value,
+    )
+
+    try:
+        validate_langfuse_span_scope_value(value)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+def _capture_message_content_error(
+    callback_name: str | None, callback_vars: Mapping[str, str], callback_type: str | None
+) -> str | None:
+    value: Final = callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
+    if value is None:
+        return None
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.destinations import destination_capable_backends
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_capture_message_content_value,
+    )
+
+    supported: Final = sorted(destination_capable_backends())
+    if callback_name not in supported:
+        return f"{CAPTURE_MESSAGE_CONTENT_VAR} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
+    if not is_otel_v2_enabled():
+        return f"Per-destination {CAPTURE_MESSAGE_CONTENT_VAR} requires the proxy to run with LITELLM_OTEL_V2=true."
+    try:
+        validate_capture_message_content_value(value)
+    except ValueError as e:
+        return str(e)
+    if callback_type == "failure":
+        return f"{CAPTURE_MESSAGE_CONTENT_VAR} needs callback_type 'success' or 'success_and_failure'"
+    return None
+
+
 # Which credential family a dynamic variable belongs to. The families are the
 # integrations that share one account: every langfuse_* variable configures the
 # same Langfuse project whether it rides the classic callback or the OTel one,
@@ -63,13 +130,20 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset(
+    {_LANGFUSE_SPAN_SCOPE_VAR, _ARIZE_OTLP_PROTOCOL_VAR, *_ARIZE_SAMPLING_RATE_VARS}
+)
+
 
 def _family_of(var: str) -> str | None:
     """The credential family ``var`` configures, or ``None`` if it configures none.
 
     ``turn_off_message_logging`` and friends belong to no backend, so they carry
-    no credentials anyone could redirect.
+    no credentials anyone could redirect. ``langfuse_span_scope`` shares the Langfuse
+    prefix but is a fixed enum choosing what the family exports, not where to.
     """
+    if var in _FAMILY_OPTION_VARS:
+        return None
     return next((family for prefix, family in _VAR_FAMILIES.items() if var.startswith(prefix)), None)
 
 
@@ -129,30 +203,148 @@ def cross_entry_family_error(
     )
 
 
+def conflicting_span_scope_error(
+    callback_vars: Mapping[str, str] | None,
+    stored_vars_by_entry: Sequence[Mapping[str, str]],
+) -> str | None:
+    incoming: Final = None if callback_vars is None else callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    if incoming is None:
+        return None
+    return next(
+        (
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} is already set to {stored!r} by another callback entry. "
+            f"Every entry shares one scope: remove that entry or send the same value."
+            for entry in stored_vars_by_entry
+            if (stored := entry.get(_LANGFUSE_SPAN_SCOPE_VAR)) not in (None, incoming)
+        ),
+        None,
+    )
+
+
+def conflicting_capture_error(
+    callback_name: str,
+    callback_vars: Mapping[str, str] | None,
+    stored_entries: Sequence[tuple[str | None, Mapping[str, str]]],
+) -> str | None:
+    incoming: Final = None if callback_vars is None else callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
+    if incoming is None:
+        return None
+    return next(
+        (
+            f"{CAPTURE_MESSAGE_CONTENT_VAR} is already set to {stored!r} by another {callback_name} entry. "
+            f"Every {callback_name} entry shares one value: remove that entry or send the same value."
+            for name, entry_vars in stored_entries
+            if name == callback_name and (stored := entry_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)) not in (None, incoming)
+        ),
+        None,
+    )
+
+
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:
         return None
-    entries: Final = metadata.get("logging")
-    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+    entries: Final = _object_sequence(metadata.get("logging"))
+    if entries is None:
         return None
+    entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
+    named_vars: Final = tuple(zip((_entry_callback_name(entry) for entry in entries), entry_vars))
     return next(
-        (error for error in (_logging_entry_error(entry) for entry in entries) if error is not None),
+        (
+            error
+            for error in (
+                *(_logging_entry_error(entry) for entry in entries),
+                *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+                *(_conflicting_entry_capture_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
+            )
+            if error is not None
+        ),
         None,
     )
+
+
+def stored_capture_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
+    """The callback name and vars of every stored ``logging`` entry, for ``conflicting_capture_error``."""
+    entries: Final = _object_sequence(logging_entries) or ()
+    return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
+
+
+def _object_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
+
+
+def _entry_callback_name(entry: object) -> str | None:
+    match entry:
+        case {"callback_name": str() as callback_name}:
+            return callback_name
+        case _:
+            return None
+
+
+def _conflicting_entry_capture_error(
+    entry: tuple[str | None, Mapping[str, str]], earlier: Sequence[tuple[str | None, Mapping[str, str]]]
+) -> str | None:
+    callback_name, callback_vars = entry
+    return None if callback_name is None else conflicting_capture_error(callback_name, callback_vars, earlier)
+
+
+def _entry_callback_vars(entry: object) -> Mapping[str, str]:
+    callback_vars: Final = entry.get("callback_vars") if isinstance(entry, Mapping) else None
+    if not isinstance(callback_vars, Mapping):
+        return MappingProxyType({})
+    return MappingProxyType({str(key): str(value) for key, value in callback_vars.items()})
 
 
 def _logging_entry_error(entry: object) -> str | None:
     if not isinstance(entry, Mapping):
         return None
     callback_name: Final = entry.get("callback_name")
-    callback_vars: Final = entry.get("callback_vars")
-    if not isinstance(callback_name, str) or not isinstance(callback_vars, Mapping):
+    if not isinstance(callback_name, str) or not isinstance(entry.get("callback_vars"), Mapping):
         return None
+    callback_type_raw: Final = entry.get("callback_type")
     return callback_config_error(
-        callback_name,
-        MappingProxyType({str(key): str(value) for key, value in callback_vars.items()}),
+        callback_name, _entry_callback_vars(entry), callback_type_raw if isinstance(callback_type_raw, str) else None
     )
+
+
+def _arize_sampling_rate_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    for var in sorted(_ARIZE_SAMPLING_RATE_VARS):
+        value = callback_vars.get(var)
+        if value is None or value in ("", "None"):
+            continue
+        if callback_name != _ARIZE_CALLBACK:
+            return f"{var} applies to the {_ARIZE_CALLBACK} callback only, not {callback_name!r}"
+        try:
+            rate = float(value)
+        except (TypeError, ValueError):
+            return f"{var} must be a number between 0.0 and 1.0 (inclusive), got {value!r}"
+        if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+            return f"{var} must be a number between 0.0 and 1.0 (inclusive), got {value!r}"
+    return None
+
+
+def _arize_otlp_protocol_error(
+    callback_name: str | None, callback_vars: Mapping[str, str], callback_type: str | None = None
+) -> str | None:
+    value: Final = callback_vars.get(_ARIZE_OTLP_PROTOCOL_VAR)
+    if value is None:
+        return None
+    if callback_name != _ARIZE_CALLBACK:
+        return f"{_ARIZE_OTLP_PROTOCOL_VAR} applies to the {_ARIZE_CALLBACK} callback only, not {callback_name!r}"
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_arize_otlp_protocol_value,
+    )
+
+    try:
+        validate_arize_otlp_protocol_value(value)
+    except ValueError as e:
+        return str(e)
+    if callback_type == "failure":
+        return f"{_ARIZE_OTLP_PROTOCOL_VAR} needs callback_type 'success' or 'success_and_failure'; failure-only Arize callbacks export over the proxy's own Arize transport"
+    if not is_otel_v2_enabled():
+        return "Per-team Arize transport selection requires the proxy to run with LITELLM_OTEL_V2=true."
+    return None
 
 
 def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:

@@ -1,8 +1,9 @@
-import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatHistory } from "@/components/chat/useChatHistory";
 import ChatConversationPage from "./page";
+import { renderWithProviders } from "@/../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 
 const { mockMakeOpenAIResponsesRequest, shellState } = vi.hoisted(() => ({
   mockMakeOpenAIResponsesRequest: vi.fn(),
@@ -68,8 +69,8 @@ const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
 
-async function sendOneMessage(): Promise<void> {
-  render(<ChatConversationPage />);
+async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
+  renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
   expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText("How can I help you today?"), {
     target: { value: "How much did this cost?" },
@@ -120,6 +121,19 @@ describe("/ui/chat request metrics", () => {
     expect(typeof call[ON_TOTAL_LATENCY_INDEX]).toBe("function");
   });
 
+  it("puts the new conversation ID in the URL after the first message is sent", async () => {
+    mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+    await sendOneMessage(onUrlUpdate);
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    const newConversationId = onUrlUpdate.mock.lastCall?.[0].searchParams.get("id");
+    expect(newConversationId).toBeTruthy();
+    expect(onUrlUpdate.mock.lastCall?.[0].options.history).toBe("push");
+    expect(localStorage.getItem("litellm_chat_history_v1:metrics-test-user")).toContain(newConversationId);
+  });
+
   it("shows no metrics bar for a turn the provider reported no usage for", async () => {
     mockMakeOpenAIResponsesRequest.mockImplementation(async (...args: unknown[]) => {
       const updateTextUI = args[1] as (role: string, delta: string) => void;
@@ -141,7 +155,7 @@ describe("/ui/chat storage banner", () => {
   });
 
   it("keeps the dismiss control amber on hover instead of the ghost variant's foreground", async () => {
-    render(<ChatConversationPage />);
+    renderWithProviders(<ChatConversationPage />);
 
     const banner = await screen.findByText("Chat history won't be saved in this browser session");
     const dismiss = within(banner.parentElement!).getByRole("button");

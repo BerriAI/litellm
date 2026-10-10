@@ -166,6 +166,37 @@ def get_next_standardized_reset_time(
         return base_midnight + timedelta(days=1)
 
 
+def _subtract_months(moment: datetime, months: int) -> datetime:
+    total_months: Final = moment.year * 12 + moment.month - 1 - months
+    year, month_index = divmod(total_months, 12)
+    month: Final = month_index + 1
+    return moment.replace(year=year, month=month, day=min(moment.day, get_last_day_of_month(year, month)))
+
+
+def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
+    """Start of the budget period that ends at `reset_at`, under the same rules
+    `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
+    months and a duration it does not recognize resets at the next midnight."""
+    value, unit = _parse_duration(_normalize_duration(duration))
+    if value is None:
+        return reset_at - timedelta(days=1)
+    match unit:
+        case "mo":
+            return _subtract_months(reset_at, value)
+        case "d":
+            return _subtract_months(reset_at, 1) if value == 30 else reset_at - timedelta(days=value)
+        case "w":
+            return reset_at - timedelta(weeks=value)
+        case "h":
+            return reset_at - timedelta(hours=value)
+        case "m":
+            return reset_at - timedelta(minutes=value)
+        case "s":
+            return reset_at - timedelta(seconds=value)
+        case _:
+            return reset_at - timedelta(days=1)
+
+
 def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
     """Set up timezone and normalize current time to that timezone."""
     try:

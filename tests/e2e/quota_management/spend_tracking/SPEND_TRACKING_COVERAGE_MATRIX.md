@@ -6,7 +6,7 @@ that would catch a regression.
 
 Companion: live suite `test_spend_tracking_e2e.py` + route breadth
 `test_spend_routes.py` (this directory). Offline regression suite:
-`tests/test_litellm/proxy/spend_tracking/`. Reference PR: BerriAI/litellm#29956.
+`tests/unit/proxy/spend_tracking/`. Reference PR: BerriAI/litellm#29956.
 
 Levels: `unit` mocked; `integration` real DB/cost-map; `live` real provider +
 proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
@@ -23,7 +23,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | per-model / per-provider attribution | `test_spend_tracking_utils.py` | unit | covered | yes (`test_each_model_on_a_shared_key_gets_its_own_row`) |
 | field population (model/tokens/api_key/team/org) | `test_spend_tracking_utils.py` | unit | partial | yes (asserts real values) |
 | `request_tags` propagation | `test_db_spend_update_writer.py` | unit | partial | yes (`test_request_tags_round_trip`) |
-| `end_user` attribution | unit | unit | partial | yes (`test_end_user_spend_attributed_on_row`) |
+| `end_user` attribution | unit | unit | partial | yes (`test_end_user_spend_attributed_on_row`, `test_end_user_header_attributes_responses_row`) |
 
 ## Cost calculation by modality
 
@@ -43,14 +43,14 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Tag | `test_update_daily_tag_spend.py` | partial | yes (`test_tag_spend_matches_sum_of_tagged_logs`) |
 | End-user | `test_proxy_update_spend.py` | covered | yes |
 | Spend == sum(logs) consistency | none | gap | yes (key + tag aggregate == sum of rows) |
-| Concurrent increments (one key, parallel writers) | `tests/spend_tracking_tests/test_spend_accuracy_tests.py` (burst) | partial | yes (`test_burst_of_concurrent_calls_loses_no_spend`) |
+| Concurrent increments (one key, parallel writers) | `tests/integration/spend/test_spend_rollup_accuracy.py`, `tests/integration/spend/test_chaos_burst_spend_once.py` (burst) | partial | yes (`test_burst_of_concurrent_calls_loses_no_spend`) |
 
 ## Spend read endpoints (verification surface)
 
 | Endpoint | Existing | Status | Live e2e |
 |----------|----------|--------|----------|
 | `/spend/logs` (request_id / api_key) | `test_spend_management_endpoints.py` | covered | yes (primary read path; `test_spend_logs_endpoint_returns_spend` asserts 200 + spend, never 5xx) |
-| `/spend/calculate` | `local_testing/test_spend_calculate_endpoint.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
+| `/spend/calculate` | `unit/proxy/spend_tracking/test_spend_management_endpoints.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
 | `/spend/tags` | `test_spend_management_endpoints.py` | partial | yes (tag accuracy test) |
 | `/spend/logs/v2` pagination (total/total_pages/out-of-range) | `test_spend_query_optimization.py` | covered | yes (`test_spend_logs_v2_pagination_caps_pages_and_keeps_total`; filter takes the hashed token, not the raw key) |
 | whole spend GET surface (22 routes) | unit per-handler | partial | yes (`test_spend_routes.py` probes each for 404/5xx) |
@@ -67,6 +67,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | `test_request_tags_round_trip` | tags persist onto the row |
 | `test_tag_spend_matches_sum_of_tagged_logs` | `/spend/tags` SUM/COUNT == tagged rows |
 | `test_end_user_spend_attributed_on_row` | `end_user` attributed + costed |
+| `test_end_user_header_attributes_responses_row` | `x-litellm-customer-id` / `x-litellm-end-user-id` + `x-litellm-tags` headers on `/v1/responses` (the Codex CLI `http_headers` shape) attributed + tagged + costed, and `/customer/info` spend equals the row |
 | `test_each_model_on_a_shared_key_gets_its_own_row` | per-model/provider rows, correct model + cost, distinct request_ids matching response id |
 | `test_failure_call_writes_failure_status_row` | failed call -> `status=failure`, `spend=0` |
 | `test_spend_calculate_returns_nonzero_cost` | cost-map smoke (no batch wait) |

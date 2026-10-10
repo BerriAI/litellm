@@ -3,13 +3,15 @@
 import copy
 import logging
 import re
-from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import Collection, Iterable, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -338,6 +340,13 @@ def get_or_create_metadata_bucket(
     return metadata_key, metadata_bucket
 
 
+def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapping[str, object] | None) -> object:
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
+        return litellm_metadata["used_client_oauth_token"]
+    return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -356,6 +365,46 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
             return metadata
 
     return {}
+
+
+def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
+    if isinstance(user_api_key_auth, Mapping):
+        return user_api_key_auth.get("budget_reservation")
+    return getattr(user_api_key_auth, "budget_reservation", None)
+
+
+def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
+    stamped: Final = metadata.get("user_api_key_budget_reservation")
+    if isinstance(stamped, dict):
+        return stamped
+    on_auth_object: Final = _budget_reservation_on_auth_object(metadata.get("user_api_key_auth"))
+    return on_auth_object if isinstance(on_auth_object, dict) else None
+
+
+def _stamp_budget_reservation_callback_bound(litellm_params: Mapping[str, object], callback_bound: bool) -> None:
+    for metadata_variable_name in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_variable_name)
+        if not isinstance(metadata, Mapping):
+            continue
+        budget_reservation = budget_reservation_from_metadata(metadata)
+        if budget_reservation is not None:
+            budget_reservation["callback_bound"] = callback_bound
+
+
+def bind_budget_reservation_to_callbacks(litellm_params: Mapping[str, object]) -> None:
+    """Mark the request's budget reservation as owned by the success callbacks of this call.
+
+    The proxy releases any reservation still unbound when the request ends; one bound here
+    is left for the cost callback, which may finish after the response has been sent. Bind
+    only where a success handler is guaranteed to run: a logging object merely existing is
+    not that, since the proxy builds one for every route before calling anything.
+    """
+    _stamp_budget_reservation_callback_bound(litellm_params, True)
+
+
+def unbind_budget_reservation_from_callbacks(litellm_params: Mapping[str, object]) -> None:
+    """Hand a failed call's reservation back to the request-end release: failure handlers never settle it."""
+    _stamp_budget_reservation_callback_bound(litellm_params, False)
 
 
 def reconstruct_model_name(
@@ -378,28 +427,41 @@ def reconstruct_model_name(
 
 
 # Helper functions used for OTEL logging
-def _get_parent_otel_span_from_kwargs(
-    kwargs: dict | None = None,
+def get_parent_otel_span_from_kwargs(
+    kwargs: dict[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:
             return None
         litellm_params: Final = kwargs.get("litellm_params")
-        _metadata: Final = kwargs.get("metadata") or {}
-        if "litellm_parent_otel_span" in _metadata:
-            return _metadata["litellm_parent_otel_span"]
+        metadata: Final = cast(  # cast-ok: metadata is caller-provided request data
+            Mapping[str, object], kwargs.get("metadata") or {}
+        )
+        if "litellm_parent_otel_span" in metadata:
+            return cast(  # cast-ok: tracing metadata crosses an external boundary
+                Span | None, metadata["litellm_parent_otel_span"]
+            )
         elif (
             litellm_params is not None
-            and litellm_params.get("metadata") is not None
-            and "litellm_parent_otel_span" in litellm_params.get("metadata", {})
+            and cast(Mapping[str, object], litellm_params).get("metadata") is not None
+            and "litellm_parent_otel_span"
+            in cast(
+                Mapping[str, object],
+                cast(Mapping[str, object], litellm_params).get("metadata", {}),
+            )
         ):
-            return litellm_params["metadata"]["litellm_parent_otel_span"]
+            typed_litellm_params: Final = cast(Mapping[str, object], litellm_params)
+            litellm_metadata: Final = cast(Mapping[str, object], typed_litellm_params["metadata"])
+            return cast(Span | None, litellm_metadata["litellm_parent_otel_span"])
         elif "litellm_parent_otel_span" in kwargs:
-            return kwargs["litellm_parent_otel_span"]
+            return cast(Span | None, kwargs["litellm_parent_otel_span"])
         return None
     except Exception as e:
         verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
+
+
+_get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
@@ -447,7 +509,8 @@ def process_response_headers(
         **processed_headers,
         **additional_headers,
     }
-    return additional_headers
+    request_id: Final = get_provider_request_id(response_headers)
+    return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
 def preserve_upstream_non_openai_attributes(
@@ -538,7 +601,7 @@ def independent_snapshot(
     """
     sanitized: Final = {
         key: (
-            {  # mutable-ok: same request-payload shape as data
+            {
                 inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
                 for inner_key, inner_value in value.items()
             }
@@ -560,15 +623,13 @@ def independent_snapshot(
             and isinstance(original_value, dict)
             and "litellm_parent_otel_span" in original_value
         ):
-            return {  # mutable-ok: same request-payload shape as data
+            return {
                 **copied_value,
                 "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
             }
         return copied_value
 
-    return {  # mutable-ok: same request-payload shape as data
-        key: _copied_value(key, value) for key, value in sanitized.items()
-    }
+    return {key: _copied_value(key, value) for key, value in sanitized.items()}
 
 
 def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
@@ -668,17 +729,18 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
 
 def redact_nested_match_and_regex_keys(
     payload: dict | list[Any] | str | None,
+    keys: Collection[str] = ("match", "regex"),
 ) -> dict | list[Any] | str | None:
     """
-    Deep-copy `payload` and replace every `match` / `regex` string field with
-    "[REDACTED]" anywhere in nested dict/list structures.
+    Deep-copy `payload` and replace every configured string field with "[REDACTED]"
+    anywhere in nested dict/list structures.
 
     Used for guardrail spend/compliance logging so raw spans are not persisted.
     """
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 
@@ -693,13 +755,66 @@ def redact_nested_match_and_regex_keys(
                 continue
             seen.add(node_id)
             if isinstance(node, dict):
-                if "match" in node:
-                    node["match"] = "[REDACTED]"
-                if "regex" in node:
-                    node["regex"] = "[REDACTED]"
+                for key in keys:
+                    if key in node:
+                        node[key] = "[REDACTED]"
                 stack.extend(node.values())
             elif isinstance(node, list):
                 stack.extend(node)
     except Exception:
         return payload
     return redacted
+
+
+RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
+_NO_HEADERS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+class _CarriesHiddenParams(Protocol):
+    _hidden_params: dict[str, object]  # mutable-ok: the responses billed here keep hidden params in a plain dict
+
+    @property
+    def hidden_params(self) -> dict[str, object]: ...  # mutable-ok: API requires mutation
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
+
+def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
+    """Record a provider-reported cost where the cost calculator looks before the price map."""
+    if cost is None:
+        return
+    hidden_params: Final = response.hidden_params
+    additional_headers: Final[object] = hidden_params.get("additional_headers")
+    merged: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
+        **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
+        RESPONSE_COST_HEADER: cost,
+    }
+    hidden_params["additional_headers"] = merged
+
+
+_HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+
+
+def set_provider_response_headers_in_hidden_params(
+    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
+) -> None:
+    hidden_params: Final = response.hidden_params
+    existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
+    raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
+    additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
+        **process_response_headers(raw_headers),
+        **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
+    }
+    hidden_params["headers"] = raw_headers
+    hidden_params["additional_headers"] = additional_headers
+
+
+def get_provider_response_headers_from_hidden_params(response: object) -> Mapping[str, str] | None:
+    hidden_params: Final[object] = getattr(response, "_hidden_params", None)
+    try:
+        validated: Final = _HIDDEN_PARAMS_ADAPTER.validate_python(hidden_params)
+        return _PROVIDER_HEADERS_ADAPTER.validate_python(validated.get("headers"))
+    except ValidationError:
+        return None

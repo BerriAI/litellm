@@ -86,7 +86,7 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
+def _last_user_content(messages: Sequence[Mapping[str, object]] | None) -> str | None:
     if not messages:
         return None
     for msg in reversed(messages):
@@ -135,7 +135,7 @@ def _recent_tool_results(
     return results
 
 
-def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
+def _assistant_content_and_tool_calls(response_obj: Any) -> tuple[object, Sequence[Mapping[str, object]]]:
     """Return (assistant_text, tool_calls_list) extracted from a ModelResponse-ish object."""
     if response_obj is None:
         return None, []

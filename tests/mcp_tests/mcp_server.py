@@ -51,6 +51,21 @@ def request_headers(ctx: Context) -> dict[str, str]:
     }
 
 
+@mcp.prompt()
+def greeting(name: str) -> str:
+    return f"Hello, {name}"
+
+
+@mcp.resource("memo://status")
+def status() -> str:
+    return "ready"
+
+
+@mcp.resource("memo://greeting/{name}")
+def greeting_resource(name: str) -> str:
+    return f"Hello, {name}"
+
+
 def main() -> None:
     args = _parse_args()
     transport = (args.transport or "stdio").lower()

@@ -9,11 +9,12 @@ from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -32,6 +33,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
+    proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
@@ -43,7 +45,14 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
+from litellm.proxy._types import (
+    SpendLogsMetadata,
+    SpendLogsMetadataFields,
+    SpendLogsPayload,
+    SpendLogsRouterMetadata,
+)
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -82,7 +91,7 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
+def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
     considered equivalent — only the raw master-key string matches.
@@ -90,6 +99,9 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     if _master_key is None or api_key is None:
         return False
     return secrets.compare_digest(api_key, _master_key)
+
+
+_is_master_key: Final = is_master_key
 
 
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
@@ -102,19 +114,28 @@ _NON_SECRET_KEY_ALIASES: Final = frozenset(
 )
 
 
-def _is_non_secret_key_value(value: str) -> bool:
+def _is_cli_session_alias(value: str, key_alias: object) -> bool:
+    return value.startswith(f"{CLI_SESSION_KEY_PREFIX}-") and value == key_alias
+
+
+def _is_non_secret_key_value(value: str, *, key_alias: object = None) -> bool:
     return (
-        value in _NON_SECRET_KEY_ALIASES or is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
+        value in _NON_SECRET_KEY_ALIASES
+        or is_valid_sha256_hash(value)
+        or _HASHED_JWT_RE.fullmatch(value) is not None
+        or _is_cli_session_alias(value, key_alias)
     )
 
 
-def _redact_logged_api_key(value: str | None, *, already_redacted: bool = False) -> str | None:
+def _redact_logged_api_key(
+    value: str | None, *, already_redacted: bool = False, key_alias: object = None
+) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     stripped: Final = re.sub(r"(?i)^bearer ", "", value)
     if not stripped:
         return None
-    if already_redacted and _is_non_secret_key_value(stripped):
+    if already_redacted and _is_non_secret_key_value(stripped, key_alias=key_alias):
         return stripped
     return hash_token(stripped)
 
@@ -137,7 +158,17 @@ def _get_router_metadata_for_spend_log(
     )
 
 
-_STAMPED_METADATA_KEYS: Final = frozenset(("router_metadata", "azure_spillover"))
+_STAMPED_METADATA_KEYS: Final = frozenset(
+    (
+        "router_metadata",
+        "azure_spillover",
+        "autorouter_savings",
+        "autorouter_savings_estimate",
+        "autorouter_baseline_observation",
+        "used_client_oauth_token",
+        "litellm_roi_estimator",
+    )
+)
 
 
 def _get_spend_logs_metadata(
@@ -156,8 +187,11 @@ def _get_spend_logs_metadata(
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
+    autorouter_savings_estimate: Mapping[str, JsonValue] | None = None,
+    autorouter_baseline_observation: str | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
+    used_client_oauth_token: bool | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -186,6 +220,7 @@ def _get_spend_logs_metadata(
             usage_object=None,
             guardrail_information=None,
             internal_call_origin=None,
+            litellm_roi_estimator=False,
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
@@ -196,10 +231,13 @@ def _get_spend_logs_metadata(
             cost_breakdown=None,
             compression_savings=None,
             autorouter_savings=autorouter_savings,
+            autorouter_savings_estimate=autorouter_savings_estimate,
+            autorouter_baseline_observation=autorouter_baseline_observation,
             litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
+            used_client_oauth_token=used_client_oauth_token,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -207,16 +245,28 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
-        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS},
+        **MappingProxyType(
+            {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
+        ),
+        autorouter_savings=autorouter_savings,
+        autorouter_savings_estimate=autorouter_savings_estimate,
+        autorouter_baseline_observation=autorouter_baseline_observation,
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
+        used_client_oauth_token=used_client_oauth_token,
+        litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
+    _key_alias: Final = metadata.get("user_api_key_alias")
     _already_redacted: Final = (
-        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
+        isinstance(_trusted_hash, str)
+        and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
+        and _trusted_hash == _raw_key
     )
-    clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
+    clean_metadata["user_api_key"] = _redact_logged_api_key(
+        _raw_key, already_redacted=_already_redacted, key_alias=_key_alias
+    )
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["batch_successful_requests"] = batch_successful_requests
@@ -231,7 +281,6 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
-    clean_metadata["autorouter_savings"] = autorouter_savings
     clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
@@ -521,10 +570,13 @@ def get_logging_payload(
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     _trusted_hash = metadata.get("user_api_key_hash")
+    _key_alias = metadata.get("user_api_key_alias")
     _key_already_redacted = (
-        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == api_key
+        isinstance(_trusted_hash, str)
+        and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
+        and _trusted_hash == api_key
     )
-    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted) or ""
+    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted, key_alias=_key_alias) or ""
 
     if (
         standard_logging_payload is not None
@@ -532,7 +584,9 @@ def get_logging_payload(
         api_key = (
             api_key
             or _redact_logged_api_key(
-                standard_logging_payload["metadata"].get("user_api_key_hash"), already_redacted=True
+                standard_logging_payload["metadata"].get("user_api_key_hash"),
+                already_redacted=True,
+                key_alias=standard_logging_payload["metadata"].get("user_api_key_alias"),
             )
             or ""
         )
@@ -660,6 +714,16 @@ def get_logging_payload(
         autorouter_savings=(
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
+        autorouter_savings_estimate=(
+            standard_logging_payload.get("autorouter_savings_estimate")
+            if standard_logging_payload is not None
+            else None
+        ),
+        autorouter_baseline_observation=(
+            standard_logging_payload.get("autorouter_baseline_observation")
+            if standard_logging_payload is not None
+            else None
+        ),
         litellm_call_id=litellm_call_id,
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
@@ -667,6 +731,9 @@ def get_logging_payload(
             selected_model=model_name,
             selected_provider=custom_llm_provider,
             router_correlation_id=litellm_call_id,
+        ),
+        used_client_oauth_token=resolve_used_client_oauth_token(
+            proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params), custom_llm_provider
         ),
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")
@@ -749,6 +816,7 @@ def get_logging_payload(
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
+            billing_agent_id=clean_metadata.get("billing_agent_id"),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
@@ -1037,19 +1105,42 @@ def _get_messages_for_spend_logs_payload(
 
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
+_REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
+_TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
+_TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
+
+
+def _is_request_body_credential(key: str, value: object) -> bool:
+    return isinstance(value, str) and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
+
+
+def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
+    block_type: Final = parent.get("type")
+    block_type_name: Final = block_type if isinstance(block_type, str) else None
+    return (
+        key in ("arguments", "logprobs")
+        or (key == "input" and block_type_name in _TOOL_INPUT_BLOCK_TYPES)
+        or (
+            key in ("content", "output")
+            and (block_type_name in _TOOL_OUTPUT_BLOCK_TYPES or parent.get("role") == "tool")
+        )
+    )
 
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
+    mask_credentials: bool = True,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
 
-    Also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields
-    which contains raw HTTP headers including Authorization tokens).
+    At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
+    which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
+    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
+    and logprobs.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1067,11 +1158,13 @@ def _sanitize_request_body_for_spend_logs_payload(
         return {}
     visited.add(obj_id)
 
-    def _sanitize_value(value: object) -> object:
+    def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db, mask_credentials
+            )
         elif isinstance(value, list):
-            return [_sanitize_value(item) for item in value]
+            return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
             if len(value) > max_string_length_prompt_in_db:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
@@ -1106,7 +1199,13 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {k: _sanitize_value(v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
+    return {
+        k: REDACTED_BY_LITELM_STRING
+        if mask_credentials and _is_request_body_credential(k, v)
+        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
+        for k, v in request_body.items()
+        if k not in _SENSITIVE_REQUEST_BODY_KEYS
+    }
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
@@ -1320,7 +1419,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     return {**redacted, "guardrail_response": preserved_stats}
 
 
-def _sanitize_error_information_for_spend_logs(
+def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
@@ -1359,6 +1458,9 @@ def _sanitize_error_information_for_spend_logs(
 
     sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
     return cast(StandardLoggingPayloadErrorInformation, sanitized)
+
+
+_sanitize_error_information_for_spend_logs: Final = sanitize_error_information_for_spend_logs
 
 
 def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = None, max_depth: int = 20) -> object:
@@ -1627,6 +1729,35 @@ def should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+
+
+_SPEND_LOGS_METADATA_FIELDS_ADAPTER: Final[TypeAdapter[SpendLogsMetadataFields | None]] = TypeAdapter(
+    SpendLogsMetadataFields | None
+)
+_SPEND_LOGS_METADATA_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def configured_spend_logs_metadata_fields() -> SpendLogsMetadataFields | None:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    try:
+        return _SPEND_LOGS_METADATA_FIELDS_ADAPTER.validate_python(
+            general_settings_view().get("spend_logs_metadata_fields")
+        )
+    except ValidationError as e:
+        verbose_proxy_logger.error("Ignoring invalid general_settings.spend_logs_metadata_fields: %s", e)
+        return None
+
+
+def spend_log_row_with_retained_metadata(
+    row: Mapping[str, object], fields: SpendLogsMetadataFields | None
+) -> Mapping[str, object]:
+    metadata_json: Final = row.get("metadata")
+    if fields is None or not isinstance(metadata_json, str):
+        return row
+    metadata: Final = _SPEND_LOGS_METADATA_ADAPTER.validate_json(metadata_json)
+    retained: Final = {name: value for name, value in metadata.items() if fields.keeps(name)}
+    return {**row, "metadata": safe_dumps(retained)}
 
 
 def _get_status_for_spend_log(

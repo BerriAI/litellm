@@ -1,6 +1,7 @@
 import json
 import time
 import traceback
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -12,8 +13,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -23,9 +24,8 @@ from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 from ..common_utils import API_BASE, BytezError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -187,7 +187,7 @@ class BytezChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -231,7 +231,7 @@ class BytezChatConfig(BaseConfig):
 
         model_response.usage = usage
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
             "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
             "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
@@ -259,9 +259,12 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(
@@ -301,6 +304,9 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
@@ -335,10 +341,10 @@ class BytezChatConfig(BaseConfig):
 
 
 class BytezCustomStreamWrapper(CustomStreamWrapper):
-    def chunk_creator(self, chunk: Any):
+    def chunk_creator(self, chunk: object):
         try:
             model_response: Final = self.model_response_creator()
-            response_obj: dict[str, Any] = {}
+            response_obj: dict[str, object] = {}
 
             response_obj = {
                 "text": chunk,
@@ -346,7 +352,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
                 "finish_reason": "",
             }
 
-            completion_obj: Final[dict[str, Any]] = {"content": chunk}
+            completion_obj: Final[dict[str, object]] = {"content": chunk}
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,

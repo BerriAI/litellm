@@ -4,7 +4,7 @@ use std::sync::Arc;
 use azure_core::credentials::TokenCredential;
 use moka::future::Cache;
 
-use litellm_auth::Error;
+use litellm_auth_types::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AzureCredentialProviderCacheKey {
