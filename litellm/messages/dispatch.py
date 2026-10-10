@@ -5,6 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
+from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
@@ -75,8 +76,11 @@ def _resolved_provider(request: NativeCall) -> str | None:
 def _python_serves(request: NativeCall) -> bool:
     """Vertex AI serves only Claude through the Anthropic Messages config, as
     ``get_provider_anthropic_messages_config`` does; every other Vertex model keeps Python's
-    translation through Chat Completions."""
-    return _resolved_provider(request) == "vertex_ai" and "claude" not in str(request.resolved["model"]).lower()
+    translation through Chat Completions. A request Python would answer with classifier
+    ``safeguard_results`` stays on Python too."""
+    model: Final = str(request.resolved["model"])
+    vertex_without_claude: Final = _resolved_provider(request) == "vertex_ai" and "claude" not in model.lower()
+    return vertex_without_claude or native_route_classifies(model, request.kwargs.get("safeguards"))
 
 
 def _context(request: NativeCall) -> RouteContext:

@@ -15,12 +15,15 @@ from typing import (
     get_args,
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
+from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -37,11 +40,13 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
+_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -333,6 +338,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         compaction_block: CompactionBlock | None = None,
         iterations_usage: list[UsageIteration] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
+        safeguards_evaluator: "SafeguardsEvaluator | None" = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -343,6 +349,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self.litellm_logging_obj = litellm_logging_obj
+        self.safeguards_evaluator: Final = safeguards_evaluator
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -1039,12 +1046,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
+        safeguard_results: Final = StreamedSafeguardResults(self.safeguards_evaluator)
         try:
             async for chunk in self:
                 if isinstance(chunk, dict):
-                    event_type: str = str(chunk.get("type", "message"))
-                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                    yield payload.encode()
+                    yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
                 else:
                     yield chunk
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
