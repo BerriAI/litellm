@@ -1054,6 +1054,13 @@ jobs:
           fi
           exit "$status"
 
+      - name: Check schema compatibility
+        if: always() && steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend'
+        timeout-minutes: 2
+        env:
+          BASE_REF: origin/${{ github.event.repository.default_branch }}
+        run: uv run --no-sync python scripts/check_schema_compatibility.py --base-ref "$BASE_REF"
+
       - name: Save coverage report
         if: always() && steps.changes.outputs.decision != 'skip'
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1

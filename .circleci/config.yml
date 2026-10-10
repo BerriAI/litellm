@@ -3391,12 +3391,11 @@ workflows:
       - integration_contracts:
           name: integration-extensions
           suite: extensions
-          parallelism: 24
-          resource_class: xlarge
+          parallelism: 32
       - integration_shard_coverage:
           name: integration-extensions-coverage
           suite: extensions
-          shards: 24
+          shards: 32
           requires:
             - integration-extensions
       - integration_contracts:

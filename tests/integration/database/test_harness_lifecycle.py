@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -10,8 +11,11 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
+from queue import SimpleQueue
+from threading import Event
 from types import FrameType
 from typing import Final
 
@@ -31,9 +35,11 @@ from tests.integration._support.database_relay import (
     dropped_connection_relay,
     held_statement_relay,
 )
+from tests.integration._support.runtime import configure_executor
 
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
+STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 
 
 @pytest.mark.parametrize("factory", (database_relay, dropped_connection_relay, held_statement_relay))
@@ -84,10 +90,64 @@ class _InterruptedCleanup(BaseException):
     pass
 
 
+async def test_owned_runtime_starts_the_entire_held_provider_burst_on_a_small_runner() -> None:
+    arrived: Final[SimpleQueue[bool]] = SimpleQueue()
+    complete: Final = Event()
+    release: Final = Event()
+
+    def held() -> None:
+        arrived.put(True)
+        if arrived.qsize() == 20:
+            complete.set()
+        assert release.wait(timeout=5), "Held executor job was never released"
+
+    with ThreadPoolExecutor(max_workers=1) as initial:
+        asyncio.get_running_loop().set_default_executor(initial)
+        configure_executor()
+        async with asyncio.TaskGroup() as tasks:
+            burst: Final = tuple(tasks.create_task(asyncio.to_thread(held)) for _ in range(20))
+            try:
+                assert await asyncio.wait_for(asyncio.to_thread(complete.wait, 2), timeout=3)
+                assert arrived.qsize() == len(burst)
+            finally:
+                release.set()
+
+
+@pytest.mark.timeout(90)
+def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_replaced(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    hook: Final = tmp_path / "slow_worker_startup.py"
+    hook.write_text("from threading import Event\n\ndef configure():\n    Event().wait(6)\n")
+    overrides: Final = {
+        "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", ""))),
+        "LITELLM_WORKER_STARTUP_HOOKS": "slow_worker_startup:configure",
+    }
+    with process_support.owned_proxy_process(gateway, tmp_path, overrides, workers=2) as owned:
+        workers: Final = eventually(
+            lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
+            lambda pids: len(pids) == 2 and owned.log.read_text().count("Application startup complete.") == 2,
+            seconds=30,
+        )
+        victim: Final = psutil.Process(workers[0])
+        victim.suspend()
+        try:
+            Event().wait(1)
+        finally:
+            victim.kill()
+        replacement: Final = eventually(
+            lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
+            lambda pids: len(pids) == 3 and owned.log.read_text().count("Application startup complete.") == 3,
+            seconds=30,
+        )
+        assert replacement[-1] not in workers
+        assert not psutil.pid_exists(victim.pid)
+        assert owned.gateway.request("GET", "/health/readiness").status_code == 200
+
+
 def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
     child_code: Final = (
-        "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
-        "print('ready',flush=True); time.sleep(60)"
+        "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(60)"
     )
     parent_code: Final = (
         "import signal,subprocess,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "

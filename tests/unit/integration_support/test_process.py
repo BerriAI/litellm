@@ -94,3 +94,21 @@ def test_owned_writer_keeps_only_a_reader_paired_with_its_database(
         )
     assert environment["DATABASE_URL"] == writer
     assert environment.get("DATABASE_URL_READ_REPLICA") == expected_reader
+
+
+@pytest.mark.parametrize("explicit", (False, True))
+@pytest.mark.parametrize("remove", (False, True))
+def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, explicit: bool, remove: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_WORKER_STARTUP_HOOKS", "ambient:configure")
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = process_module._proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {"LITELLM_WORKER_STARTUP_HOOKS": "custom:configure"} if explicit else {},
+            ("LITELLM_WORKER_STARTUP_HOOKS",) if remove else (),
+        )
+    expected: Final = "custom:configure" if explicit else ("" if remove else "ambient:configure")
+    assert environment["LITELLM_WORKER_STARTUP_HOOKS"] == ",".join(
+        hook for hook in ("integration._support.runtime:configure_executor", expected) if hook
+    )

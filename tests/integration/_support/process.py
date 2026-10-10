@@ -217,7 +217,14 @@ def _launch_until_bound(
         raise
     if exit_code is None:
         launch.log.with_suffix(".startup.json").write_text(
-            json.dumps({"root_pid": launch.process.pid, "readiness_seconds": time.monotonic() - launch.started}) + "\n"
+            json.dumps(
+                {
+                    "root_pid": launch.process.pid,
+                    "readiness_seconds": time.monotonic() - launch.started,
+                    "logical_cpus": os.cpu_count(),
+                }
+            )
+            + "\n"
         )
         return launch
     _stop_launch(launch)
@@ -241,6 +248,10 @@ def _proxy_environment(
         and urlsplit(writer).path != urlsplit(reader).path
     )
     removed: Final = frozenset((*remove_environment, *(("DATABASE_URL_READ_REPLICA",) if unpaired_reader else ())))
+    configured_hooks: Final = overrides.get(
+        "LITELLM_WORKER_STARTUP_HOOKS",
+        inherited.get("LITELLM_WORKER_STARTUP_HOOKS", "") if "LITELLM_WORKER_STARTUP_HOOKS" not in removed else "",
+    )
     return MappingProxyType(
         {
             **{name: value for name, value in inherited.items() if name not in removed},
@@ -249,6 +260,9 @@ def _proxy_environment(
             "STORE_MODEL_IN_DB": "True",
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
+            "LITELLM_WORKER_STARTUP_HOOKS": ",".join(
+                hook for hook in ("integration._support.runtime:configure_executor", configured_hooks) if hook
+            ),
         }
     )
 
@@ -306,7 +320,7 @@ def owned_proxy_process(
         "--num_workers",
         str(workers),
         "--timeout_worker_healthcheck",
-        str(int(graceful_stop_seconds())),
+        "5",
         *database_setup,
         *extra_arguments,
     )
