@@ -11,6 +11,8 @@ import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
 import EditFallbacks from "./EditFallbacks";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { useQuery } from "@tanstack/react-query";
 
 type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
@@ -125,9 +127,16 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [fallbackToEdit, setFallbackToEdit] = useState<FallbackEntry | null>(null);
+  const { data: modelInfo = [] } = useQuery({
+    queryKey: ["availableModels", "fallbacks", accessToken],
+    queryFn: () => fetchAvailableModels(accessToken ?? ""),
+    enabled: Boolean(accessToken),
+  });
 
   const { data: modelCostMapData } = useModelCostMap();
   const getProviderFromModel = (model: string): string => {
+    const provider = modelInfo.find((info) => info.model_group === model)?.providers?.[0];
+    if (provider) return provider;
     if (modelCostMapData != null && typeof modelCostMapData === "object" && model in modelCostMapData) {
       return modelCostMapData[model]["litellm_provider"] ?? "";
     }

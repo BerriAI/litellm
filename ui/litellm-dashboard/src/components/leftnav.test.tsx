@@ -307,6 +307,11 @@ describe("Sidebar (leftnav)", () => {
     expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
   });
 
+  it("links directly to fallbacks without expanding Settings", () => {
+    renderWithProviders(<Sidebar />);
+    expect(screen.getByRole("link", { name: "Fallbacks" })).toHaveAttribute("href", "/ui/fallbacks");
+  });
+
   it("has no duplicate keys among all menu items and their children", () => {
     // React keys must be unique across the whole nav config, otherwise the
     // active-item highlight and group expansion collide.
