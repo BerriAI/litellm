@@ -21,7 +21,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
+from typing_extensions import (
+    NotRequired,
+    ReadOnly,
+    Required,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the before-validator input without copying it
+)
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
@@ -191,7 +197,7 @@ from litellm.types.integrations.slack_alerting import (
 )
 
 
-def hash_token(token: str):
+def hash_token(token: str) -> str:
     import hashlib
 
     # Hash the string using SHA-256
@@ -3263,6 +3269,12 @@ from litellm.models.verification_token import (  # noqa: E402
     LiteLLM_VerificationToken as LiteLLM_VerificationToken,
 )
 
+_UntypedDict: TypeAlias = dict[Any, Any]
+
+
+def _is_str_keyed_dict(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: pydantic input and JSON keys are str
+    return isinstance(value, dict)
+
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
@@ -3277,12 +3289,12 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_model_max_budget: dict[str, object] | None = None
-    team_models: list = []
+    team_models: list[Any] = []
     team_blocked: bool = False
     soft_budget: float | None = None
-    team_model_aliases: dict | None = None
+    team_model_aliases: _UntypedDict | None = None
     team_member: Member | None = None
-    team_metadata: dict | None = None
+    team_metadata: _UntypedDict | None = None
     team_object_permission_id: str | None = None
 
     # Team Member Specific Params
@@ -3296,23 +3308,23 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_rpm_limit: int | None = None
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
-    end_user_model_max_budget: dict | None = None
+    end_user_model_max_budget: _UntypedDict | None = None
 
     # Organization Params
     organization_alias: str | None = None
     organization_max_budget: float | None = None
     organization_tpm_limit: int | None = None
     organization_rpm_limit: int | None = None
-    organization_metadata: dict | None = None
+    organization_metadata: _UntypedDict | None = None
 
     # Project Params
     project_alias: str | None = None
-    project_metadata: dict | None = None
+    project_metadata: _UntypedDict | None = None
 
     # Time stamps
     last_refreshed_at: float | None = None  # last time joint view was pulled from db
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         # Handle litellm_budget_table_* keys (budget table overrides when key value is None or empty)
         for key, value in list(kwargs.items()):
             if key.startswith("litellm_budget_table_") and value is not None:
@@ -3324,7 +3336,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                     current = getattr(self, attr_name, None)
                 # Apply budget value when key has no value, or for model_max_budget when key has empty dict
                 should_apply = current is None or (
-                    attr_name == "model_max_budget" and isinstance(current, dict) and len(current) == 0
+                    attr_name == "model_max_budget" and _is_str_keyed_dict(current) and len(current) == 0
                 )
                 if should_apply:
                     kwargs[attr_name] = value
@@ -3334,7 +3346,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
         if kwargs.get("organization_id") is not None:
             kwargs["org_id"] = kwargs.pop("organization_id")
         # Initialize the superclass
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # pydantic validates raw values
 
 
 class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response object for user api key auth
@@ -3422,15 +3434,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     team_object_permission: LiteLLM_ObjectPermissionTable | None = None
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
-    jwt_claims: dict | None = None
+    jwt_claims: _UntypedDict | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @model_validator(mode="before")
     @classmethod
-    def check_api_key(cls, values):
+    def check_api_key(cls, values: object) -> object:
         # If values is already an instance (not a dict), return it as-is
-        if not isinstance(values, dict):
+        if not _is_str_keyed_dict(values):
             return values
         # mcp_admitted_user_subject is a server-only marker, set ONLY by the MCP gateway admission
         # path via post-construction assignment. Strip it from any validated input (constructor
@@ -3450,10 +3462,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
-        if values.get("api_key") is not None:
-            values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str):
-                values.update({"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+        api_key: Final = values.get("api_key")
+        if api_key is not None:
+            values.update({"token": cls._safe_hash_litellm_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher
+            if isinstance(api_key, str):
+                values.update({"api_key": cls._safe_hash_litellm_api_key(api_key)})
         return values
 
     @classmethod
@@ -3530,8 +3543,8 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         return (
             self.user_id is None
             and self.team_id is not None
-            and bool(self.metadata)
-            and self.metadata.get("service_account_id") is not None
+            and bool(self.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped base field
+            and self.metadata.get("service_account_id") is not None  # pyright: ignore[reportUnknownMemberType]  # untyped base field
         )
 
 
