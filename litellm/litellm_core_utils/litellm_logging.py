@@ -6384,7 +6384,7 @@ class StandardLoggingPayloadSetup:
             return None
         user_agent_tags: list[str] | None = None
         headers: Final = proxy_server_request.get("headers", {})
-        if headers is not None and isinstance(headers, dict):
+        if headers is not None and isinstance(headers, Mapping):
             request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
                 dict[str, str | None], headers
             )
@@ -6411,7 +6411,7 @@ class StandardLoggingPayloadSetup:
             return None
 
         headers: Final = proxy_server_request.get("headers", {})
-        if not isinstance(headers, dict):
+        if not isinstance(headers, Mapping):
             return None
         request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
             dict[str, str], headers
