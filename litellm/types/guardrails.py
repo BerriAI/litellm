@@ -1,8 +1,9 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, cast
+from typing import Final, Literal, TypeAlias, cast
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -990,6 +991,23 @@ def runtime_stream_scope(
 
 
 LoggingOnlyScope = Literal["input", "output", "both"]
+LoggingOnlyDirection: TypeAlias = Literal["input", "output"]
+
+
+@dataclass(frozen=True, slots=True)
+class LoggingOnlySettings:
+    direction: LoggingOnlyDirection | None
+    continue_on_input_failure: bool
+
+
+def normalize_logging_only_settings(
+    scope: LoggingOnlyScope | None, continue_on_input_failure: bool | None
+) -> LoggingOnlySettings:
+    if scope == "both":
+        return LoggingOnlySettings(direction=None, continue_on_input_failure=True)
+    return LoggingOnlySettings(
+        direction=scope, continue_on_input_failure=bool(continue_on_input_failure) and scope is None
+    )
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
@@ -1250,8 +1268,19 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     logging_only_scope: LoggingOnlyScope | None = Field(
         default=None,
         description=(
-            "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' "
-            "(default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking."
+            "which direction a logging_only scan observes: 'input' (request) or 'output' (response); "
+            "unset scans both directions. 'both' is a deprecated alias for unset plus "
+            "logging_only_continue_on_input_failure=true. Only applies to mode logging_only; "
+            "pre_call/post_call on the same guardrail keep blocking."
+        ),
+    )
+
+    logging_only_continue_on_input_failure: bool | None = Field(
+        default=None,
+        description=(
+            "when True, a flagged or raising logging_only request scan is logged and the response is "
+            "still scanned, so both verdicts land. Only applies to mode logging_only and is ignored "
+            "when logging_only_scope is 'input' or 'output'."
         ),
     )
 

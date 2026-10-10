@@ -26688,8 +26688,13 @@ export interface components {
              */
             location?: string | null;
             /**
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
+             */
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
              * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. 'both' is a deprecated alias for unset plus logging_only_continue_on_input_failure=true. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
              */
             logging_only_scope?: ("input" | "output" | "both") | null;
             /**
@@ -36008,8 +36013,13 @@ export interface components {
              */
             location?: string | null;
             /**
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
+             */
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
              * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. 'both' is a deprecated alias for unset plus logging_only_continue_on_input_failure=true. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
              */
             logging_only_scope?: ("input" | "output" | "both") | null;
             /**

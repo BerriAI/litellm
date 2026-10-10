@@ -1674,6 +1674,120 @@ async def test_patch_guardrail_rejects_explicit_unsupported_scope_and_rolls_back
 
 
 @pytest.mark.asyncio
+async def test_patch_guardrail_rejects_invalid_continue_flag_with_422(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+        mock_guardrail_registry,
+    )
+    mock_in_memory_handler = mocker.Mock(spec=InMemoryGuardrailHandler)
+    mock_in_memory_handler.sync_guardrail_from_db.side_effect = ValueError(
+        "Guardrail test-db-guardrail: logging_only_continue_on_input_failure is set, but mode does not include logging_only"
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    request = PatchGuardrailRequest(
+        litellm_params=BaseLitellmParams(mode="pre_call", logging_only_continue_on_input_failure=True)
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await patch_guardrail("test-guardrail-id", request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 422
+    assert "update rejected" in str(exc_info.value.detail)
+    mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
+        guardrail=mocker.ANY,
+        reject_invalid_logging_only_scope=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_clears_continue_flag_when_logging_only_mode_is_removed(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_scope_supported_test",
+        {
+            "mode": ["pre_call", "logging_only"],
+            "logging_only_continue_on_input_failure": True,
+            "default_on": True,
+        },
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(mode=["pre_call"]))
+
+    try:
+        result = await patch_guardrail(
+            stored_guardrail["guardrail_id"],
+            request,
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+        assert result["guardrail_id"] == stored_guardrail["guardrail_id"]
+        persisted_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+        assert persisted_guardrail["litellm_params"].logging_only_continue_on_input_failure is None
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_continue_on_input_failure is False
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_rejects_continue_flag_outside_logging_only_with_400(mocker, mock_guardrail_registry):
+    mock_guardrail_registry.add_guardrail_to_db = AsyncMock(
+        return_value={
+            "guardrail_id": "flag-400-test",
+            "guardrail_name": "flag-400-test",
+            "litellm_params": {
+                "guardrail": "presidio",
+                "mode": "pre_call",
+                "logging_only_continue_on_input_failure": True,
+            },
+            "guardrail_info": {},
+        }
+    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    delete_row = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints._delete_guardrail_row", AsyncMock())
+    mock_in_memory_handler = mocker.Mock(spec=InMemoryGuardrailHandler)
+    mock_in_memory_handler.initialize_guardrail.side_effect = ValueError(
+        "Guardrail flag-400-test: logging_only_continue_on_input_failure is set, but mode does not include logging_only"
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_guardrail(
+            CreateGuardrailRequest(
+                guardrail={
+                    "guardrail_name": "flag-400-test",
+                    "litellm_params": {
+                        "guardrail": "presidio",
+                        "mode": "pre_call",
+                        "logging_only_continue_on_input_failure": True,
+                    },
+                    "guardrail_info": {},
+                }
+            ),
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "logging_only_continue_on_input_failure" in str(exc_info.value.detail)
+    mock_in_memory_handler.initialize_guardrail.assert_called_once_with(
+        guardrail=mocker.ANY, source="db", reject_invalid_logging_only_scope=True
+    )
+    delete_row.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_patch_guardrail_rejected_update_restores_invalid_stored_scope_verbatim(
     mocker, monkeypatch, mock_guardrail_registry
 ):

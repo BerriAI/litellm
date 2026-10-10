@@ -44,15 +44,23 @@ export const CustomCodeLoggingOnlyScopeSelect: React.FC<{
 export const getCustomCodeLoggingOnlyScopeCreate = (
   mode: string[],
   choice: LoggingOnlyScopeChoice,
-): { logging_only_scope?: LoggingOnlyScope } => {
+  continueOnInputFailure: boolean,
+): { logging_only_scope?: LoggingOnlyScope; logging_only_continue_on_input_failure?: boolean } => {
   if (!mode.includes("logging_only")) return {};
   const scope = choiceToLoggingOnlyScope(choice);
-  return scope === null ? {} : { logging_only_scope: scope };
+  return {
+    ...(scope === null ? {} : { logging_only_scope: scope }),
+    ...(continueOnInputFailure ? { logging_only_continue_on_input_failure: true } : {}),
+  };
 };
 
 export const getCustomCodeLoggingOnlyScopeUpdate = (
   mode: string[],
-  litellmParams: { logging_only_scope?: string | null } | null | undefined,
+  litellmParams:
+    | { logging_only_scope?: string | null; logging_only_continue_on_input_failure?: boolean | null }
+    | null
+    | undefined,
   choice: LoggingOnlyScopeChoice,
-): { logging_only_scope?: LoggingOnlyScope | null } =>
-  mode.includes("logging_only") ? getLoggingOnlyScopeUpdate(litellmParams, choice) : {};
+  continueOnInputFailure: boolean,
+): { logging_only_scope?: LoggingOnlyScope | null; logging_only_continue_on_input_failure?: boolean } =>
+  mode.includes("logging_only") ? getLoggingOnlyScopeUpdate(litellmParams, choice, continueOnInputFailure) : {};

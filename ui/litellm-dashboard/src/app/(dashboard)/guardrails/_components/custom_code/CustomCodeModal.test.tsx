@@ -208,7 +208,7 @@ describe("CustomCodeModal", () => {
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     expect(mockUpdate.mock.calls[0][2]).toMatchObject({
-      litellm_params: { logging_only_scope: "output" },
+      litellm_params: { logging_only_scope: "output", logging_only_continue_on_input_failure: false },
     });
   });
 
@@ -232,6 +232,7 @@ describe("CustomCodeModal", () => {
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     expect(mockUpdate.mock.calls[0][2]).toHaveProperty("litellm_params.logging_only_scope", null);
+    expect(mockUpdate.mock.calls[0][2]).toHaveProperty("litellm_params.logging_only_continue_on_input_failure", false);
   });
 
   it("should omit an unchanged logging-only scope from the edit payload", async () => {
@@ -286,6 +287,37 @@ describe("CustomCodeModal", () => {
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(mockCreate.mock.calls[0][1]).toMatchObject({
       litellm_params: { logging_only_scope: "input" },
+    });
+    expect(mockCreate.mock.calls[0][1]).not.toHaveProperty("litellm_params.logging_only_continue_on_input_failure");
+  });
+
+  it("should send the continue flag and migrate a legacy both scope in edit mode", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      editData: {
+        guardrail_id: "g-1",
+        guardrail_name: "existing-guardrail",
+        litellm_params: {
+          mode: ["logging_only"],
+          logging_only_scope: "both",
+          custom_code: "def apply_guardrail(): pass",
+        },
+      },
+    });
+
+    const scopeSelect = await screen.findByRole("combobox", { name: "Logging only scope" });
+    expect(scopeSelect).toHaveTextContent("Default (request and response)");
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Continue observing the response after a flagged request",
+    });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: /update guardrail/i }));
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    expect(mockUpdate.mock.calls[0][2]).toMatchObject({
+      litellm_params: { logging_only_scope: null, logging_only_continue_on_input_failure: false },
     });
   });
 

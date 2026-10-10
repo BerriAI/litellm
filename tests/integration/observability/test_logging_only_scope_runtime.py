@@ -1577,3 +1577,215 @@ def test_S4_logging_only_input_scope_scans_every_multipart_text_part(gateway: Ga
                     ) == tuple((identity, "logging_only", "guardrail_intervened") for _ in expected_directions), entries
     finally:
         delete_scenario(upstream_handle)
+
+
+@pytest.mark.parametrize(
+    ("row_id", "scope", "include_scope", "continue_flag", "expected_directions"),
+    (
+        pytest.param("J1", None, False, None, ("request",), id="J1-unset-flag-stops-after-flagged-input"),
+        pytest.param(
+            "J2",
+            None,
+            False,
+            True,
+            ("request", "response"),
+            id="J2-flag-continues-past-flagged-input",
+        ),
+        pytest.param(
+            "J3",
+            "both",
+            True,
+            None,
+            ("request", "response"),
+            id="J3-legacy-both-matches-flag-continue",
+        ),
+        pytest.param(
+            "J4",
+            "both",
+            True,
+            False,
+            ("request", "response"),
+            id="J4-explicit-both-wins-over-flag-false",
+        ),
+        pytest.param("J5", "input", True, True, ("request",), id="J5-input-scope-ignores-flag"),
+        pytest.param("J6", "output", True, True, ("response",), id="J6-output-scope-ignores-flag"),
+    ),
+)
+def test_continue_on_input_failure_observes_flagged_input_and_response(
+    gateway: Gateway,
+    tmp_path: Path,
+    row_id: str,
+    scope: str | None,
+    include_scope: bool,
+    continue_flag: bool | None,
+    expected_directions: tuple[Direction, ...],
+) -> None:
+    identity: Final = f"logging-scope-{row_id.lower()}-{uuid.uuid4().hex}"
+    prompt: Final = f"synthetic flagged request {identity}"
+    reply: Final = f"synthetic flagged response {identity}"
+    scenario_id: Final = f"phase12-{row_id.lower()}-{uuid.uuid4().hex}"
+    guarded_call_id: Final = f"{scenario_id}-guarded"
+    upstream_handle: Final = register_scenario(
+        scenario_id, _provider_response("chat", scenario_id, reply, False)
+    )
+
+    def policy(_request: Request) -> Reply:
+        return Reply(body=b'{"action":"BLOCKED","blocked_reason":"synthetic flagged denial"}')
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            with wire_server(policy) as guardrail:
+                config: Final = _configuration(
+                    tmp_path,
+                    identity,
+                    guardrail.url,
+                    scope,
+                    include_scope=include_scope,
+                    continue_on_input_failure=continue_flag,
+                )
+                with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+                    baseline: Final = _call_client(
+                        "openai_sync", "chat", gateway, model, prompt, False, f"{scenario_id}-baseline"
+                    )
+                    assert baseline.status == 200 and baseline.text == reply, baseline
+                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    result: Final = _call_client(
+                        "openai_sync", "chat", candidate, model, prompt, False, guarded_call_id
+                    )
+                    assert (result.status, _response_body_without_ids(result.body)) == (
+                        baseline.status,
+                        _response_body_without_ids(baseline.body),
+                    ), (result, baseline)
+                    assert result.text == reply, result
+                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
+                    eventually(
+                        lambda: guardrail.received.qsize(),
+                        lambda count: count >= len(expected_directions),
+                        seconds=20,
+                    )
+                    calls: Final = guardrail.drain()
+                    assert len(calls) == len(expected_directions), calls
+                    payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in calls)
+                    observed_directions: Final = tuple(_direction(payload) for payload in payloads)
+                    assert tuple(sorted(observed_directions)) == tuple(sorted(expected_directions)), payloads
+                    assert all(_policy_call_id_matches(payload, guarded_call_id) for payload in payloads), payloads
+                    assert tuple(payload["texts"] for payload in payloads) == tuple(
+                        [prompt] if direction == "request" else [reply] for direction in observed_directions
+                    ), payloads
+                    rows: Final = _spend_rows(model, 2)
+                    guarded_rows: Final = tuple(row for row in rows if _guardrail_entries(row))
+                    assert len(guarded_rows) == 1, rows
+                    _assert_response_id("chat", str(guarded_rows[0]["request_id"]), result.response_id, scenario_id)
+                    entries: Final = _guardrail_entries(guarded_rows[0])
+                    assert tuple(
+                        (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
+                        for entry in entries
+                    ) == tuple(
+                        (identity, "logging_only", "guardrail_intervened") for _ in expected_directions
+                    ), entries
+    finally:
+        delete_scenario(upstream_handle)
+
+
+@pytest.mark.parametrize(
+    ("row_id", "continue_flag", "expected_directions", "expected_statuses"),
+    (
+        pytest.param(
+            "J7",
+            None,
+            ("request",),
+            ("guardrail_failed_to_respond",),
+            id="J7-raising-input-aborts-response-scan",
+        ),
+        pytest.param(
+            "J8",
+            True,
+            ("request", "response"),
+            ("guardrail_failed_to_respond", "success"),
+            id="J8-flag-continues-past-raising-input",
+        ),
+    ),
+)
+def test_continue_on_input_failure_recovers_from_raising_input_scan(
+    gateway: Gateway,
+    tmp_path: Path,
+    row_id: str,
+    continue_flag: bool | None,
+    expected_directions: tuple[Direction, ...],
+    expected_statuses: tuple[str, ...],
+) -> None:
+    identity: Final = f"logging-scope-{row_id.lower()}-{uuid.uuid4().hex}"
+    prompt: Final = f"synthetic outage request {identity}"
+    reply: Final = f"synthetic outage response {identity}"
+    scenario_id: Final = f"phase12-{row_id.lower()}-{uuid.uuid4().hex}"
+    guarded_call_id: Final = f"{scenario_id}-guarded"
+    upstream_handle: Final = register_scenario(
+        scenario_id, _provider_response("chat", scenario_id, reply, False)
+    )
+
+    def policy(request: Request) -> Reply:
+        payload: Final = JSON_OBJECT.validate_json(request.body)
+        if _direction(payload) == "request":
+            return Reply(status=500, body=b"policy edge outage")
+        return Reply(body=b'{"action":"NONE"}')
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            with wire_server(policy) as guardrail:
+                config: Final = _configuration(
+                    tmp_path,
+                    identity,
+                    guardrail.url,
+                    None,
+                    include_scope=False,
+                    continue_on_input_failure=continue_flag,
+                )
+                with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+                    baseline: Final = _call_client(
+                        "openai_sync", "chat", gateway, model, prompt, False, f"{scenario_id}-baseline"
+                    )
+                    assert baseline.status == 200 and baseline.text == reply, baseline
+                    assert len(_drain_upstream(gateway.upstream_url)) == 1
+                    result: Final = _call_client(
+                        "openai_sync", "chat", candidate, model, prompt, False, guarded_call_id
+                    )
+                    assert (result.status, _response_body_without_ids(result.body)) == (
+                        baseline.status,
+                        _response_body_without_ids(baseline.body),
+                    ), (result, baseline)
+                    assert result.text == reply, result
+                    upstream: Final = _drain_upstream(gateway.upstream_url)
+                    assert len(upstream) == 1 and prompt in json.dumps(upstream[0]["body"]), upstream
+                    eventually(
+                        lambda: guardrail.received.qsize(),
+                        lambda count: count >= len(expected_directions),
+                        seconds=20,
+                    )
+                    calls: Final = guardrail.drain()
+                    assert len(calls) == len(expected_directions), calls
+                    payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in calls)
+                    assert tuple(_direction(payload) for payload in payloads) == expected_directions, payloads
+                    assert all(_policy_call_id_matches(payload, guarded_call_id) for payload in payloads), payloads
+                    rows: Final = _spend_rows(model, 2)
+                    guarded_rows: Final = tuple(row for row in rows if _guardrail_entries(row))
+                    assert len(guarded_rows) == 1, rows
+                    _assert_response_id("chat", str(guarded_rows[0]["request_id"]), result.response_id, scenario_id)
+                    entries: Final = _guardrail_entries(guarded_rows[0])
+                    assert tuple(entry["guardrail_status"] for entry in entries) == expected_statuses, entries
+                    assert all(
+                        entry["guardrail_name"] == identity and entry["guardrail_mode"] == "logging_only"
+                        for entry in entries
+                    ), entries
+    finally:
+        delete_scenario(upstream_handle)

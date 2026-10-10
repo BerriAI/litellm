@@ -39,6 +39,7 @@ import {
   getLoggingOnlyScopeUpdate,
   getGuardrailLogoAndName,
   guardrail_provider_map,
+  loggingOnlyContinueFromParams,
   loggingOnlyScopeToChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
@@ -235,6 +236,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     const storedLoggingOnlyScope = guardrailData.litellm_params?.logging_only_scope;
     form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedLoggingOnlyScope));
     form.setValue(
+      "logging_only_continue_on_input_failure",
+      loggingOnlyContinueFromParams(guardrailData.litellm_params),
+    );
+    form.setValue(
       "skip_system_message_choice",
       skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
     );
@@ -303,8 +308,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       if (!accessToken) return;
 
       // Prepare update data object - only include changed fields
+      const { logging_only_scope_choice: scopeChoice, logging_only_continue_on_input_failure: continueFlag } = values;
       const updateData: any = {
-        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, values.logging_only_scope_choice),
+        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, scopeChoice, continueFlag),
       };
 
       // Only include guardrail_name if it has changed

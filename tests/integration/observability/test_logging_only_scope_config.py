@@ -1589,3 +1589,189 @@ def test_H13_unauthenticated_management_and_chat_requests_do_not_scan(gateway: G
                     assert _drain_upstream(gateway.upstream_url) == ()
     finally:
         delete_scenario(upstream_handle)
+
+
+def test_K1_post_rejects_continue_flag_outside_logging_only(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k1-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            before_list: Final = candidate.get("/v2/guardrails/list")["guardrails"]
+            response: Final = candidate.request(
+                "POST",
+                "/guardrails",
+                _post_guardrail_body(
+                    identity,
+                    "generic_guardrail_api",
+                    "pre_call",
+                    "http://127.0.0.1:9",
+                    None,
+                    include_scope=False,
+                    continue_on_input_failure=True,
+                ),
+            )
+            assert response.status_code == 400, response.text
+            assert "logging_only_continue_on_input_failure" in response.text, response.text
+            assert _management_guardrail_rows(identity) == ()
+            after_list: Final = candidate.get("/v2/guardrails/list")["guardrails"]
+            assert after_list == before_list, (before_list, after_list)
+            assert identity not in {object_value(item)["guardrail_name"] for item in after_list}, after_list
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K2_post_accepts_both_scope_and_stores_it_verbatim(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k2-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            response: Final = candidate.request(
+                "POST",
+                "/guardrails",
+                _post_guardrail_body(
+                    identity,
+                    "generic_guardrail_api",
+                    "logging_only",
+                    "http://127.0.0.1:9",
+                    "both",
+                ),
+            )
+            assert response.status_code == 200, response.text
+            body: Final = JSON_OBJECT.validate_json(response.content)
+            assert object_value(body["litellm_params"]).get("logging_only_scope") == "both", body
+            rows: Final = _management_guardrail_rows(identity)
+            assert len(rows) == 1, rows
+            assert object_value(rows[0]["litellm_params"]).get("logging_only_scope") == "both", rows
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K3_patch_flag_rejection_preserves_raw_stored_row(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k3-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            created: Final = _create_guardrail(
+                candidate,
+                identity,
+                {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "synthetic-guardrail-key",
+                },
+            )
+            guardrail_id: Final = string_value(created["guardrail_id"])
+            before_raw: Final = read_rows(
+                'SELECT litellm_params::text AS raw_params FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s',
+                (identity,),
+            )
+            assert len(before_raw) == 1, before_raw
+            rejected: Final = candidate.request(
+                "PATCH",
+                f"/guardrails/{guardrail_id}",
+                {"litellm_params": {"logging_only_continue_on_input_failure": True}},
+            )
+            assert rejected.status_code == 422, rejected.text
+            assert "logging_only_continue_on_input_failure" in rejected.text, rejected.text
+            after_raw: Final = read_rows(
+                'SELECT litellm_params::text AS raw_params FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s',
+                (identity,),
+            )
+            assert len(after_raw) == 1, after_raw
+            # Rollback re-encrypts api_key, so ciphertext bytes differ even though the row is unchanged.
+            before_params: Final = JSON_OBJECT.validate_json(before_raw[0]["raw_params"])
+            after_params: Final = JSON_OBJECT.validate_json(after_raw[0]["raw_params"])
+            assert set(before_params) == set(after_params), (before_params, after_params)
+            assert {
+                key: before_params[key] for key in before_params if key != "api_key"
+            } == {key: after_params[key] for key in after_params if key != "api_key"}, (before_params, after_params)
+            assert str(after_params["api_key"]).startswith("litellm_enc::"), after_params
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K4_patch_dropping_logging_only_mode_clears_stored_flag(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k4-{uuid.uuid4().hex}"
+    config: Final = _empty_proxy_configuration(tmp_path, identity)
+    try:
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+            created: Final = _create_guardrail(
+                candidate,
+                identity,
+                {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": ["pre_call", "logging_only"],
+                    "default_on": True,
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "synthetic-guardrail-key",
+                    "logging_only_continue_on_input_failure": True,
+                },
+            )
+            guardrail_id: Final = string_value(created["guardrail_id"])
+            before: Final = _management_guardrail_rows(identity)
+            assert len(before) == 1, before
+            assert object_value(before[0]["litellm_params"]).get("logging_only_continue_on_input_failure") is True, (
+                before
+            )
+            patched: Final = candidate.request(
+                "PATCH",
+                f"/guardrails/{guardrail_id}",
+                {"litellm_params": {"mode": ["pre_call"]}},
+            )
+            assert patched.status_code == 200, patched.text
+            persisted: Final = _management_guardrail_rows(identity)
+            assert len(persisted) == 1, persisted
+            params: Final = object_value(persisted[0]["litellm_params"])
+            assert params.get("logging_only_continue_on_input_failure") is None, persisted
+            assert params["mode"] == ["pre_call"], persisted
+    finally:
+        _delete_database_guardrail(identity)
+
+
+def test_K5_yaml_flag_on_blocking_guardrail_boots_and_keeps_blocking(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-k5-{uuid.uuid4().hex}"
+    prompt: Final = f"synthetic yaml flag marker {identity}"
+    reply: Final = f"synthetic yaml flag response {identity}"
+    scenario_id: Final = f"phase12-k5-{uuid.uuid4().hex}"
+    upstream_handle: Final = register_scenario(scenario_id, _provider_response("chat", scenario_id, reply, False))
+
+    def policy(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        return Reply(body=b'{"action":"BLOCKED","blocked_reason":"synthetic yaml flag denial"}')
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            with wire_server(policy) as guardrail:
+                config: Final = _configuration(
+                    tmp_path,
+                    identity,
+                    guardrail.url,
+                    None,
+                    include_scope=False,
+                    continue_on_input_failure=True,
+                    mode="pre_call",
+                )
+                with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=1) as owned:
+                    candidate: Final = owned.gateway
+                    guarded: Final = candidate.request(
+                        "POST",
+                        "/v1/chat/completions",
+                        {"model": model, "messages": [{"role": "user", "content": prompt}]},
+                        headers={"x-litellm-call-id": f"{scenario_id}-guarded"},
+                    )
+                    assert guarded.status_code == 400 and "synthetic yaml flag denial" in guarded.text, guarded.text
+                    assert _drain_upstream(gateway.upstream_url) == ()
+                    payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in guardrail.drain())
+                    assert tuple(_direction(payload) for payload in payloads) == ("request",), payloads
+                    log_text: Final = owned.log.read_text()
+                    assert "Ignoring logging_only_continue_on_input_failure" in log_text, log_text
+    finally:
+        _delete_database_guardrail(identity)
+        delete_scenario(upstream_handle)

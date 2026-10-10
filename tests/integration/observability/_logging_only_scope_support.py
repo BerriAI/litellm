@@ -629,6 +629,7 @@ def _configuration(
     scope: str | None,
     *,
     include_scope: bool = True,
+    continue_on_input_failure: bool | None = None,
     default_on: bool = True,
     mode: str | list[str] = "logging_only",
     cache: bool = False,
@@ -648,6 +649,11 @@ def _configuration(
         "api_key": "synthetic-guardrail-key",
         "extra_headers": ["x-litellm-call-id"],
         **({"logging_only_scope": scope} if include_scope else {}),
+        **(
+            {"logging_only_continue_on_input_failure": continue_on_input_failure}
+            if continue_on_input_failure is not None
+            else {}
+        ),
     }
     config["guardrails"] = [{"guardrail_name": identity, "litellm_params": params}]
     scope_name: Final = scope if scope is not None else "unset"
@@ -760,6 +766,7 @@ def _insert_database_guardrail(
     *,
     mode: str = "pre_call",
     default_on: bool = True,
+    continue_on_input_failure: bool | None = None,
 ) -> None:
     params: Final = {
         "guardrail": "generic_guardrail_api",
@@ -769,6 +776,11 @@ def _insert_database_guardrail(
         "api_key": "synthetic-guardrail-key",
         "extra_headers": ["x-litellm-call-id"],
         **({"logging_only_scope": scope} if scope is not None else {}),
+        **(
+            {"logging_only_continue_on_input_failure": continue_on_input_failure}
+            if continue_on_input_failure is not None
+            else {}
+        ),
     }
     write_rows(
         'INSERT INTO "LiteLLM_GuardrailsTable" '
@@ -805,6 +817,7 @@ def _post_guardrail_body(
     api_base: str,
     scope: JsonValue,
     include_scope: bool = True,
+    continue_on_input_failure: bool | None = None,
 ) -> dict[str, JsonValue]:
     params: Final = {
         "guardrail": provider,
@@ -821,6 +834,11 @@ def _post_guardrail_body(
         ),
         **({"extra_headers": ["x-litellm-call-id"]} if provider == "generic_guardrail_api" else {}),
         **({"logging_only_scope": scope} if include_scope else {}),
+        **(
+            {"logging_only_continue_on_input_failure": continue_on_input_failure}
+            if continue_on_input_failure is not None
+            else {}
+        ),
     }
     return {
         "guardrail": {

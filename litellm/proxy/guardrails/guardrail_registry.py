@@ -54,6 +54,7 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
+    normalize_logging_only_settings,
     with_tolerated_stream_scope,
 )
 
@@ -595,6 +596,18 @@ def _logging_only_scope_error(
     return None
 
 
+def _logging_only_continue_error(guardrail_name: str, litellm_params: LitellmParams) -> str | None:
+    if litellm_params.logging_only_continue_on_input_failure is True and (
+        GuardrailEventHooks.logging_only.value not in configured_event_hooks(litellm_params.mode)
+    ):
+        return (
+            f"Guardrail {guardrail_name}: logging_only_continue_on_input_failure is set, but mode does not "
+            "include logging_only, so it would never apply. Add logging_only to mode or remove "
+            "logging_only_continue_on_input_failure."
+        )
+    return None
+
+
 def _configure_callback_scoping(
     custom_guardrail_callback: CustomGuardrail,
     guardrail_name: str,
@@ -602,20 +615,30 @@ def _configure_callback_scoping(
     *,
     reject_invalid_logging_only_scope: bool = False,
 ) -> None:
-    logging_only_scope: Final = litellm_params.logging_only_scope
     logging_only_scope_error: Final = _logging_only_scope_error(
         custom_guardrail_callback, guardrail_name, litellm_params
     )
+    logging_only_continue_error: Final = _logging_only_continue_error(guardrail_name, litellm_params)
+    if reject_invalid_logging_only_scope:
+        for error in (logging_only_scope_error, logging_only_continue_error):
+            if error is not None:
+                raise ValueError(error)
     if logging_only_scope_error is not None:
-        if reject_invalid_logging_only_scope:
-            raise ValueError(logging_only_scope_error)
         verbose_proxy_logger.error(
             "%s Ignoring logging_only_scope; the guardrail keeps its configured mode.",
             logging_only_scope_error.replace("\r", "").replace("\n", ""),
         )
-        custom_guardrail_callback.logging_only_scope = None
-    else:
-        custom_guardrail_callback.logging_only_scope = logging_only_scope
+    if logging_only_continue_error is not None:
+        verbose_proxy_logger.error(
+            "%s Ignoring logging_only_continue_on_input_failure; the guardrail keeps its configured mode.",
+            logging_only_continue_error.replace("\r", "").replace("\n", ""),
+        )
+    settings: Final = normalize_logging_only_settings(
+        None if logging_only_scope_error is not None else litellm_params.logging_only_scope,
+        None if logging_only_continue_error is not None else litellm_params.logging_only_continue_on_input_failure,
+    )
+    custom_guardrail_callback.logging_only_scope = settings.direction
+    custom_guardrail_callback.logging_only_continue_on_input_failure = settings.continue_on_input_failure
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
@@ -651,15 +674,24 @@ def parse_tolerant_litellm_params(
     try:
         return params_model(**litellm_params_data)
     except ValidationError as validation_error:
-        if any(tuple(error["loc"]) != ("logging_only_scope",) for error in validation_error.errors()):
+        tolerated_fields: Final = ("logging_only_scope", "logging_only_continue_on_input_failure")
+        error_locs: Final = {tuple(error["loc"]) for error in validation_error.errors()}
+        tolerated_locs: Final = frozenset((field,) for field in tolerated_fields)
+        if any(loc not in tolerated_locs for loc in error_locs):
             raise
-        verbose_proxy_logger.error(
-            "Guardrail %s: logging_only_scope=%r is not one of 'input', 'output' or 'both'. "
-            "Ignoring logging_only_scope; the guardrail keeps its configured mode.",
-            guardrail_name.replace("\r", "").replace("\n", ""),
-            str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
+        sanitized: Final = MappingProxyType(
+            {**litellm_params_data, **{field: None for field in tolerated_fields if (field,) in error_locs}}
         )
-        return params_model(**MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
+        for field in tolerated_fields:
+            if (field,) in error_locs:
+                verbose_proxy_logger.error(
+                    "Guardrail %s: %s=%r is not a valid value. Ignoring %s; the guardrail keeps its configured mode.",
+                    guardrail_name.replace("\r", "").replace("\n", ""),
+                    field,
+                    str(litellm_params_data.get(field)).replace("\r", "").replace("\n", "")[:100],
+                    field,
+                )
+        return params_model(**sanitized)
 
 
 class InMemoryGuardrailHandler:
@@ -829,9 +861,12 @@ class InMemoryGuardrailHandler:
         litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
         guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
         for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
-            scope_error = _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params)
-            if scope_error is not None:
-                raise ValueError(scope_error)
+            for error in (
+                _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params),
+                _logging_only_continue_error(guardrail_name, litellm_params),
+            ):
+                if error is not None:
+                    raise ValueError(error)
 
     def initialize_custom_guardrail(
         self,
