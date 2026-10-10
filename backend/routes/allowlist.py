@@ -32,6 +32,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/token",
     "/onboarding/",
     "/audit",
+    "/telemetry/",
     "/oauth/",
     "/invitation/",
     "/jwt/",

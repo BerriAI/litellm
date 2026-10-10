@@ -2003,3 +2003,14 @@ model LiteLLM_LensTraceSignal {
 
   @@id([trace_id, trace_ref])
 }
+
+model LiteLLM_TelemetryReport {
+  id           String   @id
+  window_start Float
+  window_end   Float
+  report       Json
+  created_at   DateTime @default(now())
+
+  @@index([window_end])
+  @@index([created_at])
+}
