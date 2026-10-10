@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Activity } from "lucide-react";
 import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
@@ -28,15 +27,22 @@ const destinationText = (settings: TelemetrySettings): string => {
   }
 };
 
-function GroupList({ groups, settings }: { groups: readonly TelemetryGroup[]; settings: TelemetrySettings }) {
-  const update = useUpdateTelemetrySettings();
+type SettingsUpdate = ReturnType<typeof useUpdateTelemetrySettings>;
+
+function GroupList({
+  groups,
+  settings,
+  update,
+}: {
+  groups: readonly TelemetryGroup[];
+  settings: TelemetrySettings;
+  update: SettingsUpdate;
+}) {
   const requires: Requires = new Map(settings.groups.map((info) => [info.group, info.requires ?? null]));
   const enabled = new Set(settings.groups.filter((info) => info.enabled).map((info) => info.group));
-  const [error, setError] = useState<string | null>(null);
   const depths = relativeDepths(groups, requires);
   const onToggle = (group: TelemetryGroup, on: boolean) => {
-    setError(null);
-    update.mutate([...toggleGroup(group, on, enabled, requires)], { onError: (e) => setError(e.message) });
+    update.mutate([...toggleGroup(group, on, enabled, requires)]);
   };
   return (
     <ul className="divide-y rounded-md border">
@@ -69,7 +75,7 @@ function GroupList({ groups, settings }: { groups: readonly TelemetryGroup[]; se
           </li>
         );
       })}
-      {error !== null && <li className="p-3 text-xs text-destructive">{error}</li>}
+      {update.error !== null && <li className="p-3 text-xs text-destructive">{update.error.message}</li>}
     </ul>
   );
 }
@@ -95,6 +101,7 @@ function ReportPreview({ settings }: { settings: TelemetrySettings }) {
 export default function TelemetrySettingsPage() {
   const [tab, setTab] = useUrlTab(TABS, "proxy");
   const { data: settings, isLoading, error } = useTelemetrySettings();
+  const update = useUpdateTelemetrySettings();
   if (isLoading) return <Page>Loading telemetry settings...</Page>;
   if (settings === undefined)
     return <Page className="text-destructive">Could not load telemetry settings: {error?.message}</Page>;
@@ -117,10 +124,10 @@ export default function TelemetrySettingsPage() {
           </PageHeaderControls>
         </PageHeader>
         <PageTabsContent value="proxy" className="gap-4">
-          <GroupList groups={PROXY_GROUPS} settings={settings} />
+          <GroupList groups={PROXY_GROUPS} settings={settings} update={update} />
         </PageTabsContent>
         <PageTabsContent value="ui" className="gap-4">
-          <GroupList groups={UI_GROUPS} settings={settings} />
+          <GroupList groups={UI_GROUPS} settings={settings} update={update} />
           <p className="text-xs text-muted-foreground">
             Sent only while Page navigation is on, to this proxy at POST /telemetry/ui_events, and counted into the same
             report as proxy traffic
