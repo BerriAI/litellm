@@ -23,6 +23,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
+    is_expected_credential_challenge,
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,
     normalize_request_route,
@@ -193,14 +194,27 @@ class UserAPIKeyAuthExceptionHandler:
             log_extra: Final = {"requester_ip": requester_ip}
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
             is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
-            logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
+            is_expected_challenge: Final = is_expected_credential_challenge(e, request)
+            log_level: Final = (
+                logging.DEBUG if is_expected_challenge else logging.WARNING if is_quiet_log else logging.ERROR
+            )
+            logger: Final = (
+                verbose_proxy_stdout_logger if is_quiet_log and not is_expected_challenge else verbose_proxy_logger
+            )
+            exc_info: Final = (
+                None
+                if is_expected_challenge
+                else True
+                if litellm.log_client_error_tracebacks or not is_expected_client_error(e)
+                else None
+            )
             logger.log(
-                logging.WARNING if is_quiet_log else logging.ERROR,
+                log_level,
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
                 e,
                 requester_ip,
                 _identity_log_suffix(resolved_identity),
-                exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
+                exc_info=exc_info,
                 extra=log_extra,
             )
 
@@ -250,8 +264,10 @@ class UserAPIKeyAuthExceptionHandler:
                 e = transformed_exception
 
             final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
-            # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
-            if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+            # Escalate callback-transformed quiet logs and expected challenges with non-401 codes
+            if (is_quiet_log or is_expected_challenge) and str(final_exception.code) != str(
+                status.HTTP_401_UNAUTHORIZED
+            ):
                 verbose_proxy_logger.error(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                     final_exception,

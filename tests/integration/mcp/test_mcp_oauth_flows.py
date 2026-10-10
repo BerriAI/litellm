@@ -31,7 +31,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -355,6 +355,44 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
             )
             == []
         )
+
+
+def test_anonymous_oauth_mcp_cold_start_does_not_log_malformed_key_at_error(
+    gateway: Gateway,
+    tmp_path: Path,
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, owned_proxy_process(gateway, tmp_path, {}) as owned:
+        with owned.gateway.scenario() as scenario:
+            alias: Final = "cold" + uuid.uuid4().hex[:8]
+            _register_oauth(
+                scenario,
+                peer,
+                auth,
+                alias,
+                auth_type="oauth2",
+                oauth2_flow="authorization_code",
+                credentials={"client_id": "cold-client", "client_secret": "cold-secret"},
+            )
+            baseline_log: Final = owned.log.read_text()
+            response: Final = owned.gateway.client.post(
+                f"/{alias}/mcp",
+                headers=ACCEPT,
+                json=INITIALIZE,
+            )
+
+            assert response.status_code == 401, response.text
+            assert "www-authenticate" in response.headers, response.headers
+            assert "resource_metadata=" in response.headers["www-authenticate"]
+            request_log: Final = eventually(
+                owned.log.read_text,
+                lambda value: f"POST /{alias}/mcp" in value[len(baseline_log) :],
+            )
+            error_lines: Final = tuple(
+                line
+                for line in request_log[len(baseline_log) :].splitlines()
+                if "Malformed API Key" in line and "ERROR" in line
+            )
+            assert error_lines == ()
 
 
 def test_authorization_request_without_pkce_is_refused_before_reaching_the_authorization_server(

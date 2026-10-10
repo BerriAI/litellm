@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
+from starlette.requests import Request
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -23,7 +24,253 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.agents import AgentCaller
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,extra_headers,auth_type,custom_key_header_name,hide_target,expected",
+    [
+        pytest.param("/oauth/mcp", (), MCPAuth.oauth2, None, False, True, id="gateway-oauth-server"),
+        pytest.param("/mcp", (), None, None, False, True, id="aggregate-mcp"),
+        pytest.param(
+            "/oauth/mcp",
+            ((b"authorization", b""),),
+            MCPAuth.oauth2,
+            None,
+            False,
+            False,
+            id="empty-authorization",
+        ),
+        pytest.param(
+            "/oauth/mcp",
+            ((b"authorization", b"Basic malformed"),),
+            MCPAuth.oauth2,
+            None,
+            False,
+            False,
+            id="malformed-authorization",
+        ),
+        pytest.param(
+            "/oauth/mcp",
+            ((b"x-litellm-api-key", b""),),
+            MCPAuth.oauth2,
+            None,
+            False,
+            False,
+            id="empty-litellm-key",
+        ),
+        pytest.param(
+            "/oauth/mcp",
+            ((b"x-custom-litellm-key", b""),),
+            MCPAuth.oauth2,
+            "x-custom-litellm-key",
+            False,
+            False,
+            id="custom-key-header",
+        ),
+        pytest.param("/keyed/mcp", (), MCPAuth.api_key, None, False, False, id="non-oauth-target"),
+        pytest.param("/missing/mcp", (), None, None, False, False, id="unresolved-target"),
+        pytest.param("/hidden/mcp", (), MCPAuth.oauth2, None, True, False, id="target-hidden-by-client-ip"),
+    ],
+)
+async def test_process_mcp_request_marks_only_expected_credential_challenges(
+    path: str,
+    extra_headers: tuple[tuple[bytes, bytes], ...],
+    auth_type: MCPAuth | None,
+    custom_key_header_name: str | None,
+    hide_target: bool,
+    expected: bool,
+) -> None:
+    from litellm.proxy.auth.auth_utils import EXPECTED_CREDENTIAL_CHALLENGE_STATE_KEY
+
+    server: Final[MCPServer | None] = (
+        MCPServer(
+            server_id="server-id",
+            name="oauth" if auth_type == MCPAuth.oauth2 else "keyed",
+            server_name="oauth" if auth_type == MCPAuth.oauth2 else "keyed",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=auth_type,
+            extra_headers=["x-api-key"] if auth_type == MCPAuth.api_key else None,
+        )
+        if auth_type is not None
+        else None
+    )
+    scope: Final = {
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "headers": [(b"host", b"testserver"), *extra_headers],
+    }
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=HTTPException(status_code=401, detail="Authentication required"),
+        ) as mock_auth,
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
+            return_value="203.0.113.10" if hide_target else None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": custom_key_header_name},
+        ),
+    ):
+        mock_manager.get_mcp_server_by_name.return_value = None if hide_target else server
+        with pytest.raises(HTTPException):
+            await MCPRequestHandler.process_mcp_request(scope)
+
+    auth_request: Final = mock_auth.call_args.kwargs["request"]
+    assert getattr(auth_request.state, EXPECTED_CREDENTIAL_CHALLENGE_STATE_KEY, False) is expected
+
+
+@pytest.mark.parametrize(
+    "path,auth_type,delegate_auth_to_upstream,pass_through,bearer_presented,mcp_auth_header,"
+    "mcp_server_auth_headers,mcp_servers,expected",
+    [
+        pytest.param(
+            "/mcp/legacy",
+            MCPAuth.oauth2,
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            "defer_to_route_challenge",
+            id="legacy-delegate-without-bearer",
+        ),
+        pytest.param(
+            "/mcp/legacy",
+            MCPAuth.oauth2,
+            True,
+            False,
+            True,
+            None,
+            None,
+            None,
+            None,
+            id="legacy-delegate-with-bearer",
+        ),
+        pytest.param(
+            "/mcp/passthrough",
+            None,
+            False,
+            True,
+            True,
+            None,
+            None,
+            None,
+            "defer_to_route_challenge",
+            id="pass-through-with-bearer",
+        ),
+        pytest.param(
+            "/mcp/oauth",
+            MCPAuth.oauth2,
+            False,
+            False,
+            False,
+            None,
+            None,
+            None,
+            "gateway_challenge",
+            id="gateway-dcr-per-server",
+        ),
+        pytest.param(
+            "/mcp",
+            None,
+            False,
+            False,
+            False,
+            None,
+            None,
+            None,
+            "gateway_challenge",
+            id="aggregate-mcp",
+        ),
+        pytest.param(
+            "/mcp",
+            None,
+            False,
+            False,
+            False,
+            None,
+            None,
+            ["oauth"],
+            "gateway_challenge",
+            id="aggregate-mcp-scoped-by-header",
+        ),
+        pytest.param(
+            "/mcp/oauth",
+            MCPAuth.oauth2,
+            False,
+            False,
+            False,
+            "Bearer upstream",
+            None,
+            None,
+            None,
+            id="legacy-mcp-auth-header",
+        ),
+        pytest.param(
+            "/mcp/oauth",
+            MCPAuth.oauth2,
+            False,
+            False,
+            False,
+            None,
+            {"oauth": {"Authorization": "Bearer upstream"}},
+            None,
+            None,
+            id="server-specific-mcp-auth-header",
+        ),
+    ],
+)
+def test_cold_start_fallback_classifies_structural_challenges(
+    path: str,
+    auth_type: MCPAuth | None,
+    delegate_auth_to_upstream: bool,
+    pass_through: bool,
+    bearer_presented: bool,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    mcp_servers: list[str] | None,
+    expected: Literal["defer_to_route_challenge", "gateway_challenge"] | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _cold_start_fallback
+
+    server: Final[MCPServer | MagicMock | None] = (
+        MagicMock(is_oauth_passthrough=True)
+        if pass_through
+        else MCPServer(
+            server_id="server-id",
+            name=path.rsplit("/", 1)[-1],
+            server_name=path.rsplit("/", 1)[-1],
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=auth_type,
+            delegate_auth_to_upstream=delegate_auth_to_upstream,
+        )
+        if auth_type is not None
+        else None
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": path, "headers": []})
+    with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        result: Final = _cold_start_fallback(
+            request=request,
+            request_route=path,
+            mcp_servers=mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            bearer_presented=bearer_presented,
+        )
+
+    assert result == expected
 
 
 @pytest.mark.parametrize("headers,expected", [
