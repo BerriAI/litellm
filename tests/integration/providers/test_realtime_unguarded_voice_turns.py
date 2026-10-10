@@ -21,6 +21,7 @@ from hashlib import sha256
 from itertools import chain
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
 import psutil
@@ -58,6 +59,7 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 WORKERS: Final = 2
 BURST: Final = 20
 OPEN_SESSIONS: Final = 6
+MAX_OPEN_SESSIONS: Final = 24
 VOICE_MODEL: Final = "gpt-realtime-2.1"
 XAI_VOICE_MODEL: Final = "grok-voice"
 LIVE_MODEL: Final = "gemini-3.8-live"
@@ -873,31 +875,57 @@ async def _turn_or_close(socket: ClientConnection, label: str) -> Session:
         return Session(({"type": "closed", "code": _close_code(closed)},))
 
 
-async def _open_sessions(url: str, key: str) -> tuple[ClientConnection, ...]:
-    sockets: Final = tuple(
-        [await websockets.connect(url, additional_headers=_headers(key, None)) for _ in range(OPEN_SESSIONS)]
+@dataclass(frozen=True, slots=True)
+class WorkerSession:
+    socket: ClientConnection
+    pid: int
+
+
+def _accepted_client_ports(worker: psutil.Process, proxy_port: int) -> frozenset[int]:
+    return frozenset(
+        connection.raddr.port
+        for connection in worker.net_connections(kind="tcp")
+        if connection.status == psutil.CONN_ESTABLISHED and connection.laddr.port == proxy_port and connection.raddr
     )
-    created: Final = await asyncio.wait_for(asyncio.gather(*(socket.recv() for socket in sockets)), 60)
-    assert [JSON_OBJECT.validate_json(event).get("type") for event in created] == ["session.created"] * OPEN_SESSIONS
-    return sockets
 
 
-async def _sessions_through_worker_kill(url: str, key: str, root: psutil.Process) -> tuple[Session, ...]:
-    sockets: Final = await _open_sessions(url, key)
+async def _open_session(url: str, key: str, workers: tuple[psutil.Process, ...]) -> WorkerSession:
+    proxy_port: Final = urlsplit(url).port or 0
+    before: Final = tuple(_accepted_client_ports(worker, proxy_port) for worker in workers)
+    socket: Final = await websockets.connect(url, additional_headers=_headers(key, None))
+    created: Final = JSON_OBJECT.validate_json(await asyncio.wait_for(socket.recv(), 60))
+    assert created.get("type") == "session.created", created
+    accepted_by: Final = tuple(
+        worker.pid for worker, ports in zip(workers, before) if _accepted_client_ports(worker, proxy_port) - ports
+    )
+    assert len(accepted_by) == 1, accepted_by
+    return WorkerSession(socket, accepted_by[0])
+
+
+async def _sessions_on_every_worker(
+    url: str, key: str, workers: tuple[psutil.Process, ...], opened: tuple[WorkerSession, ...]
+) -> tuple[WorkerSession, ...]:
+    serving: Final = frozenset(session.pid for session in opened)
+    if len(opened) >= OPEN_SESSIONS and len(serving) == len(workers):
+        return opened
+    assert len(opened) < MAX_OPEN_SESSIONS, f"all {len(opened)} sessions landed on workers {sorted(serving)}"
+    return await _sessions_on_every_worker(url, key, workers, (*opened, await _open_session(url, key, workers)))
+
+
+async def _sessions_through_worker_kill(
+    url: str, key: str, workers: tuple[psutil.Process, ...]
+) -> tuple[tuple[Session, bool], ...]:
+    opened: Final = await _sessions_on_every_worker(url, key, workers, ())
+    sockets: Final = tuple(session.socket for session in opened)
     try:
-        workers: Final = _workers(root)
-        assert len(workers) == WORKERS, [process.pid for process in workers]
+        on_killed_worker: Final = tuple(session.pid == workers[0].pid for session in opened)
         workers[0].kill()
         await asyncio.to_thread(eventually, lambda: _exited(workers[0]), bool, graceful_stop_seconds())
-        turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(OPEN_SESSIONS)))
-        return tuple(await asyncio.wait_for(asyncio.gather(*turns), 90))
+        turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(len(sockets))))
+        sessions: Final = await asyncio.wait_for(asyncio.gather(*turns), 90)
+        return tuple(zip(sessions, on_killed_worker))
     finally:
         await asyncio.gather(*(socket.close() for socket in sockets))
-
-
-def _served(sessions: tuple[Session, ...]) -> tuple[str, ...]:
-    labels: Final = _labels(OPEN_SESSIONS)
-    return tuple(label for label, session in zip(labels, sessions) if session.types[-1:] == (RESPONSE_DONE,))
 
 
 def test_worker_kill_leaves_the_surviving_sessions_with_only_their_own_frames(gateway: Gateway, tmp_path: Path) -> None:
@@ -910,15 +938,16 @@ def test_worker_kill_leaves_the_surviving_sessions_with_only_their_own_frames(ga
             model: Final = _named_deployment(owned.gateway, scenario, handle.scenario_id)
             fresh_model: Final = _named_deployment(owned.gateway, scenario, fresh.scenario_id)
             root: Final = psutil.Process(owned.process.pid)
-            killed_pid: Final = _workers(root)[0].pid
-            sessions: Final = asyncio.run(
-                _sessions_through_worker_kill(_session_url(_owned_url(owned), f"model={model}"), key, root)
+            workers: Final = _workers(root)
+            assert len(workers) == WORKERS, [process.pid for process in workers]
+            outcomes: Final = asyncio.run(
+                _sessions_through_worker_kill(_session_url(_owned_url(owned), f"model={model}"), key, workers)
             )
-            served: Final = _served(sessions)
-            assert [session.types for session in sessions] == [
-                ("session.updated", TRANSCRIPT_COMPLETED, RESPONSE_DONE) if label in served else ("closed",)
-                for label in _labels(OPEN_SESSIONS)
-            ], sessions
+            served: Final = tuple(label for label, (_, killed) in zip(_labels(len(outcomes)), outcomes) if not killed)
+            assert [session.types for session, _ in outcomes] == [
+                ("closed",) if killed else ("session.updated", TRANSCRIPT_COMPLETED, RESPONSE_DONE)
+                for _, killed in outcomes
+            ], outcomes
             sent: Final = _sent(_observed(gateway.upstream_url, handle.scenario_id))
             assert _frame_counts(sent) == _frame_counts(_every_client_frame(served)), sent
             with httpx.Client(base_url=_owned_url(owned), timeout=graceful_stop_seconds(), trust_env=False) as client:
@@ -926,7 +955,7 @@ def test_worker_kill_leaves_the_surviving_sessions_with_only_their_own_frames(ga
             assert readiness.status_code == 200, readiness.text
             eventually(
                 lambda: tuple(process.pid for process in _workers(root)),
-                lambda pids: len(pids) == WORKERS and killed_pid not in pids,
+                lambda pids: len(pids) == WORKERS and workers[0].pid not in pids,
                 seconds=graceful_stop_seconds(),
             )
             fresh_session: Final = _drive(
