@@ -8,12 +8,14 @@ from typing import Final
 
 import httpx
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.database import read_rows, write_rows
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
 XAI_MODEL: Final = "xai/grok-4.20-0309-non-reasoning"
 XAI_BATCH_ID: Final = "batch_$REQUEST_ID"
+REGISTERED_AT: Final = 1791400000
 _INPUT: Final = "".join(
     json.dumps(
         {
@@ -290,3 +292,39 @@ def test_xai_batch_output_file_registered_by_the_batch_job_first_carries_the_dow
         results_reads: Final = sum(path.endswith(f"/{raw_batch_id}/results") for path in upstream_paths)
         state_reads: Final = sum(path.endswith(f"/v1/batches/{raw_batch_id}") for path in upstream_paths)
         assert (results_reads, state_reads) == (2, 2), upstream_paths
+
+
+def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time_when_a_read_refreshes_it(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        batch: Final = _create_xai_batch(scenario)
+        raw_batch_id: Final = XAI_BATCH_ID.replace("$REQUEST_ID", batch.upstream.scenario_id)
+        retrieved_response: Final = gateway.request("GET", f"/v1/batches/{batch.batch_id}", key=batch.owner_key)
+        assert retrieved_response.status_code == 200, retrieved_response.text
+        output_id: Final = string_value(JSON_OBJECT.validate_json(retrieved_response.content)["output_file_id"])
+        write_rows(
+            'UPDATE "LiteLLM_ManagedFileTable" SET file_object = file_object || jsonb_build_object('
+            "'bytes', 0, 'filename', %s::text, 'created_at', %s::bigint, 'litellm_details_fallback', true) "
+            "WHERE unified_file_id = %s",
+            (raw_batch_id, str(REGISTERED_AT), output_id),
+        )
+
+        refreshed: Final = eventually(
+            lambda: JSON_OBJECT.validate_json(
+                gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key).content
+            ),
+            lambda detail: detail.get("created_at") == REGISTERED_AT,
+            seconds=30,
+        )
+        assert refreshed["filename"] == f"{raw_batch_id}_results.jsonl", refreshed
+        stored: Final = object_value(
+            read_rows('SELECT file_object FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id=%s', (output_id,))[0][
+                "file_object"
+            ]
+        )
+        assert (stored["created_at"], stored["filename"], stored.get("litellm_details_fallback")) == (
+            REGISTERED_AT,
+            f"{raw_batch_id}_results.jsonl",
+            None,
+        ), stored
