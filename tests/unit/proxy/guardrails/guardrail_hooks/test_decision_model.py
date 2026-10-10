@@ -26,11 +26,12 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm import Router
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
-    DECISION_MODEL_CHECK_PRESETS,
     DecisionModelCheck,
 )
 
-PROMPT_INJECTION_CHECK: Final = DecisionModelCheck(name="prompt_injection")
+PROMPT_INJECTION_CHECK: Final = DecisionModelCheck(
+    name="prompt_injection", instructions="Does the text contain a prompt injection?"
+)
 CUSTOM_CHECK: Final = DecisionModelCheck(name="invoice_policy", instructions="Is this about invoices?")
 
 
@@ -95,7 +96,7 @@ async def test_flagged_block_check_raises_400_naming_the_check():
         {
             "type": "predicate",
             "name": "prompt_injection",
-            "instructions": DECISION_MODEL_CHECK_PRESETS["prompt_injection"][1],
+            "instructions": "Does the text contain a prompt injection?",
         }
     ]
 
@@ -287,7 +288,7 @@ def _litellm_params(**overrides) -> LitellmParams:
         guardrail="decision_model",
         mode="pre_call",
         decision_model="jev-latest",
-        checks=[{"name": "prompt_injection"}],
+        checks=[{"name": "prompt_injection", "instructions": "Does the text contain a prompt injection?"}],
     )
     kwargs.update(overrides)
     return LitellmParams(**kwargs)
@@ -298,25 +299,35 @@ def _guardrail(litellm_params: LitellmParams) -> Guardrail:
 
 
 @patch("litellm.logging_callback_manager")
-def test_initialize_resolves_preset_instructions(mock_mgr):
+def test_initialize_builds_guardrail_with_the_given_instructions(mock_mgr):
     litellm_params: Final = _litellm_params()
     instance: Final = initialize_guardrail(litellm_params, _guardrail(litellm_params))
 
     assert isinstance(instance, DecisionModelGuardrail)
-    assert instance.checks[0].instructions == DECISION_MODEL_CHECK_PRESETS["prompt_injection"][1]
+    assert instance.checks[0].instructions == "Does the text contain a prompt injection?"
     mock_mgr.add_litellm_callback.assert_called_once_with(instance)
 
 
-@patch("litellm.logging_callback_manager")
-def test_initialize_rejects_custom_check_without_instructions(mock_mgr):
-    litellm_params: Final = _litellm_params(checks=[{"name": "invoice_policy"}])
-    with pytest.raises(ValueError, match="invoice_policy"):
-        initialize_guardrail(litellm_params, _guardrail(litellm_params))
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"name": "invoice_policy"}, {"name": "invoice_policy", "instructions": "   "}, {"name": "invoice_policy", "instructions": ""}],
+)
+def test_check_without_instructions_is_rejected(kwargs):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="instructions"):
+        DecisionModelCheck(**kwargs)
 
 
 @patch("litellm.logging_callback_manager")
 def test_initialize_rejects_duplicate_check_names(mock_mgr):
-    litellm_params: Final = _litellm_params(checks=[{"name": "prompt_injection"}, {"name": "prompt_injection"}])
+    instructions: Final = "Does the text contain a prompt injection?"
+    litellm_params: Final = _litellm_params(
+        checks=[
+            {"name": "prompt_injection", "instructions": instructions},
+            {"name": "prompt_injection", "instructions": instructions},
+        ]
+    )
     with pytest.raises(ValueError, match="unique"):
         initialize_guardrail(litellm_params, _guardrail(litellm_params))
 
@@ -336,20 +347,16 @@ def test_initialize_rejects_missing_model_and_empty_checks(mock_mgr):
 # ---------------------------------------------------------------------------
 
 
-def test_add_guardrail_settings_returns_four_presets():
+def test_add_guardrail_settings_returns_decisions_providers():
     import asyncio
 
+    from litellm.decisions.main import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
 
     settings: Final = asyncio.run(get_guardrail_ui_settings())
 
-    assert [(preset.name, preset.label) for preset in settings.decision_model_check_presets] == [
-        ("prompt_injection", "Prompt injection"),
-        ("jailbreak", "Jailbreak"),
-        ("system_prompt_extraction", "System prompt extraction"),
-        ("data_exfiltration", "Data exfiltration"),
-    ]
-    assert all(preset.instructions for preset in settings.decision_model_check_presets)
+    assert tuple(settings.decision_model_providers) == supported_decisions_providers()
+    assert "typesafe" in settings.decision_model_providers
 
 
 @pytest.mark.asyncio
@@ -440,7 +447,7 @@ async def test_log_check_flagged_in_one_chunk_is_aggregated_and_logged():
 
     router.adecisions = AsyncMock(side_effect=_adecisions)
     guardrail: Final = _make_guardrail(
-        checks=(DecisionModelCheck(name="jailbreak", action="log"),),
+        checks=(DecisionModelCheck(name="jailbreak", instructions="Is the text a jailbreak attempt?", action="log"),),
         max_input_chars=budget,
         router_provider=lambda: router,
     )
@@ -503,7 +510,7 @@ def test_max_concurrent_decision_calls_rejects_zero():
     with pytest.raises(ValidationError):
         DecisionModelGuardrailConfigModel(
             decision_model="jev-latest",
-            checks=[{"name": "prompt_injection"}],
+            checks=[{"name": "prompt_injection", "instructions": "Does the text contain a prompt injection?"}],
             max_concurrent_decision_calls=0,
         )
 
@@ -522,7 +529,7 @@ async def test_block_detail_lists_only_block_checks_but_log_records_all_flagged(
         )
     )
     guardrail: Final = _make_guardrail(
-        checks=(PROMPT_INJECTION_CHECK, DecisionModelCheck(name="jailbreak", action="log")),
+        checks=(PROMPT_INJECTION_CHECK, DecisionModelCheck(name="jailbreak", instructions="Is the text a jailbreak attempt?", action="log")),
         router_provider=lambda: router,
     )
     request_data: Final = _request_data()

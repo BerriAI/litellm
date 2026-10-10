@@ -12541,15 +12541,9 @@
               "type": "string"
             },
             "instructions": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Instructions"
+              "minLength": 1,
+              "title": "Instructions",
+              "type": "string"
             },
             "name": {
               "minLength": 1,
@@ -12565,32 +12559,10 @@
             }
           },
           "required": [
-            "name"
-          ],
-          "title": "DecisionModelCheck",
-          "type": "object"
-        },
-        "DecisionModelCheckPreset": {
-          "properties": {
-            "instructions": {
-              "title": "Instructions",
-              "type": "string"
-            },
-            "label": {
-              "title": "Label",
-              "type": "string"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          "required": [
             "name",
-            "label",
             "instructions"
           ],
-          "title": "DecisionModelCheckPreset",
+          "title": "DecisionModelCheck",
           "type": "object"
         },
         "GUARDRAIL_DEFINITION_LOCATION": {
@@ -12925,11 +12897,11 @@
               ],
               "title": "Content Filter Settings"
             },
-            "decision_model_check_presets": {
+            "decision_model_providers": {
               "items": {
-                "$ref": "#/components/schemas/DecisionModelCheckPreset"
+                "type": "string"
               },
-              "title": "Decision Model Check Presets",
+              "title": "Decision Model Providers",
               "type": "array"
             },
             "pii_entity_categories": {

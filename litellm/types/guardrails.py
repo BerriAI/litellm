@@ -27,7 +27,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelCheck,
-    DecisionModelCheckPreset,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
@@ -1444,7 +1443,7 @@ class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
-    decision_model_check_presets: tuple[DecisionModelCheckPreset, ...] = Field(default_factory=tuple)
+    decision_model_providers: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class PresidioPerRequestConfig(LiteLLMBaseModel):

@@ -22,7 +22,6 @@ from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
-    DECISION_MODEL_CHECK_PRESETS,
     DecisionModelCheck,
     DecisionModelGuardrailConfigModel,
 )
@@ -43,8 +42,8 @@ class _CheckVerdict(TypedDict):
 
 
 def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionModelCheck, ...]:
-    """Fill preset instructions and enforce the check invariants (non-empty, unique names,
-    instructions present) that decide what a run sends, wherever the guardrail is built."""
+    """Enforce the check invariants (non-empty list, unique names, bounded count)
+    that decide what a run sends, wherever the guardrail is built."""
     if not checks:
         raise ValueError("decision_model guardrail requires at least one check")
     if len(checks) > MAX_DECISION_QUESTIONS:
@@ -54,20 +53,7 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     names: Final = [check.name for check in checks]
     if len(set(names)) != len(names):
         raise ValueError("decision_model guardrail check names must be unique")
-    resolved: Final = tuple(
-        check
-        if check.instructions is not None
-        else (
-            check.model_copy(update={"instructions": DECISION_MODEL_CHECK_PRESETS[check.name][1]})
-            if check.name in DECISION_MODEL_CHECK_PRESETS
-            else check
-        )
-        for check in checks
-    )
-    missing: Final = [check.name for check in resolved if check.instructions is None]
-    if missing:
-        raise ValueError(f"decision_model guardrail check(s) {missing} are not presets and must carry instructions")
-    return resolved
+    return checks
 
 
 def _chunk_text(text: str, max_chars: int) -> tuple[str, ...]:

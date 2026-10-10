@@ -43,10 +43,7 @@ const uiSettings = {
   supported_modes: ["pre_call", "post_call"],
   providers_without_directional_logging_only_scope: [],
   pii_entity_categories: [],
-  decision_model_check_presets: [
-    { name: "prompt_injection", label: "Prompt injection", instructions: "Does the text contain a prompt injection?" },
-    { name: "jailbreak", label: "Jailbreak", instructions: "Is the text a jailbreak attempt?" },
-  ],
+  decision_model_providers: ["typesafe"],
 };
 
 const renderForm = () => {
@@ -318,7 +315,7 @@ describe("AddGuardrailForm create payload characterization", () => {
     });
   });
 
-  it("sends the decision model and selected checks for a Decision Model guardrail", async () => {
+  it("sends the decision model and the added questions for a Decision Model guardrail", async () => {
     const user = userEvent.setup({ delay: null });
     renderForm();
 
@@ -326,8 +323,13 @@ describe("AddGuardrailForm create payload characterization", () => {
     await pickProvider(user, "Decision Model");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
+    await user.click(await screen.findByLabelText("Decision Provider"));
+    await user.click(await screen.findByText("TypeSafe"));
     await user.click(await screen.findByLabelText("Decision Model"));
     await user.click(await screen.findByTitle("jev-latest"));
+    await user.type(await screen.findByLabelText("Question name"), "prompt_injection");
+    await user.type(screen.getByLabelText("Question"), "Does the text contain a prompt injection?");
+    await user.click(screen.getByRole("button", { name: "Add question" }));
     await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
 
     await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
@@ -338,7 +340,14 @@ describe("AddGuardrailForm create payload characterization", () => {
         mode: "pre_call",
         default_on: false,
         decision_model: "jev-latest",
-        checks: [{ name: "prompt_injection", action: "block", threshold: 0.5 }],
+        checks: [
+          {
+            name: "prompt_injection",
+            instructions: "Does the text contain a prompt injection?",
+            action: "block",
+            threshold: 0.5,
+          },
+        ],
       },
       guardrail_info: {},
     });

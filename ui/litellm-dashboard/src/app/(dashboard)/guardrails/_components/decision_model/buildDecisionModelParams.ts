@@ -1,10 +1,8 @@
 export interface DecisionModelCheckDraft {
   name: string;
-  label?: string;
-  instructions?: string;
+  instructions: string;
   action: "block" | "log";
   threshold: number;
-  custom?: boolean;
   enabled?: boolean;
 }
 
@@ -12,7 +10,7 @@ export interface DecisionModelLitellmParams {
   decision_model: string;
   checks: Array<{
     name: string;
-    instructions?: string;
+    instructions: string;
     action: "block" | "log";
     threshold: number;
   }>;
@@ -32,7 +30,7 @@ export function buildDecisionModelParams(
     decision_model: decisionModel,
     checks: enabledDecisionChecks(checks).map((check) => ({
       name: check.name,
-      ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
+      instructions: check.instructions,
       action: check.action,
       threshold: clampThreshold(check.threshold),
     })),

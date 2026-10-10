@@ -5,6 +5,7 @@ import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGuardrailCall,
+  decisionsTestCall,
   getGuardrailProviderSpecificParams,
   getGuardrailUISettings,
   modelHubCall,
@@ -25,6 +26,7 @@ vi.mock("@/lib/toast", () => ({
 
 vi.mock("@/components/networking", () => ({
   createGuardrailCall: vi.fn(),
+  decisionsTestCall: vi.fn(),
   getGuardrailProviderSpecificParams: vi.fn().mockResolvedValue({}),
   getGuardrailUISettings: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
@@ -76,165 +78,193 @@ describe("AddGuardrailForm provider options", () => {
   });
 });
 
-describe("AddGuardrailForm decision model checks", () => {
+describe("AddGuardrailForm decision model questions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("shows 0.5 in a custom check threshold input", async () => {
-    const user = userEvent.setup({ delay: null });
-    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
-      decision_model: { ui_friendly_name: "Decision Model" },
-    });
-    renderWithProviders(
-      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
-    );
-
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-threshold");
-    await user.click(screen.getByLabelText("Guardrail Provider"));
-    await user.click(await screen.findByText("Decision Model"));
-    await user.click(screen.getByRole("button", { name: "Next" }));
-
-    await user.type(await screen.findByLabelText("Custom check name"), "invoice_policy");
-    await user.type(screen.getByLabelText("Custom check instructions"), "Does the text ask about invoices?");
-    await user.click(screen.getByRole("button", { name: "Add check" }));
-
-    expect(await screen.findByLabelText("invoice_policy threshold")).toHaveValue(0.5);
-  });
-
-  it("rejects a custom check named after an unselected preset", async () => {
-    const user = userEvent.setup({ delay: null });
+    vi.unstubAllGlobals();
     vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
       decision_model: { ui_friendly_name: "Decision Model" },
     });
     vi.mocked(getGuardrailUISettings).mockResolvedValue({
-      decision_model_check_presets: [
-        { name: "prompt_injection", label: "Prompt injection", instructions: "Does the text inject?" },
-        { name: "jailbreak", label: "Jailbreak", instructions: "Is the text a jailbreak?" },
-      ],
-    });
-    renderWithProviders(
-      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
-    );
-
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-dupe");
-    await user.click(screen.getByLabelText("Guardrail Provider"));
-    await user.click(await screen.findByText("Decision Model"));
-    await user.click(screen.getByRole("button", { name: "Next" }));
-
-    await user.type(await screen.findByLabelText("Custom check name"), "jailbreak");
-    await user.type(screen.getByLabelText("Custom check instructions"), "Is the text a jailbreak?");
-    await user.click(screen.getByRole("button", { name: "Add check" }));
-
-    expect(await screen.findByText("That name is already used by another check")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Remove jailbreak")).not.toBeInTheDocument();
-  });
-
-  it("toggles custom checks like presets and drops unchecked ones from the submitted params", async () => {
-    const user = userEvent.setup({ delay: null });
-    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
-      decision_model: { ui_friendly_name: "Decision Model" },
-    });
-    vi.mocked(getGuardrailUISettings).mockResolvedValue({
-      decision_model_check_presets: [
-        { name: "prompt_injection", label: "Prompt injection", instructions: "Does the text inject?" },
-      ],
+      decision_model_providers: ["typesafe", "openai"],
     });
     vi.mocked(modelHubCall).mockResolvedValue({
-      data: [{ model_group: "jev-model", mode: "evaluation" }],
+      data: [
+        { model_group: "jev-latest", providers: ["typesafe"] },
+        { model_group: "gpt-5", providers: ["openai"] },
+      ],
     });
+  });
+
+  const renderDecisionModel = async (user: ReturnType<typeof userEvent.setup>) => {
     renderWithProviders(
       <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
     );
-
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-custom-toggle");
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-1");
     await user.click(screen.getByLabelText("Guardrail Provider"));
     await user.click(await screen.findByText("Decision Model"));
     await user.click(screen.getByRole("button", { name: "Next" }));
+  };
 
+  const pickTypesafeModel = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByLabelText("Decision Provider"));
+    await user.click(await screen.findByText("TypeSafe"));
     await user.click(await screen.findByLabelText("Decision Model"));
-    await user.click(await screen.findByText("jev-model"));
+    await user.click(await screen.findByTitle("jev-latest"));
+  };
 
-    await user.type(await screen.findByLabelText("Custom check name"), "invoice_policy");
-    await user.type(screen.getByLabelText("Custom check instructions"), "Does the text ask about invoices?");
-    await user.click(screen.getByRole("button", { name: "Add check" }));
+  const addQuestion = async (user: ReturnType<typeof userEvent.setup>, name: string, instructions: string) => {
+    await user.type(await screen.findByLabelText("Question name"), name);
+    await user.type(screen.getByLabelText("Question"), instructions);
+    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
+  };
+
+  it("filters the model picker by the selected provider and clears the model when it changes", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+
+    await user.click(await screen.findByLabelText("Decision Provider"));
+    await user.click(await screen.findByText("TypeSafe"));
+    await user.click(await screen.findByLabelText("Decision Model"));
+    expect(await screen.findByTitle("jev-latest")).toBeInTheDocument();
+    expect(screen.queryByTitle("gpt-5")).not.toBeInTheDocument();
+    await user.click(await screen.findByTitle("jev-latest"));
+
+    await user.click(screen.getByLabelText("Decision Provider"));
+    await user.click(await screen.findByText("OpenAI"));
+
+    const modelInput = screen.getByLabelText("Decision Model");
+    expect(modelInput).not.toHaveValue("jev-latest");
+  });
+
+  it("adds a question with the chosen action and threshold and submits its instructions", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+
+    await user.type(await screen.findByLabelText("Question name"), "invoice_policy");
+    await user.type(screen.getByLabelText("Question"), "Does the text ask about invoices?");
+    await user.click(screen.getByLabelText("New question action"));
+    await user.click(await screen.findByText("Log only"));
+    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
 
     const checkbox = await screen.findByRole("checkbox", { name: "invoice_policy" });
     expect(checkbox).toBeChecked();
 
-    await user.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(vi.mocked(createGuardrailCall)).toHaveBeenCalled());
+    const submitted = vi.mocked(createGuardrailCall).mock.calls[0][1];
+    expect(submitted.litellm_params.checks).toEqual([
+      {
+        name: "invoice_policy",
+        instructions: "Does the text ask about invoices?",
+        action: "log",
+        threshold: 0.5,
+      },
+    ]);
+  });
+
+  it("drops an unchecked question from the submitted params", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "invoice_policy" }));
     expect(screen.getByLabelText("invoice_policy action")).toBeDisabled();
-    expect(screen.getByLabelText("invoice_policy threshold")).toBeDisabled();
+    expect(screen.getByLabelText("invoice_policy threshold")).toHaveAttribute("data-disabled");
 
-    await user.click(screen.getByRole("button", { name: "Unselect all" }));
-    const afterUnselect = screen.getByRole("checkbox", { name: "invoice_policy" });
-    expect(afterUnselect).not.toBeChecked();
+    await user.type(await screen.findByLabelText("Question name"), "refund_policy");
+    await user.type(screen.getByLabelText("Question"), "Is this about refunds?");
+    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
 
-    await user.click(screen.getByRole("button", { name: "Select all" }));
-    expect(screen.getByRole("checkbox", { name: "invoice_policy" })).toBeChecked();
-
-    await user.click(screen.getByRole("checkbox", { name: "invoice_policy" }));
-
-    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Guardrail" }));
 
     await waitFor(() => expect(vi.mocked(createGuardrailCall)).toHaveBeenCalled());
     const submitted = vi.mocked(createGuardrailCall).mock.calls[0][1];
     const names = submitted.litellm_params.checks.map((c: { name: string }) => c.name);
-    expect(names).toContain("prompt_injection");
-    expect(names).not.toContain("invoice_policy");
+    expect(names).toEqual(["refund_policy"]);
   });
 
-  it("removes a custom check row via its Remove button", async () => {
-    const user = userEvent.setup({ delay: null });
-    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
-      decision_model: { ui_friendly_name: "Decision Model" },
-    });
-    renderWithProviders(
-      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
-    );
+  it("rejects a second question with a name already used", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
+    await addQuestion(user, "invoice_policy", "Duplicate name");
 
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-remove");
-    await user.click(screen.getByLabelText("Guardrail Provider"));
-    await user.click(await screen.findByText("Decision Model"));
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("That name is already used by another question")).toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox", { name: "invoice_policy" })).toHaveLength(1);
+  });
 
-    await user.type(await screen.findByLabelText("Custom check name"), "invoice_policy");
-    await user.type(screen.getByLabelText("Custom check instructions"), "Does the text ask about invoices?");
-    await user.click(screen.getByRole("button", { name: "Add check" }));
+  it("removes a question row via its Remove button", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
 
-    await user.click(await screen.findByLabelText("Remove invoice_policy"));
+    fireEvent.click(await screen.findByLabelText("Remove invoice_policy"));
     expect(screen.queryByRole("checkbox", { name: "invoice_policy" })).not.toBeInTheDocument();
   });
 
-  it("blocks create when the only check left is an unchecked custom", async () => {
-    const user = userEvent.setup({ delay: null });
-    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
-      decision_model: { ui_friendly_name: "Decision Model" },
-    });
-    vi.mocked(modelHubCall).mockResolvedValue({
-      data: [{ model_group: "jev-model", mode: "evaluation" }],
-    });
-    renderWithProviders(
-      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
-    );
+  it("blocks create when the only question left is unchecked", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
 
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-none-enabled");
-    await user.click(screen.getByLabelText("Guardrail Provider"));
-    await user.click(await screen.findByText("Decision Model"));
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "invoice_policy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Guardrail" }));
 
-    await user.click(await screen.findByLabelText("Decision Model"));
-    await user.click(await screen.findByText("jev-model"));
-
-    await user.type(await screen.findByLabelText("Custom check name"), "invoice_policy");
-    await user.type(screen.getByLabelText("Custom check instructions"), "Does the text ask about invoices?");
-    await user.click(screen.getByRole("button", { name: "Add check" }));
-
-    await user.click(screen.getByRole("button", { name: "Unselect all" }));
-    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
-
-    await waitFor(() => expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith("Please select at least one check"));
+    await waitFor(() => expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith("Add at least one question"));
     expect(vi.mocked(createGuardrailCall)).not.toHaveBeenCalled();
+  });
+
+  it("tests a question against the decisions endpoint and shows the outcome", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(decisionsTestCall).mockResolvedValue({
+      model: "jev-latest",
+      answers: [{ type: "predicate", name: "invoice_policy", probability: 0.87 }],
+    });
+
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test invoice_policy" }));
+    fireEvent.change(await screen.findByLabelText("Try an input for invoice_policy"), {
+      target: { value: "please invoice me" },
+    });
+
+    expect(await screen.findByText("Would block", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText(/0\.87/)).toBeInTheDocument();
+
+    expect(vi.mocked(decisionsTestCall)).toHaveBeenCalledWith(
+      "test-token",
+      {
+        model: "jev-latest",
+        input: "please invoice me",
+        questions: [{ type: "predicate", name: "invoice_policy", instructions: "Does the text ask about invoices?" }],
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("shows a refusal verdict as Refused", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(decisionsTestCall).mockResolvedValue({ answers: [{ type: "refusal", name: "invoice_policy" }] });
+
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test invoice_policy" }));
+    fireEvent.change(await screen.findByLabelText("Try an input for invoice_policy"), {
+      target: { value: "x" },
+    });
+
+    expect(await screen.findByText("Refused", {}, { timeout: 3000 })).toBeInTheDocument();
   });
 });
 
@@ -244,7 +274,7 @@ describe("AddGuardrailForm provider search", () => {
   });
 
   it("finds Decision Model by search aliases and keeps label search working", async () => {
-    const user = userEvent.setup({ delay: null });
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
       decision_model: { ui_friendly_name: "Decision Model" },
     });

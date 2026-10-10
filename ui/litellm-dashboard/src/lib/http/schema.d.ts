@@ -31835,7 +31835,7 @@ export interface components {
              */
             action: "block" | "log";
             /** Instructions */
-            instructions?: string | null;
+            instructions: string;
             /** Name */
             name: string;
             /**
@@ -31843,15 +31843,6 @@ export interface components {
              * @default 0.5
              */
             threshold: number;
-        };
-        /** DecisionModelCheckPreset */
-        DecisionModelCheckPreset: {
-            /** Instructions */
-            instructions: string;
-            /** Label */
-            label: string;
-            /** Name */
-            name: string;
         };
         /**
          * DefaultInternalUserParams
@@ -33689,8 +33680,8 @@ export interface components {
             content_filter_settings?: {
                 [key: string]: unknown;
             } | null;
-            /** Decision Model Check Presets */
-            decision_model_check_presets?: components["schemas"]["DecisionModelCheckPreset"][];
+            /** Decision Model Providers */
+            decision_model_providers?: string[];
             /** Pii Entity Categories */
             pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
             /** Providers Without Directional Logging Only Scope */

@@ -1,8 +1,8 @@
 "use client";
 
 import { Plus, X } from "lucide-react";
-import React, { useId, useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import React, { useState } from "react";
+import { useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -16,19 +16,19 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { asText, GuardrailField, labelWithHint, requiredRule, type GuardrailFormControl } from "../GuardrailFormField";
 import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
-
-export interface DecisionModelCheckPreset {
-  name: string;
-  label: string;
-  instructions: string;
-}
+import DecisionQuestionTest from "./DecisionQuestionTest";
 
 export interface DecisionModelFieldsProps {
+  accessToken: string | null;
+  decisionProviders: string[];
+  selectedProvider: string | null;
+  onProviderChange: (provider: string | null) => void;
   decisionModels: string[];
-  presets: DecisionModelCheckPreset[];
   checks: DecisionModelCheckDraft[];
   onChecksChange: (checks: DecisionModelCheckDraft[]) => void;
   control: GuardrailFormControl;
@@ -39,17 +39,43 @@ const ACTION_ITEMS = [
   { label: "Log only", value: "log" },
 ];
 
+const ThresholdSlider: React.FC<{
+  value: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+  "aria-label": string;
+}> = ({ value, onChange, disabled, "aria-label": ariaLabel }) => (
+  <div className="flex items-center gap-2">
+    <Slider
+      aria-label={ariaLabel}
+      min={0}
+      max={1}
+      step={0.01}
+      value={[value]}
+      onValueChange={(next) => onChange(Array.isArray(next) ? next[0] ?? 0 : next)}
+      disabled={disabled}
+      className="min-w-16 flex-1"
+    />
+    <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">{value.toFixed(2)}</span>
+  </div>
+);
+
 const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
+  accessToken,
+  decisionProviders,
+  selectedProvider,
+  onProviderChange,
   decisionModels,
-  presets,
   checks,
   onChecksChange,
   control,
 }) => {
-  const nameId = useId();
   const [customName, setCustomName] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
+  const [customAction, setCustomAction] = useState<"block" | "log">("block");
+  const [customThreshold, setCustomThreshold] = useState(0.5);
   const [customNameTaken, setCustomNameTaken] = useState(false);
+  const selectedModel = asText(useWatch({ control, name: "decision_model" }));
 
   const selectedNames = new Set(checks.map((check) => check.name));
 
@@ -57,39 +83,23 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
     onChecksChange(checks.map((check) => (check.name === name ? { ...check, ...patch } : check)));
   };
 
-  const togglePreset = (preset: DecisionModelCheckPreset, selected: boolean) => {
-    if (selected) {
-      onChecksChange([...checks, { name: preset.name, label: preset.label, action: "block", threshold: 0.5 }]);
-    } else {
-      onChecksChange(checks.filter((check) => check.name !== preset.name));
-    }
-  };
-
-  const selectAll = () => {
-    const missing = presets.filter((preset) => !selectedNames.has(preset.name));
-    onChecksChange([
-      ...checks.map((check) => (check.custom ? { ...check, enabled: true } : check)),
-      ...missing.map((preset) => ({
-        name: preset.name,
-        label: preset.label,
-        action: "block" as const,
-        threshold: 0.5,
-      })),
-    ]);
-  };
-
   const addCustomCheck = () => {
     const name = customName.trim();
     const instructions = customInstructions.trim();
     if (!name || !instructions) return;
-    if (selectedNames.has(name) || presets.some((preset) => preset.name === name)) {
+    if (selectedNames.has(name)) {
       setCustomNameTaken(true);
       return;
     }
     setCustomNameTaken(false);
-    onChecksChange([...checks, { name, instructions, action: "block", threshold: 0.5, custom: true, enabled: true }]);
+    onChecksChange([
+      ...checks,
+      { name, instructions, action: customAction, threshold: customThreshold, enabled: true },
+    ]);
     setCustomName("");
     setCustomInstructions("");
+    setCustomAction("block");
+    setCustomThreshold(0.5);
   };
 
   const removeCheck = (name: string) => onChecksChange(checks.filter((check) => check.name !== name));
@@ -98,16 +108,45 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
     <div className="space-y-5">
       <div className="rounded-md border border-success/20 bg-success/10 px-3.5 py-2.5 text-[13px] text-success">
         The <strong>Decision Model</strong> answers yes/no questions about each request (pre_call, during_call) or
-        response (post_call). A check whose probability reaches its threshold blocks the call, or is recorded when set
-        to Log only.
+        response (post_call). A question whose probability reaches its threshold blocks the call, or is recorded when
+        set to Log only.
       </div>
+
+      <Field>
+        <FieldLabel>Decision Provider</FieldLabel>
+        <Select
+          items={decisionProviders.map((provider) => {
+            const { displayName } = getProviderLogoAndName(provider);
+            return { label: displayName, value: provider };
+          })}
+          value={selectedProvider}
+          onValueChange={(next: string | null) => onProviderChange(next)}
+        >
+          <SelectTrigger className="w-full" aria-label="Decision Provider">
+            <SelectValue placeholder="Select a provider" />
+          </SelectTrigger>
+          <SelectContent>
+            {decisionProviders.map((provider) => {
+              const { logo, displayName } = getProviderLogoAndName(provider);
+              return (
+                <SelectItem key={provider} value={provider}>
+                  <span className="flex items-center gap-2">
+                    {logo && <img src={logo} alt={`${displayName} logo`} className="size-4" />}
+                    {displayName}
+                  </span>
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      </Field>
 
       <GuardrailField
         control={control}
         name="decision_model"
         label={labelWithHint(
           "Decision Model",
-          "A model on this proxy whose mode is 'evaluation', such as typesafe/jev-latest. It scores every check below.",
+          "A decisions-API model on this proxy, such as typesafe/jev-latest. It scores every question below.",
         )}
         rules={requiredRule("Select a decision model")}
       >
@@ -134,112 +173,31 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
         )}
       </GuardrailField>
 
-      {decisionModels.length === 0 && (
+      {selectedProvider && decisionModels.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No decision models yet. Add one with mode <code>evaluation</code>, such as <code>typesafe/jev-latest</code>,
-          on the Models page.
+          No decision models for this provider. Add one on the Models page.
         </p>
       )}
 
-      <div className="flex items-center justify-between">
-        <FieldLabel>Checks</FieldLabel>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={selectAll}>
-            Select all
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onChecksChange(checks.filter((c) => c.custom).map((c) => ({ ...c, enabled: false })))}
-          >
-            Unselect all
-          </Button>
-        </div>
-      </div>
+      <FieldLabel>Questions</FieldLabel>
 
       <div className="overflow-hidden rounded-lg border border-border">
         <div className="flex border-b border-border bg-muted/40 px-5 py-3">
-          <span className="flex-1 font-semibold">Check</span>
+          <span className="flex-1 font-semibold">Question</span>
           <span className="w-28 text-right font-semibold">Action</span>
-          <span className="w-28 pl-4 font-semibold">Threshold</span>
+          <span className="w-36 pl-4 font-semibold">Threshold</span>
+          <span className="w-16" />
           <span className="w-10" />
         </div>
         <div>
-          {presets.map((preset) => {
-            const check = checks.find((entry) => entry.name === preset.name);
-            const selected = check !== undefined;
+          {checks.map((check) => {
+            const enabled = check.enabled !== false;
             return (
               <div
-                key={preset.name}
-                className={`flex items-center justify-between border-b border-border px-5 py-3 hover:bg-muted/40 ${
-                  selected ? "bg-accent" : ""
-                }`}
+                key={check.name}
+                className={`border-b border-border px-5 py-3 hover:bg-muted/40 ${enabled ? "bg-accent" : ""}`}
               >
-                <div className="flex flex-1 items-start">
-                  <Checkbox
-                    className="mr-3 mt-0.5"
-                    checked={selected}
-                    onCheckedChange={(next) => togglePreset(preset, next === true)}
-                    aria-label={preset.label}
-                  />
-                  <div>
-                    <span className={selected ? "font-medium text-foreground" : "text-muted-foreground"}>
-                      {preset.label}
-                    </span>
-                    <p className="m-0 mt-0.5 text-xs text-muted-foreground">{preset.instructions}</p>
-                  </div>
-                </div>
-                <div className="w-28">
-                  <Select
-                    items={ACTION_ITEMS}
-                    value={selected ? check.action : "block"}
-                    onValueChange={(next: string | null) =>
-                      next && setCheck(preset.name, { action: next as "block" | "log" })
-                    }
-                    disabled={!selected}
-                  >
-                    <SelectTrigger
-                      className={`w-full ${selected ? "" : "opacity-50"}`}
-                      aria-label={`${preset.label} action`}
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ACTION_ITEMS.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-28 pl-4">
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    disabled={!selected}
-                    aria-label={`${preset.label} threshold`}
-                    value={selected ? check.threshold : 0.5}
-                    onChange={(event) => setCheck(preset.name, { threshold: Number(event.target.value) || 0 })}
-                  />
-                </div>
-                <div className="w-10" />
-              </div>
-            );
-          })}
-          {checks
-            .filter((check) => check.custom)
-            .map((check) => {
-              const enabled = check.enabled !== false;
-              return (
-                <div
-                  key={check.name}
-                  className={`flex items-center justify-between border-b border-border px-5 py-3 hover:bg-muted/40 ${
-                    enabled ? "bg-accent" : ""
-                  }`}
-                >
+                <div className="flex items-center justify-between">
                   <div className="flex flex-1 items-start">
                     <Checkbox
                       className="mr-3 mt-0.5"
@@ -251,9 +209,6 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       <span className={enabled ? "font-medium text-foreground" : "text-muted-foreground"}>
                         {check.name}
                       </span>
-                      <Badge variant="secondary" className="ml-2">
-                        custom
-                      </Badge>
                       <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
                     </div>
                   </div>
@@ -281,16 +236,22 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="w-28 pl-4">
-                    <Input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      disabled={!enabled}
+                  <div className="w-36 pl-4">
+                    <ThresholdSlider
                       aria-label={`${check.name} threshold`}
                       value={check.threshold}
-                      onChange={(event) => setCheck(check.name, { threshold: Number(event.target.value) || 0 })}
+                      onChange={(next) => setCheck(check.name, { threshold: next })}
+                      disabled={!enabled}
+                    />
+                  </div>
+                  <div className="flex w-16 justify-end">
+                    <DecisionQuestionTest
+                      accessToken={accessToken}
+                      model={selectedModel}
+                      name={check.name}
+                      instructions={check.instructions}
+                      action={check.action}
+                      threshold={check.threshold}
                     />
                   </div>
                   <div className="flex w-10 justify-end">
@@ -305,45 +266,71 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     </Button>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
         </div>
       </div>
 
       <Field>
-        <FieldLabel>Add a custom check</FieldLabel>
-        <div className="rounded-md border border-dashed border-border p-3">
-          <div className="flex gap-2">
-            <Input
-              id={nameId}
-              aria-label="Custom check name"
-              placeholder="Check name (e.g. invoice_policy)"
-              value={customName}
-              onChange={(event) => {
-                setCustomName(event.target.value);
-                setCustomNameTaken(false);
-              }}
-            />
+        <FieldLabel>Add a question</FieldLabel>
+        <div className="space-y-2 rounded-md border border-dashed border-border p-3">
+          <Input
+            aria-label="Question name"
+            placeholder="Question name (e.g. invoice_policy)"
+            value={customName}
+            onChange={(event) => {
+              setCustomName(event.target.value);
+              setCustomNameTaken(false);
+            }}
+          />
+          <Textarea
+            aria-label="Question"
+            rows={2}
+            placeholder="The question the decision model answers, e.g. Does the text ask about invoices?"
+            className="w-full resize-none"
+            value={customInstructions}
+            onChange={(event) => setCustomInstructions(event.target.value)}
+          />
+          <div className="flex items-center gap-2">
+            <div className="w-28">
+              <Select
+                items={ACTION_ITEMS}
+                value={customAction}
+                onValueChange={(next: string | null) => next && setCustomAction(next as "block" | "log")}
+              >
+                <SelectTrigger className="w-full" aria-label="New question action">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ACTION_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-36 pl-4">
+              <ThresholdSlider
+                aria-label="New question threshold"
+                value={customThreshold}
+                onChange={setCustomThreshold}
+              />
+            </div>
+            <div className="flex-1" />
             <Button
               variant="outline"
               onClick={addCustomCheck}
               disabled={!customName.trim() || !customInstructions.trim()}
             >
               <Plus className="size-4" />
-              Add check
+              Add question
             </Button>
           </div>
           {customNameTaken && (
-            <p className="mt-1 text-xs text-destructive">That name is already used by another check</p>
+            <p className="m-0 text-xs text-destructive">That name is already used by another question</p>
           )}
-          <Textarea
-            aria-label="Custom check instructions"
-            rows={2}
-            placeholder="The question the decision model answers, e.g. Does the text ask about invoices?"
-            className="mt-2 w-full resize-none"
-            value={customInstructions}
-            onChange={(event) => setCustomInstructions(event.target.value)}
-          />
         </div>
       </Field>
     </div>

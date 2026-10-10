@@ -6130,6 +6130,9 @@ export const applyGuardrail = async (
   }
 };
 
+export const decisionsTestCall = async (accessToken: string, requestBody: Record<string, any>, signal?: AbortSignal) =>
+  apiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
+
 interface TestCustomCodeGuardrailRequest {
   custom_code: string;
   test_input: {

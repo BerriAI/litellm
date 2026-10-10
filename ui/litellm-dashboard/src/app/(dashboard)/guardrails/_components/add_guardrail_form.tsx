@@ -66,12 +66,17 @@ import {
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
-import DecisionModelFields, { type DecisionModelCheckPreset } from "./decision_model/DecisionModelFields";
+import DecisionModelFields from "./decision_model/DecisionModelFields";
 import {
   buildDecisionModelParams,
   enabledDecisionChecks,
   type DecisionModelCheckDraft,
 } from "./decision_model/buildDecisionModelParams";
+import {
+  decisionModelsForProvider,
+  decisionProvidersForGroups,
+  type DecisionModelGroup,
+} from "./decision_model/decisionModelQuestion";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -115,7 +120,7 @@ interface GuardrailSettings {
     category: string;
     entities: string[];
   }>;
-  decision_model_check_presets?: DecisionModelCheckPreset[];
+  decision_model_providers?: string[];
   content_filter_settings?: {
     prebuilt_patterns: Array<{
       name: string;
@@ -252,7 +257,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     createEmptyToolPermissionConfig,
   );
 
-  const [decisionModels, setDecisionModels] = useState<string[]>([]);
+  const [decisionModelGroups, setDecisionModelGroups] = useState<DecisionModelGroup[]>([]);
+  const [decisionProvider, setDecisionProvider] = useState<string | null>(null);
   const [decisionChecks, setDecisionChecks] = useState<DecisionModelCheckDraft[]>([]);
 
   const isToolPermissionProvider = useMemo(() => {
@@ -263,6 +269,18 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     return (providerValue || "").toLowerCase() === "tool_permission";
   }, [selectedProvider]);
   const isDecisionModelProvider = useMemo(() => shouldRenderDecisionModelFields(selectedProvider), [selectedProvider]);
+  const decisionProviders = useMemo(
+    () => decisionProvidersForGroups(guardrailSettings?.decision_model_providers ?? [], decisionModelGroups),
+    [guardrailSettings, decisionModelGroups],
+  );
+  const decisionModels = useMemo(
+    () => decisionModelsForProvider(decisionModelGroups, decisionProvider),
+    [decisionModelGroups, decisionProvider],
+  );
+  const changeDecisionProvider = (provider: string | null) => {
+    setDecisionProvider(provider);
+    form.setValue("decision_model", undefined);
+  };
   const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, selectedProvider);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
@@ -285,11 +303,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           setAvailableModels(modelsResp.data.map((m: { id: string }) => m.id));
         }
         if (modelGroupsResp?.data) {
-          setDecisionModels(
-            modelGroupsResp.data
-              .filter((m: { model_group: string; mode?: string | null }) => m.mode === "evaluation")
-              .map((m: { model_group: string }) => m.model_group)
-              .toSorted((a: string, b: string) => a.localeCompare(b)),
+          setDecisionModelGroups(
+            modelGroupsResp.data.map((m: { model_group: string; providers?: string[] }) => ({
+              model_group: m.model_group,
+              providers: m.providers ?? [],
+            })),
           );
         }
 
@@ -391,12 +409,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       form.setValue("mode", "post_call");
     }
 
-    if (guardrail_provider_map[value] === "decision_model") {
-      const preset = guardrailSettings?.decision_model_check_presets?.find((p) => p.name === "prompt_injection");
-      setDecisionChecks(preset ? [{ name: preset.name, label: preset.label, action: "block", threshold: 0.5 }] : []);
-    } else {
-      setDecisionChecks([]);
-    }
+    setDecisionChecks([]);
+    setDecisionProvider(null);
   };
 
   const handleEntitySelect = (entity: string) => {
@@ -438,7 +452,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           return;
         }
         if (enabledDecisionChecks(decisionChecks).length === 0) {
-          toast.fromError("Please select at least one check to continue");
+          toast.fromError("Add at least one question");
           return;
         }
       }
@@ -647,7 +661,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
       if (guardrailProvider === "decision_model") {
         if (enabledDecisionChecks(decisionChecks).length === 0) {
-          toast.fromError("Please select at least one check");
+          toast.fromError("Add at least one question");
           setLoading(false);
           return;
         }
@@ -1019,8 +1033,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (isDecisionModelProvider) {
           return (
             <DecisionModelFields
+              accessToken={accessToken}
+              decisionProviders={decisionProviders}
+              selectedProvider={decisionProvider}
+              onProviderChange={changeDecisionProvider}
               decisionModels={decisionModels}
-              presets={guardrailSettings?.decision_model_check_presets ?? []}
               checks={decisionChecks}
               onChecksChange={setDecisionChecks}
               control={form.control}
