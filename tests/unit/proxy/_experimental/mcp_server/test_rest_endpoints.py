@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
 from litellm.proxy._types import (
+    MCPToolCallRequest,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
@@ -4862,3 +4863,51 @@ async def test_saved_preview_protocol_omission_and_explicit_edits(
     assert result == {"protocol_version": expected}
     assert saved.protocol_version == "2025-11-25"
     assert payload.mcp_info == metadata
+
+
+class TestCallToolRestApiRequestBody:
+    """POST /mcp-rest/tools/call documents its body in the generated OpenAPI
+    spec, so a client built from openapi.json passes server_id, name and
+    arguments instead of calling the tool blind (issue #32121)."""
+
+    def test_openapi_documents_the_tools_call_body(self) -> None:
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(rest_endpoints.router)
+        paths: Final = app.openapi()["paths"]
+
+        operation: Final = paths["/mcp-rest/tools/call"]["post"]
+        body_schema: Final = operation["requestBody"]["content"]["application/json"]["schema"]
+        refs: Final = body_schema.get("anyOf", [body_schema])
+        model_ref: Final = next(ref["$ref"] for ref in refs if "$ref" in ref)
+        components: Final = app.openapi()["components"]["schemas"]
+        properties: Final = components[model_ref.rsplit("/", 1)[-1]]["properties"]
+
+        assert {"server_id", "name", "arguments", "metadata"} <= set(properties)
+        assert all(field.get("description") for field in properties.values())
+
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        (
+            (MCPToolCallRequest(name="demo-tool"), "server_id is required in request body"),
+            (MCPToolCallRequest(server_id="server-1"), "name is required in request body"),
+        ),
+    )
+    async def test_missing_required_fields_keep_the_400_response(self, body: MCPToolCallRequest, message: str) -> None:
+        request: Final = _build_request(path="/mcp-rest/tools/call", method="POST", json_body={})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, body=body, user_api_key_dict=UserAPIKeyAuth())
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == {"error": "missing_parameter", "message": message}
+
+    def test_null_arguments_are_treated_as_no_arguments(self) -> None:
+        body: Final = MCPToolCallRequest.model_validate(
+            {"server_id": "server-1", "name": "demo-tool", "arguments": None}
+        )
+
+        assert body.arguments == {}
+        assert body.model_dump()["arguments"] == {}
+

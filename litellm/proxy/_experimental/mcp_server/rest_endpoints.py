@@ -53,6 +53,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 )
 from litellm.proxy._types import (
     LitellmUserRoles,
+    MCPToolCallRequest,
     UserAPIKeyAuth,
     user_api_key_has_admin_view,
 )
@@ -1218,6 +1219,7 @@ if MCP_AVAILABLE:
     @catalog_operation(global_manager)
     async def call_tool_rest_api(
         request: Request,
+        body: MCPToolCallRequest | None = None,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -1238,7 +1240,7 @@ if MCP_AVAILABLE:
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
-            data = await request.json()
+            data = body.model_dump() if body is not None else await request.json()
 
             tool_name: Final[str | None] = data.get("name")
             tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}

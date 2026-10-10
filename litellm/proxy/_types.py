@@ -1615,6 +1615,40 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         return values
 
 
+class MCPToolCallRequest(LiteLLMPydanticObjectBase):
+    """Request body for `POST /mcp-rest/tools/call`.
+
+    Fields stay optional here on purpose: the endpoint answers a missing
+    `server_id` or `name` with its 400 `missing_parameter` response rather
+    than a framework 422, and unknown fields pass through to the pre-call
+    pipeline, matching the previous untyped `request.json()` handling.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    server_id: str | None = Field(
+        default=None,
+        description="Required. The id of the MCP server that owns the tool to call.",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Required. The name of the tool to call.",
+    )
+    arguments: dict[str, object] = Field(
+        default_factory=dict,
+        description="Arguments to pass to the tool.",
+    )
+    metadata: dict[str, object] | None = Field(
+        default=None,
+        description="Optional request metadata, forwarded to logging and guardrails.",
+    )
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _coerce_null_arguments(cls, value: object) -> object:
+        return {} if value is None else value
+
+
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
     server_name: str | None = None
