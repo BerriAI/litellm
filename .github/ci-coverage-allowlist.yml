@@ -18,9 +18,8 @@ test_paths:
     paths:
       - tests/rust-python-harness
   - reason: >-
-      Live-provider caching cases in tests/local_testing that remain outside CI. Jobs that
-      glob that directory either deselect them (local_testing_part1 and part2 carry `-k "... and
-      not caching and not cache"`) or keep only another keyword (langfuse, router, assistants).
+      Live-provider caching cases in tests/local_testing that remain outside CI. No CircleCI job
+      globs that directory anymore, and the legacy jobs that did always deselected these files.
       The two Redis Cluster IAM authentication tests moved to tests/integration/sdk and remain
       selected by node ID in redis_compat, where redis-server is installed.
       The five keyless files now run in the caching-local shard, leaving live cases in these two.
