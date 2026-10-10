@@ -525,10 +525,16 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
+                            raw_tool_result_content: Final = self._tool_result_content(content.get("content"))
+                            tool_result_content: Final = (
+                                self._mark_tool_result_as_error(raw_tool_result_content)
+                                if content.get("is_error")
+                                else raw_tool_result_content
+                            )
                             tool_result = ChatCompletionToolMessage(
                                 role="tool",
                                 tool_call_id=content.get("tool_use_id", ""),
-                                content=self._tool_result_content(content.get("content")),
+                                content=tool_result_content,
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
@@ -1316,6 +1322,20 @@ class LiteLLMAnthropicMessagesAdapter:
                 return text
             case _:
                 return list(parts)
+
+    @staticmethod
+    def _mark_tool_result_as_error(content: ToolResultContent) -> ToolResultContent:
+        """Keep Anthropic's `is_error` signal visible.
+
+        Chat Completions tool messages have no error field, so encode the
+        flag into the content itself; models and downstream provider
+        mappings can then still tell the tool call failed.
+        """
+        if isinstance(content, str):
+            return "[tool error] " + content if content else "[tool error]"
+        if isinstance(content, list):
+            return [ChatCompletionTextObject(type="text", text="[tool error] "), *content]
+        return content
 
     def _tool_result_part(self, item: object) -> ToolMessageContentPart | None:
         if isinstance(item, str):

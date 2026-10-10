@@ -4620,6 +4620,106 @@ def test_tool_result_without_translatable_content_still_answers_its_tool_use(too
     assert result[0]["role"] == "assistant"
 
 
+def test_tool_result_is_error_is_encoded_in_string_content():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "deploy failed",
+                        "is_error": True,
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1] == {
+        "role": "tool",
+        "tool_call_id": "toolu_01",
+        "content": "[tool error] deploy failed",
+    }
+
+
+def test_tool_result_is_error_puts_the_marker_first_in_part_lists():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": [{"type": "text", "text": "boom"}, _tool_reference_block()],
+                        "is_error": True,
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "[tool error] "},
+        {"type": "text", "text": "boom"},
+        {"type": "tool_reference", "tool_name": "WebFetch"},
+    ]
+
+
+def test_tool_result_is_error_with_empty_content_keeps_the_marker():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "",
+                        "is_error": True,
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1]["content"] == "[tool error]"
+
+
+def test_tool_result_without_is_error_keeps_content_unchanged():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "deploy succeeded",
+                        "is_error": False,
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1]["content"] == "deploy succeeded"
+
+
 def _openai_response_with_usage(usage: Usage) -> ModelResponse:
     return ModelResponse(
         id="resp_web_search",
