@@ -4531,16 +4531,9 @@ class OrganizationAddMemberResponse(LiteLLMPydanticObjectBase):
     updated_organization_memberships: list[LiteLLM_OrganizationMembershipTable]
 
 
-class MemberDeleteRequest(LiteLLMPydanticObjectBase):
-    user_id: str | None = None
-    user_email: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
+from litellm.types.proxy.management_endpoints.team_endpoints import (  # noqa: E402  # re-export after the definitions above
+    MemberDeleteRequest as MemberDeleteRequest,  # noqa: PLC0414  # public re-export
+)
 
 
 class MemberUpdateResponse(LiteLLMPydanticObjectBase):
