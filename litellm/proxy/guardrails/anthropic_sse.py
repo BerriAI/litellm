@@ -11,12 +11,14 @@ import json
 from typing import Final
 
 from litellm.llms.anthropic.pass_through.stream_assembly import (
-    assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,
+    assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.pass_through.stream_assembly import (
-    is_anthropic_sse_stream as is_anthropic_sse_stream,
+    is_anthropic_sse_stream as is_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
-from litellm.llms.anthropic.pass_through.stream_assembly import is_raw_sse_stream as is_raw_sse_stream
+from litellm.llms.anthropic.pass_through.stream_assembly import (
+    is_raw_sse_stream as is_raw_sse_stream,  # noqa: PLC0414  # public re-export
+)
 from litellm.types.utils import Choices, ModelResponse
 
 
@@ -43,7 +45,9 @@ def anthropic_sse_error_frames(message: str) -> tuple[bytes, ...]:
     )
 
 
-from litellm.llms.anthropic.pass_through.stream_assembly import is_sse_error_stream as is_sse_error_stream  # noqa: E402
+from litellm.llms.anthropic.pass_through.stream_assembly import (  # noqa: E402  # re-export after the definitions above
+    is_sse_error_stream as is_sse_error_stream,  # noqa: PLC0414  # public re-export
+)
 
 
 def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes, ...]:
