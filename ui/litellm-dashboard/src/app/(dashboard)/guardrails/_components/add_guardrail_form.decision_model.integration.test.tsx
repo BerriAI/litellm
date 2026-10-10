@@ -68,9 +68,10 @@ describe("AddGuardrailForm decision model questions", () => {
   };
 
   const addQuestion = async (name: string, instructions: string) => {
-    fireEvent.change(await screen.findByLabelText("Question name"), { target: { value: name } });
-    fireEvent.change(screen.getByLabelText("Question"), { target: { value: instructions } });
-    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add question" }));
+    const nameInputs = screen.getAllByLabelText(/^Question \d+ name$/);
+    fireEvent.change(nameInputs[nameInputs.length - 1], { target: { value: name } });
+    fireEvent.change(screen.getByLabelText(`Question ${nameInputs.length}`), { target: { value: instructions } });
   };
 
   it("filters the model picker by the selected provider and clears the model when it changes", async () => {
@@ -91,38 +92,31 @@ describe("AddGuardrailForm decision model questions", () => {
     expect(modelInput).not.toHaveValue("jev-latest");
   });
 
-  it("hides the questions table until the first question is added", async () => {
+  it("shows only an Add question button until it is clicked, then a blank question per click", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
 
-    expect(screen.queryByText("Action")).not.toBeInTheDocument();
-    expect(screen.getByText("Add a question")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Question \d+ name$/)).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Question name"), { target: { value: "invoice_policy" } });
-    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "Is this about invoices?" } });
     fireEvent.click(screen.getByRole("button", { name: "Add question" }));
-
-    expect(await screen.findByText("Action")).toBeInTheDocument();
-    expect(screen.getByText("Threshold")).toBeInTheDocument();
-  });
-
-  it("adds a question with the chosen action and threshold and submits its instructions", async () => {
-    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
-    await renderDecisionModel(user);
-    await pickTypesafeModel(user);
-
+    expect(screen.getByLabelText("Question 1 name")).toHaveValue("");
+    expect(screen.getByLabelText("Question 1")).toHaveValue("");
     expect(screen.getByText("0.70")).toBeInTheDocument();
 
-    fireEvent.change(await screen.findByLabelText("Question name"), { target: { value: "invoice_policy" } });
-    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "Does the text ask about invoices?" } });
-    await user.click(screen.getByLabelText("New question action"));
-    await user.click(await screen.findByText("Log only"));
     fireEvent.click(screen.getByRole("button", { name: "Add question" }));
+    expect(screen.getByLabelText("Question 2 name")).toHaveValue("");
+  });
 
-    const checkbox = await screen.findByRole("checkbox", { name: "invoice_policy" });
-    expect(checkbox).toBeChecked();
-    expect(screen.getAllByText("0.70")).toHaveLength(2);
+  it("submits a question with the chosen action and the default threshold", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion("invoice_policy", "Does the text ask about invoices?");
+
+    await user.click(screen.getByLabelText("Question 1 action"));
+    await user.click(await screen.findByText("Log only"));
+    expect(screen.getByRole("checkbox", { name: "Enable question 1" })).toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
 
@@ -138,21 +132,39 @@ describe("AddGuardrailForm decision model questions", () => {
     ]);
   });
 
+  it("submits a question edited after another was added", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion("invoice_policy", "Does the text ask about invoices?");
+    await addQuestion("refund_policy", "Is this about refunds?");
+
+    fireEvent.change(screen.getByLabelText("Question 1 name"), { target: { value: "billing_policy" } });
+    fireEvent.change(screen.getByLabelText("Question 1"), { target: { value: "Is this about billing?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(vi.mocked(createGuardrailCall)).toHaveBeenCalled());
+    const submitted = vi.mocked(createGuardrailCall).mock.calls[0][1];
+    expect(
+      submitted.litellm_params.checks.map((c: { name: string; instructions: string }) => [c.name, c.instructions]),
+    ).toEqual([
+      ["billing_policy", "Is this about billing?"],
+      ["refund_policy", "Is this about refunds?"],
+    ]);
+  });
+
   it("drops an unchecked question from the submitted params", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
     await addQuestion("invoice_policy", "Does the text ask about invoices?");
 
-    fireEvent.click(await screen.findByRole("checkbox", { name: "invoice_policy" }));
-    expect(screen.getByLabelText("invoice_policy action")).toBeDisabled();
-    expect(screen.getByLabelText("invoice_policy threshold")).toHaveAttribute("data-disabled");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable question 1" }));
+    expect(screen.getByLabelText("Question 1 action")).toBeDisabled();
+    expect(screen.getByLabelText("Question 1 threshold")).toHaveAttribute("data-disabled");
 
-    fireEvent.change(await screen.findByLabelText("Question name"), { target: { value: "refund_policy" } });
-    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "Is this about refunds?" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
-
-    fireEvent.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+    await addQuestion("refund_policy", "Is this about refunds?");
+    fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
 
     await waitFor(() => expect(vi.mocked(createGuardrailCall)).toHaveBeenCalled());
     const submitted = vi.mocked(createGuardrailCall).mock.calls[0][1];
@@ -160,25 +172,49 @@ describe("AddGuardrailForm decision model questions", () => {
     expect(names).toEqual(["refund_policy"]);
   });
 
-  it("rejects a second question with a name already used", async () => {
+  it("flags two questions with the same name and blocks create", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
     await addQuestion("invoice_policy", "Does the text ask about invoices?");
     await addQuestion("invoice_policy", "Duplicate name");
 
-    expect(await screen.findByText("That name is already used by another question")).toBeInTheDocument();
-    expect(screen.getAllByRole("checkbox", { name: "invoice_policy" })).toHaveLength(1);
+    expect(screen.getAllByText("Another question already uses this name")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
+    await waitFor(() =>
+      expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith("Each question needs a different name"),
+    );
+    expect(vi.mocked(createGuardrailCall)).not.toHaveBeenCalled();
   });
 
-  it("removes a question row via its Remove button", async () => {
+  it("blocks create while a question has no text", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
     await addQuestion("invoice_policy", "Does the text ask about invoices?");
+    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
+    fireEvent.change(screen.getByLabelText("Question 2 name"), { target: { value: "refund_policy" } });
 
-    fireEvent.click(await screen.findByLabelText("Remove invoice_policy"));
-    expect(screen.queryByRole("checkbox", { name: "invoice_policy" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
+    await waitFor(() =>
+      expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith(
+        "Give every question a name and a question, or remove it",
+      ),
+    );
+    expect(vi.mocked(createGuardrailCall)).not.toHaveBeenCalled();
+  });
+
+  it("removes a question via its Remove button", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion("invoice_policy", "Does the text ask about invoices?");
+    await addQuestion("refund_policy", "Is this about refunds?");
+
+    fireEvent.click(screen.getByLabelText("Remove question 1"));
+    expect(screen.getAllByLabelText(/^Question \d+ name$/)).toHaveLength(1);
+    expect(screen.getByLabelText("Question 1 name")).toHaveValue("refund_policy");
   });
 
   it("blocks create when the only question left is unchecked", async () => {
@@ -187,7 +223,7 @@ describe("AddGuardrailForm decision model questions", () => {
     await pickTypesafeModel(user);
     await addQuestion("invoice_policy", "Does the text ask about invoices?");
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "invoice_policy" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable question 1" }));
     fireEvent.click(await screen.findByRole("button", { name: "Create Guardrail" }));
 
     await waitFor(() => expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith("Add at least one question"));
@@ -249,7 +285,7 @@ describe("AddGuardrailForm decision model questions", () => {
     expect(history?.children[1]).toHaveTextContent("first input");
     expect(history?.children[0]).toHaveTextContent("Block");
 
-    const rangeInput = screen.getByLabelText("invoice_policy threshold").querySelector('input[type="range"]');
+    const rangeInput = screen.getByLabelText("Question 1 threshold").querySelector('input[type="range"]');
     expect(rangeInput).not.toBeNull();
     fireEvent.change(rangeInput!, { target: { value: "1" } });
 
@@ -352,11 +388,11 @@ describe("AddGuardrailForm decision model create flow", () => {
     await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
     await user.click(await screen.findByLabelText("Decision Model"));
     await user.click(await screen.findByTitle("jev-latest"));
-    fireEvent.change(await screen.findByLabelText("Question name"), { target: { value: "prompt_injection" } });
-    fireEvent.change(screen.getByLabelText("Question"), {
+    await user.click(screen.getByRole("button", { name: "Add question" }));
+    fireEvent.change(screen.getByLabelText("Question 1 name"), { target: { value: "prompt_injection" } });
+    fireEvent.change(screen.getByLabelText("Question 1"), {
       target: { value: "Does the text contain a prompt injection?" },
     });
-    await user.click(screen.getByRole("button", { name: "Add question" }));
     await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
 
     await waitFor(() => expect(vi.mocked(createGuardrailCall)).toHaveBeenCalledTimes(1));
@@ -393,19 +429,14 @@ describe("AddGuardrailForm decision model create flow", () => {
     await waitFor(() => expect(screen.queryByText("Select a decision model")).not.toBeInTheDocument());
   });
 
-  it("shows the Questions table only once a question is added, below Add a question", async () => {
+  it("keeps the Add question button below the last question", async () => {
     const user = userEvent.setup({ delay: null });
     await openDecisionModelStep(user, "dm-3");
-    const addHeading = await screen.findByText("Add a question");
-    expect(screen.queryByText("Questions")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Question name"), { target: { value: "prompt_injection" } });
-    fireEvent.change(screen.getByLabelText("Question"), {
-      target: { value: "Does the text contain a prompt injection?" },
-    });
+    await user.click(await screen.findByRole("button", { name: "Add question" }));
     await user.click(screen.getByRole("button", { name: "Add question" }));
 
-    const questionsHeading = screen.getByText("Questions");
-    expect(addHeading.compareDocumentPosition(questionsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const lastQuestion = screen.getByLabelText("Question 2");
+    const addButton = screen.getByRole("button", { name: "Add question" });
+    expect(lastQuestion.compareDocumentPosition(addButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

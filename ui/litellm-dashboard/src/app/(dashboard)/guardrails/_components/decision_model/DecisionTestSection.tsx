@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
 import { FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,7 @@ import { decisionsTestCall } from "@/components/networking";
 import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
 import {
   buildDecisionTestBody,
+  DECISION_TEST_CHIP_TONE,
   decisionTestChip,
   decisionTestOverall,
   enabledDecisionQuestions,
@@ -119,9 +120,10 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
                       {run.input}
                     </p>
                     {visible.length > 0 && (
-                      <Badge variant={decisionTestOverall(visible) === "block" ? "destructive" : "secondary"}>
-                        {decisionTestOverall(visible) === "block" ? "Block" : "Pass"}
-                      </Badge>
+                      <StatusBadge
+                        tone={DECISION_TEST_CHIP_TONE[decisionTestOverall(visible)]}
+                        label={decisionTestOverall(visible) === "block" ? "Block" : "Pass"}
+                      />
                     )}
                   </div>
                   {"error" in run && <p className="m-0 mt-1.5 text-xs text-destructive">{run.error}</p>}
@@ -140,17 +142,11 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
                         else if (chip === "logged") label = "Pass · logged";
                         else if (chip === "pass") label = "Pass";
                         return (
-                          <span
+                          <StatusBadge
                             key={check.name}
-                            className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
-                              chip === "block"
-                                ? "border-destructive font-semibold text-destructive"
-                                : "border-border text-muted-foreground"
-                            }`}
-                          >
-                            {check.name} {score}
-                            {label && ` ${label}`}
-                          </span>
+                            tone={DECISION_TEST_CHIP_TONE[chip]}
+                            label={label ? `${check.name} ${score} ${label}` : `${check.name} ${score}`}
+                          />
                         );
                       })}
                     </div>

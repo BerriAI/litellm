@@ -1,4 +1,5 @@
 export interface DecisionModelCheckDraft {
+  id: string;
   name: string;
   instructions: string;
   action: "block" | "log";
@@ -17,7 +18,26 @@ export interface DecisionModelLitellmParams {
 }
 
 export function enabledDecisionChecks(checks: readonly DecisionModelCheckDraft[]): readonly DecisionModelCheckDraft[] {
-  return checks.filter((check) => check.enabled !== false);
+  return checks
+    .filter((check) => check.enabled !== false)
+    .map((check) => ({ ...check, name: check.name.trim(), instructions: check.instructions.trim() }));
+}
+
+export function duplicateDecisionCheckNames(checks: readonly DecisionModelCheckDraft[]): ReadonlySet<string> {
+  const names = enabledDecisionChecks(checks)
+    .map((check) => check.name)
+    .filter(Boolean);
+  return new Set(names.filter((name, index) => names.indexOf(name) !== index));
+}
+
+export function decisionChecksProblem(checks: readonly DecisionModelCheckDraft[]): string | null {
+  const enabled = enabledDecisionChecks(checks);
+  if (enabled.length === 0) return "Add at least one question";
+  if (enabled.some((check) => !check.name || !check.instructions)) {
+    return "Give every question a name and a question, or remove it";
+  }
+  if (duplicateDecisionCheckNames(checks).size > 0) return "Each question needs a different name";
+  return null;
 }
 
 const clampThreshold = (value: number): number => Math.min(1, Math.max(0, value));

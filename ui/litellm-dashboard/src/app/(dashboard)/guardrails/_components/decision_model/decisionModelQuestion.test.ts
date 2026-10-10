@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
 import {
   buildDecisionTestBody,
+  DECISION_TEST_CHIP_TONE,
   DECISION_TEST_HISTORY_CAP,
   decisionModelsForProvider,
   decisionProvidersForGroups,
   decisionTestChip,
   decisionTestOverall,
+  newDecisionCheckDraft,
   parseDecisionModelGroups,
   parseDecisionTestResponse,
   prependTestRun,
@@ -24,6 +26,7 @@ const groups = [
 ];
 
 const draft = (overrides: Partial<DecisionModelCheckDraft>): DecisionModelCheckDraft => ({
+  id: "1",
   name: "invoice_policy",
   instructions: "Is this about invoices?",
   action: "block",
@@ -106,6 +109,36 @@ describe("buildDecisionTestBody", () => {
       ],
     });
   });
+
+  it("skips a question still missing its name or text, and trims the rest", () => {
+    const body = buildDecisionTestBody("jev-latest", "hello", [
+      draft({ name: " invoice_policy ", instructions: " Is this about invoices? " }),
+      draft({ name: "", instructions: "No name yet" }),
+      draft({ name: "refund_policy", instructions: "  " }),
+    ]);
+
+    expect(body.questions).toEqual([
+      { type: "predicate", name: "invoice_policy", instructions: "Is this about invoices?" },
+    ]);
+  });
+});
+
+describe("newDecisionCheckDraft", () => {
+  it("starts a blank enabled Block question at the default threshold", () => {
+    const blank: DecisionModelCheckDraft = {
+      id: "1",
+      name: "",
+      instructions: "",
+      action: "block",
+      threshold: 0.7,
+      enabled: true,
+    };
+    expect(newDecisionCheckDraft([])).toEqual(blank);
+  });
+
+  it("gives each new question an id no existing question uses", () => {
+    expect(newDecisionCheckDraft([draft({ id: "3" }), draft({ id: "1" })]).id).toBe("4");
+  });
 });
 
 describe("parseDecisionTestResponse", () => {
@@ -142,6 +175,15 @@ describe("decisionTestChip", () => {
     expect(decisionTestChip({ kind: "missing" }, draft({ action: "block" }))).toBe("block");
     expect(decisionTestChip({ kind: "refused" }, draft({ action: "log" }))).toBe("no_answer");
     expect(decisionTestChip({ kind: "missing" }, draft({ action: "log" }))).toBe("no_answer");
+  });
+});
+
+describe("DECISION_TEST_CHIP_TONE", () => {
+  it("shows Pass in the success tone and Block in the error tone", () => {
+    expect(DECISION_TEST_CHIP_TONE.pass).toBe("success");
+    expect(DECISION_TEST_CHIP_TONE.block).toBe("error");
+    expect(DECISION_TEST_CHIP_TONE.logged).toBe("warning");
+    expect(DECISION_TEST_CHIP_TONE.no_answer).toBe("neutral");
   });
 });
 

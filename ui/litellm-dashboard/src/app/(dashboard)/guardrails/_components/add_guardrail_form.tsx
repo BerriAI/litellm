@@ -71,7 +71,7 @@ import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import DecisionModelFields from "./decision_model/DecisionModelFields";
 import {
   buildDecisionModelParams,
-  enabledDecisionChecks,
+  decisionChecksProblem,
   type DecisionModelCheckDraft,
 } from "./decision_model/buildDecisionModelParams";
 import {
@@ -456,8 +456,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (!(await form.trigger(["decision_model"]))) {
           return;
         }
-        if (enabledDecisionChecks(decisionChecks).length === 0) {
-          toast.fromError("Add at least one question");
+        const questionsProblem = decisionChecksProblem(decisionChecks);
+        if (questionsProblem) {
+          toast.fromError(questionsProblem);
           return;
         }
       }
@@ -674,8 +675,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       }
 
       if (guardrailProvider === "decision_model") {
-        if (enabledDecisionChecks(decisionChecks).length === 0) {
-          toast.fromError("Add at least one question");
+        const questionsProblem = decisionChecksProblem(decisionChecks);
+        if (questionsProblem) {
+          toast.fromError(questionsProblem);
           setLoading(false);
           return;
         }

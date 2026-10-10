@@ -1,3 +1,4 @@
+import type { StatusTone } from "@/components/shared/table_cells";
 import { isDecisionMode } from "@/lib/decisionModels";
 
 import { enabledDecisionChecks, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
@@ -49,7 +50,7 @@ export interface DecisionTestBody {
 }
 
 export function enabledDecisionQuestions(checks: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft[] {
-  return checks.filter((check) => check.enabled !== false && check.instructions.trim().length > 0);
+  return enabledDecisionChecks(checks).filter((check) => check.name && check.instructions);
 }
 
 export function buildDecisionTestBody(
@@ -113,6 +114,13 @@ export function parseDecisionTestResponse(body: unknown, questionNames: readonly
 
 export type DecisionTestChip = "block" | "pass" | "logged" | "no_answer";
 
+export const DECISION_TEST_CHIP_TONE: Readonly<Record<DecisionTestChip, StatusTone>> = {
+  block: "error",
+  pass: "success",
+  logged: "warning",
+  no_answer: "neutral",
+};
+
 export function decisionTestChip(result: DecisionTestResult, check: DecisionModelCheckDraft): DecisionTestChip {
   if (result.kind !== "probability") return check.action === "block" ? "block" : "no_answer";
   if (result.probability >= check.threshold) return check.action === "block" ? "block" : "logged";
@@ -146,6 +154,18 @@ export function runTestShortcutLabel(platform?: string): string {
 }
 
 export const DEFAULT_DECISION_THRESHOLD = 0.7;
+
+export function newDecisionCheckDraft(existing: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft {
+  const lastId = Math.max(0, ...existing.map((check) => Number(check.id) || 0));
+  return {
+    id: String(lastId + 1),
+    name: "",
+    instructions: "",
+    action: "block",
+    threshold: DEFAULT_DECISION_THRESHOLD,
+    enabled: true,
+  };
+}
 
 export const DECISION_TEST_HISTORY_CAP = 20;
 
