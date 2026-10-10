@@ -88,10 +88,12 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
+    model_access_group_registry_cache_key,
     object_permission_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
@@ -7876,6 +7878,79 @@ async def test_get_end_user_object_caches_empty_restricted_registry(end_user_reg
     )
     mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auth_registries_survive_management_cache_churn():
+    from litellm.proxy.auth.auth_checks import _cache_registry_answer, _cached_registry, _RegistryNotCached
+
+    registry_cases = (
+        (end_user_restricted_registry_cache_key(), (), END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL),
+        (tag_registry_cache_key(), ("tag-a",), TAG_REGISTRY_OVERFLOW_SENTINEL),
+        (
+            model_access_group_registry_cache_key(),
+            MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+            MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+        ),
+    )
+    cache = UserApiKeyCache(
+        in_memory_cache=InMemoryCache(max_size_in_memory=3, clock=lambda: 0.0),
+        key_object_in_memory_cache=InMemoryCache(max_size_in_memory=3, clock=lambda: 0.0),
+        default_in_memory_ttl=60,
+    )
+    for key, value, _ in registry_cases:
+        await _cache_registry_answer(key, value, 60, cache)
+
+    registry_memory = cache.auth_registry_cache.in_memory_cache
+    original_ttls = {key: registry_memory.ttl_dict[key] for key, _, _ in registry_cases}
+    await _cache_registry_answer(registry_cases[-1][0], registry_cases[-1][1], 60, cache)
+    assert len(registry_memory.cache_dict) <= 3
+    for key, value, sentinel in registry_cases[:-1]:
+        expected = None if value == sentinel else frozenset(value)
+        assert await _cached_registry(key, sentinel, cache) == expected
+        assert registry_memory.ttl_dict[key] == original_ttls[key]
+
+    for index in range(4):
+        await cache.async_set_cache(key=f"{index + 1:064x}", value={"key_alias": str(index)}, ttl=60)
+    for key, _, sentinel in registry_cases:
+        assert not isinstance(await _cached_registry(key, sentinel, cache), _RegistryNotCached)
+
+    for index in range(4):
+        await cache.async_set_cache(key=f"team_id:team-{index}", value={"team_id": f"team-{index}"}, ttl=60)
+    for key, _, sentinel in registry_cases:
+        assert not isinstance(await _cached_registry(key, sentinel, cache), _RegistryNotCached)
+
+    for key, _, _ in registry_cases:
+        await cache.async_delete_cache(key)
+        assert isinstance(await _cached_registry(key, "unused-overflow-sentinel", cache), _RegistryNotCached)
+    for key, value, _ in registry_cases:
+        await _cache_registry_answer(key, value, 60, cache)
+    cache.flush_cache()
+    for key, _, sentinel in registry_cases:
+        assert isinstance(await _cached_registry(key, sentinel, cache), _RegistryNotCached)
+
+    key = tag_registry_cache_key()
+    cache.set_cache(key, ("sync-tag",), local_only=True, ttl=60)
+    assert registry_memory.get_cache(key) == ("sync-tag",)
+    cache.delete_cache(key)
+    assert registry_memory.get_cache(key) is None
+
+    await cache.async_set_cache_pipeline(((key, ("pipeline-tag",)),), local_only=True, ttl=60)
+    assert registry_memory.get_cache(key) == ("pipeline-tag",)
+    assert await cache.async_delete_cache_pre_call(key) is None
+    assert registry_memory.get_cache(key) == ("pipeline-tag",)
+
+    with (
+        patch.object(
+            cache.auth_registry_cache,
+            "async_set_cache_pre_call",
+            new=AsyncMock(return_value=object()),
+        ) as set_pre_call,
+        patch.object(cache.auth_registry_cache, "async_set_cache", new=AsyncMock()) as direct_set,
+    ):
+        assert await cache.async_set_cache(key, ("queued-tag",), ttl=60) is None
+    set_pre_call.assert_awaited_once_with(key, ("queued-tag",), 60)
+    direct_set.assert_not_awaited()
 
 
 @pytest.mark.asyncio
