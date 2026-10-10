@@ -1315,8 +1315,7 @@ const dailyActivityQuery = (
     end_date: formatDate(req.endTime),
     model: req.model,
     api_key: req.apiKey,
-    team_ids:
-      entity === "tag" && req.teamIds && req.teamIds.length > 0 ? req.teamIds.join(",") : undefined,
+    team_ids: entity === "tag" && req.teamIds && req.teamIds.length > 0 ? req.teamIds.join(",") : undefined,
     tags: entity === "team" && req.tags && req.tags.length > 0 ? req.tags.join(",") : undefined,
     group_by: req.groupBy ?? undefined,
     [ENTITY_ID_QUERY_PARAM[entity]]: entityIdValue,
@@ -5292,11 +5291,12 @@ export const tagListCall = async (
     if (!response.ok) {
       const errorData = await response.text();
       await handleError(errorData);
-      return {};
+      return [];
     }
 
-    const data = await response.json();
-    return data as TagListResponse;
+    const data: unknown = await response.json();
+    // Callers .map() the list directly, so never hand them anything but an array.
+    return Array.isArray(data) ? (data as TagListResponse) : [];
   } catch (error) {
     console.error("Error listing tags:", error);
     throw error;

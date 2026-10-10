@@ -23,7 +23,7 @@ vi.mock("../networking", async () => {
     getGuardrailsList: vi.fn().mockResolvedValue({
       guardrails: [{ guardrail_name: "test-guardrail-1" }, { guardrail_name: "test-guardrail-2" }],
     }),
-    tagListCall: vi.fn().mockResolvedValue({}),
+    tagListCall: vi.fn().mockResolvedValue([]),
     modelAvailableCall: vi.fn().mockResolvedValue({
       data: [{ id: "model-group-1" }, { id: "model-group-2" }],
     }),
@@ -101,7 +101,7 @@ vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrails", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
   useTags: vi.fn().mockReturnValue({
-    data: { tag1: ["model1", "model2"] },
+    data: [{ name: "tag1", models: ["model1", "model2"] }],
     isLoading: false,
     error: null,
   }),

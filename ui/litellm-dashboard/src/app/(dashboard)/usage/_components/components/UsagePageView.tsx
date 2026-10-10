@@ -32,7 +32,6 @@ import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter"
 import { Team } from "@/components/key_team_helpers/key_list";
 import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import { useAggregatedDailyActivity } from "../hooks/useAggregatedDailyActivity";
 import { ENTITY_API } from "./EntityUsage/entityFetchFns";
@@ -142,7 +141,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         if (cancelled) return;
         setFetchedTags({
           rangeKey: currentTagRangeKey,
-          value: Object.values(tags).map((tag: Tag) => ({
+          value: tags.map((tag) => ({
             label: tag.name,
             value: tag.name,
           })),

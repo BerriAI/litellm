@@ -30,10 +30,10 @@ vi.mock("../networking", async () => {
     modelAvailableCall: vi.fn().mockResolvedValue({
       data: [{ id: "gpt-4" }, { id: "gpt-3.5-turbo" }],
     }),
-    tagListCall: vi.fn().mockResolvedValue({
-      tag1: { name: "tag1", description: "Test tag 1" },
-      tag2: { name: "tag2", description: "Test tag 2" },
-    }),
+    tagListCall: vi.fn().mockResolvedValue([
+      { name: "tag1", description: "Test tag 1" },
+      { name: "tag2", description: "Test tag 2" },
+    ]),
     getGuardrailsList: vi.fn().mockResolvedValue({
       guardrails: [{ guardrail_name: "guardrail-1" }],
     }),

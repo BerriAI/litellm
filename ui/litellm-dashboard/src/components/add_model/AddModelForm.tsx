@@ -440,7 +440,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                         setShowAdvancedSettings={setShowAdvancedSettings}
                         teams={teams}
                         guardrailsList={guardrailsList || []}
-                        tagsList={tagsList || {}}
+                        tagsList={tagsList ?? []}
                         accessToken={accessToken || ""}
                       />
                     </>

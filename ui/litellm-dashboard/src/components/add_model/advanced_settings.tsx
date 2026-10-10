@@ -19,7 +19,7 @@ import CacheControlInjectionPoints, {
   NEW_CACHE_CONTROL_POINT,
 } from "./cache_control_settings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import { Tag } from "../tag_management/types";
+import type { TagListResponse } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
 import {
   PTU_COUNT_FIELD,
@@ -40,7 +40,7 @@ interface AdvancedSettingsProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams?: Team[] | null;
   guardrailsList: string[];
-  tagsList: Record<string, Tag>;
+  tagsList: TagListResponse;
   accessToken: string;
 }
 
@@ -188,7 +188,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   emptyText="Type to add a tag"
                   value={(control.value as string[] | undefined) ?? []}
                   onValueChange={control.onChange}
-                  options={Object.values(tagsList).map((tag) => ({
+                  options={tagsList.map((tag) => ({
                     value: tag.name,
                     label: tag.name,
                     description: tag.description || undefined,

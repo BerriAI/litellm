@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "@/components/networking";
-import { Tag } from "@/components/tag_management/types";
+import { Tag, toTag } from "@/components/tag_management/types";
 import TagTable from "./TagTable";
 import { toast } from "@/lib/toast";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -45,7 +45,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     }
     try {
       const response = await tagListCall(accessToken);
-      setTags(Object.values(response));
+      setTags(response.map(toTag));
     } catch (error) {
       console.error("Error fetching tags:", error);
       toast.fromError("Error fetching tags: " + error);

@@ -154,22 +154,22 @@ describe("ModelInfoView", () => {
       guardrails: [{ guardrail_name: "content_filter" }, { guardrail_name: "toxicity_filter" }],
     });
 
-    mockTagListCall.mockResolvedValue({
-      test_tag: {
+    mockTagListCall.mockResolvedValue([
+      {
         name: "test_tag",
         description: "A test tag",
         models: [],
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
       },
-      production_tag: {
+      {
         name: "production_tag",
         description: "Production ready models",
         models: [],
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
       },
-    });
+    ]);
 
     mockTestConnectionRequest.mockResolvedValue({
       status: "success",

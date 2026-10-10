@@ -18,7 +18,7 @@ const renderAdvancedSettings = () =>
         showAdvancedSettings={true}
         setShowAdvancedSettings={() => {}}
         guardrailsList={[]}
-        tagsList={{}}
+        tagsList={[]}
         accessToken="test-token"
       />
     </MountedFormHost>,

@@ -72,7 +72,7 @@ import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
 import { MultiSelect } from "../shared/MultiSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Tag } from "../tag_management/types";
+import type { TagListResponse } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -107,7 +107,7 @@ export function KeyEditView({
     defaultValues: toKeyEditFormValues(keyData),
   });
   const [promptsList, setPromptsList] = useState<string[]>([]);
-  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const [tagsList, setTagsList] = useState<TagListResponse>([]);
   const team = teams?.find((team) => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
@@ -661,7 +661,7 @@ export function KeyEditView({
                 id={id}
                 value={(value as string[] | undefined) ?? []}
                 onValueChange={onChange}
-                options={Object.values(tagsList).map((tag) => ({ value: tag.name, label: tag.name }))}
+                options={tagsList.map((tag) => ({ value: tag.name, label: tag.name }))}
                 placeholder="Select or enter tags"
               />
             )}

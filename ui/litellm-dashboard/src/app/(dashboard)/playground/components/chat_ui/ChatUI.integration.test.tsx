@@ -20,7 +20,7 @@ vi.mock("../../llm_calls/anthropic_messages", () => ({
 }));
 
 vi.mock("@/components/networking", () => ({
-  tagListCall: vi.fn().mockResolvedValue({}),
+  tagListCall: vi.fn().mockResolvedValue([]),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ data: [] }),

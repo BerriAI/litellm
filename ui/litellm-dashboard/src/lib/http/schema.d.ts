@@ -16362,6 +16362,8 @@ export interface paths {
          *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
          *         exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
          *         group_by (Optional[Literal["tag", "team"]]): Entity the breakdown buckets key on. "team" buckets by team_id.
+         *         include_user_agent_tags (bool): Team-scoped reads omit the automatic "User-Agent: ..." tags unless
+         *             this is true or tags are given explicitly.
          *
          *     Returns:
          *         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
@@ -16908,6 +16910,8 @@ export interface paths {
          *             daily tag spend table restricted to the permitted teams.
          *         exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
          *         group_by (Optional[Literal["team", "tag"]]): Entity the breakdown buckets key on. "tag" buckets by tag.
+         *         include_user_agent_tags (bool): Tag-table reads omit the automatic "User-Agent: ..." tags unless
+         *             this is true or tags are given explicitly.
          *     Returns:
          *         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
          */
@@ -46744,6 +46748,29 @@ export interface components {
             /** Names */
             names: string[];
         };
+        /**
+         * TagListItem
+         * @description One entry of the GET /tag/list response: a stored tag, or a dynamic tag seen only in spend.
+         */
+        TagListItem: {
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Description */
+            description?: string | null;
+            litellm_budget_table?: components["schemas"]["BudgetNewRequest"] | null;
+            /** Model Info */
+            model_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            /** Name */
+            name: string;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** TagNewRequest */
         TagNewRequest: {
             /** Budget Duration */
@@ -73473,6 +73500,7 @@ export interface operations {
                 exclude_team_ids?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73514,6 +73542,7 @@ export interface operations {
                 exclude_team_ids?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73556,6 +73585,7 @@ export interface operations {
                 exclude_team_ids?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73599,6 +73629,7 @@ export interface operations {
                 exclude_team_ids?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73641,6 +73672,7 @@ export interface operations {
                 exclude_team_ids?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73683,6 +73715,7 @@ export interface operations {
                 exclude_team_ids?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73842,6 +73875,8 @@ export interface operations {
                 team_ids?: string | null;
                 /** @description When true, only tag names with usage rows in the daily tag spend table are returned. Stored tags without usage are omitted. */
                 usage_only?: boolean;
+                /** @description Only applies with team_ids. Team-scoped lists omit the automatic 'User-Agent: ...' tags unless this is true. */
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -73855,7 +73890,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TagListItem"][];
                 };
             };
             /** @description Validation Error */
@@ -74190,6 +74225,7 @@ export interface operations {
                 tags?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -74231,6 +74267,7 @@ export interface operations {
                 tags?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -74273,6 +74310,7 @@ export interface operations {
                 tags?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -74316,6 +74354,7 @@ export interface operations {
                 tags?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -74358,6 +74397,7 @@ export interface operations {
                 tags?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;
@@ -74400,6 +74440,7 @@ export interface operations {
                 tags?: string | null;
                 exclude_tags?: string | null;
                 group_by?: ("team" | "tag") | null;
+                include_user_agent_tags?: boolean;
             };
             header?: never;
             path?: never;

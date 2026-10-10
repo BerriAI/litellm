@@ -29,7 +29,7 @@ import CacheControlInjectionPoints, {
 import type { Team } from "./key_team_helpers/key_list";
 import type { CredentialItem } from "./networking";
 import NumericalInput from "./shared/numerical_input";
-import type { Tag } from "./tag_management/types";
+import type { TagListResponse } from "./tag_management/types";
 import { ModelTeamSelect } from "./view_model/ModelTeamSelect";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
@@ -290,7 +290,7 @@ interface ModelInfoEditFormProps {
   onSubmit: (values: ModelEditFormValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
   modelAccessGroups: string[] | null;
   guardrailsList: string[];
-  tagsList: Record<string, Tag>;
+  tagsList: TagListResponse;
   credentialsList: CredentialItem[];
   healthCheckModelOptions: { value: string; label: string }[];
   teams: Team[] | null;
@@ -625,7 +625,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               {isEditing ? (
                 tagsField(
                   "tags",
-                  Object.values(tagsList).map((tag: Tag) => ({ value: tag.name, label: tag.name })),
+                  tagsList.map((tag) => ({ value: tag.name, label: tag.name })),
                   "Select existing tags or type to create new ones",
                 )
               ) : (

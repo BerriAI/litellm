@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { tagDeleteCall, tagListCall } from "@/components/networking";
+import type { TagListResponse } from "@/components/tag_management/types";
 
 import TagManagement from "./index";
 
@@ -50,7 +51,7 @@ describe("TagManagement loading state", () => {
   });
 
   it("should show the loading state until the tag fetch settles", async () => {
-    let resolveFetch: (value: Record<string, never>) => void = () => {};
+    let resolveFetch: (value: TagListResponse) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveFetch = resolve;
@@ -59,7 +60,7 @@ describe("TagManagement loading state", () => {
     render(<TagManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
     expect(screen.getByText("table-loading")).toBeInTheDocument();
 
-    resolveFetch({});
+    resolveFetch([]);
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
     expect(mockTagListCall).toHaveBeenCalledWith("sk-test");
   });
@@ -68,7 +69,7 @@ describe("TagManagement loading state", () => {
 describe("TagManagement delete flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockTagListCall.mockResolvedValue({});
+    mockTagListCall.mockResolvedValue([]);
   });
 
   it("should confirm deletion through the shared DeleteResourceModal and call tagDeleteCall with the tag name", async () => {

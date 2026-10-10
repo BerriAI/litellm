@@ -46,7 +46,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
-import { Tag } from "./tag_management/types";
+import type { TagListResponse } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -87,7 +87,7 @@ export default function ModelInfoView({
   const [autoRouterTestId, setAutoRouterTestId] = useState(0);
   const [autoRouterTestTargets, setAutoRouterTestTargets] = useState<AutoRouterTestTarget[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const [tagsList, setTagsList] = useState<TagListResponse>([]);
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook

@@ -18,8 +18,8 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 // Mock data
-const mockTags: TagListResponse = {
-  "tag-1": {
+const mockTags: TagListResponse = [
+  {
     name: "tag-1",
     description: "Test tag 1 description",
     models: ["gpt-3.5-turbo", "gpt-4"],
@@ -27,7 +27,6 @@ const mockTags: TagListResponse = {
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
     created_by: "user-1",
-    updated_by: "user-1",
     litellm_budget_table: {
       max_budget: 1000,
       soft_budget: 800,
@@ -35,10 +34,10 @@ const mockTags: TagListResponse = {
       rpm_limit: 1000,
       max_parallel_requests: 10,
       budget_duration: "monthly",
-      model_max_budget: { "gpt-3.5-turbo": 500, "gpt-4": 500 },
+      model_max_budget: { "gpt-3.5-turbo": { max_budget: 500 }, "gpt-4": { max_budget: 500 } },
     },
   },
-  "tag-2": {
+  {
     name: "tag-2",
     description: "Test tag 2 description",
     models: ["claude-3"],
@@ -46,7 +45,6 @@ const mockTags: TagListResponse = {
     created_at: "2024-01-02T00:00:00Z",
     updated_at: "2024-01-02T00:00:00Z",
     created_by: "user-2",
-    updated_by: "user-2",
     litellm_budget_table: {
       max_budget: 2000,
       soft_budget: 1500,
@@ -54,10 +52,10 @@ const mockTags: TagListResponse = {
       rpm_limit: 2000,
       max_parallel_requests: 20,
       budget_duration: "monthly",
-      model_max_budget: { "claude-3": 2000 },
+      model_max_budget: { "claude-3": { max_budget: 2000 } },
     },
   },
-};
+];
 
 describe("useTags", () => {
   let queryClient: QueryClient;
@@ -248,9 +246,8 @@ describe("useTags", () => {
     expect(tagListCall).toHaveBeenCalledTimes(1);
   });
 
-  it("should return empty object when API returns empty data", async () => {
-    // Mock API returning empty object
-    (tagListCall as any).mockResolvedValue({});
+  it("should return an empty list when API returns no tags", async () => {
+    (tagListCall as any).mockResolvedValue([]);
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
@@ -260,7 +257,7 @@ describe("useTags", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual({});
+    expect(result.current.data).toEqual([]);
     expect(tagListCall).toHaveBeenCalledWith("test-access-token");
   });
 

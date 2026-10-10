@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.management_endpoints.common_daily_activity import (
     ScopeDenied,
     SpendAnalyticsPaginatedResponse,
+    _is_user_agent_tag,  # pyright: ignore[reportPrivateUsage]  # shared User-Agent tag classifier
     get_daily_activity_for_scope,
     raise_public,
 )
@@ -46,6 +47,7 @@ from litellm.types.tag_management import (
     TagConfig,
     TagDeleteRequest,
     TagInfoRequest,
+    TagListItem,
     TagNewRequest,
     TagUpdateRequest,
 )
@@ -614,6 +616,7 @@ async def _tag_list_team_scope(
     "/tag/list",
     tags=["tag management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=list[TagListItem],
 )
 async def list_tags(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -642,6 +645,13 @@ async def list_tags(
         description=(
             "When true, only tag names with usage rows in the daily tag spend "
             "table are returned. Stored tags without usage are omitted."
+        ),
+    ),
+    include_user_agent_tags: bool = Query(
+        False,
+        description=(
+            "Only applies with team_ids. Team-scoped lists omit the automatic "
+            "'User-Agent: ...' tags unless this is true."
         ),
     ),
 ):
@@ -696,6 +706,8 @@ async def list_tags(
                     end_date=end_date,
                 )
             ]
+            if not include_user_agent_tags:
+                dynamic_tag_rows = [row for row in dynamic_tag_rows if not _is_user_agent_tag(str(row["tag"]))]
             used_tag_names = [str(row["tag"]) for row in dynamic_tag_rows if row["tag"]]
         else:
             # Use group_by instead of find_many(distinct=["tag"]).
@@ -829,6 +841,7 @@ async def get_tag_daily_activity(
     exclude_team_ids: str | None = None,
     exclude_tags: str | None = None,
     group_by: Literal["tag", "team"] | None = None,
+    include_user_agent_tags: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -846,6 +859,8 @@ async def get_tag_daily_activity(
         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
         exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
         group_by (Optional[Literal["tag", "team"]]): Entity the breakdown buckets key on. "team" buckets by team_id.
+        include_user_agent_tags (bool): Team-scoped reads omit the automatic "User-Agent: ..." tags unless
+            this is true or tags are given explicitly.
 
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
@@ -866,6 +881,7 @@ async def get_tag_daily_activity(
         exclude_team_ids=exclude_team_ids,
         exclude_tags=exclude_tags,
         group_by=group_by,
+        include_user_agent_tags=include_user_agent_tags,
     )
     resolved: Final = await TAG_RESOLVER.resolve(user_api_key_dict, query, prisma_client)
     if isinstance(resolved, ScopeDenied):

@@ -137,10 +137,7 @@ describe("dailyActivityAggregatedCall", () => {
   it("emits team_ids and group_by for tag", async () => {
     const mockFetch = captureFetch();
 
-    await dailyActivityAggregatedCall(
-      "tag",
-      req({ entityIds: ["shared"], teamIds: ["t1", "t2"], groupBy: "team" }),
-    );
+    await dailyActivityAggregatedCall("tag", req({ entityIds: ["shared"], teamIds: ["t1", "t2"], groupBy: "team" }));
 
     const url = requestedUrl(mockFetch);
     expect(url.searchParams.get("team_ids")).toBe("t1,t2");
@@ -287,6 +284,26 @@ describe("cacheLeakageKeysCall", () => {
 });
 
 describe("tagListCall", () => {
+  const respondWith = (body: unknown) => {
+    global.fetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+  };
+
+  it("returns the /tag/list array as-is", async () => {
+    respondWith([{ name: "cc-shared" }, { name: "Café ☕" }]);
+
+    expect(await tagListCall("sk-key")).toEqual([{ name: "cc-shared" }, { name: "Café ☕" }]);
+  });
+
+  it("returns an empty list rather than a non-array body, so callers can always .map()", async () => {
+    respondWith({ "cc-shared": { name: "cc-shared" } });
+
+    expect(await tagListCall("sk-key")).toEqual([]);
+  });
+
   it("GETs /tag/list with no params when nothing is given", async () => {
     const mockFetch = captureFetch();
 

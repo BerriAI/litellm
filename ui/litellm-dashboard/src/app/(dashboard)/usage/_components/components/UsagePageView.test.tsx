@@ -13,6 +13,7 @@ import type { Organization } from "@/components/networking";
 import type { ModelActivityData } from "@/components/UsagePage/types";
 import * as networking from "@/components/networking";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
+import type { TagListResponse } from "@/components/tag_management/types";
 import { OTHER_COLOR } from "./overview/overviewData";
 import UsagePage from "./UsagePageView";
 
@@ -461,7 +462,7 @@ describe("UsagePage", () => {
       isFetchingNextPage: false,
       isLoading: false,
     } as any);
-    mockTagListCall.mockResolvedValue({});
+    mockTagListCall.mockResolvedValue([]);
     mockUseCustomers.mockReturnValue({
       data: [],
       isLoading: false,
@@ -687,7 +688,7 @@ describe("UsagePage", () => {
   });
 
   it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
-    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    let resolveTagList: (tags: TagListResponse) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveTagList = resolve;
@@ -704,14 +705,14 @@ describe("UsagePage", () => {
     expect(entityUsage).toHaveAttribute("data-entity-list", "null");
 
     await act(async () => {
-      resolveTagList({});
+      resolveTagList([]);
     });
 
     expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
   });
 
   it("should drop the previous range's tags as soon as the range changes", async () => {
-    mockTagListCall.mockResolvedValue({ "old-range-tag": { name: "old-range-tag" } } as never);
+    mockTagListCall.mockResolvedValue([{ name: "old-range-tag" }]);
 
     renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -726,7 +727,7 @@ describe("UsagePage", () => {
       );
     });
 
-    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    let resolveNewRange: (tags: TagListResponse) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveNewRange = resolve;
@@ -740,7 +741,7 @@ describe("UsagePage", () => {
     expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "null");
 
     await act(async () => {
-      resolveNewRange({});
+      resolveNewRange([]);
     });
 
     expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
