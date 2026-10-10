@@ -64,7 +64,6 @@ from tests.integration.cost_calculation.cost_tracking_case import JsonResponse
     (
         pytest.param("A1", "chat", False, "openai_sync", "input", True, (), id="A1-chat-input"),
         pytest.param("A2", "chat", False, "openai_sync", "output", True, (), id="A2-chat-output"),
-        pytest.param("A3", "chat", False, "openai_sync", "both", True, (), id="A3-chat-both"),
         pytest.param("A4", "chat", False, "httpx", None, False, (), id="A4-chat-missing-scope"),
         pytest.param("A5", "chat", False, "httpx", None, True, (), id="A5-chat-null-scope"),
         pytest.param("A6", "chat", True, "openai_async", "input", True, (), id="A6-chat-stream-async-input"),
@@ -97,16 +96,6 @@ from tests.integration.cost_calculation.cost_tracking_case import JsonResponse
         pytest.param("A15", "responses", True, "openai_sync", "input", True, (), id="A15-responses-stream-input"),
         pytest.param("B1", "chat", False, "openai_sync", "input", True, ("request",), id="B1-logging-block-input"),
         pytest.param("B2", "chat", False, "openai_sync", "output", True, ("response",), id="B2-logging-block-output"),
-        pytest.param(
-            "B3",
-            "chat",
-            False,
-            "openai_sync",
-            "both",
-            True,
-            ("request",),
-            id="B3-logging-block-both",
-        ),
     ),
 )
 def test_runtime_directional_scope_matches_client_call_and_spend_log(
@@ -911,10 +900,9 @@ def test_logging_only_scope_respects_guardrail_selection_level(
         delete_scenario(upstream_handle)
 
 
-def test_X1_missing_null_and_both_scope_have_identical_scans(gateway: Gateway, tmp_path: Path) -> None:
+def test_X1_missing_and_null_scope_have_identical_scans(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-x1-{uuid.uuid4().hex}"
     variants: Final = (
-        ("both", "both", True),
         ("missing", None, False),
         ("null", None, True),
     )
@@ -1590,22 +1578,6 @@ def test_S4_logging_only_input_scope_scans_every_multipart_text_part(gateway: Ga
             True,
             ("request", "response"),
             id="J2-flag-continues-past-flagged-input",
-        ),
-        pytest.param(
-            "J3",
-            "both",
-            True,
-            None,
-            ("request", "response"),
-            id="J3-legacy-both-matches-flag-continue",
-        ),
-        pytest.param(
-            "J4",
-            "both",
-            True,
-            False,
-            ("request", "response"),
-            id="J4-explicit-both-wins-over-flag-false",
         ),
         pytest.param("J5", "input", True, True, ("request",), id="J5-input-scope-ignores-flag"),
         pytest.param("J6", "output", True, True, ("response",), id="J6-output-scope-ignores-flag"),

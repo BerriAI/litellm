@@ -1,9 +1,8 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -990,24 +989,7 @@ def runtime_stream_scope(
     return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
 
 
-LoggingOnlyScope = Literal["input", "output", "both"]
-LoggingOnlyDirection: TypeAlias = Literal["input", "output"]
-
-
-@dataclass(frozen=True, slots=True)
-class LoggingOnlySettings:
-    direction: LoggingOnlyDirection | None
-    continue_on_input_failure: bool
-
-
-def normalize_logging_only_settings(
-    scope: LoggingOnlyScope | None, continue_on_input_failure: bool | None
-) -> LoggingOnlySettings:
-    if scope == "both":
-        return LoggingOnlySettings(direction=None, continue_on_input_failure=True)
-    return LoggingOnlySettings(
-        direction=scope, continue_on_input_failure=bool(continue_on_input_failure) and scope is None
-    )
+LoggingOnlyScope = Literal["input", "output"]
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
@@ -1269,9 +1251,8 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description=(
             "which direction a logging_only scan observes: 'input' (request) or 'output' (response); "
-            "unset scans both directions. 'both' is a deprecated alias for unset plus "
-            "logging_only_continue_on_input_failure=true. Only applies to mode logging_only; "
-            "pre_call/post_call on the same guardrail keep blocking."
+            "unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the "
+            "same guardrail keep blocking."
         ),
     )
 

@@ -146,9 +146,8 @@ export const loggingOnlyContinueFromParams = (
     | null
     | undefined,
 ): boolean =>
-  litellmParams?.logging_only_scope === "both" ||
-  (litellmParams?.logging_only_continue_on_input_failure === true &&
-    (litellmParams?.logging_only_scope === null || litellmParams?.logging_only_scope === undefined));
+  litellmParams?.logging_only_continue_on_input_failure === true &&
+  (litellmParams?.logging_only_scope === null || litellmParams?.logging_only_scope === undefined);
 
 export const effectiveLoggingOnlyContinue = (
   choice: LoggingOnlyScopeChoice | undefined,

@@ -1379,10 +1379,11 @@ class TestLoggingOnlyScopeValidation:
             "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
         )
 
-    def test_both_scope_accepted_when_guardrail_owns_logging_hook(self) -> None:
+    def test_continue_flag_accepted_when_guardrail_owns_logging_hook(self) -> None:
         callback: Final = self._initialize(
             mode="logging_only",
-            scope="both",
+            scope=None,
+            continue_on_input_failure=True,
             callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
         )
 
@@ -1398,9 +1399,10 @@ class TestLoggingOnlyScopeValidation:
 
         assert callback.logging_only_scope == "output"
 
-    def test_invalid_scope_fails_litellm_params_validation(self) -> None:
+    @pytest.mark.parametrize("scope", ("request", "both"))
+    def test_invalid_scope_fails_litellm_params_validation(self, scope: str) -> None:
         with pytest.raises(ValidationError):
-            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope="request")
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope=scope)
 
     def test_invalid_scope_literal_keeps_content_filter_registered_and_blocking(self) -> None:
         import litellm
@@ -1447,15 +1449,12 @@ class TestLoggingOnlyScopeValidation:
             (None, None, None, False),
             (None, True, None, True),
             (None, False, None, False),
-            ("both", None, None, True),
-            ("both", False, None, True),
-            ("both", True, None, True),
             ("input", True, "input", False),
             ("output", True, "output", False),
             ("input", None, "input", False),
         ),
     )
-    def test_normalize_logging_only_settings_table(
+    def test_logging_only_settings_table(
         self,
         scope: LoggingOnlyScope | None,
         continue_on_input_failure: bool | None,

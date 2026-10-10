@@ -240,7 +240,7 @@ def wire_server(respond: Callable[[Request], Reply], port: int = 0, *, policy_ed
 
 
 def _directions_for_scope(base_default: tuple[Direction, ...], scope: str | None) -> tuple[Direction, ...]:
-    if scope is None or scope == "both":
+    if scope is None:
         return base_default
     selected_direction: Final = "request" if scope == "input" else "response"
     return tuple(direction for direction in base_default if direction == selected_direction)

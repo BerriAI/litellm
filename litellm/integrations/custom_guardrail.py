@@ -26,7 +26,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     GuardrailStreamScope,
     LitellmParams,
-    LoggingOnlyDirection,
+    LoggingOnlyScope,
     Mode,
     runtime_stream_scope,
 )
@@ -222,7 +222,7 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
-    logging_only_scope: LoggingOnlyDirection | None
+    logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE

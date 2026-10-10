@@ -54,7 +54,6 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
-    normalize_logging_only_settings,
     with_tolerated_stream_scope,
 )
 
@@ -588,7 +587,7 @@ def _logging_only_scope_error(
             f"Guardrail {guardrail_name}: logging_only_scope is set, but mode does not include logging_only, "
             "so it would never apply. Add logging_only to mode or remove logging_only_scope."
         )
-    if logging_only_scope in ("input", "output") and not custom_guardrail_callback.supports_logging_only_scope():
+    if logging_only_scope is not None and not custom_guardrail_callback.supports_logging_only_scope():
         return (
             f"Guardrail {guardrail_name}: logging_only_scope={logging_only_scope!r} is not supported by this "
             "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
@@ -633,12 +632,13 @@ def _configure_callback_scoping(
             "%s Ignoring logging_only_continue_on_input_failure; the guardrail keeps its configured mode.",
             logging_only_continue_error.replace("\r", "").replace("\n", ""),
         )
-    settings: Final = normalize_logging_only_settings(
-        None if logging_only_scope_error is not None else litellm_params.logging_only_scope,
-        None if logging_only_continue_error is not None else litellm_params.logging_only_continue_on_input_failure,
+    logging_only_scope: Final = None if logging_only_scope_error is not None else litellm_params.logging_only_scope
+    custom_guardrail_callback.logging_only_scope = logging_only_scope
+    custom_guardrail_callback.logging_only_continue_on_input_failure = (
+        logging_only_continue_error is None
+        and logging_only_scope is None
+        and litellm_params.logging_only_continue_on_input_failure is True
     )
-    custom_guardrail_callback.logging_only_scope = settings.direction
-    custom_guardrail_callback.logging_only_continue_on_input_failure = settings.continue_on_input_failure
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",

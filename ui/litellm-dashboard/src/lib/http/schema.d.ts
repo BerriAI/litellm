@@ -26694,9 +26694,9 @@ export interface components {
             logging_only_continue_on_input_failure?: boolean | null;
             /**
              * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. 'both' is a deprecated alias for unset plus logging_only_continue_on_input_failure=true. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
@@ -36019,9 +36019,9 @@ export interface components {
             logging_only_continue_on_input_failure?: boolean | null;
             /**
              * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. 'both' is a deprecated alias for unset plus logging_only_continue_on_input_failure=true. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API

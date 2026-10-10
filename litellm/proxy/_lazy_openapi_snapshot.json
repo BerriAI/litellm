@@ -11637,8 +11637,7 @@
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -11646,7 +11645,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. 'both' is a deprecated alias for unset plus logging_only_continue_on_input_failure=true. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask_request_content": {
@@ -14056,8 +14055,7 @@
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -14065,7 +14063,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. 'both' is a deprecated alias for unset plus logging_only_continue_on_input_failure=true. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask": {

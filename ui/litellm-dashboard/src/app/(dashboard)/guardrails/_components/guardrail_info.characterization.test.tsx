@@ -227,9 +227,9 @@ describe("GuardrailInfoView update payload characterization", () => {
     });
   });
 
-  it("shows a legacy both scope as Default with the continue toggle on and migrates it cleanly", async () => {
+  it("shows a stored continue flag as Default with the toggle on and saves no change", async () => {
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
-      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_scope: "both" }),
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_continue_on_input_failure: true }),
     );
     const user = userEvent.setup({ delay: null });
     renderView();
@@ -245,9 +245,9 @@ describe("GuardrailInfoView update payload characterization", () => {
     expect(networking.updateGuardrailCall).not.toHaveBeenCalled();
   });
 
-  it("sends both scope keys when a legacy both scope's continue toggle is switched off", async () => {
+  it("sends both scope keys when a stored continue flag is switched off", async () => {
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
-      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_scope: "both" }),
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_continue_on_input_failure: true }),
     );
     const user = userEvent.setup({ delay: null });
     renderView();

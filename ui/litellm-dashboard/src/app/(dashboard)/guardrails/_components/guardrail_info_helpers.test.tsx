@@ -266,7 +266,6 @@ describe("guardrail_info_helpers", () => {
     it("maps API scope values to choices and back", () => {
       expect(loggingOnlyScopeToChoice("input")).toBe("input");
       expect(loggingOnlyScopeToChoice("output")).toBe("output");
-      expect(loggingOnlyScopeToChoice("both")).toBe("default");
       expect(loggingOnlyScopeToChoice(undefined)).toBe("default");
       expect(loggingOnlyScopeToChoice(null)).toBe("default");
       expect(loggingOnlyScopeToChoice("invalid")).toBe("default");
@@ -289,15 +288,6 @@ describe("guardrail_info_helpers", () => {
         logging_only_scope: null,
         logging_only_continue_on_input_failure: true,
       });
-      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "both" }, "default", true)).toEqual({});
-      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "both" }, "default", false)).toEqual({
-        logging_only_scope: null,
-        logging_only_continue_on_input_failure: false,
-      });
-      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "both" }, "input", true)).toEqual({
-        logging_only_scope: "input",
-        logging_only_continue_on_input_failure: false,
-      });
       expect(
         getLoggingOnlyScopeUpdate(
           { logging_only_scope: "input", logging_only_continue_on_input_failure: true },
@@ -312,16 +302,12 @@ describe("guardrail_info_helpers", () => {
       });
     });
 
-    it("reads the continue toggle from a legacy both scope or the stored flag", () => {
-      expect(loggingOnlyContinueFromParams({ logging_only_scope: "both" })).toBe(true);
+    it("reads the continue toggle from the stored flag", () => {
       expect(loggingOnlyContinueFromParams({ logging_only_continue_on_input_failure: true })).toBe(true);
       expect(loggingOnlyContinueFromParams({ logging_only_scope: "input" })).toBe(false);
       expect(
         loggingOnlyContinueFromParams({ logging_only_scope: "input", logging_only_continue_on_input_failure: true }),
       ).toBe(false);
-      expect(
-        loggingOnlyContinueFromParams({ logging_only_scope: "both", logging_only_continue_on_input_failure: false }),
-      ).toBe(true);
       expect(loggingOnlyContinueFromParams({ logging_only_continue_on_input_failure: false })).toBe(false);
       expect(loggingOnlyContinueFromParams(undefined)).toBe(false);
       expect(loggingOnlyContinueFromParams(null)).toBe(false);
@@ -330,7 +316,6 @@ describe("guardrail_info_helpers", () => {
     it("formats every scope and falls back to default for missing or unknown values", () => {
       expect(formatLoggingOnlyScope("input")).toBe("Input only (request)");
       expect(formatLoggingOnlyScope("output")).toBe("Output only (response)");
-      expect(formatLoggingOnlyScope("both")).toBe("Default (request and response)");
       expect(formatLoggingOnlyScope(undefined)).toBe("Default (request and response)");
       expect(formatLoggingOnlyScope(null)).toBe("Default (request and response)");
       expect(formatLoggingOnlyScope("invalid")).toBe("Default (request and response)");

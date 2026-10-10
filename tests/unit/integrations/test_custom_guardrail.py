@@ -19,7 +19,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, LoggingOnlyDirection, Mode
+from litellm.types.guardrails import GuardrailEventHooks, LoggingOnlyScope, Mode
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -2823,7 +2823,7 @@ class TestLoggingOnlyApplyGuardrail:
     @pytest.mark.asyncio
     async def test_logging_only_scope_scans_configured_directions(
         self,
-        scope: LoggingOnlyDirection | None,
+        scope: LoggingOnlyScope | None,
         continue_on_input_failure: bool,
         expected_calls: list[tuple[str, list[str]]],
     ) -> None:
@@ -2895,7 +2895,7 @@ class TestLoggingOnlyApplyGuardrail:
     @pytest.mark.asyncio
     async def test_request_copy_failure_drops_the_response_scan_only_without_continue(
         self,
-        scope: LoggingOnlyDirection | None,
+        scope: LoggingOnlyScope | None,
         continue_on_input_failure: bool,
         expected_calls: list[tuple[str, list[str]]],
         expected_statuses: list[str],
@@ -2957,7 +2957,7 @@ class TestLoggingOnlyApplyGuardrail:
     @pytest.mark.asyncio
     async def test_input_scan_error_drops_the_response_scan_only_without_continue(
         self,
-        scope: LoggingOnlyDirection | None,
+        scope: LoggingOnlyScope | None,
         continue_on_input_failure: bool,
         expected_calls: list[tuple[str, list[str]]],
         expected_statuses: list[str],

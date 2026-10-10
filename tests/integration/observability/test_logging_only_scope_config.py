@@ -879,14 +879,14 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
             id="H4-post-rejects-presidio-input-scope",
         ),
         pytest.param(
-            "H4",
-            "presidio",
+            "H2",
+            "generic_guardrail_api",
             "logging_only",
             "both",
-            200,
-            "both",
-            "",
-            id="H4-post-accepts-presidio-both-scope",
+            422,
+            None,
+            "logging_only_scope",
+            id="H2-post-rejects-removed-both-scope",
         ),
     ),
 )
@@ -1616,32 +1616,6 @@ def test_K1_post_rejects_continue_flag_outside_logging_only(gateway: Gateway, tm
             after_list: Final = candidate.get("/v2/guardrails/list")["guardrails"]
             assert after_list == before_list, (before_list, after_list)
             assert identity not in {object_value(item)["guardrail_name"] for item in after_list}, after_list
-    finally:
-        _delete_database_guardrail(identity)
-
-
-def test_K2_post_accepts_both_scope_and_stores_it_verbatim(gateway: Gateway, tmp_path: Path) -> None:
-    identity: Final = f"logging-scope-k2-{uuid.uuid4().hex}"
-    config: Final = _empty_proxy_configuration(tmp_path, identity)
-    try:
-        with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
-            response: Final = candidate.request(
-                "POST",
-                "/guardrails",
-                _post_guardrail_body(
-                    identity,
-                    "generic_guardrail_api",
-                    "logging_only",
-                    "http://127.0.0.1:9",
-                    "both",
-                ),
-            )
-            assert response.status_code == 200, response.text
-            body: Final = JSON_OBJECT.validate_json(response.content)
-            assert object_value(body["litellm_params"]).get("logging_only_scope") == "both", body
-            rows: Final = _management_guardrail_rows(identity)
-            assert len(rows) == 1, rows
-            assert object_value(rows[0]["litellm_params"]).get("logging_only_scope") == "both", rows
     finally:
         _delete_database_guardrail(identity)
 

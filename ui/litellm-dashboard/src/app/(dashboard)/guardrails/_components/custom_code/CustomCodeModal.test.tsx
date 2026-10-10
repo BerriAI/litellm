@@ -308,7 +308,7 @@ describe("CustomCodeModal", () => {
     expect(toggle).not.toBeChecked();
   });
 
-  it("should send the continue flag and migrate a legacy both scope in edit mode", async () => {
+  it("should load and turn off a stored continue flag in edit mode", async () => {
     const user = userEvent.setup();
     renderModal({
       editData: {
@@ -316,7 +316,7 @@ describe("CustomCodeModal", () => {
         guardrail_name: "existing-guardrail",
         litellm_params: {
           mode: ["logging_only"],
-          logging_only_scope: "both",
+          logging_only_continue_on_input_failure: true,
           custom_code: "def apply_guardrail(): pass",
         },
       },
