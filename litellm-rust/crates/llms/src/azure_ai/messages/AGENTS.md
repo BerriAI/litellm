@@ -1,3 +1,8 @@
-This directory owns Azure's Messages adapter: its endpoints, authentication policy, headers, and transformations. Implement the shared adapter contract from `base_llm/messages`, consume API data contracts from `litellm-llms-types::formats::messages`, and leave call orchestration to `inference-messages`
+# rules
 
-The Claude adapter may explicitly reuse payload policy from `anthropic/messages` when it applies to Azure's Claude backend. Keep Azure-specific differences here. Sharing that helper does not make Anthropic policy a format-wide default or justify a dependency from `base_llm/messages` on provider implementations
+- Claude on Azure AI Foundry: reuses `anthropic/messages` shaping, with the Azure `/anthropic` path, Azure credential env vars and `x-api-key` or bearer auth
+- Keep Azure differences here, not in the Anthropic helpers
+
+# references
+
+- https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude
