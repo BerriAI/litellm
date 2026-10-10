@@ -1,21 +1,22 @@
+import importlib
+import sys
 from typing import Final
 
 import pytest
 
 from litellm.proxy._experimental.mcp_server import litellm_proxy_mcp_handler as relocated
 from litellm.responses.mcp import litellm_proxy_mcp_handler as legacy
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
-def test_legacy_import_leaves_relocated_proxy_module_unloaded() -> None:
-    result: Final = run_child_interpreter(
-        "import sys, litellm.responses.mcp.litellm_proxy_mcp_handler\n"
-        "print('litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler' in sys.modules)",
-        timeout=120,
-    )
+def test_legacy_import_leaves_relocated_proxy_module_unloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, legacy.__name__)
+    monkeypatch.delitem(sys.modules, relocated.__name__)
+    monkeypatch.setattr(sys.modules["litellm.responses.mcp"], "litellm_proxy_mcp_handler", legacy)
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "False"
+    reimported: Final = importlib.import_module(legacy.__name__)
+
+    assert reimported is not legacy
+    assert relocated.__name__ not in sys.modules
 
 
 @pytest.mark.parametrize("name", legacy.__all__)

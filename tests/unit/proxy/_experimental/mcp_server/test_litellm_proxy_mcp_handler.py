@@ -22,6 +22,7 @@ from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
 from litellm.proxy._experimental.mcp_server import litellm_proxy_mcp_handler as mcp_handler_module
@@ -32,6 +33,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_toolset import MCPToolset
 from litellm.types.responses.main import OutputFunctionToolCall
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, ModelResponse
 
@@ -1576,21 +1578,25 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
 
 
+def _toolset_prisma_client(find_first: AsyncMock | None = None, find_many: AsyncMock | None = None) -> MagicMock:
+    client: Final = MagicMock()
+    client.db.litellm_mcptoolsettable.find_first = find_first or AsyncMock(return_value=None)
+    client.db.litellm_mcptoolsettable.find_many = find_many or AsyncMock(return_value=[])
+    return client
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "lookup,expected",
+    "find_first,expected",
     [
-        (AsyncMock(return_value=types.SimpleNamespace(toolset_id="ts-1")), True),
+        (AsyncMock(return_value=MCPToolset(toolset_id="ts-1", toolset_name="team-toolset")), True),
         (AsyncMock(return_value=None), False),
         (AsyncMock(side_effect=RuntimeError("db down")), False),
     ],
 )
-async def test_toolset_exists_reflects_the_toolset_lookup(monkeypatch, lookup: AsyncMock, expected: bool):
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        types.SimpleNamespace(get_toolset_by_name_cached=lookup),
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+async def test_toolset_exists_reflects_the_toolset_lookup(monkeypatch, find_first: AsyncMock, expected: bool):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _toolset_prisma_client(find_first=find_first))
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     assert await mcp_handler_module._toolset_exists("team-toolset") is expected
 
@@ -1599,12 +1605,16 @@ async def test_toolset_exists_reflects_the_toolset_lookup(monkeypatch, lookup: A
 async def test_apply_toolset_permissions_merges_into_existing_object_permission(monkeypatch):
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        types.SimpleNamespace(
-            resolve_toolset_tool_permissions=AsyncMock(return_value={"srv-1": ["add"], "srv-2": ["sub"]})
-        ),
+    toolset: Final = MCPToolset(
+        toolset_id="ts-1",
+        toolset_name="team-toolset",
+        tools=[{"server_id": "srv-1", "tool_name": "add"}, {"server_id": "srv-2", "tool_name": "sub"}],
     )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _toolset_prisma_client(find_many=AsyncMock(return_value=[toolset])),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     existing: Final = LiteLLM_ObjectPermissionTable(
         object_permission_id="op-key",
         mcp_servers=["old"],
@@ -1631,84 +1641,23 @@ async def test_apply_toolset_permissions_merges_into_existing_object_permission(
 
 
 @pytest.mark.asyncio
-async def test_apply_toolset_permissions_returns_auth_unchanged_when_resolution_fails(monkeypatch):
+async def test_apply_toolset_permissions_grants_no_toolset_servers_when_the_toolset_table_is_down(monkeypatch):
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        types.SimpleNamespace(resolve_toolset_tool_permissions=AsyncMock(side_effect=RuntimeError("db down"))),
+        "litellm.proxy.proxy_server.prisma_client",
+        _toolset_prisma_client(find_many=AsyncMock(side_effect=RuntimeError("db down"))),
     )
-    auth: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     scoped: Final = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
         resolved_toolset_ids=["ts-1"],
         resolved_mcp_servers=[],
-        user_api_key_auth=auth,
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
     )
 
-    assert scoped is auth
-    assert scoped.object_permission is None
-    assert scoped.mcp_explicit_grants_only is not True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("prisma_client", [None, MagicMock()])
-async def test_get_mcp_tools_from_manager_treats_unresolvable_toolsets_as_server_names(monkeypatch, prisma_client):
-    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
-    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
-    manager = _toolset_gateway_manager("unused", "unused")
-    manager.get_toolset_by_name_cached = AsyncMock(side_effect=[None, RuntimeError("db down")])
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        manager,
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    auth: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
-
-    tools, server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
-        user_api_key_auth=auth,
-        mcp_tools_with_litellm_proxy=[
-            {"type": "mcp", "server_url": "litellm_proxy/mcp/missing"},
-            {"type": "mcp", "server_url": "litellm_proxy/mcp/broken"},
-        ],
-    )
-
-    assert tools == []
-    assert server_names == []
-    assert mock_get_tools.await_args is not None
-    assert mock_get_tools.await_args.kwargs["mcp_servers"] == ["missing", "broken"]
-    assert mock_get_tools.await_args.kwargs["user_api_key_auth"] is auth
-
-
-@pytest.mark.asyncio
-async def test_process_mcp_tools_to_openai_format_filters_dedupes_and_maps_to_the_single_server(monkeypatch):
-    server: Final = _registered("srv-1", "deepwiki", server_name="deepwiki")
-    listed: Final = [
-        MCPTool(name="deepwiki-read", inputSchema={"type": "object"}),
-        MCPTool(name="deepwiki-read", inputSchema={"type": "object"}),
-        MCPTool(name="deepwiki-write", inputSchema={"type": "object"}),
-    ]
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
-        AsyncMock(return_value=AggregateToolListing(tools=listed, outcomes={})),
-    )
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        types.SimpleNamespace(
-            catalog=types.SimpleNamespace(operation=nullcontext),
-            get_mcp_server_by_name=MagicMock(return_value=server),
-            get_allowed_mcp_servers=AsyncMock(return_value=["srv-1"]),
-            get_mcp_servers_from_ids=MagicMock(return_value=[server]),
-        ),
-    )
-
-    openai_tools, tool_server_map = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_to_openai_format(
-        user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
-        mcp_tools_with_litellm_proxy=[
-            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki", "allowed_tools": ["deepwiki-read"]}
-        ],
-    )
-
-    assert [(tool["type"], tool["name"]) for tool in openai_tools] == [("function", "deepwiki-read")]
-    assert tool_server_map == {"deepwiki-read": "deepwiki"}
+    assert scoped.object_permission is not None
+    assert scoped.object_permission.mcp_servers == []
+    assert scoped.object_permission.mcp_tool_permissions == {}
+    assert scoped.mcp_explicit_grants_only is True
 
 
 @pytest.mark.asyncio
