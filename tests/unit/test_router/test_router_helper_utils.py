@@ -1645,6 +1645,26 @@ def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_resul
     assert router._has_default_fallbacks() is expected_result
 
 
+def test_default_fallbacks_do_not_mutate_input_fallbacks() -> None:
+    fallbacks: Final[list[dict[str, list[str]]]] = [{"primary": ["secondary"]}]
+    first_router: Final = Router(model_list=[], fallbacks=fallbacks, default_fallbacks=["first-default"])
+    second_router: Final = Router(model_list=[], fallbacks=fallbacks, default_fallbacks=["second-default"])
+
+    try:
+        assert fallbacks == [{"primary": ["secondary"]}]
+        assert first_router.fallbacks == [
+            {"primary": ["secondary"]},
+            {"*": ["first-default"]},
+        ]
+        assert second_router.fallbacks == [
+            {"primary": ["secondary"]},
+            {"*": ["second-default"]},
+        ]
+    finally:
+        first_router.discard()
+        second_router.discard()
+
+
 def test_add_optional_pre_call_checks(model_list):
     router = Router(model_list=model_list)
 
