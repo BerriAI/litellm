@@ -14,10 +14,10 @@ from integration.cost_calculation.stream_parity.case import COVERS, MODEL, Strea
 
 _USAGE: Final = {"inputTokens": 30, "outputTokens": 40, "totalTokens": 70}
 
-CLAUDE_OPUS_5_CONVERSE_MESSAGES: Final = CostTrackingTestCase(
-    name="bedrock-converse-claude-opus-5-messages-parity",
+CLAUDE_OPUS_5_5_CONVERSE_MESSAGES: Final = CostTrackingTestCase(
+    name="bedrock-converse-claude-opus-5-5-messages-parity",
     covers=COVERS,
-    model="us.anthropic.claude-opus-5-v1:0",
+    model="us.anthropic.claude-opus-5-5",
     endpoint="/v1/messages",
     deployment=Deployment(input_cost_per_token=0.001, output_cost_per_token=0.002),
     request={
@@ -38,12 +38,12 @@ CLAUDE_OPUS_5_CONVERSE_MESSAGES: Final = CostTrackingTestCase(
     expected=ExactExpected(spend=0.11, input_cost=0.03, output_cost=0.08, prompt_tokens=30, completion_tokens=40),
 )
 
-CLAUDE_OPUS_5_CONVERSE_MESSAGES_PARITY: Final = StreamParityTestCase(
-    plain=CLAUDE_OPUS_5_CONVERSE_MESSAGES,
-    streamed=CLAUDE_OPUS_5_CONVERSE_MESSAGES.model_copy(
+CLAUDE_OPUS_5_5_CONVERSE_MESSAGES_PARITY: Final = StreamParityTestCase(
+    plain=CLAUDE_OPUS_5_5_CONVERSE_MESSAGES,
+    streamed=CLAUDE_OPUS_5_5_CONVERSE_MESSAGES.model_copy(
         update={
-            "name": "bedrock-converse-claude-opus-5-messages-parity-stream",
-            "request": {**CLAUDE_OPUS_5_CONVERSE_MESSAGES.request, "stream": True},
+            "name": "bedrock-converse-claude-opus-5-5-messages-parity-stream",
+            "request": {**CLAUDE_OPUS_5_5_CONVERSE_MESSAGES.request, "stream": True},
             "response": EventStreamResponse(
                 content_type="application/vnd.amazon.eventstream",
                 framing="converse",

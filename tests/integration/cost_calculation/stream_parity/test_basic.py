@@ -13,7 +13,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration.cost_calculation.stream_parity.bases import anthropic, bedrock, groq, openai, openai_responses
+from integration.cost_calculation.stream_parity.bases import anthropic, bedrock, openai, openai_responses, xai
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 from integration.cost_calculation.stream_parity.runner import assert_stream_parity
 
@@ -23,9 +23,9 @@ NATIVE: Final = (
     openai_responses.GPT_5_3_CODEX_RESPONSES_PARITY,
 )
 BRIDGES: Final = (
-    groq.QWEN_3_8_MESSAGES_PARITY,
+    xai.GROK_4_7_MESSAGES_PARITY,
     openai.GPT_5_4_MINI_MESSAGES_PARITY,
-    bedrock.CLAUDE_OPUS_5_CONVERSE_MESSAGES_PARITY,
+    bedrock.CLAUDE_OPUS_5_5_CONVERSE_MESSAGES_PARITY,
     openai_responses.GPT_5_3_CODEX_CHAT_COMPLETIONS_PARITY,
     anthropic.CLAUDE_SONNET_5_RESPONSES_PARITY,
 )
