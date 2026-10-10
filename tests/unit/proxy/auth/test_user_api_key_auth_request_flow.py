@@ -7166,6 +7166,71 @@ async def test_user_api_key_auth_returns_the_parse_error_even_if_logging_it_fail
 
 
 @pytest.mark.asyncio
+async def test_user_api_key_auth_rejects_a_client_disconnect_with_499_instead_of_an_empty_body():
+    """Regression (#44797): a client that disconnects mid-upload must be rejected by auth
+    with the 499 the body reader raised, not handed on to the endpoint as an empty body."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="team-1")
+    messages = iter(
+        [
+            {"type": "http.request", "body": b'{"model": "gpt-4o", "mess', "more_body": True},
+            {"type": "http.disconnect"},
+        ]
+    )
+
+    async def receive():
+        return next(messages)
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+            "path": "/chat/completions",
+        },
+        receive=receive,
+    )
+    request._url = URL(url="/chat/completions")
+    hook = AsyncMock(return_value=None)
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["proxy_logging_obj"].post_call_failure_hook = hook
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ) as mock_builder,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ) as mock_common_checks,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(request=request, api_key="Bearer sk-test")
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert exc_info.value.code == "499"
+    assert exc_info.value.type == "client_disconnect"
+    mock_builder.assert_awaited_once()
+    mock_common_checks.assert_not_awaited()
+    assert hook.await_args.kwargs["original_exception"] is exc_info.value
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_the_parse_error():
     """The body is read before the key is authenticated, so a caller who sends both a
     malformed body and a key that fails auth gets the 400. Authenticating the request
