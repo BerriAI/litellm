@@ -623,7 +623,7 @@ async def get_user_api_key_filter(
     prisma_client: PrismaClient,
     user_id: str,
     api_key: str | None,
-) -> list[str]:
+) -> Sequence[str]:
     """Return the key digests that should scope a user activity query."""
     active_keys: Final[Sequence[_UserApiKeyRecord]] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"user_id": user_id},

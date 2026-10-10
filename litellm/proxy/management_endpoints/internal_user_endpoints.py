@@ -3077,8 +3077,8 @@ async def get_user_daily_activity_aggregated(
         if requested_user_id is None
         else await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key)
     )
-    repository = daily_activity_repository(typed_prisma_client)
-    scope = daily_activity_scope(
+    repository: Final = daily_activity_repository(typed_prisma_client)
+    scope: Final = daily_activity_scope(
         table="litellm_dailyuserspend",
         entity_id_field="user_id",
         entity_id=None,
