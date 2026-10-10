@@ -1,4 +1,4 @@
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import httpx
 
@@ -60,7 +60,7 @@ class ContextCachingEndpoints(VertexBase):
         Returns
             token, url
         """
-        auth_header: str | None
+        auth_header: str | dict[str, str | None] | None
         if custom_llm_provider == "gemini":
             auth_header = {"x-goog-api-key": gemini_api_key}
             endpoint = "cachedContents"
@@ -82,7 +82,7 @@ class ContextCachingEndpoints(VertexBase):
             gemini_api_key=gemini_api_key,
             endpoint=endpoint,
             stream=None,
-            auth_header=auth_header,
+            auth_header=cast(str | None, auth_header),
             url=url,
             model=model,
             vertex_project=vertex_project,
@@ -367,21 +367,35 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
-        google_cache_name: Final = self.check_cache(
-            cache_key=generated_cache_key,
-            client=client,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header,
-            model=model,
+        cache_key_kwargs: Final[dict[str, object]] = {
+            "messages": cached_messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "model": model,
+        }
+        generated_cache_key: Final = local_cache_obj.get_cache_key(**cache_key_kwargs)
+        if not generated_cache_key:
+            if tools is not None:
+                optional_params["tools"] = tools
+            if tool_choice is not None:
+                optional_params["tool_choice"] = tool_choice
+            return messages, optional_params, None
+        google_cache_name: Final = (
+            None
+            if generated_cache_key is None
+            else self.check_cache(
+                cache_key=generated_cache_key,
+                client=client,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=vertex_auth_header,
+                model=model,
+            )
         )
         if google_cache_name:
             return non_cached_messages, optional_params, google_cache_name
@@ -522,21 +536,35 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
-        google_cache_name: Final = await self.async_check_cache(
-            cache_key=generated_cache_key,
-            client=client,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header,
-            model=model,
+        cache_key_kwargs: Final[dict[str, object]] = {
+            "messages": cached_messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "model": model,
+        }
+        generated_cache_key: Final = local_cache_obj.get_cache_key(**cache_key_kwargs)
+        if not generated_cache_key:
+            if tools is not None:
+                optional_params["tools"] = tools
+            if tool_choice is not None:
+                optional_params["tool_choice"] = tool_choice
+            return messages, optional_params, None
+        google_cache_name: Final = (
+            None
+            if generated_cache_key is None
+            else await self.async_check_cache(
+                cache_key=generated_cache_key,
+                client=client,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=vertex_auth_header,
+                model=model,
+            )
         )
 
         if google_cache_name:
