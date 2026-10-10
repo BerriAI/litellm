@@ -2066,32 +2066,20 @@ async def test_missing_model_reaches_the_router_when_no_wildcard_matches_it() ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route_type", ["acompletion", "aresponses", "anthropic_messages"])
-async def test_missing_model_is_not_routed_to_a_forwarding_wildcard_deployment(route_type: str) -> None:
-    router: Final = _router_with_defaults({}, wildcard_target="openai/*")
+@pytest.mark.parametrize("model", [None, ""])
+@pytest.mark.parametrize("wildcard_target", ["openai/*", "hosted_vllm/*"])
+async def test_missing_model_is_not_routed_to_a_forwarding_wildcard_deployment(
+    route_type: str, model: str | None, wildcard_target: str
+) -> None:
+    router: Final = _router_with_defaults({}, wildcard_target=wildcard_target)
 
     with pytest.raises(ProxyModelNotFoundError):
         await route_request(
-            {"model": None, "input": "hi", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8},
+            {"model": model, "input": "hi", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8},
             router,
             None,
             route_type,
         )
-
-
-@pytest.mark.asyncio
-async def test_empty_model_still_reaches_a_forwarding_wildcard_deployment() -> None:
-    router: Final = _router_with_defaults({}, wildcard_target="hosted_vllm/*")
-
-    response: Final = await (
-        await route_request(
-            {"model": "", "messages": [{"role": "user", "content": "hi"}], "mock_response": "served model"},
-            router,
-            None,
-            "acompletion",
-        )
-    )
-
-    assert response.choices[0].message.content == "served model"
 
 
 @pytest.mark.asyncio

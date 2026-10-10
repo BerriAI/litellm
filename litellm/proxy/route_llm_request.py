@@ -382,7 +382,8 @@ def _wildcard_forwards_missing_model(llm_router: LitellmRouter) -> bool:
     """Whether the router would pick a wildcard deployment for a request with no model
     and every such deployment copies the requested name into its target (`openai/*`), so
     the provider would get a made-up model instead of a fixed one like `openai/gpt-4o`.
-    An empty model is not "no model": it reaches the provider as `""`."""
+    An empty model counts as no model: key and team model checks skip it, so letting it
+    through would serve a server's default model (vLLM's) to a key restricted elsewhere."""
     matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
         llm_router.pattern_router.get_deployments_by_pattern(model=None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for a missing model; it returns untyped dicts
     )
@@ -915,7 +916,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             elif llm_router.default_deployment is not None or (
                 len(llm_router.pattern_router.patterns) > 0
                 and not (
-                    data["model"] is None
+                    not data["model"]
                     and route_type in _ROUTE_TYPES_REQUIRING_MODEL
                     and _wildcard_forwards_missing_model(llm_router)
                 )
