@@ -74,7 +74,7 @@ def _service_health() -> httpx.Response | None:
 def cost_center_service() -> Iterator[None]:
     service: Final = Path(__file__).with_name("cost_center_service.py")
     process: Final = subprocess.Popen(
-        [sys.executable, str(service), "--host", "127.0.0.1", "--port", "9414"],
+        [sys.executable, "-I", str(service), "--host", "127.0.0.1", "--port", "9414"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

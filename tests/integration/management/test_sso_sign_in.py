@@ -1,177 +1,123 @@
+import base64
+import json
+import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Final
+from urllib.parse import parse_qs, urlencode, urlparse
+
+import httpx
 import pytest
-from fastapi.testclient import TestClient
-from fastapi import Request, Header
-from unittest.mock import patch, MagicMock, AsyncMock
+import yaml
+from pydantic import JsonValue
 
-import os
+from tests.integration._support.client import Gateway, gateway_from_environment
+from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.wire import Reply, Request, wire_server
 
-import litellm
-from litellm.proxy.proxy_server import app
-from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.proxy.management_endpoints.ui_sso import auth_callback
-from litellm.proxy._types import LitellmUserRoles
-import jwt
-import time
-from litellm.caching.caching import DualCache
+pytestmark: Final = pytest.mark.timeout(300)
 
-proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+CLIENT_ID: Final = "integration-sso-client"
+CLIENT_SECRET: Final = "integration-sso-secret"
+IDP_PROVIDER: Final = "integration-idp"
 
 
-@pytest.fixture
-def mock_env_vars(monkeypatch):
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "mock_google_client_id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "mock_google_client_secret")
-    monkeypatch.setenv("PROXY_BASE_URL", "http://testserver")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "mock_master_key")
-
-
-@pytest.fixture
-def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
-
-    params = {"connection_limit": 100, "pool_timeout": 60}
-    database_url = os.getenv("DATABASE_URL")
-    modified_url = append_query_params(database_url, params)
-    os.environ["DATABASE_URL"] = modified_url
-
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
-
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
-    litellm.proxy.proxy_server.user_custom_key_generate = None
-
-    return prisma_client
-
-
-@patch("fastapi_sso.sso.google.GoogleSSO")
-@pytest.mark.asyncio
-async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_client):
-    """
-    Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER_VIEW_ONLY' role
-    """
-    from litellm._uuid import uuid
-    import litellm
-
-    litellm.turn_on_debug()
-
-    unique_user_id = str(uuid.uuid4())
-    unique_user_email = f"newuser{unique_user_id}@example.com"
-
-    try:
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        litellm.proxy.proxy_server.master_key = "mock_master_key"
-
-        mock_sso_result = MagicMock()
-        mock_sso_result.email = unique_user_email
-        mock_sso_result.id = unique_user_id
-        mock_sso_result.provider = "google"
-        mock_sso_result.user_role = (
-            None                                                           
+def _idp_reply(request: Request) -> Reply:
+    target: Final = urlparse(request.target)
+    query: Final = parse_qs(target.query)
+    if target.path == "/authorize":
+        code: Final = f"code-{query['login_hint'][0]}"
+        location: Final = f"{query['redirect_uri'][0]}?{urlencode({'code': code, 'state': query['state'][0]})}"
+        return Reply(status=302, body=b"", headers={"location": location})
+    if target.path == "/token":
+        expected: Final = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+        form: Final = parse_qs(request.body.decode())
+        if request.headers.get("authorization") != f"Basic {expected}" or form.get("grant_type") != [
+            "authorization_code"
+        ]:
+            return Reply(status=401, body=b'{"error": "invalid_client"}')
+        subject: Final = form["code"][0].removeprefix("code-")
+        return Reply(body=json.dumps({"access_token": f"access-{subject}", "token_type": "Bearer"}).encode())
+    if target.path == "/userinfo":
+        signed_in: Final = request.headers.get("authorization", "").removeprefix("Bearer access-")
+        return Reply(
+            body=json.dumps(
+                {
+                    "sub": signed_in,
+                    "preferred_username": signed_in,
+                    "email": f"{signed_in}@example.com",
+                    "provider": IDP_PROVIDER,
+                }
+            ).encode()
         )
-        mock_google_sso.return_value.verify_and_process = AsyncMock(
-            return_value=mock_sso_result
-        )
+    return Reply(status=404, body=b'{"error": "not_found"}')
 
-        mock_request = Request(
-            scope={
-                "type": "http",
-                "method": "GET",
-                "scheme": "http",
-                "server": ("testserver", 80),
-                "path": "/sso/callback",
-                "query_string": b"",
-                "headers": {},
+
+@contextmanager
+def _sso_gateway(directory: Path, litellm_settings: Mapping[str, JsonValue]) -> Iterator[Gateway]:
+    config: Final = directory / "sso_proxy_config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                },
+                "litellm_settings": dict(litellm_settings),
             }
         )
-
-        response = await auth_callback(request=mock_request)
-
-        assert response.status_code == 303
-        assert response.headers["location"].startswith(
-            f"http://testserver/ui/?login=success"
-        )
-
-        user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_id": unique_user_id}
-        )
-        print("inserted user from SSO", user)
-        assert user is not None
-        assert user.user_email == unique_user_email
-        assert user.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-        assert user.metadata == {"auth_provider": "google"}
-
-    finally:
-        await prisma_client.db.litellm_usertable.delete(
-            where={"user_id": unique_user_id}
-        )
-
-
-@patch("fastapi_sso.sso.google.GoogleSSO")
-@pytest.mark.asyncio
-async def test_auth_callback_new_user_with_sso_default(
-    mock_google_sso, mock_env_vars, prisma_client
-):
-    """
-    When litellm_settings.default_internal_user_params.user_role = 'INTERNAL_USER'
-
-    Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER' role
-    """
-    from litellm._uuid import uuid
-
-    unique_user_id = str(uuid.uuid4())
-    unique_user_email = f"newuser{unique_user_id}@example.com"
-
-    try:
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        litellm.default_internal_user_params = {
-            "user_role": LitellmUserRoles.INTERNAL_USER.value
+    )
+    with wire_server(_idp_reply) as idp, gateway_from_environment() as rig:
+        environment: Final = {
+            "GENERIC_CLIENT_ID": CLIENT_ID,
+            "GENERIC_CLIENT_SECRET": CLIENT_SECRET,
+            "GENERIC_AUTHORIZATION_ENDPOINT": f"{idp.url}/authorize",
+            "GENERIC_TOKEN_ENDPOINT": f"{idp.url}/token",
+            "GENERIC_USERINFO_ENDPOINT": f"{idp.url}/userinfo",
+            "OAUTHLIB_INSECURE_TRANSPORT": "1",
         }
-        await litellm.proxy.proxy_server.prisma_client.connect()
+        with owned_proxy(rig, directory, environment, config=config, remove_environment=("PROXY_BASE_URL",)) as gw:
+            yield gw
 
-        litellm.proxy.proxy_server.master_key = "mock_master_key"
 
-        mock_sso_result = MagicMock()
-        mock_sso_result.email = unique_user_email
-        mock_sso_result.id = unique_user_id
-        mock_sso_result.provider = "google"
-        mock_google_sso.return_value.verify_and_process = AsyncMock(
-            return_value=mock_sso_result
-        )
+def _sign_in(gateway: Gateway, subject: str) -> httpx.Response:
+    proxy_url: Final = str(gateway.client.base_url).rstrip("/")
+    with httpx.Client(follow_redirects=False, trust_env=False, timeout=30) as browser:
+        start: Final = browser.get(f"{proxy_url}/sso/key/generate")
+        assert start.is_redirect, f"{start.status_code} {start.text}"
+        at_idp: Final = browser.get(f"{start.headers['location']}&{urlencode({'login_hint': subject})}")
+        assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
+        return browser.get(at_idp.headers["location"])
 
-        mock_request = Request(
-            scope={
-                "type": "http",
-                "method": "GET",
-                "scheme": "http",
-                "server": ("testserver", 80),
-                "path": "/sso/callback",
-                "query_string": b"",
-                "headers": {},
+
+def _signed_in_user(subject: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT user_email, user_role, metadata FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
+
+
+@pytest.mark.parametrize(
+    ("litellm_settings", "expected_role"),
+    [
+        ({}, "internal_user_viewer"),
+        ({"default_internal_user_params": {"user_role": "internal_user"}}, "internal_user"),
+    ],
+    ids=["no-default", "default-internal-user"],
+)
+def test_a_first_sso_sign_in_creates_the_user_with_the_default_role(
+    tmp_path: Path, litellm_settings: Mapping[str, JsonValue], expected_role: str
+) -> None:
+    subject: Final = f"sso-new-user-{uuid.uuid4().hex[:12]}"
+    with _sso_gateway(tmp_path, litellm_settings) as gateway:
+        callback: Final = _sign_in(gateway, subject)
+
+        assert callback.status_code == 303, f"{callback.status_code} {callback.text}"
+        assert callback.headers["location"].startswith(f"{str(gateway.client.base_url).rstrip('/')}/ui/?login=success")
+        assert _signed_in_user(subject) == [
+            {
+                "user_email": f"{subject}@example.com",
+                "user_role": expected_role,
+                "metadata": {"auth_provider": IDP_PROVIDER},
             }
-        )
-
-        response = await auth_callback(request=mock_request)
-
-        assert response.status_code == 303
-        assert response.headers["location"].startswith(
-            f"http://testserver/ui/?login=success"
-        )
-
-        user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_id": unique_user_id}
-        )
-        print("inserted user from SSO", user)
-        assert user is not None
-        assert user.user_email == unique_user_email
-        assert user.user_role == LitellmUserRoles.INTERNAL_USER
-
-    finally:
-        await prisma_client.db.litellm_usertable.delete(
-            where={"user_id": unique_user_id}
-        )
-        litellm.default_internal_user_params = None
+        ]

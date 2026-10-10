@@ -1,10 +1,3 @@
-"""Stand-in cost center validation service for the team metadata e2e tests.
-
-Accepts POST /validate with {"operation": ..., "metadata": {...}} and answers
-{"ok": true} or {"ok": false, "reason": ...} based on a static allowlist.
-GET /health answers 200 for the CI wait loop.
-"""
-
 import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
