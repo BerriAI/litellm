@@ -1,5 +1,6 @@
 from typing import Final
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_PLACEHOLDER
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.types.llms.bedrock import (
     ContentBlock,
@@ -91,7 +92,7 @@ def test_place_tool_result_images_preserves_tool_result_status_on_gpt():
     tool_result: Final = placed[0]["content"][0]["toolResult"]
     assert isinstance(tool_result, dict)
     assert tool_result["status"] == "error"
-    assert tool_result["content"] == [{"text": "Image attached."}]
+    assert tool_result["content"] == [{"text": TOOL_RESULT_IMAGE_PLACEHOLDER}]
     image: Final = placed[0]["content"][1]["image"]
     assert isinstance(image, dict)
     assert image["format"] == "png"

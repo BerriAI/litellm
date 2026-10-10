@@ -3,10 +3,9 @@
 from collections.abc import Iterator, Sequence
 from typing import Final
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_PLACEHOLDER
 from litellm.llms.bedrock.common_utils import bedrock_converse_supports_tool_result_images
 from litellm.types.llms.bedrock import ContentBlock, ImageBlock, MessageBlock, ToolResultBlock, ToolResultContentBlock
-
-_IMAGE_ONLY_NOTE: Final = "Image attached."
 
 
 def place_tool_result_images(messages: Sequence[MessageBlock], model: str) -> tuple[MessageBlock, ...]:
@@ -35,7 +34,7 @@ def _blocks_with_sibling_images(content: Sequence[ContentBlock]) -> Iterator[Con
         if not images:
             yield block
             continue
-        kept = tuple(_without_images(parts)) or (ToolResultContentBlock(text=_IMAGE_ONLY_NOTE),)
+        kept = tuple(_without_images(parts)) or (ToolResultContentBlock(text=TOOL_RESULT_IMAGE_PLACEHOLDER),)
         yield ContentBlock(toolResult=_tool_result_without_images(tool_result, kept))
         yield from (ContentBlock(image=image) for image in images)
 

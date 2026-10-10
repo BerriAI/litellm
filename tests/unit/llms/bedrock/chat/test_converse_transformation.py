@@ -6622,11 +6622,13 @@ def test_openai_gpt_tool_result_image_sits_beside_the_tool_result():
 
 
 def test_openai_gpt_image_only_tool_result_keeps_a_text_block():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_PLACEHOLDER
+
     turn: Final = _gpt_tool_turn(None)
     tool_index: Final = next(i for i, block in enumerate(turn) if "toolResult" in block)
     tool_result: Final = turn[tool_index]["toolResult"]
     assert isinstance(tool_result, dict)
-    assert tool_result["content"] == [{"text": "Image attached."}]
+    assert tool_result["content"] == [{"text": TOOL_RESULT_IMAGE_PLACEHOLDER}]
     image: Final = turn[tool_index + 1]["image"]
     assert isinstance(image, dict)
     assert image["format"] == "png"
