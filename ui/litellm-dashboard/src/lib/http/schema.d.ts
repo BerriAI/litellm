@@ -47513,7 +47513,8 @@ export interface components {
         };
         /**
          * TelemetryGroup
-         * @description One switch in the telemetry settings; ``litellm.telemetry.consent.REQUIRES`` orders them
+         * @description A telemetry group describes a group of metrics that can be toggled on/off separately. One
+         *     group may have dependencies on another.
          * @enum {string}
          */
         TelemetryGroup: "heartbeat" | "request_success" | "token_info" | "request_taxonomy" | "event_details" | "instance_configuration" | "page_navigation";
