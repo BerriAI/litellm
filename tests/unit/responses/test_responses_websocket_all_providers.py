@@ -8,6 +8,7 @@ Tests that:
 """
 
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -1898,6 +1899,33 @@ def _make_streaming(**kwargs):
     return ResponsesWebSocketStreaming(**kwargs)
 
 
+class _TurnLoggingRecorder:
+    """Stands in for a socket's connection-level Logging object and keeps every per-turn copy it hands out."""
+
+    def __init__(self) -> None:
+        self.turns: list[MagicMock] = []
+        self.connection = MagicMock()
+        self.connection.copy_for_new_call = MagicMock(side_effect=self._copy_for_new_call)
+
+    def _copy_for_new_call(self, litellm_call_id: str, start_time: object) -> MagicMock:
+        from unittest.mock import AsyncMock
+
+        turn = MagicMock()
+        turn.litellm_call_id = litellm_call_id
+        turn.start_time = start_time
+        turn.model_call_details = {}
+        turn.dispatch_success_handlers = AsyncMock()
+        turn.dispatch_failure_handlers = AsyncMock()
+        turn.response_cost_calculator = MagicMock(return_value=0.0)
+        self.turns.append(turn)
+        return turn
+
+    def logged_turns(self) -> int:
+        return sum(
+            1 for turn in self.turns if turn.dispatch_success_handlers.await_count or turn.dispatch_failure_handlers.await_count
+        )
+
+
 class TestNativeWebSocketGuardrailMasking:
     """Exercises the input/output PII masking hooks on ResponsesWebSocketStreaming."""
 
@@ -3051,12 +3079,11 @@ class TestNativeWebSocketEncryptedContentAffinity:
                 Exception("stop"),
             ]
         )
-        logging_obj = MagicMock()
-        logging_obj.dispatch_success_handlers = AsyncMock()
+        recorder = _TurnLoggingRecorder()
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
-            logging_obj=logging_obj,
+            logging_obj=recorder.connection,
             request_data={"litellm_metadata": dict(_AFFINITY_METADATA)},
             custom_llm_provider="openai",
         )
@@ -3075,7 +3102,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
         assert completed["response"]["output"][0]["encrypted_content"] == wrapped_content
         await asyncio.sleep(0)
-        logged = logging_obj.dispatch_success_handlers.await_args[0][0]
+        logged = recorder.turns[0].dispatch_success_handlers.await_args[0][0]
         assert logged[0]["response"]["id"] == completed["response"]["id"]
 
     @pytest.mark.asyncio
@@ -3163,14 +3190,11 @@ class TestNativeWebSocketEncryptedContentAffinity:
                 Exception("stop"),
             ]
         )
-        logging_obj = MagicMock()
-        logging_obj.dispatch_success_handlers = AsyncMock()
-        logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
+        recorder = _TurnLoggingRecorder()
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
-            logging_obj=logging_obj,
+            logging_obj=recorder.connection,
             request_data={},
             authorized_model="gpt-5.6",
             custom_llm_provider="openai",
@@ -3179,163 +3203,306 @@ class TestNativeWebSocketEncryptedContentAffinity:
         await handler.backend_to_client()
         await asyncio.sleep(0)
 
-        logging_obj.dispatch_success_handlers.assert_not_awaited()
-        logging_obj.dispatch_failure_handlers.assert_awaited_once()
-        exception = logging_obj.dispatch_failure_handlers.await_args[0][0]
+        (turn,) = recorder.turns
+        turn.dispatch_success_handlers.assert_not_awaited()
+        turn.dispatch_failure_handlers.assert_awaited_once()
+        exception = turn.dispatch_failure_handlers.await_args[0][0]
         assert exception.status_code == expected_status
         assert failure_frame.get("error", failure_frame.get("response", {}).get("error"))["message"] in str(exception)
 
-    @pytest.mark.asyncio
-    async def test_backend_to_client_bills_completed_turns_before_a_failure(self):
+
+def _completed_turn(response_id: str, input_tokens: int, output_tokens: int) -> list[dict[str, object]]:
+    return [
+        {"type": "response.created", "response": {"id": response_id, "status": "in_progress"}},
+        {"type": "response.output_text.delta", "delta": "hi"},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                },
+            },
+        },
+    ]
+
+
+def _response_create(text: str) -> str:
+    return json.dumps(
+        {
+            "type": "response.create",
+            "model": "gpt-5.4-mini",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}],
+        }
+    )
+
+
+class _ScriptedBackend:
+    """Answers each forwarded response.create with the next scripted turn of upstream events."""
+
+    def __init__(self, turns: list[list[dict[str, object]]]) -> None:
         import asyncio
+
+        self.turns = list(turns)
+        self.events: asyncio.Queue[str] = asyncio.Queue()
+        self.sent: list[str] = []
+
+    async def send(self, frame: str) -> None:
+        self.sent.append(frame)
+        if json.loads(frame).get("type") == "response.create" and self.turns:
+            for event in self.turns.pop(0):
+                self.events.put_nowait(json.dumps(event))
+
+    async def recv(self, decode: bool = False) -> str:
+        return await self.events.get()
+
+    async def close(self) -> None:
+        return None
+
+
+async def _until(condition) -> bool:
+    import asyncio
+
+    for _ in range(200):
+        if condition():
+            return True
+        await asyncio.sleep(0)
+    return False
+
+
+class _ScriptedClient:
+    """Sends each frame only after the previous turn's log was dispatched, then hangs up."""
+
+    def __init__(self, frames: list[str], logged_turns: Callable[[], int]) -> None:
+        self.frames = list(frames)
+        self.logged_turns = logged_turns
+        self.sent_text: list[str] = []
+        self.logged_turns_before_each_frame: list[int] = []
+        self.logged_turns_before_hang_up: int | None = None
+
+    async def receive_text(self) -> str:
+        sent_so_far = len(self.logged_turns_before_each_frame)
+        await _until(lambda: self.logged_turns() >= sent_so_far)
+        if self.frames:
+            self.logged_turns_before_each_frame.append(self.logged_turns())
+            return self.frames.pop(0)
+        self.logged_turns_before_hang_up = self.logged_turns()
+        raise Exception("client hung up")
+
+    async def send_text(self, text: str) -> None:
+        self.sent_text.append(text)
+
+
+class TestNativeWebSocketPerTurnLogging:
+    """One native Responses socket carries many response.create turns, and each turn is its own logged call."""
+
+    @pytest.mark.asyncio
+    async def test_each_turn_is_logged_as_its_own_call_while_the_socket_stays_open(self):
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        recorder = _TurnLoggingRecorder()
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder.logged_turns)
+        backend = _ScriptedBackend(
+            [_completed_turn("resp_1", 10, 1), _completed_turn("resp_2", 20, 2), _completed_turn("resp_3", 30, 3)]
+        )
+        handler = _make_streaming(
+            websocket=client, backend_ws=backend, logging_obj=recorder.connection, request_data={}
+        )
+
+        await handler.bidirectional_forward()
+
+        assert client.logged_turns_before_each_frame == [0, 1, 2]
+        assert client.logged_turns_before_hang_up == 3
+        assert len({turn.litellm_call_id for turn in recorder.turns}) == 3
+        assert recorder.connection.litellm_call_id not in {turn.litellm_call_id for turn in recorder.turns}
+        logged_events = [turn.dispatch_success_handlers.await_args[0][0] for turn in recorder.turns]
+        sent_frames = [json.loads(text) for text in client.sent_text]
+        ids_the_client_saw = [frame["response"]["id"] for frame in sent_frames if frame["type"] == "response.completed"]
+        assert [events[-1]["response"]["id"] for events in logged_events] == ids_the_client_saw
+        assert [
+            ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)["response_id"]
+            for response_id in ids_the_client_saw
+        ] == ["resp_1", "resp_2", "resp_3"]
+        assert [len(events) for events in logged_events] == [2, 2, 2]
+        assert [events[-1]["response"]["usage"]["input_tokens"] for events in logged_events] == [10, 20, 30]
+        assert [turn.model_call_details["messages"] for turn in recorder.turns] == [
+            [{"role": "user", "content": "one"}],
+            [{"role": "user", "content": "two"}],
+            [{"role": "user", "content": "three"}],
+        ]
+        for turn in recorder.turns:
+            turn.dispatch_failure_handlers.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_turn_is_booked_alone_and_leaves_the_other_turns_successful(self):
         from unittest.mock import AsyncMock
 
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        websocket = MagicMock()
-        websocket.send_text = AsyncMock()
-        backend_ws = MagicMock()
-        backend_ws.recv = AsyncMock(
-            side_effect=[
-                json.dumps(
+        recorder = _TurnLoggingRecorder()
+        on_turn_failure = AsyncMock()
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder.logged_turns)
+        backend = _ScriptedBackend(
+            [
+                _completed_turn("resp_1", 10, 1),
+                [
                     {
-                        "type": "response.completed",
-                        "response": {
-                            "id": "resp_1",
-                            "status": "completed",
-                            "output": [],
-                            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                        "type": "error",
+                        "status": 400,
+                        "error": {
+                            "type": "invalid_request_error",
+                            "code": "previous_response_not_found",
+                            "message": "Previous response with id 'resp_x' not found.",
                         },
                     }
-                ),
-                json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": "bad turn"}}),
-                Exception("stop"),
+                ],
+                _completed_turn("resp_3", 30, 3),
             ]
         )
-        logging_obj = MagicMock()
-        logging_obj.dispatch_success_handlers = AsyncMock()
-        logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj.response_cost_calculator = MagicMock(return_value=0.01)
-        handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, logging_obj=logging_obj, request_data={})
+        handler = _make_streaming(
+            websocket=client,
+            backend_ws=backend,
+            logging_obj=recorder.connection,
+            request_data={},
+            authorized_model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+            on_turn_failure=on_turn_failure,
+        )
 
-        await handler.backend_to_client()
-        await asyncio.sleep(0)
+        await handler.bidirectional_forward()
 
-        logging_obj.record_partial_usage_for_failure.assert_called_once()
-        usage, response_cost = logging_obj.record_partial_usage_for_failure.call_args[0]
-        assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
-        assert response_cost == 0.01
-        logging_obj.dispatch_success_handlers.assert_not_awaited()
-        logging_obj.dispatch_failure_handlers.assert_awaited_once()
+        first, failed, third = recorder.turns
+        for successful in (first, third):
+            successful.dispatch_success_handlers.assert_awaited_once()
+            successful.dispatch_failure_handlers.assert_not_awaited()
+        failed.dispatch_success_handlers.assert_not_awaited()
+        failed.dispatch_failure_handlers.assert_awaited_once()
+        on_turn_failure.assert_awaited_once()
+        booked_turn, booked_exception = on_turn_failure.await_args[0]
+        assert booked_turn is failed
+        assert booked_exception is failed.dispatch_failure_handlers.await_args[0][0]
+        assert booked_exception.status_code == 400
+        assert "not found" in str(booked_exception)
 
     @pytest.mark.asyncio
-    async def test_bidirectional_forward_returns_the_provider_failure(self):
-        import asyncio
-        from unittest.mock import AsyncMock
+    async def test_a_failed_turn_bills_the_usage_its_failure_event_reports(self):
+        from datetime import datetime
 
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        backend_drained = asyncio.Event()
-        backend_events = [
-            json.dumps({"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}}),
-            json.dumps(
-                {
-                    "type": "error",
-                    "status": 400,
-                    "error": {
-                        "type": "invalid_request_error",
-                        "code": "invalid_encrypted_content",
-                        "message": "could not be verified",
+        import litellm
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+        from litellm.types.utils import CallTypes
+
+        logged: list[dict[str, object]] = []
+
+        class _SpendRows(CustomLogger):
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                logged.append(kwargs["standard_logging_object"])
+
+            async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                logged.append(kwargs["standard_logging_object"])
+
+        spend_rows = _SpendRows()
+        connection = Logging(
+            model="gpt-4o",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aresponses_websocket.value,
+            start_time=datetime.now(),  # noqa: DTZ005  # logging pipeline uses naive datetimes
+            litellm_call_id="ws-connection",
+            function_id="ws-connection",
+            dynamic_async_success_callbacks=[spend_rows],
+            dynamic_async_failure_callbacks=[spend_rows],
+        )
+        connection.update_environment_variables(
+            litellm_params={"metadata": {}, "proxy_server_request": {}},
+            optional_params={},
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        failed_usage = {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9}
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two")], lambda: len(logged))
+        backend = _ScriptedBackend(
+            [
+                _completed_turn("resp_1", 10, 5),
+                [
+                    {"type": "response.created", "response": {"id": "resp_2", "status": "in_progress"}},
+                    {
+                        "type": "response.failed",
+                        "response": {
+                            "id": "resp_2",
+                            "status": "failed",
+                            "error": {"code": "server_error", "message": "upstream blew up"},
+                            "usage": failed_usage,
+                        },
                     },
-                }
-            ),
-        ]
-
-        async def recv(decode=False):
-            if backend_events:
-                return backend_events.pop(0)
-            backend_drained.set()
-            raise Exception("stop")
-
-        async def receive_text():
-            await backend_drained.wait()
-            raise Exception("client gone")
-
-        websocket = MagicMock()
-        websocket.send_text = AsyncMock()
-        websocket.receive_text = receive_text
-        backend_ws = MagicMock()
-        backend_ws.recv = recv
-        backend_ws.send = AsyncMock()
-        backend_ws.close = AsyncMock()
-        logging_obj = MagicMock()
-        logging_obj.dispatch_success_handlers = AsyncMock()
-        logging_obj.dispatch_failure_handlers = AsyncMock()
-        logging_obj.response_cost_calculator = MagicMock(return_value=0.0)
+                ],
+            ]
+        )
         handler = _make_streaming(
-            websocket=websocket,
-            backend_ws=backend_ws,
-            logging_obj=logging_obj,
+            websocket=client,
+            backend_ws=backend,
+            logging_obj=connection,
             request_data={},
-            authorized_model="gpt-5.6",
+            authorized_model="gpt-4o",
             custom_llm_provider="openai",
         )
 
-        failure = await handler.bidirectional_forward()
+        await handler.bidirectional_forward()
+        await _until(lambda: len(logged) == 2)
 
-        assert isinstance(failure, Exception)
-        assert failure.status_code == 400
-        assert "could not be verified" in str(failure)
+        completed, failed = logged
+        assert (completed["status"], failed["status"]) == ("success", "failure")
+        assert (completed["prompt_tokens"], completed["completion_tokens"]) == (10, 5)
+        assert (failed["prompt_tokens"], failed["completion_tokens"]) == (7, 2)
+        http_failed_cost = litellm.completion_cost(
+            completion_response=ResponsesAPIResponse(
+                id="resp_2",
+                created_at=0,
+                model="gpt-4o",
+                object="response",
+                output=[],
+                status="failed",
+                usage=ResponseAPIUsage(**failed_usage),
+            ),
+            model="gpt-4o",
+            call_type=CallTypes.aresponses.value,
+            custom_llm_provider="openai",
+        )
+        assert http_failed_cost > 0
+        assert failed["response_cost"] == pytest.approx(http_failed_cost)
 
     @pytest.mark.asyncio
-    async def test_bidirectional_forward_returns_none_after_a_completed_turn(self):
-        import asyncio
-        from unittest.mock import AsyncMock
-
+    async def test_a_turn_still_in_flight_when_the_socket_closes_is_logged_with_what_it_received(self):
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        backend_drained = asyncio.Event()
-        backend_events = [
-            json.dumps(
-                {
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_1",
-                        "status": "completed",
-                        "output": [],
-                        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-                    },
-                }
-            ),
-        ]
-
-        async def recv(decode=False):
-            if backend_events:
-                return backend_events.pop(0)
-            backend_drained.set()
-            raise Exception("stop")
-
-        async def receive_text():
-            await backend_drained.wait()
-            raise Exception("client gone")
-
-        websocket = MagicMock()
-        websocket.send_text = AsyncMock()
-        websocket.receive_text = receive_text
-        backend_ws = MagicMock()
-        backend_ws.recv = recv
-        backend_ws.send = AsyncMock()
-        backend_ws.close = AsyncMock()
-        logging_obj = MagicMock()
-        logging_obj.dispatch_success_handlers = AsyncMock()
-        logging_obj.dispatch_failure_handlers = AsyncMock()
+        recorder = _TurnLoggingRecorder()
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder.logged_turns)
+        backend = _ScriptedBackend(
+            [
+                _completed_turn("resp_1", 10, 1),
+                [{"type": "response.created", "response": {"id": "resp_2", "status": "in_progress"}}],
+            ]
+        )
         handler = _make_streaming(
-            websocket=websocket,
-            backend_ws=backend_ws,
-            logging_obj=logging_obj,
-            request_data={},
-            authorized_model="gpt-5.6",
-            custom_llm_provider="openai",
+            websocket=client, backend_ws=backend, logging_obj=recorder.connection, request_data={}
         )
 
-        assert await handler.bidirectional_forward() is None
+        await handler.bidirectional_forward()
+        await _until(lambda: recorder.turns[1].dispatch_success_handlers.await_count == 1)
+
+        first, in_flight, unanswered = recorder.turns
+        first.dispatch_success_handlers.assert_awaited_once()
+        in_flight.dispatch_success_handlers.assert_awaited_once()
+        assert [event["type"] for event in in_flight.dispatch_success_handlers.await_args[0][0]] == ["response.created"]
+        unanswered.dispatch_success_handlers.assert_not_awaited()
+        unanswered.dispatch_failure_handlers.assert_not_awaited()

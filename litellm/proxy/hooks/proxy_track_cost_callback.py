@@ -469,11 +469,7 @@ class _ProxyDBLogger(CustomLogger):
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
-                # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
-                # result=None; their per-turn costs are tracked on the inner aresponses/realtime calls.
-                if sl_object is None and (
-                    not kwargs.get("model") or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
-                ):
+                if sl_object is None and (not kwargs.get("model") or kwargs.get("call_type") == "_arealtime"):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),

@@ -495,8 +495,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
-        # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
-        if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
+        if kwargs.get("call_type") == "_arealtime":
             return
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
