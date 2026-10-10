@@ -3996,6 +3996,53 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
 
 
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_invokes_sync_provider_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    response: Final = await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="single call check",
+        voice="Kore",
+        api_key="fake-gemini-key",
+    )
+
+    assert mock_route.call_count == 1, "a synchronous provider must be invoked exactly once"
+    assert b"pcm-audio-bytes" in response.content, "the audio must come from that single invocation"
+    await _wait_for_success_event(recorder, call_type="aspeech")
+    await asyncio.sleep(0.1)
+    assert [event.call_type for event in recorder.events].count("aspeech") == 1
+
+
+@pytest.mark.asyncio
+async def test_aspeech_awaits_coroutine_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+    result: Final = HttpxBinaryResponseContent(
+        httpx.Response(200, content=b"async-audio", request=httpx.Request("POST", "https://example.test"))
+    )
+
+    async def fake_speech(*args: object, **kwargs: object) -> HttpxBinaryResponseContent:
+        calls.append(kwargs.get("model"))
+        return result
+
+    monkeypatch.setattr(litellm_main, "speech", fake_speech)
+
+    response: Final = await litellm.aspeech(model="openai/tts-1", input="hi", voice="alloy", api_key="fake-key")
+
+    assert calls == ["openai/tts-1"]
+    assert response is result
+    assert response.content == b"async-audio"
+
+
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-cost",
