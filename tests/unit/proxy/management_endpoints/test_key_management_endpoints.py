@@ -485,6 +485,100 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_honors_explicit_expires_without_duration(monkeypatch):
+    """GH#45236: an absolute `expires` timestamp supplied to /key/generate must be
+    persisted and returned as-is — not silently replaced by a duration-derived
+    expiry. No `duration` is given, so the supplied timestamp is the only
+    source of truth for the key's expiry, and the insert payload (what an
+    immediate GET /key/info reads back) must carry it."""
+    explicit_expires = datetime(2031, 5, 4, 3, 2, 1, tzinfo=timezone.utc)
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None, object_permission=None)
+    )
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    response = await generate_key_fn(
+        data=GenerateKeyRequest(expires=explicit_expires),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="admin"
+        ),
+    )
+
+    assert response.expires == explicit_expires
+    key_insert = mock_prisma_client.insert_data.await_args_list[-1].kwargs
+    assert key_insert["table_name"] == "key"
+    assert key_insert["data"]["expires"] == explicit_expires
+
+
+@pytest.mark.asyncio
+async def test_generate_key_rejects_explicit_expires_with_duration():
+    """GH#45236: `expires` (absolute) and `duration` (relative) are two ways to say
+    when a key dies. Accepting both would require silently picking one, so the
+    ambiguous request must be rejected with a clear 400."""
+    with pytest.raises(HTTPException) as exc:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                expires=datetime(2031, 5, 4, 3, 2, 1, tzinfo=timezone.utc),
+                duration="1d",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="admin"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc.value.status_code == 400
+    assert "expires" in str(exc.value.detail) and "duration" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_expires_only_survives_config_upperbound_duration(monkeypatch):
+    """With `upperbound_key_generate_params.duration` configured, generate fills a
+    duration onto requests that don't set one. An explicit `expires` timestamp
+    from the caller must still win over that config-derived duration — otherwise
+    the timestamp is silently ignored (the exact bug in GH#45236)."""
+    explicit_expires = datetime(2031, 5, 4, 3, 2, 1, tzinfo=timezone.utc)
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(duration="1d"),
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None, object_permission=None)
+    )
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    response = await generate_key_fn(
+        data=GenerateKeyRequest(expires=explicit_expires),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="admin"
+        ),
+    )
+
+    assert response.expires == explicit_expires
+    key_insert = mock_prisma_client.insert_data.await_args_list[-1].kwargs
+    assert key_insert["data"]["expires"] == explicit_expires
+
+
+@pytest.mark.asyncio
 async def test_generate_key_persists_tpd_limit(monkeypatch):
     mock_prisma_client = AsyncMock()
     mock_prisma_client.insert_data = AsyncMock(
@@ -2384,6 +2478,64 @@ async def test_prepare_key_update_data_duration_none_never_expires():
     )
 
     assert result["expires"] is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_honors_explicit_expires():
+    """GH#45236: an absolute `expires` timestamp on /key/update must be persisted,
+    replacing the stored expiry — previously it was dropped and the stored
+    expiry (here, from the original duration) stayed unchanged."""
+    explicit_expires = datetime(2031, 5, 4, 3, 2, 1, tzinfo=timezone.utc)
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        expires="2030-01-01T00:00:00+00:00",
+        metadata={},
+    )
+
+    result = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="test-token", expires=explicit_expires),
+        existing_key_row=existing_key,
+    )
+
+    assert result["expires"] == explicit_expires
+    assert "duration" not in result
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_rejects_explicit_expires_with_duration():
+    """GH#45236: `expires` + `duration` on /key/update is ambiguous — reject with a
+    clear 400 instead of silently letting one of them win."""
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        expires="2030-01-01T00:00:00+00:00",
+        metadata={},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await prepare_key_update_data(
+            data=UpdateKeyRequest(
+                key="test-token",
+                expires=datetime(2031, 5, 4, 3, 2, 1, tzinfo=timezone.utc),
+                duration="1d",
+            ),
+            existing_key_row=existing_key,
+        )
+    assert exc.value.status_code == 400
+    assert "expires" in str(exc.value.detail) and "duration" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_effective_key_for_generate_uses_explicit_expires():
+    """The custom-key-policy view of a generate request must see the caller's
+    absolute `expires`, not a duration-derived timestamp."""
+    now = datetime(2031, 5, 4, 3, 2, 1, tzinfo=timezone.utc)
+    explicit_expires = datetime(2031, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    effective = _effective_key_for_generate(
+        data=GenerateKeyRequest(expires=explicit_expires), now=now
+    )
+
+    assert effective.expires == explicit_expires
 
 
 @pytest.mark.asyncio
