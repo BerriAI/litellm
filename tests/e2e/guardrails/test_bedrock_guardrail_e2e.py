@@ -69,6 +69,44 @@ class TestBedrockGuardrail:
             mode=Mode.NONSTREAM,
         )
     )
+    def test_bedrock_guardrail_triggered(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        identifier = os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"]
+        version = os.environ["BEDROCK_GUARDRAIL_VERSION"]
+        name = f"e2e-bedrock-guard-{unique_marker()}"
+        guardrail_id = client.create_bedrock_guardrail(name, identifier=identifier, version=version)
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        result = poll_until_blocked(
+            lambda: client.chat(
+                scoped_key,
+                MODEL,
+                "Hello do you like coffee?",
+                guardrails=[name],
+            )
+        )
+
+        match result:
+            case UnknownApiError(status_code=status, body=body):
+                assert status in {400, 403}, f"expected a guardrail block status, got {status}: {body[:400]}"
+                assert "Violated guardrail policy" in body
+            case _:
+                pytest.fail(f"bedrock guardrail did not block the request; got {result}")
+
+    @pytest.mark.covers(
+        "guardrail.bedrock.pre_call.blocks",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_pre_call_blocks_harmful_prompt(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:

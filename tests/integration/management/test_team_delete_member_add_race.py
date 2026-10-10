@@ -173,7 +173,7 @@ async def test_member_add_blocked_by_delete_writes_no_dangling_reference():
                     task = asyncio.create_task(add_member())
                     await _await_lock_contention(db, lock_key, task, "member_add")
 
-                    # the delete wins the race: strip the team row while the lock is held
+                                                                                         
                     await held.execute_raw(_DELETE_TEAM, team_id)
 
                 with pytest.raises(HTTPException) as exc_info:
@@ -237,7 +237,7 @@ async def test_member_delete_blocked_by_member_add_removes_from_the_fresh_roster
                         task = asyncio.create_task(run_delete())
                         await _await_lock_contention(db, lock_key, task, "member_delete")
 
-                        # member_add wins the race: it adds `other_user` while holding the lock
+                                                                                               
                         await held.litellm_teamtable.update(
                             where={"team_id": team_id},
                             data={"members_with_roles": winning_add_roster},
@@ -315,7 +315,7 @@ async def test_delete_blocked_by_member_add_sweeps_the_fresh_reference():
                         task = asyncio.create_task(run_delete())
                         await _await_lock_contention(db, lock_key, task, "delete_team")
 
-                        # member_add wins the race: write the reference while holding the lock
+                                                                                              
                         await held.litellm_usertable.upsert(
                             where={"user_id": user_id},
                             data={

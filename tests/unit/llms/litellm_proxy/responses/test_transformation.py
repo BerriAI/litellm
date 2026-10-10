@@ -4,7 +4,15 @@ import pytest
 
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.types.utils import LlmProviders
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.utils import ProviderConfigManager
+
+
+def test_litellm_proxy_responses_config_uses_openai_response_contract() -> None:
+    config: Final = LiteLLMProxyResponsesAPIConfig()
+
+    assert isinstance(config, OpenAIResponsesAPIConfig)
+    assert config.custom_llm_provider == LlmProviders.LITELLM_PROXY
 
 
 def test_provider_config_manager_returns_litellm_proxy_responses_config() -> None:

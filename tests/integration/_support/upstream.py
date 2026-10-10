@@ -312,7 +312,7 @@ class Provider:
             self.observations.put(
                 Observation(request.url.path, request.headers.get("authorization", ""), body, request.method)
             )
-        elif request.method == "GET":
+        elif request.method in {"DELETE", "GET"}:
             self.observations.put(
                 Observation(request.url.path, request.headers.get("authorization", ""), {}, request.method)
             )
@@ -566,6 +566,7 @@ class Provider:
                 ),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
+                Route("/{path:path}", self.scripted, methods=["DELETE"]),
                 WebSocketRoute("/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/realtime", self.realtime),

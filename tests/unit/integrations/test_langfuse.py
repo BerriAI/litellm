@@ -11,11 +11,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.types.utils import (
     Choices,
     Message,
@@ -31,6 +34,19 @@ from litellm.types.utils import (
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
+
+
+@pytest.mark.asyncio
+async def test_langfuse_otel_service_hooks_do_not_export_spans() -> None:
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = LangfuseOtelLogger(
+        config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True)
+    )
+
+    await logger.async_service_success_hook("health_check", {"status": "ok"})
+    await logger.async_service_failure_hook("health_check", {"status": "error"})
+
+    assert exporter.get_finished_spans() == []
 
 
 class TestLangfuseUsageDetails(unittest.TestCase):
