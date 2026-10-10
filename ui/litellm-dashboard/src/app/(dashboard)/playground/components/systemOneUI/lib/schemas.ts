@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type DecisionEndpoint = "/v1/decisions" | "/typesafe/v1/systemone";
+export type DecisionEndpoint = "/v1/systemone" | "/typesafe/v1/systemone";
 
 const decisionsJson = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 const decisionInstructions = decisionsJson.nullish();

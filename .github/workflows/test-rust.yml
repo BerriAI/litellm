@@ -7,6 +7,8 @@ on:
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
       - "scripts/trace_codegen/**"
+      - "scripts/lens_assets/**"
+      - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -36,6 +38,8 @@ on:
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
       - "scripts/trace_codegen/**"
+      - "scripts/lens_assets/**"
+      - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -89,11 +93,14 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo clippy --workspace --all-targets --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Trim debuginfo to keep the job's target dir within the runner's disk
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         working-directory: litellm-rust
@@ -132,7 +139,7 @@ jobs:
         working-directory: .
         run: uv run scripts/generate_trace_types.py --check
 
-      - run: cargo nextest run --workspace --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema
+      - run: cargo nextest run --workspace --locked
 
       - run: cargo test --workspace --doc --locked
 

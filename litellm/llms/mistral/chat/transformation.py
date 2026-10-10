@@ -229,7 +229,7 @@ class MistralConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[object, object, list[AllMessageValues]]: 
+    ) -> Coroutine[object, object, list[AllMessageValues]]:
         ...
 
     @overload
@@ -285,6 +285,24 @@ class MistralConfig(OpenAIGPTConfig):
             return super()._transform_messages(new_messages, model, True)
         else:
             return super()._transform_messages(new_messages, model, False)
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
 
     async def _transform_messages_async(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
         """
@@ -394,12 +412,12 @@ class MistralConfig(OpenAIGPTConfig):
         import copy
 
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-        from litellm.utils import _remove_json_schema_refs
+        from litellm.utils import remove_json_schema_refs
 
         cleaned_tools = copy.deepcopy(tools)
 
         # Apply all cleaning functions with max_depth protection
-        cleaned_tools = _remove_json_schema_refs(cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
+        cleaned_tools = remove_json_schema_refs(cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
 
         return cleaned_tools
 

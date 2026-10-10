@@ -10,7 +10,7 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Keep one canonical definition and import path when moving a contract, updating consumers together instead of adding duplicate models or compatibility re-exports
 
 - Keep shared provider-specific wire types and extensions under `providers`
-  - Provider types may reuse format types; format types must not depend on provider types
+  - Provider types may reuse format types. Format types must not depend on provider types
   - A field belonging to an API format stays under `formats` even when provider support varies. Including it in a type does not promise provider support
   - Add a typed provider extension when a consumer needs to interpret or construct it. Keep adapter-only projections in `llms` until a shared public data contract is needed
   - Keep one authoritative representation of each field, preserving unknown fields without duplicating typed values in an extension map
@@ -67,3 +67,9 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Follow the workspace test-placement and `rstest` rules
   - Test provider transformations, header policy, and stream execution in their owning crates
   - Do not test import locations or Rust source structure as substitutes for behavior
+
+# references
+
+## json_schema.rs
+
+- https://json-schema.org/draft/2020-12/json-schema-core

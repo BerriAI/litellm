@@ -240,7 +240,7 @@ def test_add_callbacks_invalid_input():
 @pytest.mark.asyncio
 async def test_json_logs_calls_turn_on_json():
     """
-    Test that json_logs: true in litellm_settings calls litellm._turn_on_json()
+    Test that json_logs: true in litellm_settings calls litellm.turn_on_json()
 
     This is a regression test for the bug where json_logs in config file
     would only set the attribute but not actually enable JSON logging.
@@ -269,7 +269,7 @@ async def test_json_logs_calls_turn_on_json():
         proxy_config = ProxyConfig()
 
         # Mock _turn_on_json to track if it gets called
-        with mock.patch("litellm._turn_on_json") as mock_turn_on_json:
+        with mock.patch("litellm.turn_on_json") as mock_turn_on_json:
             await proxy_config.load_config(
                 router=None,
                 config_file_path=temp_file_path,

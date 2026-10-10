@@ -32,12 +32,24 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
-    _is_model_cost_zero,
-    _virtual_key_soft_budget_check,
+    is_model_cost_zero,
+    virtual_key_soft_budget_check,
     _team_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
+
+
+@pytest.mark.parametrize("route", ("/lens/datasets", "/lens/tracing/keys"))
+def test_lens_management_does_not_require_an_inference_user_parameter(route: str) -> None:
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.auth_checks import _enforce_user_param_check
+
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    _enforce_user_param_check({"enforce_user_param": True}, request, {}, route)
+    with pytest.raises(Exception, match="'user' param not passed"):
+        _enforce_user_param_check({"enforce_user_param": True}, request, {}, "/v1/chat/completions")
 
 
 @pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
@@ -91,7 +103,7 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     Note: Budget enforcement for end users happens in common_checks() via 
     _check_end_user_budget(), not in get_end_user_object().
     """
-    from litellm.proxy.auth.auth_checks import _check_end_user_budget
+    from litellm.proxy.auth.auth_checks import check_end_user_budget
     
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
     end_user_obj = LiteLLM_EndUserTable(
@@ -104,14 +116,14 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     should_exceed = customer_spend > customer_budget
     
     if not should_exceed:
-        await _check_end_user_budget(
+        await check_end_user_budget(
             end_user_obj=end_user_obj,
             route="/v1/chat/completions",
         )
         return
 
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await _check_end_user_budget(
+        await check_end_user_budget(
             end_user_obj=end_user_obj,
             route="/v1/chat/completions",
         )
@@ -476,7 +488,7 @@ async def test_virtual_key_max_budget_check(
     1. Triggers budget alert for all cases
     2. Raises BudgetExceededError when spend >= max_budget
     """
-    from litellm.proxy.auth.auth_checks import _virtual_key_max_budget_check
+    from litellm.proxy.auth.auth_checks import virtual_key_max_budget_check
 
     # Setup test data
     valid_token = UserAPIKeyAuth(
@@ -508,7 +520,7 @@ async def test_virtual_key_max_budget_check(
 
     if expect_budget_error:
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
-            await _virtual_key_max_budget_check(
+            await virtual_key_max_budget_check(
                 valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
                 user_obj=user_obj,
@@ -516,7 +528,7 @@ async def test_virtual_key_max_budget_check(
         assert exc_info.value.current_cost == token_spend
         assert exc_info.value.max_budget == max_budget
     else:
-        await _virtual_key_max_budget_check(
+        await virtual_key_max_budget_check(
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
             user_obj=user_obj,
@@ -633,7 +645,7 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 
     proxy_logging_obj = MockProxyLogging()
 
-    await _virtual_key_soft_budget_check(
+    await virtual_key_soft_budget_check(
         valid_token=valid_token,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -970,7 +982,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
 @pytest.mark.asyncio
 async def test_cache_access_object():
     """Test _cache_access_object stores access group in cache with correct key."""
-    from litellm.proxy.auth.auth_checks import _cache_access_object
+    from litellm.proxy.auth.auth_checks import cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
 
     cache = DualCache()
@@ -980,7 +992,7 @@ async def test_cache_access_object():
         access_group_name="test-group",
         access_model_names=["gpt-4"],
     )
-    await _cache_access_object(
+    await cache_access_object(
         access_group_id=ag_id,
         access_group_table=ag_table,
         user_api_key_cache=cache,
@@ -998,7 +1010,7 @@ async def test_cache_access_object():
 @pytest.mark.asyncio
 async def test_delete_cache_access_object():
     """Test _delete_cache_access_object removes access group from in-memory cache."""
-    from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+    from litellm.proxy.auth.auth_checks import delete_cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
 
     cache = DualCache()
@@ -1008,7 +1020,7 @@ async def test_delete_cache_access_object():
         access_group_name="to-delete",
     )
     await cache.async_set_cache(key=f"access_group_id:{ag_id}", value=ag_table, ttl=60)
-    await _delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
+    await delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
     cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
     assert cached is None
 
@@ -1047,8 +1059,8 @@ async def test_get_resources_from_access_groups(
 
     from litellm.proxy._types import LiteLLM_AccessGroupTable
     from litellm.proxy.auth.auth_checks import (
-        _get_agent_ids_from_access_groups,
-        _get_models_from_access_groups,
+        get_agent_ids_from_access_groups,
+        get_models_from_access_groups,
     )
 
     ag_table = LiteLLM_AccessGroupTable(
@@ -1064,13 +1076,13 @@ async def test_get_resources_from_access_groups(
         return_value=ag_table,
     ):
         if resource_field == "access_model_names":
-            result = await _get_models_from_access_groups(
+            result = await get_models_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
                 user_api_key_cache=DualCache(),
             )
         else:
-            result = await _get_agent_ids_from_access_groups(
+            result = await get_agent_ids_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
                 user_api_key_cache=DualCache(),
@@ -1081,9 +1093,9 @@ async def test_get_resources_from_access_groups(
 @pytest.mark.asyncio
 async def test_get_models_from_access_groups_empty_ids():
     """Test _get_models_from_access_groups returns empty list when access_group_ids is empty."""
-    from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+    from litellm.proxy.auth.auth_checks import get_models_from_access_groups
 
-    result = await _get_models_from_access_groups(access_group_ids=[])
+    result = await get_models_from_access_groups(access_group_ids=[])
     assert result == []
 
 
@@ -1106,7 +1118,7 @@ async def test_can_team_access_model_via_access_group_ids():
     )
 
     with patch(
-        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
         new_callable=AsyncMock,
         return_value=["gpt-4"],
     ):
@@ -1134,7 +1146,7 @@ async def test_can_team_access_model_access_group_ids_denied():
     )
 
     with patch(
-        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
         new_callable=AsyncMock,
         return_value=["claude-3"],
     ):
@@ -1174,7 +1186,7 @@ async def test_can_key_call_model_via_access_group_ids():
     )
 
     with patch(
-        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
         new_callable=AsyncMock,
         return_value=["gpt-4"],
     ):
@@ -1231,7 +1243,7 @@ async def test_key_access_group_grants_model_when_team_authorized():
     """
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.proxy.auth.auth_checks import key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1262,7 +1274,7 @@ async def test_key_access_group_grants_model_when_team_authorized():
         p.start()
     try:
         assert (
-            await _key_access_group_grants_model(
+            await key_access_group_grants_model(
                 model="claude-haiku-4-5",
                 valid_token=valid_token,
                 team_object=team_object,
@@ -1284,7 +1296,7 @@ async def test_key_access_group_grants_model_when_key_directly_authorized():
     """
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.proxy.auth.auth_checks import key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token-hashed",
@@ -1316,7 +1328,7 @@ async def test_key_access_group_grants_model_when_key_directly_authorized():
         p.start()
     try:
         assert (
-            await _key_access_group_grants_model(
+            await key_access_group_grants_model(
                 model="claude-haiku-4-5",
                 valid_token=valid_token,
                 team_object=team_object,
@@ -1332,7 +1344,7 @@ async def test_key_access_group_grants_model_when_key_directly_authorized():
 @pytest.mark.asyncio
 async def test_key_access_group_grants_model_when_key_has_no_groups():
     """Key with no access_group_ids → False (early return, no DB read)."""
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.proxy.auth.auth_checks import key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1346,7 +1358,7 @@ async def test_key_access_group_grants_model_when_key_has_no_groups():
         access_group_ids=["any-group"],
     )
     assert (
-        await _key_access_group_grants_model(
+        await key_access_group_grants_model(
             model="claude-haiku-4-5",
             valid_token=valid_token,
             team_object=team_object,
@@ -1361,7 +1373,7 @@ async def test_key_access_group_grants_model_when_group_does_not_cover_model():
     """Group authorizes the team but does not grant the requested model → False."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.proxy.auth.auth_checks import key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1392,7 +1404,7 @@ async def test_key_access_group_grants_model_when_group_does_not_cover_model():
         p.start()
     try:
         assert (
-            await _key_access_group_grants_model(
+            await key_access_group_grants_model(
                 model="claude-haiku-4-5",
                 valid_token=valid_token,
                 team_object=team_object,
@@ -1415,7 +1427,7 @@ async def test_key_access_group_grants_model_when_group_authorizes_neither():
     """
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.proxy.auth.auth_checks import key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="team-a-token",
@@ -1447,7 +1459,7 @@ async def test_key_access_group_grants_model_when_group_authorizes_neither():
         p.start()
     try:
         assert (
-            await _key_access_group_grants_model(
+            await key_access_group_grants_model(
                 model="claude-opus-4-5",
                 valid_token=valid_token,
                 team_object=team_object,
@@ -1465,7 +1477,7 @@ async def test_key_access_group_grants_model_when_get_access_object_raises():
     """Group lookup failure (404, network, etc.) is treated as no authorization."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.proxy.auth.auth_checks import key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1490,7 +1502,7 @@ async def test_key_access_group_grants_model_when_get_access_object_raises():
         p.start()
     try:
         assert (
-            await _key_access_group_grants_model(
+            await key_access_group_grants_model(
                 model="claude-haiku-4-5",
                 valid_token=valid_token,
                 team_object=team_object,
@@ -1633,7 +1645,7 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
     expected: Final = {"chain-entry": True, "local-free": False, "paid-gpt": False}
     order: Final = ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
 
-    verdicts: Final = {name: _is_model_cost_zero(model=name, llm_router=router) for name in order}
+    verdicts: Final = {name: is_model_cost_zero(model=name, llm_router=router) for name in order}
 
     assert verdicts == expected
-    assert {name: _is_model_cost_zero(model=name, llm_router=router) for name in order} == expected
+    assert {name: is_model_cost_zero(model=name, llm_router=router) for name in order} == expected

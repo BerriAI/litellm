@@ -49,6 +49,7 @@ class CostMapEntry(BaseModel):
     output_cost_per_token: float | None = None
     input_cost_per_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
+    output_cost_per_image_token_batches: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     output_vector_size: int | None = None
@@ -170,6 +171,9 @@ class RealtimeResponse(BaseModel):
     content_type: Literal["application/x-realtime"]
     events: tuple[dict[str, JsonValue], ...]
     session_model: str | None = None
+    session_type: str | None = None
+    created_event: Literal["session.created", "transcription_session.created"] = "session.created"
+    created_repeats: int = 1
 
 
 StoredResponse: TypeAlias = Annotated[
@@ -246,7 +250,7 @@ class CostTrackingTestCase(BaseModel):
             "/v1/audio/speech",
             "/v1/images/generations",
             "/v1/images/edits",
-            "/v1/decisions",
+            "/v1/systemone",
         ]
         | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
     ) = "/v1/chat/completions"
@@ -583,14 +587,24 @@ def data_errors() -> tuple[str, ...]:
         name for name in {case.name for case in _ALL_CASES} if sum(case.name == name for case in _ALL_CASES) > 1
     )
     input_rates: Final = tuple(
-        (entry.input_cost_per_token, model)
+        (entry.litellm_provider, entry.input_cost_per_token, model)
         for model, entry in COST_MAP.items()
         if entry.mode != "realtime"
     )
+    shared_input_rate_details: Final = tuple(
+        (
+            provider,
+            rate,
+            tuple(
+                model
+                for candidate_provider, value, model in input_rates
+                if candidate_provider == provider and value == rate
+            ),
+        )
+        for provider, rate in frozenset((provider, rate) for provider, rate, _ in input_rates if rate is not None)
+    )
     shared_input_rates: Final = sorted(
-        f"{rate}: {tuple(model for value, model in input_rates if value == rate)}"
-        for rate in {value for value, _ in input_rates if value is not None}
-        if sum(value == rate for value, _ in input_rates) > 1
+        f"{rate}: {models}" for _, rate, models in shared_input_rate_details if len(models) > 1
     )
     recount_mismatches: Final = sorted(
         case.name

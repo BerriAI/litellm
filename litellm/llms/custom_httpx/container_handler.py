@@ -19,8 +19,8 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -255,7 +255,7 @@ def _sync_http_client(
 ) -> HTTPHandler:
     """The sync HTTP client for a container request, reusing the caller's when usable."""
     if client is None or not isinstance(client, HTTPHandler):
-        return _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        return get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
     return client
 
 

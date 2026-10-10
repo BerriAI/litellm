@@ -211,6 +211,11 @@ class AutoRouterBenchmarkTotals(LiteLLMBaseModel):
 
     sessions: int = Field(description="Sessions overlapping the window, counted whole")
     turns: int = Field(description="Auto-routed requests on the selected UTC days")
+    total_tokens: int | None = Field(
+        default=None,
+        description="Input and output tokens of routed generation requests on the selected UTC days, excluding "
+        "classifier tokens; null when any selected requests predate daily token recording",
+    )
     avg_turns_per_session: float | None = Field(
         description="Lifetime turns per overlapping session; null when the window has routed requests but no session "
         "rows for this router type, such as an alias whose router type changed mid-session"

@@ -283,38 +283,40 @@ def test_access_group_membership_follows_edits(gateway: Gateway) -> None:
         assert tool_calls(peer.drain()) == ()
 
 
-def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Gateway, peer: Gateway) -> None:
-    with mcp_peer() as first, mcp_peer() as second, gateway.scenario() as scenario:
+def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "peer.yaml"
+    config.write_text(yaml.safe_dump({
+        "model_list": [],
+        "general_settings": {"master_key": gateway.key, "store_model_in_db": True, "proxy_config_reload_interval_seconds": 3600},
+    }))
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=config, database_setup=()) as peer,
+        mcp_peer() as first,
+        mcp_peer() as second,
+        gateway.scenario() as scenario,
+    ):
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, first, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-        eventually(
-            lambda: peer.client.get(
-                "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
-            ),
-            lambda value: value.status_code == 200 and value.json() != [],
-            seconds=40,
+        listing: Final = peer.client.get(
+            "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
         )
+        assert listing.status_code == 200 and listing.json() != [], listing.text
         names: Final = tool_names(peer, key, identity)
         assert call_tool(peer, key, identity, names["add"], ADD).status_code == 200
         assert len(tool_calls(first.drain())) == 1
         moved: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "url": second.url})
         assert moved.status_code == 202, moved.text
-        eventually(
-            lambda: call_tool(peer, key, identity, names["add"], ADD),
-            lambda value: value.status_code == 200 and len(tool_calls(second.drain())) == 1,
-            seconds=40,
-        )
+        called: Final = call_tool(peer, key, identity, names["add"], ADD)
+        assert called.status_code == 200, called.text
+        assert tool_calls(first.drain()) == ()
+        assert len(tool_calls(second.drain())) == 1
         delete_mcp(gateway, identity)
-        eventually(
-            lambda: peer.client.get(
-                "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
-            ),
-            lambda value: value.status_code >= 400 or value.json() == [],
-            seconds=40,
+        deleted: Final = peer.client.get(
+            "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
         )
-        second.drain()
-        assert call_tool(peer, key, identity, names["add"], ADD).status_code >= 400
+        assert deleted.status_code in (403, 404) or (deleted.status_code == 200 and deleted.json() == []), deleted.text
+        assert call_tool(peer, key, identity, names["add"], ADD).status_code in (403, 404)
         assert tool_calls(second.drain()) == ()
 
 

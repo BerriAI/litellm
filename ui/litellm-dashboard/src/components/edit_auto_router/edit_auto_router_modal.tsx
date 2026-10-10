@@ -97,6 +97,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "plan_mode_min_tier",
   "tier_labels",
   "classifier_type",
+  "local_heuristic",
   "capability_classifier_config",
   "llm_v2_config",
   "classifier_llm_config",

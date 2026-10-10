@@ -405,13 +405,14 @@ class DatabaseURLSettings(BaseSettings):
         """Load the settings from ``os.environ`` (read at call time)."""
         return cls()
 
-    def token_auth(self) -> DatabaseTokenAuth | None:
+    def token_auth(self, *, read_replica: bool = False) -> DatabaseTokenAuth | None:
         """The token strategy the toggles ask for, or ``None`` for password auth.
 
         Raises ``RuntimeError`` when both toggles are on, since the password can only
         come from one source.
         """
         return build_database_token_auth(
+            read_replica=read_replica,
             iam_token_db_auth=self.iam_token_db_auth,
             azure_postgresql_auth=self.azure_postgresql_auth,
         )
@@ -517,7 +518,7 @@ class DatabaseURLSettings(BaseSettings):
         schema: Final = self.database_schema_read_replica or self.database_schema
         password: Final = self.database_password_read_replica or self.database_password
 
-        auth: Final = self.token_auth()
+        auth: Final = self.token_auth(read_replica=True)
         if auth is not None:
             missing: Final = tuple(
                 env

@@ -77,9 +77,10 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.team_endpoints import (
-    _refresh_cached_team,
+from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  # legacy module exports
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     append_team_models,
+    refresh_cached_team,
     team_model_add,
     team_model_delete,
 )
@@ -126,10 +127,11 @@ from litellm.router_strategy.complexity_router.config import resolve_complexity_
 from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
+    GatedAutoRouterCapability,
     capability_limit_violation,
     carries_complexity_router_settings,
     count_capability_routers,
-    gated_capability_of,
+    gated_capabilities_of,
     is_complexity_router_model,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
@@ -559,6 +561,20 @@ def _raise_on_tuning_quota_violation(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}")
 
 
+async def _claimed_capability_violation(
+    tables: _TxModelTables,
+    *,
+    capability: GatedAutoRouterCapability,
+    config_rows: Sequence[Mapping[str, object]],
+    model_id: str | None,
+    limit: int | None,
+) -> str | None:
+    rows: Final = await tables.query_raw(_CAPABILITY_DB_ROWS_SQL[capability.key], model_id or "")
+    db_held: Final = sum(1 for row in rows if is_complexity_router_model(_decrypted_model(row.get("model"))))
+    held: Final = db_held + count_capability_routers(config_rows, capability=capability)
+    return capability_limit_violation(capability=capability, held=held + 1, limit=limit)
+
+
 @asynccontextmanager
 async def _auto_router_capability_slot(
     prisma_client: PrismaClient,
@@ -591,11 +607,11 @@ async def _auto_router_capability_slot(
     )
 
     limit: Final = _license_check.auto_router_capability_limit()
-    capability: Final = gated_capability_of(effective_params)
+    capabilities: Final = gated_capabilities_of(effective_params)
     baselines: Final = heuristic_v1_tuning_baselines
     tuning_candidate: Final = _tuning_candidate(effective_params, model_id=model_id)
     judges_tuning: Final = baselines is not None and is_mutable_tuned_candidate(tuning_candidate, baselines)
-    if member_write is None and (limit is None or (capability is None and not judges_tuning)):
+    if member_write is None and (limit is None or (not capabilities and not judges_tuning)):
         yield _proxy_model_table(prisma_client)
         return
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
@@ -685,14 +701,12 @@ async def _auto_router_capability_slot(
                 prisma_client=pinned_client,
                 llm_router=llm_router,
             )
-        if capability is not None:
-            rows: Sequence[Mapping[str, object]] = await tx_ctx.query_raw(
-                _CAPABILITY_DB_ROWS_SQL[capability.key], model_id or ""
-            )
-            db_held: Final = sum(1 for row in rows if is_complexity_router_model(_decrypted_model(row.get("model"))))
-            held: Final = db_held + count_capability_routers(config_rows, capability=capability)
-            violation: Final = capability_limit_violation(capability=capability, held=held + 1, limit=limit)
-            if violation is not None:
+        for capability in capabilities:
+            if (
+                violation := await _claimed_capability_violation(
+                    tables, capability=capability, config_rows=config_rows, model_id=model_id, limit=limit
+                )
+            ) is not None:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}"
                 )
@@ -1535,7 +1549,7 @@ async def unblock_model(
 ####################################################################################
 
 
-async def _add_model_to_db(
+async def add_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
@@ -1578,7 +1592,10 @@ async def _add_model_to_db(
         return await table.create(data=_create_data)
 
 
-async def _add_team_model_to_db(
+_add_model_to_db: Final = add_model_to_db
+
+
+async def add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
@@ -1612,7 +1629,7 @@ async def _add_team_model_to_db(
     model_params.model_name = unique_model_name
 
     ## CREATE MODEL IN DB ##
-    model_response: Final = await _add_model_to_db(
+    model_response: Final = await add_model_to_db(
         model_params=model_params,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -1631,6 +1648,9 @@ async def _add_team_model_to_db(
         )
 
     return model_response
+
+
+_add_team_model_to_db: Final = add_team_model_to_db
 
 
 async def _update_team_model_in_db(
@@ -1953,7 +1973,7 @@ async def _remove_unbacked_team_models(
         data={"models": [model for model in existing_team_row.models if model not in names_to_remove]},
         include={"object_permission": True},
     )
-    await _refresh_cached_team(
+    await refresh_cached_team(
         team_row=updated_team_row,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -2170,7 +2190,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation ({wif_fields[0]!r})."
+                    f"workload identity federation or OAuth token exchange ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,
@@ -2587,9 +2607,7 @@ async def add_new_model(
             reload_outcome: ReconcileOutcome = ReconcileOutcome(still_desired=None, live_after=None)
             try:
                 _original_litellm_model_name: Final = model_params.model_name
-                add_model: Final = (
-                    _add_model_to_db if model_params.model_info.team_id is None else _add_team_model_to_db
-                )
+                add_model: Final = add_model_to_db if model_params.model_info.team_id is None else add_team_model_to_db
                 model_response = await add_model(
                     model_params=priced_model_params,
                     user_api_key_dict=user_api_key_dict,
@@ -3189,7 +3207,7 @@ async def get_auto_router_classifier_default_prompt(
     )
 
 
-def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
+def deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
     """
     Deduplicate models based on their model_info.id field.
     Returns a list of unique models keeping only the first occurrence of each model ID.
@@ -3208,6 +3226,9 @@ def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
             unique_models.append(model)
             seen_ids.add(model_id)
     return unique_models
+
+
+_deduplicate_litellm_router_models: Final = deduplicate_litellm_router_models
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
@@ -3444,7 +3465,7 @@ async def clear_cache() -> ReconcileOutcome:
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
             # reentrant, so the public wrapper would deadlock against itself.
-            outcome: Final = await proxy_config._add_deployment_locked(
+            outcome: Final = await proxy_config.add_deployment_locked(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
 

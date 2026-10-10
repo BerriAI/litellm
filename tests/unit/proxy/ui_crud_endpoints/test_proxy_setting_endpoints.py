@@ -445,7 +445,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_decrypt_and_set_db_env_variables",
+            "decrypt_and_set_db_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -655,7 +655,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -739,7 +739,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -806,7 +806,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -874,7 +874,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -953,7 +953,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -1024,7 +1024,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -1092,7 +1092,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -1964,7 +1964,7 @@ class TestProxySettingEndpoints:
 
         from litellm.proxy.proxy_server import proxy_config
 
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", mock_encrypt)
+        monkeypatch.setattr(proxy_config, "encrypt_env_variables", mock_encrypt)
 
         # New SSO settings to save
         new_sso_settings = {
@@ -2043,7 +2043,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2092,7 +2092,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2127,7 +2127,7 @@ class TestProxySettingEndpoints:
         from litellm.proxy.proxy_server import proxy_config
 
         monkeypatch.setattr(
-            proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt_and_set
+            proxy_config, "decrypt_and_set_db_env_variables", mock_decrypt_and_set
         )
 
         response = client.get("/get/sso_settings")
@@ -2212,7 +2212,7 @@ class TestProxySettingEndpoints:
             return environment_variables
 
         monkeypatch.setattr(
-            proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt
+            proxy_config, "decrypt_and_set_db_env_variables", mock_decrypt
         )
 
         response = client.get("/get/sso_settings")
@@ -2257,7 +2257,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2309,7 +2309,7 @@ class TestProxySettingEndpoints:
         )
         monkeypatch.setattr(
             proxy_config,
-            "_decrypt_and_set_db_env_variables",
+            "decrypt_and_set_db_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2431,7 +2431,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_decrypt_and_set_db_env_variables",
+            "decrypt_and_set_db_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2581,7 +2581,7 @@ def test_update_sso_settings_writes_redacted_audit_log(mock_proxy_config, monkey
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_encrypt_env_variables",
+        "encrypt_env_variables",
         lambda environment_variables: environment_variables,
     )
 
@@ -2653,14 +2653,14 @@ def test_update_sso_settings_audit_captures_redacted_before_snapshot(
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_encrypt_env_variables",
+        "encrypt_env_variables",
         lambda environment_variables: environment_variables,
     )
     # Pretend the stored value is already plaintext for the test (production
     # decrypts via Fernet); the audit helper still has to redact it.
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_decrypt_db_variables",
+        "decrypt_db_variables",
         lambda variables_dict: dict(variables_dict),
     )
 
@@ -2934,7 +2934,7 @@ def test_update_ui_theme_settings_writes_audit_log(mock_proxy_config, monkeypatc
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_encrypt_env_variables",
+        "encrypt_env_variables",
         lambda environment_variables: environment_variables,
     )
 
@@ -3940,6 +3940,46 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert stored["team_admin_editable_team_fields"] == enabled
         assert general_settings["team_admin_editable_team_fields"] == enabled
 
+    def test_patch_rejects_raise_max_budget_without_max_budget(self, monkeypatch: pytest.MonkeyPatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+
+        try:
+            response = client.patch(
+                "/update/ui_settings", json={"team_admin_editable_team_fields": ["tpm_limit", "raise_max_budget"]}
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]["error"]
+        assert "'raise_max_budget'" in detail
+        assert "'max_budget'" in detail
+        assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+    def test_patch_accepts_raise_max_budget_with_max_budget_and_update_team_sees_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+            team_admin_may_raise_max_budget,
+        )
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict[str, object] = {"team_admin_editable_team_fields": ["max_budget"]}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        assert team_admin_may_raise_max_budget(general_settings) is False
+
+        try:
+            response = client.patch(
+                "/update/ui_settings", json={"team_admin_editable_team_fields": ["max_budget", "raise_max_budget"]}
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == ["max_budget", "raise_max_budget"]
+        assert team_admin_may_raise_max_budget(general_settings) is True
+
     def test_patch_accepts_the_projects_permission_and_project_endpoints_see_it(self, monkeypatch):
         from litellm.proxy.management_endpoints.team_admin_field_permissions import (
             team_admin_may_manage_projects,
@@ -4165,3 +4205,71 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
+
+
+class TestMoyaiUrlSetting:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (None, None),
+            ("", None),
+            ("https://moyai.example.com", "https://moyai.example.com"),
+            ("https://moyai.example.com/", "https://moyai.example.com"),
+            ("http://localhost:8787/", "http://localhost:8787"),
+        ],
+    )
+    def test_moyai_url_validator_accepts_and_normalizes(self, value, expected):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+        assert UISettings(moyai_url=value).moyai_url == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "javascript:alert(1)",
+            "ftp://moyai.example.com",
+            "https://user:pass@moyai.example.com",
+            "https://user@moyai.example.com",
+            "not-a-url",
+            "https://",
+        ],
+    )
+    def test_moyai_url_validator_rejects(self, value):
+        from pydantic import ValidationError
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+        with pytest.raises(ValidationError):
+            UISettings(moyai_url=value)
+
+    def test_moyai_url_is_in_allowed_ui_settings_fields(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import ALLOWED_UI_SETTINGS_FIELDS
+
+        assert "moyai_url" in ALLOWED_UI_SETTINGS_FIELDS
+
+    @pytest.mark.asyncio
+    async def test_moyai_url_patch_sets_and_clears(self, monkeypatch):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import update_ui_settings
+
+        prisma = MagicMock()
+        prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=SimpleNamespace(ui_settings={"moyai_url": "https://old.example.com"})
+        )
+        persisted: dict = {}
+
+        async def _upsert(where, data):
+            persisted.update(json.loads(data["update"]["ui_settings"]))
+
+        prisma.db.litellm_uisettings.upsert = AsyncMock(side_effect=_upsert)
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+        actor = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        await update_ui_settings({"moyai_url": "https://new.example.com/"}, actor)
+        assert persisted["moyai_url"] == "https://new.example.com"
+
+        await update_ui_settings({"moyai_url": None}, actor)
+        assert persisted["moyai_url"] is None

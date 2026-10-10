@@ -9,6 +9,7 @@ from itertools import groupby
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import LiteralString
 
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -17,6 +18,7 @@ from litellm.constants import (
 )
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES, SpendLogsPayload
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -31,6 +33,8 @@ class _UpsertTable(Protocol):
 
 class _ModelUsageBatch(Protocol):
     litellm_dailymodelusage: _UpsertTable
+
+    def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
 
 class _ModelUsageBatchManager(Protocol):
@@ -132,6 +136,7 @@ async def flush_model_usage_transactions(
     for attempt in range(n_retry_times + 1):
         try:
             async with _model_usage_batch(prisma_client) as batcher:
+                batcher.execute_raw(ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting())
                 for key, grouped in groupby(ordered, key=lambda transaction: transaction.key):
                     entries = tuple(grouped)
                     spend = sum(entry.spend for entry in entries)

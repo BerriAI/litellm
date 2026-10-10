@@ -931,6 +931,39 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("creates the selected v2 chain after editing its threshold and local tier ceiling", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    const actualSubmit = await vi.importActual<typeof import("./handle_add_auto_router_submit")>(
+      "./handle_add_auto_router_submit",
+    );
+    vi.mocked(handleAddAutoRouterSubmit).mockImplementationOnce(actualSubmit.handleAddAutoRouterSubmit);
+    renderWithProviders(<Harness />);
+    const setup = await screen.findByRole("button", { name: "Choose models for me" });
+    await waitFor(() => expect(setup).toBeEnabled());
+    await userEvent.click(setup);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "chained-router" } });
+    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
+    await selectAutoRouterOption("Judge model", ALL_FAMILY_MODELS[0].model_group);
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Local checks before the judge", "Heuristic first");
+    await selectAutoRouterOption("Heuristic before the judge", "Heuristic v2");
+    fireEvent.click(screen.getByRole("button", { name: "Heuristic tuning" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.6" } });
+    await selectAutoRouterOption("Decide locally up to", "Medium");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
+    const expectedConfig = {
+      classifier_type: "heuristic_first",
+      local_heuristic: "heuristic_v2",
+      heuristic_v2_success_threshold: 0.6,
+      heuristic_first_max_tier: "MEDIUM",
+    };
+    expect(vi.mocked(modelCreateCall).mock.calls.at(-1)?.[1].litellm_params.complexity_router_config).toMatchObject(
+      expectedConfig,
+    );
+  });
+
   it("preserves classifier tuning when choosing models automatically", async () => {
     const user = userEvent.setup();
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);

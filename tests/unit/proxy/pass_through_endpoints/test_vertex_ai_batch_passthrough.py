@@ -86,9 +86,7 @@ class TestVertexAIBatchPassthroughHandler:
                             "error_file_id": None,
                             "completion_window": "24h",
                         }
-                        mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
-                            "123456789"
-                        )
+                        mock_transformation.get_batch_id_from_vertex_ai_batch_response.return_value = "123456789"
 
                         # Test the handler
                         result = VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(
@@ -445,7 +443,7 @@ class TestVertexAIBatchPassthroughHandler:
                 "input_file_id": "gs://bucket/in.jsonl",
                 "completion_window": "24h",
             }
-            mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = "123456"
+            mock_transformation.get_batch_id_from_vertex_ai_batch_response.return_value = "123456"
 
             VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(
                 httpx_response=response,
@@ -507,11 +505,7 @@ class TestVertexAIBatchPassthroughHandler:
         expected_results = ["456789", "def123", "999", "invalid-format"]
 
         for test_case, expected in zip(test_cases, expected_results):
-            result = (
-                VertexAIBatchTransformation._get_batch_id_from_vertex_ai_batch_response(
-                    {"name": test_case}
-                )
-            )
+            result = VertexAIBatchTransformation.get_batch_id_from_vertex_ai_batch_response({"name": test_case})
             assert result == expected
 
     def test_model_name_extraction_from_vertex_path(self):
@@ -576,9 +570,7 @@ class TestVertexAIBatchPassthroughHandler:
                         "error_file_id": None,
                         "completion_window": "24h",
                     }
-                    mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
-                        "123456789"
-                    )
+                    mock_transformation.get_batch_id_from_vertex_ai_batch_response.return_value = "123456789"
 
                     # Test the complete workflow
                     result = VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(

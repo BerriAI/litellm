@@ -51,7 +51,7 @@ fn resolve_provider(
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {
     let resolved = resolve_llm_provider(model, custom_llm_provider, "messages")?;
-    let provider = messages_provider(resolved.provider)
+    let provider = messages_provider(resolved.provider, resolved.model)
         .ok_or_else(|| Error::InvalidProvider(<&str>::from(resolved.provider).to_string()))?;
     Ok(ResolvedProvider {
         model: resolved.model.to_string(),
@@ -69,6 +69,7 @@ fn prepare_provider_request(
         body,
         api_key,
         api_base,
+        litellm_params,
         extra_headers,
         provider_specific_header,
         timeout,
@@ -80,12 +81,13 @@ fn prepare_provider_request(
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
-        shaping.reasoning_auto_summary,
+        shaping.settings.reasoning_auto_summary,
     )?;
-    let trimmed = without_additional_drop_params(sanitized, &shaping.additional_drop_params)?;
+    let trimmed =
+        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
     let transformed = config.transform_anthropic_messages_request(
         trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.drop_params),
+        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
     )?;
 
     let scoped =
@@ -97,6 +99,7 @@ fn prepare_provider_request(
         forwarded,
         api_key.as_deref(),
         &transformed.model,
+        &litellm_params,
         &env_lookup,
     )?;
     let environment = ValidatedEnvironment {
@@ -107,11 +110,13 @@ fn prepare_provider_request(
         auth: validated.auth,
     };
 
-    let url = if transformed.params.stream == Some(true) {
-        config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
-    } else {
-        config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?
-    };
+    let url = config.get_complete_url(
+        api_base.as_deref(),
+        &transformed.model,
+        &litellm_params,
+        transformed.params.stream == Some(true),
+        &env_lookup,
+    )?;
 
     Ok(ProviderMessagesRequest {
         provider,
@@ -148,7 +153,7 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::MessagesShaping;
+    use crate::{MessagesSettings, MessagesShaping};
 
     #[fixture]
     fn shaping() -> MessagesShaping {
@@ -226,6 +231,7 @@ mod tests {
                 api_key: None,
                 api_base: None,
                 custom_llm_provider: Some("anthropic".into()),
+                litellm_params: Default::default(),
                 extra_headers: None,
                 provider_specific_header: None,
                 timeout: None,
@@ -252,6 +258,7 @@ mod tests {
             api_key: Some("sk-test".into()),
             api_base: Some("https://anthropic.test".into()),
             custom_llm_provider: Some("anthropic".into()),
+            litellm_params: Default::default(),
             extra_headers: None,
             provider_specific_header: None,
             timeout: None,
@@ -310,10 +317,13 @@ mod tests {
             )
         };
         let shaping = MessagesShaping {
-            additional_drop_params: additional_drop_params
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
+            settings: MessagesSettings {
+                additional_drop_params: additional_drop_params
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                ..shaping.settings
+            },
             ..shaping
         };
         assert_eq!(
@@ -356,6 +366,7 @@ mod tests {
             api_key: Some("sk-test".into()),
             api_base: Some("https://resource.services.ai.azure.com".into()),
             custom_llm_provider: custom_llm_provider.map(Into::into),
+            litellm_params: Default::default(),
             extra_headers: Some(Map::from_iter([("x-priority".into(), json!("extra"))])),
             provider_specific_header: Some(configured),
             timeout: None,
@@ -394,8 +405,11 @@ mod tests {
     #[rstest]
     fn dropped_thinking_display_is_not_restored_by_auto_summary(shaping: MessagesShaping) {
         let shaping = MessagesShaping {
-            reasoning_auto_summary: true,
-            additional_drop_params: vec!["thinking.display".to_string()],
+            settings: MessagesSettings {
+                reasoning_auto_summary: true,
+                additional_drop_params: vec!["thinking.display".to_string()],
+                ..shaping.settings
+            },
             ..shaping
         };
         assert_eq!(
@@ -420,7 +434,10 @@ mod tests {
     #[rstest]
     fn dropping_an_invalid_metadata_user_id_does_not_skip_its_validation(shaping: MessagesShaping) {
         let shaping = MessagesShaping {
-            additional_drop_params: vec!["metadata.user_id".to_string()],
+            settings: MessagesSettings {
+                additional_drop_params: vec!["metadata.user_id".to_string()],
+                ..shaping.settings
+            },
             ..shaping
         };
         assert!(matches!(

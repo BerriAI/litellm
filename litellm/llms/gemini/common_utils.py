@@ -192,7 +192,7 @@ def _dedupe_gemini_search_tools(tools: list[dict[str, object]]) -> list[dict[str
         VertexGeminiConfig,
     )
 
-    search_tool_keys: Final = VertexGeminiConfig._search_tool_keys()
+    search_tool_keys: Final = VertexGeminiConfig.search_tool_keys()
     seen_search_keys: Final[set[str]] = set()
     deduped_tools: Final[list[dict[str, object]]] = []
 
@@ -220,7 +220,7 @@ def _has_gemini_search_tool(tools: list[object]) -> bool:
         VertexGeminiConfig,
     )
 
-    search_tool_keys: Final = VertexGeminiConfig._search_tool_keys()
+    search_tool_keys: Final = VertexGeminiConfig.search_tool_keys()
     return any(isinstance(tool, dict) and any(key in tool for key in search_tool_keys) for tool in tools)
 
 
@@ -238,18 +238,18 @@ def map_gemini_image_tools_params(
 
     tools_value: Final = non_default_params.get("tools")
     if isinstance(tools_value, list) and tools_value:
-        mapped_tools: Final = gemini_config._map_function(value=tools_value, optional_params=result)
-        result = gemini_config._add_tools_to_optional_params(result, mapped_tools)
+        mapped_tools: Final = gemini_config.map_function(value=tools_value, optional_params=result)
+        result = gemini_config.add_tools_to_optional_params(result, mapped_tools)
 
     web_search_options: Final = non_default_params.get("web_search_options")
     existing_tools: Final = result.get("tools")
     if isinstance(web_search_options, dict) and not (
         isinstance(existing_tools, list) and _has_gemini_search_tool(existing_tools)
     ):
-        search_tool: Final = gemini_config._map_web_search_options(web_search_options)
-        result = gemini_config._add_tools_to_optional_params(result, [search_tool])
+        search_tool: Final = gemini_config.map_web_search_options(web_search_options)
+        result = gemini_config.add_tools_to_optional_params(result, [search_tool])
 
-    gemini_config._drop_search_tools_mixed_with_functions(result)
+    gemini_config.drop_search_tools_mixed_with_functions(result)
 
     resolved_tools: Final = result.get("tools")
     if isinstance(resolved_tools, list):
@@ -277,7 +277,7 @@ def get_gemini_image_web_search_requests(
         elif isinstance(candidate_grounding, dict):
             grounding_metadata.append(candidate_grounding)
 
-    return VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
+    return VertexGeminiConfig.calculate_web_search_requests(grounding_metadata)
 
 
 def get_gemini_image_generation_config(

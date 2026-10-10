@@ -53,10 +53,10 @@ from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm.types.integrations.zerobus import ZerobusInitParams
 from litellm._logging import (
     set_verbose,
-    _turn_on_debug,
+    turn_on_debug,
     verbose_logger,
     json_logs,
-    _turn_on_json,
+    turn_on_json,
     log_level,
 )
 import re
@@ -108,10 +108,10 @@ litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 
 ####################################################
 if set_verbose:
-    _turn_on_debug()
+    turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]  # CustomLogger is lazy-loaded
+CALLBACK_TYPES = Union[str, Callable[..., object], "CustomLogger"]  # CustomLogger is lazy-loaded
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
@@ -177,9 +177,9 @@ _custom_logger_compatible_callbacks_literal = Literal[
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
-_known_custom_logger_compatible_callbacks: List = list(get_args(_custom_logger_compatible_callbacks_literal))
+_known_custom_logger_compatible_callbacks: List[str] = list(get_args(_custom_logger_compatible_callbacks_literal))
 callbacks: List[
-    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
+    Union[Callable[..., object], str, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
@@ -194,13 +194,13 @@ datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged p
 gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
 generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
+_async_input_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
+_async_success_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
+_async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -506,6 +506,7 @@ prometheus_metrics_ttl_seconds: Optional[float] = None
 prometheus_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
+force_redis_hash_tag_grouping: bool = False
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
@@ -710,6 +711,7 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+microsoft_365_copilot_models: Set[str] = set()
 chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
@@ -991,6 +993,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "microsoft_365_copilot":
+            microsoft_365_copilot_models.add(key)
         elif value.get("litellm_provider") == "chatgpt":
             chatgpt_models.add(key)
         elif value.get("litellm_provider") == "minimax":
@@ -1247,6 +1251,7 @@ def _build_models_by_provider() -> dict:
         "amazon_nova": amazon_nova_models,
         "stability": stability_models,
         "github_copilot": github_copilot_models,
+        "microsoft_365_copilot": microsoft_365_copilot_models,
         "chatgpt": chatgpt_models,
         "minimax": minimax_models,
         "aws_polly": aws_polly_models,
@@ -1391,6 +1396,8 @@ from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
     AuthenticationError,
+    CallerCredentialAuthenticationError as CallerCredentialAuthenticationError,
+    CallerCredentialRateLimitError as CallerCredentialRateLimitError,
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
@@ -1404,6 +1411,7 @@ from .exceptions import (
     BadGatewayError,
     OpenAIError,
     ContextWindowExceededError,
+    PaymentRequiredError as PaymentRequiredError,
     ContentPolicyViolationError,
     BudgetExceededError,
     APIError,
@@ -1419,7 +1427,6 @@ from .exceptions import (
     ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
@@ -1486,6 +1493,7 @@ from .realtime_api.main import (
     arealtime_calls,
 )
 from .responses.main import _aresponses_websocket
+
 from .fine_tuning.main import *
 from .files.main import *
 from .vector_store_files.main import (
@@ -1526,6 +1534,9 @@ from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
+
+_turn_on_debug = turn_on_debug
+_turn_on_json = turn_on_json
 
 custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = []  # internal helper util, used to track names of custom providers
@@ -1660,6 +1671,33 @@ if TYPE_CHECKING:
     )
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
+    )
+    from .llms.perplexity.decisions.transformation import (
+        PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.typesafe.decisions.transformation import (
+        TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
+    )
+    from .llms.openrouter.decisions.transformation import (
+        OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.cloudflare.decisions.transformation import (
+        CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.strands_decider.decisions.transformation import (
+        StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
+    )
+    from .llms.databricks.decisions.transformation import (
+        DatabricksDecisionsConfig as DatabricksDecisionsConfig,
+    )
+    from .llms.hosted_vllm.decisions.transformation import (
+        HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
+    )
+    from .llms.openai.decisions.transformation import (
+        OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure_ai.decisions.transformation import (
+        AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,
@@ -2240,7 +2278,9 @@ if TYPE_CHECKING:
     register_model: Callable[..., None]
     encode: Callable[..., list]
     decode: Callable[..., str]
+    calculate_retry_after: Callable[..., float]
     _calculate_retry_after: Callable[..., float]
+    should_retry: Callable[..., bool]
     _should_retry: Callable[..., bool]
     get_supported_openai_params: Callable[..., Optional[list]]
     get_api_base: Callable[..., Optional[str]]
@@ -2336,9 +2376,9 @@ def __getattr__(name: str) -> Any:
         _async_client_cleanup_registered = True
 
     # Use cached registry from _lazy_imports instead of importing tuples every time
-    from ._lazy_imports import _get_lazy_import_registry
+    from ._lazy_imports import get_lazy_import_registry
 
-    registry: Final = _get_lazy_import_registry()
+    registry: Final = get_lazy_import_registry()
 
     # Check if name is in registry and call the cached handler function
     if name in registry:

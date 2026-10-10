@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 
 import httpx
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -488,6 +489,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/systemone",
+        "/v1/systemone",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -542,16 +545,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        "/lens",
-        "/lens/{lens_id}",
-        "/lens/{lens_id}/runs",
-        "/lens/{lens_id}/runs/{job_id}",
-        "/lens/{lens_id}/executions/{execution_id}",
-        "/lens/{lens_id}/cancel",
-        "/lens/{lens_id}/findings/{finding_id}",
-        "/lens/preview/sample",
-        "/lens/workers/register",
-        "/lens/workers/{worker_id}",
         "/v1/traces",
         "/v1/logs",
         "/v1/traces/query",
@@ -853,6 +846,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/mcp_hub",
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
+            "/moyai/connect/exchange",
         )
     )
 
@@ -942,6 +936,8 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/lens",
+        "/lens/{path:path}",
         # update_team resolves proxy/org/team admin itself and filters team admins
         # through the team_admin_editable_team_fields setting
         "/team/update",
@@ -1063,6 +1059,8 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/traces/signals",
+            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -1365,6 +1363,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1674,6 +1673,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1781,6 +1781,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
@@ -2212,6 +2213,7 @@ class NewTeamRequest(TeamBase):
     prompts: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2293,6 +2295,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     secret_manager_settings: dict | None = None
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2732,6 +2735,44 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+
+
+def _known_spend_logs_metadata_field(name: str) -> str:
+    if name not in SpendLogsMetadata.__annotations__:
+        raise ValueError(f"{name!r} is not a LiteLLM_SpendLogs.metadata field")
+    return name
+
+
+SpendLogsMetadataFieldName: TypeAlias = Annotated[str, AfterValidator(_known_spend_logs_metadata_field)]
+
+
+class SpendLogsMetadataFields(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    include: tuple[SpendLogsMetadataFieldName, ...] | None = None
+    exclude: tuple[SpendLogsMetadataFieldName, ...] | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_list(self) -> "SpendLogsMetadataFields":
+        if (self.include is None) == (self.exclude is None):
+            raise ValueError("set exactly one of 'include' or 'exclude'")
+        always_kept_excluded: Final = sorted(SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS.intersection(self.exclude or ()))
+        if always_kept_excluded:
+            raise ValueError(f"{always_kept_excluded} are always kept and cannot be excluded")
+        return self
+
+    def keeps(self, name: str) -> bool:
+        if name in SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS:
+            return True
+        if self.include is not None:
+            return name in self.include
+        return name not in (self.exclude or ())
+
+
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -3042,6 +3083,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
     )
+    responses_websocket_session_limit_seconds: float = Field(
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
+        ge=60,
+        le=7200,
+        description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
+    )
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
@@ -3070,6 +3117,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
+        None,
+        description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
     )
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
@@ -3146,7 +3197,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
         None,
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
-        "Modern protocol serving and Apps/Tasks remain disabled.",
+        "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
@@ -3164,6 +3215,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         ge=1,
         description="Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.",
+    )
+    mcp_prefer_client_id_metadata_document: bool | None = Field(
+        None,
+        description="When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.",
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,
@@ -3645,6 +3700,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
@@ -4863,6 +4920,7 @@ class TeamEditUnrestricted(LiteLLMBaseModel):
 class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
+    may_raise_max_budget: bool = False
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
@@ -5102,6 +5160,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
     "logging",
     "secret_manager_settings",
     "allowed_passthrough_routes",
+    "denied_passthrough_routes",
 ]
 
 # Metadata keys that are immutable once set: preserved when an update omits them,

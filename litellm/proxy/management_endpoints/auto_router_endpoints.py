@@ -28,9 +28,10 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _virtual_key_max_budget_check,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_resolved_model,
+    virtual_key_max_budget_check,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
@@ -340,7 +341,7 @@ async def _authorize_models_this_test_can_call(
         )
 
     try:
-        await _virtual_key_max_budget_check(
+        await virtual_key_max_budget_check(
             valid_token=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -558,10 +559,10 @@ async def preview_auto_router_routing(
 
     if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
         from litellm.proxy.auth.user_api_key_auth import (
-            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+            run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
         )
 
-        await _run_centralized_common_checks(
+        await run_centralized_common_checks(
             user_api_key_auth_obj=actor,
             request=http_request,
             request_data=request_data,
@@ -650,6 +651,7 @@ class _SessionAggRow(LiteLLMBaseModel):
     ttl_5m_turns: int = 0
     ttl_1h_turns: int = 0
     total_tokens: int = 0
+    day_total_tokens: int | None = None
     session_seconds: float = 0.0
     turns: int = 0
     spend: float = 0.0
@@ -724,6 +726,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return AutoRouterBenchmarkTotals(
         sessions=sessions,
         turns=row.turns,
+        total_tokens=row.day_total_tokens,
         avg_turns_per_session=_per_session(row, row.session_turns),
         avg_session_seconds=_per_session(row, row.session_seconds),
         avg_tokens_per_session=_per_session(row, row.total_tokens),
@@ -759,6 +762,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         tier_turns=row.tier_turns,
         sessions=totals.sessions,
         turns=totals.turns,
+        total_tokens=totals.total_tokens,
         avg_turns_per_session=totals.avg_turns_per_session,
         avg_session_seconds=totals.avg_session_seconds,
         avg_tokens_per_session=totals.avg_tokens_per_session,
@@ -796,6 +800,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         ttl_5m_turns=sum(row.ttl_5m_turns for row in rows),
         ttl_1h_turns=sum(row.ttl_1h_turns for row in rows),
         total_tokens=sum(row.total_tokens for row in rows),
+        day_total_tokens=(
+            sum(row.day_total_tokens or 0 for row in rows)
+            if all(row.day_total_tokens is not None for row in rows)
+            else None
+        ),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),

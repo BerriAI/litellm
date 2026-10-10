@@ -118,11 +118,11 @@ async def vector_store_search(
     https://platform.openai.com/docs/api-reference/vector-stores/search
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -132,7 +132,7 @@ async def vector_store_search(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
 
@@ -168,7 +168,7 @@ async def vector_store_search(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -198,11 +198,11 @@ async def vector_store_create(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -212,7 +212,7 @@ async def vector_store_create(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
 
     # Check for target_model_names parameter
     target_model_names: Final = data.pop("target_model_names", None)
@@ -275,7 +275,7 @@ async def vector_store_create(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -338,7 +338,7 @@ async def vector_store_retrieve(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -408,7 +408,7 @@ async def vector_store_list(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -431,11 +431,11 @@ async def vector_store_update(
     https://platform.openai.com/docs/api-reference/vector-stores/modify
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -445,7 +445,7 @@ async def vector_store_update(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
 
@@ -474,7 +474,7 @@ async def vector_store_update(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -537,7 +537,7 @@ async def vector_store_delete(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -638,5 +638,5 @@ async def index_list(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(prisma_client)
     return IndexListResponse(data=indexes)

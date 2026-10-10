@@ -1,6 +1,7 @@
 """Bedrock Runtime Chat Completions: the default for GPT 5.6 and newer, ``bedrock/chat_completions/<model>`` for the rest."""
 
 import json
+import re
 
 import httpx
 import pytest
@@ -63,7 +64,6 @@ def test_claude_stays_on_converse(local_cost_map):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.xai.grok-4.6",
         "bedrock/openai.gpt-oss-20b-1:0",
         "openai.gpt-oss-120b-1:0",
         "global.openai.gpt-5.5",
@@ -88,7 +88,9 @@ def test_cost_map_row_listing_chat_completions_leaves_the_default_route_alone(mo
     }
     monkeypatch.setattr(litellm, "model_cost", {"openai.gpt-oss-20b-1:0": entry})
     assert BedrockModelInfo.get_bedrock_route("bedrock/openai.gpt-oss-20b-1:0", {}) == "converse"
-    assert BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {}) == "chat_completions"
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {}) == "chat_completions"
+    )
 
 
 @pytest.mark.parametrize(
@@ -103,10 +105,14 @@ def test_cost_map_row_listing_chat_completions_leaves_the_default_route_alone(mo
         ("us.openai.gpt-6.1-sol", ["/v1/chat/completions"], "chat_completions"),
         ("global.openai.gpt-10-sol", ["/v1/chat/completions"], "chat_completions"),
         ("openai.gpt-oss-120b-1:0", ["/v1/chat/completions"], "converse"),
-        ("us.xai.grok-4.6", ["/v1/chat/completions"], "converse"),
+        ("us.xai.grok-4.6", ["/v1/chat/completions"], "chat_completions"),
+        ("global.xai.grok-4.7", ["/v1/chat/completions"], "chat_completions"),
+        ("global.xai.grok-4.7", ["/v1/responses"], "converse"),
+        ("global.xai.grok-4.7", [], "converse"),
+        ("us-gov.xai.grok-4.6", ["/v1/chat/completions"], "chat_completions"),
     ],
 )
-def test_default_route_needs_gpt_56_or_newer_and_a_row_listing_chat_completions(
+def test_default_route_needs_grok_or_gpt_56_or_newer_and_a_row_listing_chat_completions(
     monkeypatch, model, supported_endpoints, expected_route
 ):
     entry = {"litellm_provider": "bedrock_converse", "supported_endpoints": supported_endpoints}
@@ -257,7 +263,7 @@ def _recording_client(**response_kwargs):
 @pytest.mark.parametrize(
     "model, model_path",
     [
-        ("bedrock/us.xai.grok-4.6", b"/model/us.xai.grok-4.6/converse"),
+        ("bedrock/converse/us.xai.grok-4.6", b"/model/us.xai.grok-4.6/converse"),
         ("bedrock/openai.gpt-oss-20b-1:0", b"/model/openai.gpt-oss-20b-1%3A0/converse"),
         ("bedrock/global.openai.gpt-5.5", b"/model/global.openai.gpt-5.5/converse"),
     ],
@@ -298,6 +304,7 @@ def test_completion_keeps_the_aws_request_id_as_a_provider_header(local_cost_map
     )
 
     assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-native-1"
+
 
 def test_region_path_sends_the_bare_model_id_to_the_path_region(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
@@ -384,6 +391,10 @@ GPT_56_AND_NEWER_MODELS = (
     "global.openai.gpt-6-luna",
     "bedrock/global.openai.gpt-6.1-sol",
     "us.openai.gpt-6.1-sol",
+    "global.xai.grok-4.6",
+    "bedrock/us.xai.grok-4.6",
+    "global.xai.grok-4.7",
+    "bedrock/us.xai.grok-4.7",
 )
 
 
@@ -430,15 +441,59 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
     [
         {"additionalModelRequestFields": {"reasoning_effort": "high"}},
         {"top_k": 40},
-        {"stop": ["END"]},
         {"model_id": APPLICATION_INFERENCE_PROFILE_ARN},
     ],
-    ids=["additionalModelRequestFields", "top_k", "stop", "model_id"],
+    ids=["additionalModelRequestFields", "top_k", "model_id"],
 )
 def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, request_params):
     assert bedrock_request_needs_converse(model, request_params) is True
     assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
     assert BedrockModelInfo.get_bedrock_route(model, {key: None for key in request_params}) == "chat_completions"
+
+
+def test_stop_keeps_gpt_oss_on_converse(local_cost_map):
+    model = "chat_completions/openai.gpt-oss-20b-1:0"
+    assert bedrock_request_needs_converse(model, {"stop": ["END"]}) is True
+    assert BedrockModelInfo.get_bedrock_route(model, {"stop": ["END"]}) == "converse"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/global.xai.grok-4.7",
+        "bedrock/us.xai.grok-4.6",
+        "bedrock/global.openai.gpt-5.6-sol",
+        "bedrock/us.openai.gpt-5.6-terra",
+        "bedrock/global.openai.gpt-6-sol",
+        "bedrock/us.openai.gpt-6.1-sol",
+    ],
+)
+def test_stop_is_dropped_on_chat_completions_for_models_rejecting_stop_sequences(local_cost_map, fake_aws_env, model):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/")))
+    response = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], stop=["</block>"], max_tokens=64, client=client
+    )
+
+    assert requests[0].url.raw_path == b"/openai/v1/chat/completions"
+    body = json.loads(requests[0].content)
+    assert "stop" not in body
+    assert body["max_completion_tokens"] == 64
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize("model_id", ["global.xai.grok-4.7", "global.openai.gpt-5.6-sol", "us.openai.gpt-6.1-sol"])
+def test_stop_is_dropped_on_converse_for_models_rejecting_stop_sequences(local_cost_map, fake_aws_env, model_id):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model=f"bedrock/converse/{model_id}",
+        messages=[{"role": "user", "content": "hello"}],
+        stop=["</block>"],
+        max_tokens=64,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path == f"/model/{model_id}/converse".encode()
+    assert json.loads(requests[0].content)["inferenceConfig"] == {"maxTokens": 64}
 
 
 @pytest.mark.parametrize(
@@ -508,7 +563,10 @@ def test_bearer_api_key_is_sent_as_the_authorization_header(monkeypatch):
     ],
 )
 def test_gpt56_tools_need_reasoning_none_on_chat_completions(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params) == expected_route
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params)
+        == expected_route
+    )
     assert (
         BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/us.openai.gpt-5.6-terra", request_params)
         == expected_route
@@ -535,14 +593,22 @@ def test_gpt_oss_tools_with_any_reasoning_effort_stay_on_chat_completions(local_
     ],
 )
 def test_gpt56_legacy_functions_route_like_tools(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params) == expected_route
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", request_params) == "chat_completions"
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params)
+        == expected_route
+    )
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", request_params)
+        == "chat_completions"
+    )
 
 
 def test_thinking_block_goes_to_converse(local_cost_map):
     thinking = {"type": "enabled", "budget_tokens": 1024}
     assert BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": thinking}) == "converse"
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
+    )
 
 
 def test_explicit_converse_prefix_wins_for_openai_models(local_cost_map):
@@ -592,9 +658,7 @@ def _assert_remote_images_inlined(content):
 def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
     import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
 
-    monkeypatch.setattr(
-        image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
-    )
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}")
     body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
         model="us.xai.grok-4.6",
         messages=IMAGE_MESSAGES,
@@ -760,7 +824,9 @@ def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, mod
     ids=lambda value: value if isinstance(value, str) else next(iter(value)),
 )
 def test_refused_params_are_dropped_or_refused_before_reaching_aws(local_cost_map, fake_aws_env, model, param):
-    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/chat_completions/")))
+    requests, client = _recording_client(
+        json=_chat_completion_json("ok", model.removeprefix("bedrock/chat_completions/"))
+    )
     with pytest.raises(litellm.UnsupportedParamsError, match=next(iter(param))):
         litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], client=client, **param)
     litellm.completion(
@@ -901,17 +967,17 @@ def test_reasoning_tag_splitter_releases_a_false_tag_prefix():
     assert _run_splitter(["<", "b>x"]) == ("", "<b>x")
 
 
-def _stream_chunk(delta, finish_reason=None, index=0):
+def _stream_chunk(delta, finish_reason=None, index=0, model="openai.gpt-oss-20b-1:0"):
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 1733529600,
-        "model": "openai.gpt-oss-20b-1:0",
+        "model": model,
         "choices": [{"index": index, "delta": delta, "finish_reason": finish_reason}],
     }
 
 
-def test_streaming_handler_splits_reasoning_deltas_per_choice():
+def test_streaming_handler_splits_reasoning_deltas_per_choice(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
 
     first = handler.chunk_parser(_stream_chunk({"role": "assistant", "content": "<reasoning>I think"}))
@@ -934,7 +1000,7 @@ def _reasoning_of(parsed):
     return getattr(parsed.choices[0].delta, "reasoning_content", None)
 
 
-def test_streaming_handler_keeps_split_state_per_choice_index():
+def test_streaming_handler_keeps_split_state_per_choice_index(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
 
     opened = handler.chunk_parser(_stream_chunk({"content": "<reasoning>first"}, index=0))
@@ -949,7 +1015,7 @@ def test_streaming_handler_keeps_split_state_per_choice_index():
     assert not still_reasoning.choices[0].delta.content
 
 
-def test_streaming_handler_flushes_held_text_on_an_empty_final_delta():
+def test_streaming_handler_flushes_held_text_on_an_empty_final_delta(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
 
     held = handler.chunk_parser(_stream_chunk({"content": "<reas"}))
@@ -1278,7 +1344,7 @@ def test_gpt_oss_streaming_completion_splits_reasoning(local_cost_map, fake_aws_
     assert "".join(delta.content or "" for delta in deltas) == "Hi"
 
 
-def test_streaming_handler_keeps_native_reasoning_next_to_the_tagged_split():
+def test_streaming_handler_keeps_native_reasoning_next_to_the_tagged_split(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
     parsed = handler.chunk_parser(
         _stream_chunk({"reasoning": "native ", "content": "<reasoning>tagged</reasoning>Hi"}, finish_reason="stop")
@@ -1467,3 +1533,174 @@ def test_gpt56_json_object_with_response_schema_goes_to_converse_as_a_json_tool(
     assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
     assert body["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
     assert "response_format" not in body
+
+
+LITERAL_TAGGED_ANSWER = "<reasoning>not thinking</reasoning> Hello"
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-sol", "us.xai.grok-4.6"])
+def test_streaming_handler_keeps_a_literal_reasoning_tag_outside_gpt_oss(local_cost_map, model):
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+
+    opened = handler.chunk_parser({**_stream_chunk({"content": "<reasoning>not thinking"}), "model": model})
+    assert opened.choices[0].delta.content == "<reasoning>not thinking"
+    assert _reasoning_of(opened) is None
+
+    closed = handler.chunk_parser(
+        {**_stream_chunk({"content": "</reasoning> Hello"}, finish_reason="stop"), "model": model}
+    )
+    assert closed.choices[0].delta.content == "</reasoning> Hello"
+    assert _reasoning_of(closed) is None
+
+
+@pytest.mark.parametrize(
+    "model, expected_content, expected_reasoning",
+    [
+        ("bedrock/global.openai.gpt-5.6-sol", LITERAL_TAGGED_ANSWER, None),
+        ("bedrock/chat_completions/us.xai.grok-4.6", LITERAL_TAGGED_ANSWER, None),
+        ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", "Hello", "not thinking"),
+        ("bedrock/chat_completions/openai.gpt-oss-safeguard-20b", "Hello", "not thinking"),
+    ],
+)
+def test_reasoning_tag_split_applies_to_gpt_oss_answers_only(
+    local_cost_map, fake_aws_env, model, expected_content, expected_reasoning
+):
+    model_id = model.removeprefix("bedrock/").removeprefix("chat_completions/")
+    requests, client = _recording_client(json=_chat_completion_json(LITERAL_TAGGED_ANSWER, model_id))
+
+    response = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], client=client, max_tokens=64
+    )
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert response.choices[0].message.content == expected_content
+    assert getattr(response.choices[0].message, "reasoning_content", None) == expected_reasoning
+
+
+@pytest.mark.parametrize(
+    "capability_flags, expected_content, expected_reasoning",
+    [
+        ({"supports_bedrock_runtime_chat_completions_inline_reasoning": True}, "Hello", "not thinking"),
+        ({}, LITERAL_TAGGED_ANSWER, None),
+    ],
+)
+def test_reasoning_tag_split_is_read_from_the_cost_map(
+    monkeypatch, fake_aws_env, capability_flags, expected_content, expected_reasoning
+):
+    model_id = SYNTHETIC_NATIVE_MODEL.removeprefix("chat_completions/")
+    monkeypatch.setattr(litellm, "model_cost", {model_id: {"litellm_provider": "bedrock_converse", **capability_flags}})
+    requests, client = _recording_client(json=_chat_completion_json(LITERAL_TAGGED_ANSWER, model_id))
+
+    response = litellm.completion(
+        model=f"bedrock/{SYNTHETIC_NATIVE_MODEL}",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+        max_tokens=64,
+    )
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert response.choices[0].message.content == expected_content
+    assert getattr(response.choices[0].message, "reasoning_content", None) == expected_reasoning
+
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    chunk = handler.chunk_parser(
+        {**_stream_chunk({"content": LITERAL_TAGGED_ANSWER}, finish_reason="stop"), "model": model_id}
+    )
+    assert chunk.choices[0].delta.content == expected_content
+    assert _reasoning_of(chunk) == expected_reasoning
+
+
+def _tool_call(tool_call_id, name):
+    return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def test_positional_tool_call_ids_are_minted_unique_per_response(local_cost_map, fake_aws_env):
+    reply = _chat_completion_json(
+        None,
+        "global.xai.grok-4.7",
+        tool_calls=[_tool_call("call_0", "read_a"), _tool_call("call_1", "read_b")],
+    )
+    _, client = _recording_client(json=reply)
+    responses = [
+        litellm.completion(
+            model="bedrock/chat_completions/global.xai.grok-4.7",
+            messages=[{"role": "user", "content": "hello"}],
+            client=client,
+        )
+        for _ in range(2)
+    ]
+
+    ids = [tool_call.id for response in responses for tool_call in response.choices[0].message.tool_calls]
+    assert len(set(ids)) == 4
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
+    assert [tool_call.function.name for tool_call in responses[0].choices[0].message.tool_calls] == ["read_a", "read_b"]
+
+
+def test_provider_unique_tool_call_ids_pass_through(local_cost_map, fake_aws_env):
+    reply = _chat_completion_json(
+        None, "openai.gpt-oss-20b-1:0", tool_calls=[_tool_call("chatcmpl-tool-90090f0c1c521528", "read_a")]
+    )
+    _, client = _recording_client(json=reply)
+    response = litellm.completion(
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+    )
+
+    assert response.choices[0].message.tool_calls[0].id == "chatcmpl-tool-90090f0c1c521528"
+
+
+def _streamed_tool_call_ids(tool_call_deltas, model="global.xai.grok-4.7"):
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    return [
+        tool_call.id
+        for delta in tool_call_deltas
+        for tool_call in handler.chunk_parser(_stream_chunk({"tool_calls": [delta]}, model=model))
+        .choices[0]
+        .delta.tool_calls
+    ]
+
+
+def test_streamed_positional_tool_call_ids_are_minted_once_per_tool_call(local_cost_map):
+    deltas = [
+        {"index": 0, **_tool_call("call_0", "read_a")},
+        {"index": 0, "function": {"arguments": '{"x":1}'}},
+        {"index": 0, "id": "call_0", "function": {"arguments": "}"}},
+        {"index": 1, **_tool_call("call_1", "read_b")},
+    ]
+    first_stream = _streamed_tool_call_ids(deltas)
+    second_stream = _streamed_tool_call_ids(deltas)
+
+    assert first_stream[0] == first_stream[2]
+    assert first_stream[1] is None
+    assert len({first_stream[0], first_stream[3], second_stream[0], second_stream[3]}) == 4
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", first_stream[i]) for i in (0, 3))
+
+
+def test_streamed_provider_unique_tool_call_ids_pass_through(local_cost_map):
+    assert _streamed_tool_call_ids(
+        [{"index": 0, **_tool_call("chatcmpl-tool-8c9232df5019ff4f", "read_a")}], model="openai.gpt-oss-20b-1:0"
+    ) == ["chatcmpl-tool-8c9232df5019ff4f"]
+
+
+def test_streamed_positional_tool_call_ids_are_minted_for_gpt_too(local_cost_map):
+    deltas = [{"index": 0, **_tool_call("call_0", "read_a")}, {"index": 1, **_tool_call("call_1", "read_b")}]
+
+    ids = _streamed_tool_call_ids(deltas, model="global.openai.gpt-5.6-sol")
+
+    assert len(set(ids)) == 2
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
+
+
+def test_positional_tool_call_ids_are_minted_for_gpt_too(local_cost_map, fake_aws_env):
+    reply = _chat_completion_json(
+        None, "global.openai.gpt-5.6-sol", tool_calls=[_tool_call("call_0", "read_a"), _tool_call("call_1", "read_b")]
+    )
+    _, client = _recording_client(json=reply)
+    response = litellm.completion(
+        model="bedrock/global.openai.gpt-5.6-sol", messages=[{"role": "user", "content": "hello"}], client=client
+    )
+
+    ids = [tool_call.id for tool_call in response.choices[0].message.tool_calls]
+    assert len(set(ids)) == 2
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)

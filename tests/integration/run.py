@@ -23,7 +23,9 @@ GROUPS: Final = MappingProxyType(
         "security": ("security",),
     }
 )
-GITHUB_FILES: Final = frozenset({"tests/integration/database/test_roi_observed.py"})
+GITHUB_FILES: Final = frozenset(
+    {"tests/integration/database/test_roi_observed.py", "tests/integration/mcp/test_interactions.py"}
+)
 
 
 @dataclass(frozen=True, slots=True)
