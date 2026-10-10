@@ -281,6 +281,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setDecisionProvider(provider);
     form.setValue("decision_model", undefined);
   };
+  const revalidateDecisionModel = () => {
+    if (form.getFieldState("decision_model").error) {
+      void form.trigger("decision_model");
+    }
+  };
   const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, selectedProvider);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
@@ -1038,6 +1043,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
               decisionProviders={decisionProviders}
               selectedProvider={decisionProvider}
               onProviderChange={changeDecisionProvider}
+              onModelChange={revalidateDecisionModel}
               decisionModels={decisionModels}
               checks={decisionChecks}
               onChecksChange={setDecisionChecks}

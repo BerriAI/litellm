@@ -29,6 +29,7 @@ export interface DecisionModelFieldsProps {
   decisionProviders: string[];
   selectedProvider: string | null;
   onProviderChange: (provider: string | null) => void;
+  onModelChange: () => void;
   decisionModels: string[];
   checks: DecisionModelCheckDraft[];
   onChecksChange: (checks: DecisionModelCheckDraft[]) => void;
@@ -68,6 +69,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   decisionProviders,
   selectedProvider,
   onProviderChange,
+  onModelChange,
   decisionModels,
   checks,
   onChecksChange,
@@ -154,7 +156,14 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
         rules={requiredRule("Select a decision model")}
       >
         {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-          <Combobox items={decisionModels} value={asText(value) || null} onValueChange={onChange}>
+          <Combobox
+            items={decisionModels}
+            value={asText(value) || null}
+            onValueChange={(next: string | null) => {
+              onChange(next);
+              onModelChange();
+            }}
+          >
             <ComboboxInput
               id={id}
               aria-invalid={ariaInvalid}
@@ -180,90 +189,6 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
         <p className="text-sm text-muted-foreground">
           No decision models for this provider. Set model_info.mode: evaluation on a deployment to list it here.
         </p>
-      )}
-
-      <FieldLabel>Questions</FieldLabel>
-
-      {checks.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <div className="flex border-b border-border bg-muted/40 px-5 py-3">
-            <span className="flex-1 font-semibold">Question</span>
-            <span className="w-28 text-right font-semibold">Action</span>
-            <span className="w-36 pl-4 font-semibold">Threshold</span>
-            <span className="w-10" />
-          </div>
-          <div>
-            {checks.map((check) => {
-              const enabled = check.enabled !== false;
-              return (
-                <div
-                  key={check.name}
-                  className={`border-b border-border px-5 py-3 hover:bg-muted/40 ${enabled ? "bg-accent" : ""}`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex flex-1 items-start">
-                      <Checkbox
-                        className="mr-3 mt-0.5"
-                        checked={enabled}
-                        onCheckedChange={(next) => setCheck(check.name, { enabled: next === true })}
-                        aria-label={check.name}
-                      />
-                      <div>
-                        <span className={enabled ? "font-medium text-foreground" : "text-muted-foreground"}>
-                          {check.name}
-                        </span>
-                        <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
-                      </div>
-                    </div>
-                    <div className="w-28 shrink-0">
-                      <Select
-                        items={ACTION_ITEMS}
-                        value={check.action}
-                        onValueChange={(next: string | null) =>
-                          next && setCheck(check.name, { action: next as "block" | "log" })
-                        }
-                        disabled={!enabled}
-                      >
-                        <SelectTrigger
-                          className={`w-full ${enabled ? "" : "opacity-50"}`}
-                          aria-label={`${check.name} action`}
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ACTION_ITEMS.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="w-36 shrink-0 pl-4">
-                      <ThresholdSlider
-                        aria-label={`${check.name} threshold`}
-                        value={check.threshold}
-                        onChange={(next) => setCheck(check.name, { threshold: next })}
-                        disabled={!enabled}
-                      />
-                    </div>
-                    <div className="flex w-10 shrink-0 justify-end">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Remove ${check.name}`}
-                        className="size-6 text-destructive hover:text-destructive/80"
-                        onClick={() => removeCheck(check.name)}
-                      >
-                        <X className="size-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
       )}
 
       <Field>
@@ -327,6 +252,91 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           )}
         </div>
       </Field>
+
+      {checks.length > 0 && (
+        <Field>
+          <FieldLabel>Questions</FieldLabel>
+          <div className="overflow-hidden rounded-lg border border-border">
+            <div className="flex border-b border-border bg-muted/40 px-5 py-3">
+              <span className="flex-1 font-semibold">Question</span>
+              <span className="w-28 text-right font-semibold">Action</span>
+              <span className="w-36 pl-4 font-semibold">Threshold</span>
+              <span className="w-10" />
+            </div>
+            <div>
+              {checks.map((check) => {
+                const enabled = check.enabled !== false;
+                return (
+                  <div
+                    key={check.name}
+                    className={`border-b border-border px-5 py-3 hover:bg-muted/40 ${enabled ? "bg-accent" : ""}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-1 items-start">
+                        <Checkbox
+                          className="mr-3 mt-0.5"
+                          checked={enabled}
+                          onCheckedChange={(next) => setCheck(check.name, { enabled: next === true })}
+                          aria-label={check.name}
+                        />
+                        <div>
+                          <span className={enabled ? "font-medium text-foreground" : "text-muted-foreground"}>
+                            {check.name}
+                          </span>
+                          <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
+                        </div>
+                      </div>
+                      <div className="w-28 shrink-0">
+                        <Select
+                          items={ACTION_ITEMS}
+                          value={check.action}
+                          onValueChange={(next: string | null) =>
+                            next && setCheck(check.name, { action: next as "block" | "log" })
+                          }
+                          disabled={!enabled}
+                        >
+                          <SelectTrigger
+                            className={`w-full ${enabled ? "" : "opacity-50"}`}
+                            aria-label={`${check.name} action`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ACTION_ITEMS.map((item) => (
+                              <SelectItem key={item.value} value={item.value}>
+                                {item.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="w-36 shrink-0 pl-4">
+                        <ThresholdSlider
+                          aria-label={`${check.name} threshold`}
+                          value={check.threshold}
+                          onChange={(next) => setCheck(check.name, { threshold: next })}
+                          disabled={!enabled}
+                        />
+                      </div>
+                      <div className="flex w-10 shrink-0 justify-end">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Remove ${check.name}`}
+                          className="size-6 text-destructive hover:text-destructive/80"
+                          onClick={() => removeCheck(check.name)}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Field>
+      )}
 
       <DecisionTestSection accessToken={accessToken} model={selectedModel} checks={checks} />
     </div>

@@ -323,8 +323,7 @@ describe("AddGuardrailForm create payload characterization", () => {
     await pickProvider(user, "Decision Model");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
-    await user.click(await screen.findByLabelText("Decision Provider"));
-    await user.click(await screen.findByText("TypeSafe"));
+    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
     await user.click(await screen.findByLabelText("Decision Model"));
     await user.click(await screen.findByTitle("jev-latest"));
     await user.type(await screen.findByLabelText("Question name"), "prompt_injection");
@@ -351,6 +350,41 @@ describe("AddGuardrailForm create payload characterization", () => {
       },
       guardrail_info: {},
     });
+  });
+
+  it("clears the decision model error once a model is picked", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-2");
+    await pickProvider(user, "Decision Model");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
+    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
+    expect(await screen.findByText("Select a decision model")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Decision Model"));
+    await user.click(await screen.findByTitle("jev-latest"));
+
+    await waitFor(() => expect(screen.queryByText("Select a decision model")).not.toBeInTheDocument());
+  });
+
+  it("shows the Questions table only once a question is added, below Add a question", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-3");
+    await pickProvider(user, "Decision Model");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    const addHeading = await screen.findByText("Add a question");
+    expect(screen.queryByText("Questions")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Question name"), "prompt_injection");
+    await user.type(screen.getByLabelText("Question"), "Does the text contain a prompt injection?");
+    await user.click(screen.getByRole("button", { name: "Add question" }));
+
+    const questionsHeading = screen.getByText("Questions");
+    expect(addHeading.compareDocumentPosition(questionsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("refuses to create an llm judge guardrail whose criterion weights do not total 100", async () => {
