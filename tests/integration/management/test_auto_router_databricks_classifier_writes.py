@@ -12,6 +12,8 @@ from integration._support.openai_wire import answering_model_discovery, chat_rep
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS
+
 _MODEL: Final = "ai_decide"
 _ROUTE: Final = "/api/2.0/ai-functions/ai-decide"
 _ENDPOINT: Final = "databricks-openjev-qwen35-4b"
@@ -47,6 +49,12 @@ _ENDPOINT_ANSWER: Final[dict[str, JsonValue]] = {
     "model": "/mosaicml/local_model",
     "answers": _ANSWERS,
     "usage": {"input_tokens": 12, "output_tokens": 1},
+}
+_TIER_CRITERIA: Final[dict[str, JsonValue]] = {
+    "SIMPLE": "Greetings, chitchat, or short factual lookups with known answers",
+    "MEDIUM": "Everyday requests needing explanation, light reasoning, or minor technical work",
+    "COMPLEX": "Non-trivial code, architecture, multi-step work, or specialized domain depth",
+    "REASONING": "Open-ended analysis, proofs, tradeoffs, or tasks requiring careful thought",
 }
 _ROWS_QUERY: Final = (
     "SELECT request_id, status, metadata->>'internal_call_origin' AS origin "
@@ -257,9 +265,13 @@ def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_
         (call,) = [request for request in judge.drain() if request.method == "POST"]
         assert call.target == target, call.target
         assert call.headers.get("authorization") == f"Bearer {_API_KEY}", call.headers
-        body: Final = json.loads(call.body)
-        assert body.get("model") == (None if model == _MODEL else model), body
-        assert body["state"] == f"\nClassify this message:\n{prompt}", body
+        assert json.loads(call.body) == {
+            "state": f"\nClassify this message:\n{prompt}",
+            **({} if model == _MODEL else {"model": model}),
+            "questions": {
+                "tier": {"type": "choice", "instructions": DEFAULT_JEV_INSTRUCTIONS, "criteria": _TIER_CRITERIA}
+            },
+        }, call.body
         assert _judge_targets(simple) == () and _judge_targets(complex_tier) == ()
 
 
