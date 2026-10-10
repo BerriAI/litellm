@@ -13,6 +13,8 @@ vi.mock("./provider_display_helpers", () => ({
     const map: Record<string, string> = {
       OpenAI: "openai",
       Anthropic: "anthropic",
+      Vertex_AI: "vertex_ai",
+      Openrouter: "openrouter",
     };
     return map[enumKey] ?? null;
   }),
@@ -22,6 +24,8 @@ vi.mock("@/components/provider_info_helpers", () => ({
   Providers: {
     OpenAI: "OpenAI",
     Anthropic: "Anthropic",
+    Vertex_AI: "Vertex AI",
+    Openrouter: "OpenRouter",
   },
 }));
 
@@ -80,7 +84,7 @@ describe("useDiscountConfig", () => {
 
       let success: boolean;
       await act(async () => {
-        success = await result.current.handleAddProvider(undefined, "5");
+        success = await result.current.handleAddProvider(undefined, "5", "");
       });
 
       expect(success!).toBe(false);
@@ -92,7 +96,7 @@ describe("useDiscountConfig", () => {
 
       let success: boolean;
       await act(async () => {
-        success = await result.current.handleAddProvider("OpenAI", "");
+        success = await result.current.handleAddProvider("OpenAI", "", "");
       });
 
       expect(success!).toBe(false);
@@ -104,7 +108,7 @@ describe("useDiscountConfig", () => {
 
       let success: boolean;
       await act(async () => {
-        success = await result.current.handleAddProvider("OpenAI", "150");
+        success = await result.current.handleAddProvider("OpenAI", "150", "");
       });
 
       expect(success!).toBe(false);
@@ -127,11 +131,35 @@ describe("useDiscountConfig", () => {
 
       let success: boolean;
       await act(async () => {
-        success = await result.current.handleAddProvider("OpenAI", "10");
+        success = await result.current.handleAddProvider("OpenAI", "10", "");
       });
 
       expect(success!).toBe(false);
       expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
+    });
+
+    it("should reject a duplicate even when the stored discount is 0", async () => {
+      vi.spyOn(global, "fetch").mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ values: { vertex_ai: 0 } }),
+      } as Response);
+
+      const { result } = renderHook(() => useDiscountConfig({ accessToken: "test-token" }));
+
+      await act(async () => {
+        await result.current.fetchDiscountConfig();
+      });
+
+      vi.clearAllMocks();
+
+      let success: boolean;
+      await act(async () => {
+        success = await result.current.handleAddProvider("Vertex_AI", "5", "");
+      });
+
+      expect(success!).toBe(false);
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
     it("should save the config and return true on a valid new provider", async () => {
@@ -148,11 +176,120 @@ describe("useDiscountConfig", () => {
 
       let success: boolean;
       await act(async () => {
-        success = await result.current.handleAddProvider("OpenAI", "5");
+        success = await result.current.handleAddProvider("OpenAI", "5", "");
       });
 
       expect(success!).toBe(true);
       expect(toast.success).toHaveBeenCalledWith("Discount configuration updated successfully");
+    });
+
+    it("should store a <provider>/<pattern> key when a model pattern is given", async () => {
+      vi.spyOn(global, "fetch")
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ values: {} }) } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ values: { "openai/gpt-*": 0.2 } }) } as Response);
+
+      const { result } = renderHook(() => useDiscountConfig({ accessToken: "test-token" }));
+
+      await act(async () => {
+        await result.current.fetchDiscountConfig();
+      });
+
+      let success: boolean;
+      await act(async () => {
+        success = await result.current.handleAddProvider("OpenAI", "20", "gpt-*");
+      });
+
+      expect(success!).toBe(true);
+      const patchCall = vi.mocked(global.fetch).mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse(patchCall![1]!.body as string)).toEqual({ "openai/gpt-*": 0.2 });
+      expect(result.current.discountConfig).toHaveProperty("openai/gpt-*", 0.2);
+    });
+
+    it("should store the bare provider key when the pattern is empty or whitespace", async () => {
+      vi.spyOn(global, "fetch")
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ values: { openai: 0.05 } }) } as Response);
+
+      const { result } = renderHook(() => useDiscountConfig({ accessToken: "test-token" }));
+
+      let success: boolean;
+      await act(async () => {
+        success = await result.current.handleAddProvider("OpenAI", "5", "   ");
+      });
+
+      expect(success!).toBe(true);
+      const patchCall = vi.mocked(global.fetch).mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(JSON.parse(patchCall![1]!.body as string)).toEqual({ openai: 0.05 });
+    });
+
+    it("should compose a nested pattern with slashes into the config key", async () => {
+      vi.spyOn(global, "fetch")
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ values: { "openrouter/anthropic/claude-*": 0.15 } }),
+        } as Response);
+
+      const { result } = renderHook(() => useDiscountConfig({ accessToken: "test-token" }));
+
+      let success: boolean;
+      await act(async () => {
+        success = await result.current.handleAddProvider("Openrouter", "15", "anthropic/claude-*");
+      });
+
+      expect(success!).toBe(true);
+      const patchCall = vi.mocked(global.fetch).mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(JSON.parse(patchCall![1]!.body as string)).toEqual({ "openrouter/anthropic/claude-*": 0.15 });
+    });
+
+    it("should let a provider with a bare discount also get a pattern entry", async () => {
+      vi.spyOn(global, "fetch")
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ values: { openai: 0.05 } }) } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ values: { openai: 0.05, "openai/gpt-*": 0.2 } }),
+        } as Response);
+
+      const { result } = renderHook(() => useDiscountConfig({ accessToken: "test-token" }));
+
+      await act(async () => {
+        await result.current.fetchDiscountConfig();
+      });
+
+      let success: boolean;
+      await act(async () => {
+        success = await result.current.handleAddProvider("OpenAI", "20", "gpt-*");
+      });
+
+      expect(success!).toBe(true);
+      const patchCall = vi.mocked(global.fetch).mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(JSON.parse(patchCall![1]!.body as string)).toEqual({ openai: 0.05, "openai/gpt-*": 0.2 });
+    });
+
+    it("should reject a duplicate pattern key", async () => {
+      vi.spyOn(global, "fetch").mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ values: { "openai/gpt-*": 0.2 } }),
+      } as Response);
+
+      const { result } = renderHook(() => useDiscountConfig({ accessToken: "test-token" }));
+
+      await act(async () => {
+        await result.current.fetchDiscountConfig();
+      });
+
+      let success: boolean;
+      await act(async () => {
+        success = await result.current.handleAddProvider("OpenAI", "10", "gpt-*");
+      });
+
+      expect(success!).toBe(false);
+      expect(toast.fromError).toHaveBeenCalledWith(
+        "Discount for OpenAI (gpt-*) already exists. Edit it in the table above.",
+      );
     });
   });
 
