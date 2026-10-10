@@ -55,9 +55,7 @@ from litellm.types.decisions import (
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
-_NO_IMAGE_INPUT: Final = UnsupportedDecisionsRequest(
-    reason="image input is not supported by this Decisions provider"
-)
+_NO_IMAGE_INPUT: Final = UnsupportedDecisionsRequest(reason="image input is not supported by this Decisions provider")
 
 
 def decisions_text(value: DecisionsJSON) -> str:

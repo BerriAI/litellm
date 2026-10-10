@@ -289,10 +289,12 @@ def test_cloudflare_clef_receives_images_on_the_wire(
     )
 
     assert route.called
-    assert json.loads(respx_mock.calls[0].request.content)["images"] == [
-        "data:image/png;base64,AA==",
-        "data:image/jpeg;base64,BB==",
-    ]
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "clef",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": ["data:image/png;base64,AA==", "data:image/jpeg;base64,BB=="],
+    }
 
 
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
