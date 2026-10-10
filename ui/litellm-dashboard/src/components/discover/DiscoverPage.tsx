@@ -56,7 +56,9 @@ export default function DiscoverPage() {
       <div className="mt-2 flex w-full flex-col gap-8 p-8">
         <div>
           <h2 className="text-lg font-semibold">Discover</h2>
-          <p className="text-sm text-muted-foreground">What&apos;s new in LiteLLM, and models you can route to today.</p>
+          <p className="text-sm text-muted-foreground">
+            What&apos;s new in LiteLLM, and models you can route to today.
+          </p>
         </div>
 
         <section aria-labelledby="discover-whats-new" className="flex flex-col gap-3">

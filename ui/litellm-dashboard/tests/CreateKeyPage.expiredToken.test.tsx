@@ -105,7 +105,7 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 
 // Super-light stubs for all heavy components so rendering doesn't explode
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
-vi.mock("@/app/(dashboard)/api-keys/ApiKeysDashboard", () => ({ default: stub("api-keys-dashboard") }));
+vi.mock("@/components/discover/DiscoverPage", () => ({ default: stub("discover-page") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
 vi.mock("@/app/(dashboard)/organizations/_components/organizations", () => ({
@@ -269,9 +269,9 @@ describe("CreateKeyPage auth behavior", () => {
       expect(window.location.replace).not.toHaveBeenCalled();
     });
 
-    // And the default page content appears (ApiKeysDashboard stub; chrome now lives in the layout)
+    // And the default page content appears (DiscoverPage stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("discover-page")).toBeInTheDocument();
     });
   });
 

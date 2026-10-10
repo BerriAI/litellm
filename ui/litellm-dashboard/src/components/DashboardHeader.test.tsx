@@ -59,11 +59,11 @@ describe("DashboardHeader breadcrumb", () => {
     expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
   });
 
-  it("titles the dashboard root as Virtual Keys", () => {
+  it("titles the dashboard root as Discover", () => {
     state.pathname = "/ui/";
     renderDashboardHeader();
 
-    expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
+    expect(screen.getByText("Discover")).toBeInTheDocument();
   });
 
   it("roots the breadcrumb in the AI Gateway selector (with a Chat option) and drops the static section crumb when the selector is available", async () => {

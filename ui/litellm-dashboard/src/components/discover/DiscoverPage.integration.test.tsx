@@ -35,7 +35,9 @@ describe("DiscoverPage", () => {
     const section = (await screen.findByRole("heading", { name: "What's new" })).closest("section")!;
     const links = within(section).getAllByRole("link");
     expect(links.map((l) => l.textContent)).toEqual(
-      [...LAUNCHES].sort((a, b) => b.publishedOn.localeCompare(a.publishedOn)).map((l) => expect.stringContaining(l.title)),
+      [...LAUNCHES]
+        .sort((a, b) => b.publishedOn.localeCompare(a.publishedOn))
+        .map((l) => expect.stringContaining(l.title)),
     );
     links.forEach((link) => {
       expect(link).toHaveAttribute("target", "_blank");
