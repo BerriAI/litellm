@@ -50,6 +50,8 @@ SCORE_MIN_LEVELS: Final = 2
 SCORE_MAX_LEVELS: Final = 10
 
 MAX_ENTITIES: Final = 1000
+MAX_REF_CHAIN: Final = 32
+MAX_SCHEMA_DEPTH: Final = 32
 
 
 class ScaleDownError(BaseLLMException):
@@ -301,20 +303,25 @@ def _deref(
     """Follow local `$ref`s (`#/$defs/X`, `#/definitions/X`) to the schema they name.
 
     Returns the schema, the refs followed so far, and whether a ref repeated (a cycle).
+    The walk is a bounded loop, so a long chain of distinct refs cannot exhaust the stack.
     """
-    ref: Final = prop.get("$ref")
-    if not isinstance(ref, str) or not ref.startswith("#/"):
-        return prop, path, False
-    if ref in path:
-        return prop, path, True
-    target: Final = reduce(_child, ref[2:].split("/"), root)
-    if not isinstance(target, Mapping):
-        return prop, path, False
-    return _deref(target, root, (*path, ref))
+    current = prop  # rebind-ok: bounded walk along a ref chain
+    followed = path  # rebind-ok: bounded walk along a ref chain
+    for _ in range(MAX_REF_CHAIN):
+        ref = current.get("$ref")
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            return current, followed, False
+        if ref in followed:
+            return current, followed, True
+        target = reduce(_child, ref[2:].split("/"), root)
+        if not isinstance(target, Mapping):
+            return current, followed, False
+        current, followed = target, (*followed, ref)
+    _reject(f"The response_format schema follows more than {MAX_REF_CHAIN} chained $refs.")
 
 
 def _build_properties(
-    properties: Mapping[str, object], root: Mapping[str, object], path: tuple[str, ...], budget: int
+    properties: Mapping[str, object], root: Mapping[str, object], path: tuple[str, ...], budget: int, depth: int = 0
 ) -> tuple[Mapping[str, object], int]:
     """Turn JSON-schema properties into the /extract entity map, spending one budget unit per entity.
 
@@ -323,6 +330,8 @@ def _build_properties(
     item's entity map, local `$ref`s are followed, and a ref that points back into itself is cut
     off at that point instead of expanded.
     """
+    if depth > MAX_SCHEMA_DEPTH:
+        _reject(f"The response_format schema nests deeper than {MAX_SCHEMA_DEPTH} levels.")
     built: Final[dict[str, object]] = {}  # mutable-ok: filled once while threading the budget through
     remaining = budget  # rebind-ok: the budget is threaded through the loop
     for name, prop in properties.items():
@@ -331,12 +340,12 @@ def _build_properties(
                 f"The response_format schema expands to more than {MAX_ENTITIES} entities; "
                 "remove recursive or heavily repeated $refs."
             )
-        built[name], remaining = _build_entity(name, prop, root, path, remaining - 1)
+        built[name], remaining = _build_entity(name, prop, root, path, remaining - 1, depth)
     return built, remaining
 
 
 def _build_entity(
-    name: str, prop: object, root: Mapping[str, object], path: tuple[str, ...], budget: int
+    name: str, prop: object, root: Mapping[str, object], path: tuple[str, ...], budget: int, depth: int
 ) -> tuple[object, int]:
     schema, followed, cyclic = _deref(prop, root, path) if isinstance(prop, Mapping) else ({}, path, False)
     leaf: Final = schema.get("description") or name
@@ -344,13 +353,13 @@ def _build_entity(
     if cyclic:
         return leaf, budget
     if isinstance(nested, Mapping):
-        return _build_properties(nested, root, followed, budget)
+        return _build_properties(nested, root, followed, budget, depth + 1)
     raw_items: Final = schema.get("items")
     if schema.get("type") == "array" and isinstance(raw_items, Mapping):
         items, item_path, item_cyclic = _deref(raw_items, root, followed)
         item_properties: Final = items.get("properties")
         if not item_cyclic and isinstance(item_properties, Mapping):
-            built, remaining = _build_properties(item_properties, root, item_path, budget)
+            built, remaining = _build_properties(item_properties, root, item_path, budget, depth + 1)
             return [built], remaining
     return leaf, budget
 

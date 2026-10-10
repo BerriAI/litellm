@@ -456,6 +456,25 @@ def test_extract_cleaning_handles_lists_of_objects(config):
     assert json.loads(response.choices[0].message.content) == {"items": [{"sku": "a"}, {"sku": "b"}]}
 
 
+def test_long_ref_chain_is_rejected_cleanly_not_with_a_recursion_error(config):
+    defs = {f"D{i}": {"$ref": f"#/$defs/D{i + 1}"} for i in range(5000)}
+    defs["D5000"] = {"type": "string"}
+    schema = {"type": "object", "$defs": defs, "properties": {"f": {"$ref": "#/$defs/D0"}}}
+
+    with pytest.raises(ScaleDownError, match="chained"):
+        _extract_body(config, schema)
+
+
+def test_deeply_nested_schema_is_rejected_cleanly(config):
+    nested: dict = {"type": "string"}
+    for _ in range(200):
+        nested = {"type": "object", "properties": {"x": nested}}
+    schema = {"type": "object", "properties": {"root": nested}}
+
+    with pytest.raises(ScaleDownError, match="nests deeper"):
+        _extract_body(config, schema)
+
+
 def test_extract_and_summarize_send_an_image_as_a_native_document(config):
     messages = [
         {
