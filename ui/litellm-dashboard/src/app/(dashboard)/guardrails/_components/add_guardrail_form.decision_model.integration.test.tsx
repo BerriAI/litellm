@@ -300,6 +300,23 @@ describe("AddGuardrailForm provider search", () => {
     await user.type(provider, "presidio");
     expect(await screen.findByText("Presidio PII")).toBeInTheDocument();
   });
+
+  it("matches provider labels ignoring case and punctuation", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    renderWithProviders(
+      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
+    );
+
+    const provider = await screen.findByLabelText("Guardrail Provider");
+    await user.click(provider);
+
+    await user.type(provider, "presidio_pii");
+    expect(await screen.findByText("Presidio PII")).toBeInTheDocument();
+
+    await user.clear(provider);
+    await user.type(provider, "llm_as_a_judge");
+    expect(await screen.findByText("LiteLLM LLM as a Judge")).toBeInTheDocument();
+  });
 });
 
 describe("AddGuardrailForm decision model create flow", () => {

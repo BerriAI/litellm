@@ -8,6 +8,22 @@ export interface DecisionModelGroup {
   mode?: string | null;
 }
 
+export function parseDecisionModelGroups(data: unknown): DecisionModelGroup[] {
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { model_group, providers, mode } = entry as Record<string, unknown>;
+    if (typeof model_group !== "string") return [];
+    return [
+      {
+        model_group,
+        providers: Array.isArray(providers) ? providers.filter((p): p is string => typeof p === "string") : [],
+        mode: typeof mode === "string" ? mode : null,
+      },
+    ];
+  });
+}
+
 export function decisionProvidersForGroups(
   allowedProviders: readonly string[],
   groups: readonly DecisionModelGroup[],

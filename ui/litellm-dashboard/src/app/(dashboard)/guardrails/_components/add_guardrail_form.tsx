@@ -46,6 +46,7 @@ import {
   ComboboxInput,
   ComboboxItem,
   ComboboxList,
+  useComboboxFilter,
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -76,6 +77,7 @@ import {
 import {
   decisionModelsForProvider,
   decisionProvidersForGroups,
+  parseDecisionModelGroups,
   type DecisionModelGroup,
 } from "./decision_model/decisionModelQuestion";
 import PiiConfiguration from "./pii_configuration";
@@ -233,6 +235,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const watchedMode = useWatch({ control: form.control, name: "mode" });
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const providerFilter = useComboboxFilter();
   const [guardrailSettings, setGuardrailSettings] = useState<GuardrailSettings | null>(null);
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
   const [selectedActions, setSelectedActions] = useState<{ [key: string]: string }>({});
@@ -309,19 +312,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (modelsResp?.data) {
           setAvailableModels(modelsResp.data.map((m: { id: string }) => m.id));
         }
-        if (modelGroupsResp?.data) {
-          setDecisionModelGroups(
-            modelGroupsResp.data.map((m: { model_group: string; providers?: string[]; mode?: string | null }) => ({
-              model_group: m.model_group,
-              providers: m.providers ?? [],
-              mode: m.mode ?? null,
-            })),
-          );
-        }
 
         // Populate dynamic providers from API response
         populateGuardrailProviders(providerParamsResp);
         populateGuardrailProviderMap(providerParamsResp);
+
+        setDecisionModelGroups(parseDecisionModelGroups(modelGroupsResp?.data));
       } catch (error) {
         console.error("Error fetching guardrail data:", error);
         toast.fromError("Failed to load guardrail configuration");
@@ -791,14 +787,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const showProviderFields = !usesOwnConfigurationFields;
     const providerLabels: Record<string, string> = getGuardrailProviders();
     const providerKeys = Object.keys(providerLabels);
-    const providerMatchesQuery = (key: string, query: string) => {
-      const normalized = query.toLowerCase();
-      const terms = [
-        providerLabels[key] ?? key,
-        ...(guardrail_provider_search_aliases[guardrail_provider_map[key]] ?? []),
-      ];
-      return terms.some((term) => term.toLowerCase().includes(normalized));
-    };
+    const providerMatchesQuery = (key: string, query: string) =>
+      [providerLabels[key] ?? key, ...(guardrail_provider_search_aliases[guardrail_provider_map[key]] ?? [])].some(
+        (term) => providerFilter.contains(term, query),
+      );
     const supportedModes = getSupportedModesForProvider(guardrailSettings, selectedProvider) ?? DEFAULT_MODES;
     return (
       <FieldGroup>

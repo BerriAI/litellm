@@ -7,6 +7,7 @@ import {
   decisionProvidersForGroups,
   decisionTestChip,
   decisionTestOverall,
+  parseDecisionModelGroups,
   parseDecisionTestResponse,
   prependTestRun,
   runTestShortcutLabel,
@@ -29,6 +30,27 @@ const draft = (overrides: Partial<DecisionModelCheckDraft>): DecisionModelCheckD
   threshold: 0.5,
   enabled: true,
   ...overrides,
+});
+
+describe("parseDecisionModelGroups", () => {
+  it("returns no groups when the response data is not a list", () => {
+    expect(parseDecisionModelGroups({})).toEqual([]);
+    expect(parseDecisionModelGroups(undefined)).toEqual([]);
+  });
+
+  it("skips entries without a model group name and normalizes providers and mode", () => {
+    expect(
+      parseDecisionModelGroups([
+        null,
+        { providers: ["typesafe"] },
+        { model_group: "jev-latest", providers: ["typesafe", 7], mode: "evaluation" },
+        { model_group: "bare", providers: "typesafe", mode: 3 },
+      ]),
+    ).toEqual([
+      { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+      { model_group: "bare", providers: [], mode: null },
+    ]);
+  });
 });
 
 describe("decisionProvidersForGroups", () => {
