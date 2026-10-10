@@ -83,6 +83,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
+    OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
     InvalidControlOption,
@@ -118,6 +119,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
+from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     bedrock_route_for_request,
@@ -139,6 +141,7 @@ from litellm.types.completion import (
     _CompletionDispatchResult,
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -211,7 +214,7 @@ from .litellm_core_utils.prompt_templates.factory import (
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
-from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
@@ -429,7 +432,7 @@ async def acompletion(
     messages: list = [],
     functions: list | None = None,
     function_call: str | None = None,
-    timeout: float | None = None,
+    timeout: float | httpx.Timeout | openai.Timeout | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
@@ -639,10 +642,17 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
+        _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
+            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=kwargs.get("api_base") or base_url,
+            api_base=cast(  # cast-ok: api_base arrives as a str in the request kwargs
+                "str | None", kwargs.get("api_base")
+            )
+            or base_url,
+            litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -1318,6 +1328,7 @@ def _register_custom_pricing_for_request(
         },
         persist_across_reloads=False,
         warning_display_name=shared_key,
+        custom_llm_provider=custom_llm_provider,
     )
 
 
@@ -1361,7 +1372,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
 
     dynamic_params = False
     if client is not None and (isinstance(client, openai.AzureOpenAI) or isinstance(client, openai.AsyncAzureOpenAI)):
-        dynamic_params = _check_dynamic_azure_params(
+        dynamic_params = check_dynamic_azure_params(
             azure_client_params={"api_version": api_version},
             azure_client=client,
         )
@@ -2634,19 +2645,33 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
+    outbound_headers: Final = (
+        headers
+        if provider_config is None
+        else with_attribution_headers(provider_config.get_attribution_headers(), headers)
+    )
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
         from litellm.llms.github_copilot.authenticator import Authenticator
         from litellm.llms.github_copilot.common_utils import (
             get_copilot_default_headers,
+            pin_session_authorization,
+        )
+        from litellm.llms.github_copilot.per_user_auth import (
+            require_github_copilot_user_session,
         )
 
-        copilot_auth: Final = Authenticator()
-        copilot_api_key: Final = copilot_auth.get_api_key()
-        copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
+        user_session: Final = require_github_copilot_user_session(litellm_params)
+        copilot_headers: Final = get_copilot_default_headers(
+            user_session.token if user_session is not None else Authenticator().get_api_key()
+        )
         if extra_headers:
-            copilot_headers.update(extra_headers)
+            copilot_headers.update(
+                cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
+            )
+        if user_session is not None:
+            pin_session_authorization(copilot_headers, user_session.token)
         extra_headers = copilot_headers
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
@@ -2685,7 +2710,7 @@ def _complete_custom_openai(
                 acompletion=acompletion,
                 stream=stream,
                 api_key=api_key,
-                headers=headers,
+                headers=outbound_headers,
                 client=client,
                 provider_config=provider_config,
             )
@@ -2693,7 +2718,7 @@ def _complete_custom_openai(
             response = openai_chat_completions.completion(
                 model=model,
                 messages=messages,
-                headers=headers,
+                headers=outbound_headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 api_key=api_key,
@@ -2716,7 +2741,7 @@ def _complete_custom_openai(
             input=messages,
             api_key=api_key,
             original_response=str(e),
-            additional_args={"headers": headers},
+            additional_args={"headers": outbound_headers},
         )
         raise e
 
@@ -2726,7 +2751,7 @@ def _complete_custom_openai(
             input=messages,
             api_key=api_key,
             original_response=response,
-            additional_args={"headers": headers},
+            additional_args={"headers": outbound_headers},
         )
 
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
@@ -5068,7 +5093,7 @@ def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     (
         api_base,
         api_key,
-    ) = LangGraphConfig()._get_openai_compatible_provider_info(
+    ) = LangGraphConfig().get_openai_compatible_provider_info(
         api_base=api_base or litellm.api_base,
         api_key=api_key or litellm.api_key,
     )
@@ -5095,6 +5120,56 @@ def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     )
 
 
+def _complete_microsoft_365_copilot(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    from litellm.llms.microsoft_365_copilot.chat.handler import acompletion, completion
+    from litellm.llms.microsoft_365_copilot.common_utils import as_secret_fields
+
+    messages: Final[Sequence[AllMessageValues]] = cast(  # cast-ok: dispatch messages are prevalidated
+        Sequence[AllMessageValues],
+        ctx.messages,
+    )
+    optional_params_value: Final[object] = cast(  # cast-ok: dispatch params are validated below
+        object,
+        ctx.optional_params,
+    )
+    optional_params: Final = TypeAdapter(Mapping[str, object]).validate_python(optional_params_value)
+    kwargs_value: Final[object] = cast(  # cast-ok: dispatch kwargs are validated below
+        object,
+        ctx.kwargs,
+    )
+    kwargs: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs_value)
+    secret_fields: Final = as_secret_fields(kwargs.get("secret_fields"))
+    client: Final = _dispatch_client_http(ctx)
+    if ctx.acompletion:
+        async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
+        return acompletion(
+            model=ctx.model,
+            messages=messages,
+            api_key=ctx.api_key,
+            litellm_params=ctx.litellm_params,
+            optional_params=optional_params,
+            secret_fields=secret_fields,
+            stream=ctx.stream is True,
+            timeout=ctx.timeout,
+            logging_obj=ctx.logging,
+            client=async_client,
+            shared_session=ctx.shared_session,
+        )
+    sync_client: Final = client if isinstance(client, HTTPHandler) else None
+    return completion(
+        model=ctx.model,
+        messages=messages,
+        api_key=ctx.api_key,
+        litellm_params=ctx.litellm_params,
+        optional_params=optional_params,
+        secret_fields=secret_fields,
+        stream=ctx.stream is True,
+        timeout=ctx.timeout,
+        logging_obj=ctx.logging,
+        client=sync_client,
+    )
+
+
 def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -5117,7 +5192,7 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     (
         api_base,
         api_key,
-    ) = LangFlowConfig()._get_openai_compatible_provider_info(
+    ) = LangFlowConfig().get_openai_compatible_provider_info(
         api_base=api_base or litellm.api_base,
         api_key=api_key or litellm.api_key,
     )
@@ -5150,7 +5225,7 @@ def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: list = [],
-    timeout: float | str | httpx.Timeout | None = None,
+    timeout: float | str | httpx.Timeout | openai.Timeout | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
@@ -5730,7 +5805,11 @@ def completion(
                     *AWS_CREDENTIAL_KWARGS_KEYS,
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
+                    *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    "github_copilot_auth_type",
+                    "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    "fireworks_forward_user_id",
                 )
                 if key in kwargs
             },
@@ -6083,6 +6162,9 @@ def completion(
             # LangGraph - Agent Runtime Provider
             response = _complete_langgraph(_dispatch_ctx)
 
+        elif custom_llm_provider == "microsoft_365_copilot":
+            response = _complete_microsoft_365_copilot(_dispatch_ctx)  # rebind-ok: shared provider return
+
         elif custom_llm_provider == "langflow":
             # LangFlow - Visual AI Agent Platform
             response = _complete_langflow(_dispatch_ctx)
@@ -6372,6 +6454,10 @@ def embedding(
     """
     azure: Final = kwargs.get("azure", None)
     client: Final = kwargs.pop("client", None)
+    drop_params_kwarg: Final = (
+        cast(object, kwargs["drop_params"]) if "drop_params" in kwargs else None  # cast-ok: untyped request kwargs
+    )
+    drop_unsupported_params: Final = litellm.drop_params is True or normalize_drop_params(drop_params_kwarg) is True
     shared_session: Final = kwargs.get("shared_session", None)
     max_retries: Final = kwargs.get("max_retries", None)
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -6415,17 +6501,24 @@ def embedding(
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
     non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
 
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=GenericLiteLLMParams(**kwargs),
     )
 
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
-    allowed_openai_params: Final[list[str] | None] = kwargs.get("allowed_openai_params", None)
+    allowed_openai_params: Final[list[str] | None] = (
+        cast(  # cast-ok: allowed_openai_params arrives as a str list in the request kwargs
+            "list[str] | None", kwargs.get("allowed_openai_params", None)
+        )
+    )
     optional_params: Final = get_optional_params_embeddings(
         model=model,
         user=user,
@@ -6449,8 +6542,6 @@ def embedding(
             kwargs=kwargs,
             model_info=kwargs.get("model_info"),
         )
-
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(
@@ -6852,6 +6943,7 @@ def embedding(
                 api_base=api_base,
                 client=client,
                 extra_headers=headers,
+                drop_params=drop_unsupported_params,
             )
 
         elif custom_llm_provider == "vertex_ai":
@@ -6904,6 +6996,7 @@ def embedding(
                     api_base=api_base,
                     client=client,
                     extra_headers=headers,
+                    drop_params=drop_unsupported_params,
                 )
             elif (
                 "image" in optional_params
@@ -7787,6 +7880,8 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
+    from litellm.llms.openai.common_utils import OpenAIHTTPClient
+
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
@@ -7795,10 +7890,7 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
 
     openai_client = kwargs.get("client", None)
     if openai_client is None:
-        if api_base is not None:
-            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base)
-        else:
-            openai_client = openai.OpenAI(api_key=api_key)
+        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=OpenAIHTTPClient())
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -7846,7 +7938,7 @@ async def amoderation(
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(
+        _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
             api_key=api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
@@ -8271,7 +8363,7 @@ def speech(
     project: str | None = None,
     max_retries: int | None = None,
     metadata: dict | None = None,
-    timeout: float | httpx.Timeout | None = None,
+    timeout: float | httpx.Timeout | openai.Timeout | None = None,
     response_format: str | None = None,
     speed: int | None = None,
     instructions: str | None = None,
@@ -8301,9 +8393,12 @@ def speech(
     if instructions is not None:
         optional_params["instructions"] = instructions
 
-    if timeout is None:
-        timeout = litellm.request_timeout
-
+    timeout_or_default: Final = litellm.request_timeout if timeout is None else timeout
+    http_timeout: Final = (
+        CompletionTimeout.normalize(timeout_or_default)
+        if isinstance(timeout_or_default, openai.Timeout)
+        else timeout_or_default
+    )
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
     litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
@@ -8352,7 +8447,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
@@ -8408,7 +8503,7 @@ def speech(
             organization=organization,
             project=project,
             max_retries=max_retries,
-            timeout=timeout,
+            timeout=http_timeout,
             logging_obj=logging_obj,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
@@ -8439,7 +8534,7 @@ def speech(
                 optional_params=optional_params,
                 litellm_params_dict=litellm_params_dict,
                 logging_obj=logging_obj,
-                timeout=timeout,
+                timeout=http_timeout,
                 extra_headers=extra_headers,
                 base_llm_http_handler=base_llm_http_handler,
                 aspeech=aspeech or False,
@@ -8487,7 +8582,7 @@ def speech(
                 azure_ad_token_provider=azure_ad_token_provider,
                 organization=organization,
                 max_retries=max_retries,
-                timeout=timeout,
+                timeout=http_timeout,
                 logging_obj=logging_obj,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
@@ -8532,7 +8627,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
@@ -8589,7 +8684,7 @@ def speech(
             optional_params=optional_params,
             litellm_params_dict=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
@@ -8635,7 +8730,7 @@ def speech(
             optional_params=optional_params,
             litellm_params_dict=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=extra_headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
@@ -8676,7 +8771,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
@@ -8704,7 +8799,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
@@ -8728,7 +8823,7 @@ def speech(
             optional_params=optional_params,
             litellm_params_dict=litellm_params_dict,
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=extra_headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,

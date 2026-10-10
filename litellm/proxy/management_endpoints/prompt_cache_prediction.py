@@ -15,12 +15,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import get_cache_prediction_deployments
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # canonical parsed-body owner; validate its legacy result at the endpoint boundary
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # canonical parsed-body owner; validate its legacy result at the endpoint boundary
 )
 from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms, predict_arm
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
+    PROXY_MaxParallelRequestsHandler_v3,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -39,7 +41,7 @@ class _CallerSettings(LiteLLMBaseModel):
 
 
 def _capacity_counter(
-    limiter: _PROXY_MaxParallelRequestsHandler_v3,
+    limiter: PROXY_MaxParallelRequestsHandler_v3,
     caller: UserAPIKeyAuth,
     model_name: str,
     request_data: Mapping[str, object],
@@ -114,7 +116,7 @@ async def predict_cache_cost(
         or not caller
         or unsupported_transform
         or unsupported_headers
-        or not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3)
+        or not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3)
     ):
         reason: Final = (
             "unsupported_provider_headers"
@@ -134,7 +136,7 @@ async def predict_cache_cost(
             cache_rebuild_penalty=None,
         )
     request_data: Final = _capacity_request_data(
-        http_request, user_api_key_dict, _REQUEST_DATA.validate_python(await _read_request_body(http_request))
+        http_request, user_api_key_dict, _REQUEST_DATA.validate_python(await read_request_body(http_request))
     )
     stay: Final = await predict_arm(
         current,

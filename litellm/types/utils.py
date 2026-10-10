@@ -291,6 +291,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
+    cache_creation_input_token_cost_above_100k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
@@ -307,6 +309,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_balanced: ReadOnly[float | None]
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
+    cache_read_input_token_cost_above_100k_tokens: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens: float | None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
@@ -315,9 +318,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
@@ -327,6 +332,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_audio_token: float | None
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_100k_tokens: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: float | None
@@ -347,9 +353,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
@@ -369,6 +377,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_audio_token: float | None
     output_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_100k_tokens: ReadOnly[float | None]
     output_cost_per_token_above_200k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: float | None
@@ -779,6 +788,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/search": [CallTypes.asearch, CallTypes.search],
     "/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/systemone": [CallTypes.adecisions, CallTypes.decisions],
+    "/v1/systemone": [CallTypes.adecisions, CallTypes.decisions],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -3816,6 +3827,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None = None
@@ -3829,15 +3842,18 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_priority: float | None = None
     cache_read_input_token_cost_balanced: float | None = None
     cache_read_input_token_cost_ultrafast: float | None = None
+    cache_read_input_token_cost_above_100k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
@@ -3846,12 +3862,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
+    input_cost_per_token_above_100k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
     input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_100k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
@@ -3873,12 +3891,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_ultrafast: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
+    output_cost_per_token_above_100k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
     output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_100k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
@@ -3946,7 +3966,7 @@ def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
-ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
+ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens(?:_batches)?$")
 
 _PRICING_FIELD_EXEMPTIONS: Final[frozenset[str]] = frozenset({"output_vector_size"})
 
@@ -4034,7 +4054,19 @@ ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
-server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
+oauth_token_exchange_litellm_params: Final = (
+    "token_exchange_audience",
+    "token_exchange_endpoint",
+    "token_exchange_profile",
+    "token_exchange_scope",
+)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+server_owned_wif_litellm_params: Final = (
+    anthropic_wif_litellm_params
+    + openai_wif_litellm_params
+    + oauth_token_exchange_litellm_params
+    + github_copilot_oauth_litellm_params
+)
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
@@ -4230,6 +4262,7 @@ class LlmProviders(str, Enum):
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
     LANGFLOW = "langflow"
+    MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"

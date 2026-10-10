@@ -782,7 +782,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and any(
                 cb.should_run_guardrail(
-                    data=self.request_data,
+                    data={**self.request_data, "stream": True},
                     event_type=et,
                 )
                 for et in event_hooks
@@ -847,7 +847,7 @@ class RealTimeStreaming:
         if event_hooks is None:
             event_hooks = [GuardrailEventHooks.realtime_input_transcription]
         _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript}
+        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
         _already_run: Final[set] = set()
 
         for callback in litellm.callbacks:
@@ -896,8 +896,8 @@ class RealTimeStreaming:
                 # clientContent / cancel messages are sent.
                 if pre_block_backend_message is not None:
                     await self._send_to_backend(pre_block_backend_message)
-                # Cancel any in-progress LLM response (e.g. VAD auto-response).
-                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
+                if not self._is_transcription_session:
+                    await self._send_to_backend(json.dumps({"type": "response.cancel"}))
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
                     json.dumps(
@@ -911,25 +911,26 @@ class RealTimeStreaming:
                         }
                     )
                 )
-                # Ask the LLM to voice the exact guardrail message so the
-                # user hears it as audio in voice sessions (not just text).
-                guardrail_prompt = (
-                    f"Say exactly the following message to the user, word for word, "
-                    f"do not add anything else: {error_msg}"
-                )
-                await self._send_to_backend(
-                    json.dumps(
-                        {
-                            "type": "conversation.item.create",
-                            "item": {
-                                "type": "message",
-                                "role": "user",
-                                "content": [{"type": "input_text", "text": guardrail_prompt}],
-                            },
-                        }
+                if not self._is_transcription_session:
+                    # Ask the LLM to voice the exact guardrail message so the
+                    # user hears it as audio in voice sessions (not just text).
+                    guardrail_prompt = (
+                        f"Say exactly the following message to the user, word for word, "
+                        f"do not add anything else: {error_msg}"
                     )
-                )
-                await self._send_to_backend(json.dumps({"type": "response.create"}))
+                    await self._send_to_backend(
+                        json.dumps(
+                            {
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [{"type": "input_text", "text": guardrail_prompt}],
+                                },
+                            }
+                        )
+                    )
+                    await self._send_to_backend(json.dumps({"type": "response.create"}))
 
                 self._violation_count += 1
                 end_session_after: int | None = getattr(callback, "end_session_after_n_fails", None)
@@ -1030,7 +1031,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked and not self._is_transcription_session:
+                if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1070,18 +1071,14 @@ class RealTimeStreaming:
             self.store_message(event_obj)
             await self.websocket.send_text(self._event_to_client_json(event_obj))
 
-            # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
-            # assistant turn: capture audio-duration usage for cost and never
-            # trigger response.create.
             if self._is_transcription_session:
                 self._capture_transcription_usage(event_obj)
-                return True
 
             blocked: Final = await self.run_realtime_guardrails(
                 transcript,
                 item_id=event_obj.get("item_id"),
             )
-            if not blocked:
+            if not blocked and self._should_disable_vad_auto_response():
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
             return True
         return False

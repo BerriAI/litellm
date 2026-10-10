@@ -100,6 +100,7 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
+from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 
 # register_async_client_cleanup is lazy-loaded and called on first access
 
@@ -420,8 +421,8 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
 )
-client_session: Optional[httpx.Client] = None
-aclient_session: Optional[httpx.AsyncClient] = None
+client_session: Optional[Union[httpx.Client, DefaultHttpxClient]] = None
+aclient_session: Optional[Union[httpx.AsyncClient, DefaultAsyncHttpxClient]] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
@@ -506,6 +507,7 @@ prometheus_metrics_ttl_seconds: Optional[float] = None
 prometheus_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
+force_redis_hash_tag_grouping: bool = False
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
@@ -710,6 +712,7 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+microsoft_365_copilot_models: Set[str] = set()
 chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
@@ -991,6 +994,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "microsoft_365_copilot":
+            microsoft_365_copilot_models.add(key)
         elif value.get("litellm_provider") == "chatgpt":
             chatgpt_models.add(key)
         elif value.get("litellm_provider") == "minimax":
@@ -1247,6 +1252,7 @@ def _build_models_by_provider() -> dict:
         "amazon_nova": amazon_nova_models,
         "stability": stability_models,
         "github_copilot": github_copilot_models,
+        "microsoft_365_copilot": microsoft_365_copilot_models,
         "chatgpt": chatgpt_models,
         "minimax": minimax_models,
         "aws_polly": aws_polly_models,
@@ -1391,6 +1397,8 @@ from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
     AuthenticationError,
+    CallerCredentialAuthenticationError as CallerCredentialAuthenticationError,
+    CallerCredentialRateLimitError as CallerCredentialRateLimitError,
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
@@ -1420,7 +1428,6 @@ from .exceptions import (
     ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
@@ -1665,6 +1672,33 @@ if TYPE_CHECKING:
     )
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
+    )
+    from .llms.perplexity.decisions.transformation import (
+        PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.typesafe.decisions.transformation import (
+        TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
+    )
+    from .llms.openrouter.decisions.transformation import (
+        OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.cloudflare.decisions.transformation import (
+        CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.strands_decider.decisions.transformation import (
+        StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
+    )
+    from .llms.databricks.decisions.transformation import (
+        DatabricksDecisionsConfig as DatabricksDecisionsConfig,
+    )
+    from .llms.hosted_vllm.decisions.transformation import (
+        HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
+    )
+    from .llms.openai.decisions.transformation import (
+        OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure_ai.decisions.transformation import (
+        AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

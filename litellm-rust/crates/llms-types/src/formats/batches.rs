@@ -1,4 +1,4 @@
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchStatus {
@@ -7,7 +7,7 @@ pub enum BatchStatus {
     Completed,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Eq)]
 pub struct BatchRequestCounts {
     pub total: u64,
@@ -15,7 +15,7 @@ pub struct BatchRequestCounts {
     pub failed: u64,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Eq)]
 pub struct BatchResponse {
     pub id: String,

@@ -10,6 +10,7 @@ use litellm_llms_types::{
 };
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
+use strum::VariantArray;
 
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
@@ -54,14 +55,17 @@ fn unmapped_effort(effort: &Value) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::InvalidChoice {
         field: "reasoning effort",
         actual: repr(&from_json(effort.clone())),
-        choices: ReasoningEffort::ALL.map(|effort| effort.as_str()).into(),
+        choices: ReasoningEffort::VARIANTS
+            .iter()
+            .map(|effort| <&'static str>::from(*effort))
+            .collect(),
     })
 }
 
 fn unsupported_effort(level: EffortLevel, model: &str) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::UnsupportedValue {
         field: "effort",
-        value: level.as_str(),
+        value: <&'static str>::from(level),
         model: model.into(),
     })
 }
@@ -134,7 +138,7 @@ fn legacy_reasoning_effort(
         Some(Recognized::Known(level)) => Ok((*level).into()),
         Some(Recognized::Unrecognized(value)) if truthy(&from_json(value.clone())) => value
             .as_str()
-            .and_then(ReasoningEffort::parse)
+            .and_then(|text| text.parse().ok())
             .ok_or_else(|| unmapped_effort(value)),
         None | Some(Recognized::Unrecognized(_)) => Ok(ReasoningEffort::Medium),
     }

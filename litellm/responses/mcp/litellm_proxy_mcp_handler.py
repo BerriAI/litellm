@@ -298,10 +298,10 @@ class LiteLLM_Proxy_MCP_Handler:
                                     granted_toolset_ids,
                                 )
                                 from litellm.proxy.management_endpoints.common_utils import (
-                                    _user_has_admin_view,
+                                    user_api_key_has_admin_view,
                                 )
 
-                                if not _user_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
+                                if not user_api_key_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
                                     await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
                                 ):
                                     verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
@@ -764,7 +764,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
                     server_name
-                ) or global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+                ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
                 resolved_tool_name = (
                     _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
                 )

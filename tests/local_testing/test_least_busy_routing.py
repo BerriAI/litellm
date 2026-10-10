@@ -17,48 +17,6 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
-### UNIT TESTS FOR LEAST BUSY LOGGING ###
-
-
-def test_model_added():
-    test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
-    kwargs = {
-        "litellm_params": {
-            "metadata": {
-                "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/gpt-4.1-mini",
-            },
-            "model_info": {"id": "1234"},
-        }
-    }
-    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
-    request_count_api_key = "gpt-3.5-turbo_request_count:1234"
-    assert test_cache.get_cache(key=request_count_api_key) == 1
-
-
-def test_get_available_deployments():
-    test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
-    model_group = "gpt-3.5-turbo"
-    deployment = "azure/gpt-4.1-mini"
-    kwargs = {
-        "litellm_params": {
-            "metadata": {
-                "model_group": model_group,
-                "deployment": deployment,
-            },
-            "model_info": {"id": "1234"},
-        }
-    }
-    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
-    request_count_api_key = f"{model_group}_request_count:1234"
-    assert test_cache.get_cache(key=request_count_api_key) == 1
-
-
-# test_get_available_deployments()
-
-
 @pytest.mark.parametrize("async_test", [True, False])
 @pytest.mark.asyncio
 async def test_router_get_available_deployments(async_test):

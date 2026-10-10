@@ -12,17 +12,17 @@ from litellm.caching.caching_handler import (
 )
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import call_hook
-from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.caching import CachingSupportedCallTypes
 from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
@@ -57,8 +57,8 @@ async def test_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     litellm.cache = Cache() if legacy else _v2.Cache.memory()
     counters: Final = litellm.DualCache()
-    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+    budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     recorder: Final = RecordingLogger()
@@ -133,8 +133,8 @@ async def test_response_cache_backend_does_not_control_coordination(
     )
     recording_server.expected_requests = 2 if backend == "disabled" else 1
     counters: Final = litellm.DualCache()
-    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+    budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     key_hash: Final = "b" * 64
@@ -443,15 +443,26 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
         "api_key": "test-key",
         "api_base": recording_server.base_url,
     }
-    request: Final = LiteLLMMessagesRequest(
-        MESSAGES_MODEL, list(MESSAGES), 32, None, "test-key", recording_server.base_url, "anthropic", arguments
+    request: Final = NativeCall(
+        args=(),
+        kwargs=arguments,
+        base={
+            "model": MESSAGES_MODEL,
+            "messages": list(MESSAGES),
+            "max_tokens": 32,
+            "stream": None,
+            "api_key": "test-key",
+            "api_base": recording_server.base_url,
+            "custom_llm_provider": "anthropic",
+            **arguments,
+        },
     )
 
     def call() -> object:
         return runtime.run(
             RouteContext(Route.MESSAGES),
             binding=NATIVE_MESSAGES,
-            native=lambda hook: call_hook(hook, request, (), arguments),
+            native=lambda hook: hook(request),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
         )

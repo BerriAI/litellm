@@ -1,4 +1,5 @@
 import re
+import secrets
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import HTTPException
+from pydantic import SecretStr, TypeAdapter
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
@@ -16,6 +18,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
+from litellm.experimental_mcp_client.client import strip_auth_scheme
 from litellm.proxy._experimental.mcp_server.catalog import global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
@@ -56,12 +59,16 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
-    _run_centralized_common_checks,
+    _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    run_centralized_common_checks,
     user_api_key_auth,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
@@ -80,6 +87,11 @@ if TYPE_CHECKING:
 
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
+OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def _normalize_caller_admission_credential(value: str) -> str:
+    return _get_bearer_token_or_received_api_key(strip_auth_scheme(value, "Bearer")).strip()
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -225,7 +237,7 @@ def _agent_capped_servers(
     )
 
 
-def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+def is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
     """True when this auth is a keyless subject admitted by the gateway session / bridge user
     path, as opposed to a JWT or other keyless auth that merely lacks a ``team_id``.
 
@@ -233,6 +245,9 @@ def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> b
     is deliberately NOT a ``metadata`` key, which is caller-controlled at key creation and so forgeable
     on a personal key to gain the team grant union or dodge the egress scrub; this field cannot be."""
     return user_api_key_auth is not None and user_api_key_auth.mcp_admitted_user_subject is True
+
+
+_is_mcp_admitted_user_subject: Final = is_mcp_admitted_user_subject
 
 
 def _gateway_dcr_challenge_target(
@@ -452,7 +467,7 @@ class MCPRequestHandler:
             HTTPException: If headers are invalid or missing required headers
         """
         async with global_manager().catalog.operation():
-            headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
+            headers: Final = MCPRequestHandler.safe_get_headers_from_scope(scope)
 
             # Check if there is an explicit LiteLLM API key (primary header)
             has_explicit_litellm_key: Final = (
@@ -462,13 +477,19 @@ class MCPRequestHandler:
             litellm_api_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
 
             # Get the old mcp_auth_header for backward compatibility
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
+            mcp_auth_header = MCPRequestHandler.get_mcp_auth_header_from_headers(  # rebind-ok: pre-existing rebinding on a rename-only line
+                headers
+            )
 
             # Get the new server-specific auth headers
-            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+            mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(  # rebind-ok: pre-existing rebinding on a rename-only line
+                headers
+            )
 
             # Get the oauth2 headers
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
+            oauth2_headers = MCPRequestHandler.get_oauth2_headers_from_headers(  # rebind-ok: pre-existing rebinding on a rename-only line
+                headers
+            )
 
             # Parse MCP servers from header
             mcp_servers_header: Final = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
@@ -610,22 +631,30 @@ class MCPRequestHandler:
                         bearer_presented=False,
                     )
 
-            # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
-            # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
-            # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
-            # credential SHAPE, so a legitimate upstream/passthrough token is forwarded unchanged.
+            # Scrub gateway-shaped credentials and the exact LiteLLM credential that admitted this request.
             raw_headers = dict(headers)
+            from litellm.proxy.proxy_server import general_settings
+
+            custom_key_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(
+                general_settings.get("litellm_key_header_name")
+            )
+            admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+                headers,
+                validated_user_api_key_auth,
+                custom_key_header_name=custom_key_header_name,
+            )
             (
                 oauth2_headers,
                 raw_headers,
                 mcp_auth_header,
                 mcp_server_auth_headers,
-            ) = MCPRequestHandler._scrub_gateway_admission_credentials(
-                admitted=_is_mcp_admitted_user_subject(validated_user_api_key_auth),
+            ) = MCPRequestHandler.scrub_gateway_admission_credentials(
+                admitted=is_mcp_admitted_user_subject(validated_user_api_key_auth),
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                admitted_credential=admitted_credential,
             )
 
             return (
@@ -645,19 +674,36 @@ class MCPRequestHandler:
         return value is not None and (is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value))
 
     @staticmethod
-    def _scrub_gateway_admission_credentials(
+    def _is_caller_admission_key(value: str | None, admitted_credential: str | None) -> bool:
+        if value is None or admitted_credential is None:
+            return False
+        normalized_value: Final = _normalize_caller_admission_credential(value)
+        normalized_admitted_credential: Final = _normalize_caller_admission_credential(admitted_credential)
+        return bool(
+            normalized_value
+            and normalized_admitted_credential
+            and secrets.compare_digest(normalized_value.encode(), normalized_admitted_credential.encode())
+        )
+
+    @staticmethod
+    def scrub_gateway_admission_credentials(
         admitted: bool,
         oauth2_headers: dict[str, str] | None,
         raw_headers: dict[str, str],
         mcp_auth_header: str | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        *,
+        admitted_credential: str | None,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
-        """Remove any gateway admission credential from EVERY egress header context, keyed on the credential
-        SHAPE: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and per-server
-        ``x-mcp-{alias}-authorization``. A legitimate upstream/passthrough token is never gateway-shaped so
-        it survives (including the real upstream token the bridge arm injects per-server); an admitted
-        subject's top-level Authorization is dropped unconditionally as defense-in-depth."""
-        cred: Final = MCPRequestHandler._is_gateway_admission_credential
+        """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
+        header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
+        per-server ``x-mcp-{alias}-authorization``. Preserve the raw ``x-litellm-api-key`` admission
+        header; an admitted subject's top-level Authorization is otherwise dropped unconditionally."""
+
+        def cred(value: str | None) -> bool:
+            return MCPRequestHandler._is_gateway_admission_credential(
+                value
+            ) or MCPRequestHandler._is_caller_admission_key(value, admitted_credential)
 
         # 1. Top-level Authorization → oauth2_headers.
         authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
@@ -667,7 +713,9 @@ class MCPRequestHandler:
         # 2. raw_headers: drop the admitted subject's Authorization, and ANY header whose value is a
         #    gateway credential (covers x-mcp-auth and x-mcp-{alias}-authorization in their raw form).
         raw_headers = {
-            k: v for k, v in raw_headers.items() if not ((admitted and k.lower() == "authorization") or cred(v))
+            k: v
+            for k, v in raw_headers.items()
+            if k.lower() == "x-litellm-api-key" or not ((admitted and k.lower() == "authorization") or cred(v))
         }
 
         # 3. Deprecated x-mcp-auth value.
@@ -683,6 +731,8 @@ class MCPRequestHandler:
             mcp_server_auth_headers = {alias: hdrs for alias, hdrs in stripped.items() if hdrs}
 
         return oauth2_headers, raw_headers, mcp_auth_header, mcp_server_auth_headers
+
+    _scrub_gateway_admission_credentials = scrub_gateway_admission_credentials
 
     @staticmethod
     def extract_target_server_names_from_path(path: str) -> list[str]:
@@ -1060,7 +1110,7 @@ class MCPRequestHandler:
 
         await pre_db_read_auth_checks(
             request=request,
-            request_data=await _read_request_body(request=request),
+            request_data=await read_request_body(request=request),
             route=route,
         )
 
@@ -1351,10 +1401,10 @@ class MCPRequestHandler:
         admitted.budget_reservation = None
         try:
             RouteChecks.should_call_route(route=route, valid_token=admitted, request=request)
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
                 request=request,
-                request_data=await _read_request_body(request=request),
+                request_data=await read_request_body(request=request),
                 route=route,
             )
         except (HTTPException, ProxyException):
@@ -1401,7 +1451,7 @@ class MCPRequestHandler:
         return mcp_servers_header if mcp_servers_header is not None else []
 
     @staticmethod
-    def _get_mcp_auth_header_from_headers(headers: Headers) -> str | None:
+    def get_mcp_auth_header_from_headers(headers: Headers) -> str | None:
         """
         Get the header passed to LiteLLM to pass to downstream MCP servers
 
@@ -1424,8 +1474,10 @@ class MCPRequestHandler:
             )
         return auth_header
 
+    _get_mcp_auth_header_from_headers = get_mcp_auth_header_from_headers
+
     @staticmethod
-    def _get_mcp_server_auth_headers_from_headers(
+    def get_mcp_server_auth_headers_from_headers(
         headers: Headers,
     ) -> dict[str, dict[str, str]]:
         """
@@ -1478,8 +1530,15 @@ class MCPRequestHandler:
 
         return server_auth_headers
 
+    _get_mcp_server_auth_headers_from_headers = get_mcp_server_auth_headers_from_headers
+
     @staticmethod
-    def _get_oauth2_headers_from_headers(headers: Headers) -> dict[str, str]:
+    def get_incoming_bearer_token(headers: Mapping[str, str]) -> SecretStr | None:
+        authorization: Final = next((value for key, value in headers.items() if key.lower() == "authorization"), "")
+        return SecretStr(authorization[len("bearer ") :]) if authorization.lower().startswith("bearer ") else None
+
+    @staticmethod
+    def get_oauth2_headers_from_headers(headers: Headers) -> dict[str, str]:
         """
         Get the oauth2 headers from the request headers.
         """
@@ -1488,6 +1547,8 @@ class MCPRequestHandler:
             if header_name.lower().startswith("authorization"):
                 oauth2_headers["Authorization"] = header_value
         return oauth2_headers
+
+    _get_oauth2_headers_from_headers = get_oauth2_headers_from_headers
 
     @staticmethod
     def get_mcp_client_side_auth_header_name() -> str:
@@ -1535,7 +1596,37 @@ class MCPRequestHandler:
         return None
 
     @staticmethod
-    def _safe_get_headers_from_scope(scope: Scope) -> Headers:
+    def caller_admission_credential(
+        headers: Headers,
+        user_api_key_auth: UserAPIKeyAuth,
+        *,
+        custom_key_header_name: str | None,
+    ) -> str | None:
+        if user_api_key_auth.api_key is None:
+            return None
+        admission_header_names: Final = (
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY,
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_SECONDARY,
+            SpecialHeaders.azure_authorization.value,
+            SpecialHeaders.anthropic_authorization.value,
+            SpecialHeaders.google_ai_studio_authorization.value,
+            SpecialHeaders.azure_apim_authorization.value,
+        )
+        litellm_api_key: Final = (
+            headers.get(custom_key_header_name)
+            if custom_key_header_name is not None
+            else next(
+                (header_value for header_name in admission_header_names if (header_value := headers.get(header_name))),
+                None,
+            )
+        )
+        if litellm_api_key is None:
+            return None
+        admitted_credential: Final = _normalize_caller_admission_credential(litellm_api_key)
+        return admitted_credential or None
+
+    @staticmethod
+    def safe_get_headers_from_scope(scope: Scope) -> Headers:
         """
         Safely extract headers from ASGI scope using Starlette's Headers class
         which handles case insensitivity and proper header parsing.
@@ -1562,6 +1653,8 @@ class MCPRequestHandler:
             verbose_logger.exception("Error getting headers from scope: %s", e)
             # Return empty Headers object with empty dict
             return Headers({})
+
+    _safe_get_headers_from_scope = safe_get_headers_from_scope
 
     @staticmethod
     def _reject_duplicate_authorization(raw_headers: object) -> None:
@@ -1638,7 +1731,7 @@ class MCPRequestHandler:
             # matters: the no_mcp_servers opt-out below reads the caller's own object_permission, so above
             # this branch a user's own opt-out would wrongly zero their TEAMS' grants too (each source is
             # independent; an opt-out silences only its own source, inside the recursive call).
-            if _is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
+            if is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
                 return MCPServerAccess(
                     server_ids=tuple(await MCPRequestHandler.resolve_admitted_subject_servers(user_api_key_auth)),
                 )
@@ -1950,18 +2043,18 @@ class MCPRequestHandler:
         # already-exceeded state; ATTRIBUTION of new spend stays with the user (documented deferral).
         from litellm.exceptions import BudgetExceededError
         from litellm.proxy.auth.auth_checks import (
-            _organization_max_budget_check,
-            _team_max_budget_check,
+            organization_max_budget_check,
+            team_max_budget_check,
         )
 
         source_view: Final = MCPRequestHandler._scoped_source_auth(
             auth, team_id=team_id, org_id=team_obj.organization_id or auth.org_id, carry_user_grants=False
         )
         try:
-            await _team_max_budget_check(
+            await team_max_budget_check(
                 team_object=team_obj, valid_token=source_view, proxy_logging_obj=proxy_logging_obj
             )
-            await _organization_max_budget_check(
+            await organization_max_budget_check(
                 valid_token=source_view,
                 team_object=team_obj,
                 prisma_client=prisma_client,
@@ -2042,14 +2135,14 @@ class MCPRequestHandler:
         owning ``org_id`` so the team's budget accumulates and the right org is charged. Falls back to
         user-level attribution (rather than guessing a team) when the tool name does not resolve to a
         server, reusing the manager's own tool-name lookup."""
-        if not _is_mcp_admitted_user_subject(auth):
+        if not is_mcp_admitted_user_subject(auth):
             return auth
         try:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
-            server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+            server: Final = global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
             if server is None:
                 return auth
             source: Final = await MCPRequestHandler.attributing_source_for_server(auth, server.server_id)
@@ -2330,7 +2423,7 @@ class MCPRequestHandler:
             # FIRST statement, mirroring get_allowed_mcp_servers: a keyless admitted subject resolves per
             # source and shares nothing with the single-credential prelude below. Ordering is the invariant:
             # sat after the prelude, a fault in a lookup the subject never uses denied tools its teams grant.
-            if _is_mcp_admitted_user_subject(user_api_key_auth):
+            if is_mcp_admitted_user_subject(user_api_key_auth):
                 return await MCPRequestHandler.resolve_admitted_subject_tools(server_id, user_api_key_auth)
 
             # Get key and team object permissions (already loaded in main auth flow)
@@ -2422,7 +2515,9 @@ class MCPRequestHandler:
             # not collapse to allow-all (None); key/JWT auth keeps its prior allow-all-on-error. Both
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
-            deny_all = unreadable_entitlement or keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)
+            deny_all: Final = (
+                unreadable_entitlement or keyless_source or is_mcp_admitted_user_subject(user_api_key_auth)
+            )
             return [] if deny_all else None
 
     @staticmethod
@@ -2557,7 +2652,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
             from litellm.proxy.auth.auth_checks import (
-                _get_mcp_server_ids_from_access_groups,
+                get_mcp_server_ids_from_access_groups,
             )
             from litellm.proxy.proxy_server import (
                 prisma_client,
@@ -2565,7 +2660,7 @@ class MCPRequestHandler:
                 user_api_key_cache,
             )
 
-            raw_server_ids: Final = await _get_mcp_server_ids_from_access_groups(
+            raw_server_ids: Final = await get_mcp_server_ids_from_access_groups(
                 access_group_ids=user_api_key_auth.access_group_ids or [],
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2647,7 +2742,7 @@ class MCPRequestHandler:
             )
 
             # Get MCP servers from access groups
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
                 key_object_permission.mcp_access_groups or [],
                 requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
             )
@@ -2763,7 +2858,7 @@ class MCPRequestHandler:
             return set(team_access_group_servers)
         if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
             return set(global_mcp_server_manager.get_registry().keys())
-        legacy_access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        legacy_access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
             object_permissions.mcp_access_groups or [],
             requires_fresh_policy=requires_fresh_policy,
         )
@@ -2797,7 +2892,7 @@ class MCPRequestHandler:
         """
         try:
             from litellm.proxy.auth.auth_checks import (
-                _get_mcp_server_ids_from_access_groups,
+                get_mcp_server_ids_from_access_groups,
                 get_team_object,
             )
             from litellm.proxy.proxy_server import (
@@ -2825,7 +2920,7 @@ class MCPRequestHandler:
                 # pinned to a single team_id, but a keyless admitted identity (no team_id) unions
                 # across all of its teams and would otherwise inherit a blocked team's MCP grants.
                 return []
-            team_access_group_servers: Final = await _get_mcp_server_ids_from_access_groups(
+            team_access_group_servers: Final = await get_mcp_server_ids_from_access_groups(
                 access_group_ids=team_obj.access_group_ids or [],
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2968,7 +3063,7 @@ class MCPRequestHandler:
             # Expand names/aliases to canonical server IDs (consistent with key/team/end-user path)
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
 
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
                 object_permissions.mcp_access_groups or [],
                 requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
@@ -3073,7 +3168,7 @@ class MCPRequestHandler:
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permission.mcp_servers or [])
 
             # Get MCP servers from access groups
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
                 object_permission.mcp_access_groups or [],
                 requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
@@ -3212,7 +3307,7 @@ class MCPRequestHandler:
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
             fresh: Final = bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy)
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
                 object_permissions.mcp_access_groups or [],
                 requires_fresh_policy=fresh,
             )
@@ -3318,7 +3413,7 @@ class MCPRequestHandler:
             return False
         object_permission: Final = user_api_key_auth.object_permission
         credential_scoped: Final = (
-            not _is_mcp_admitted_user_subject(user_api_key_auth)
+            not is_mcp_admitted_user_subject(user_api_key_auth)
             and object_permission is not None
             and object_permission.mcp_servers is not None
         )
@@ -3566,7 +3661,7 @@ class MCPRequestHandler:
             expanded_direct_servers: Final = global_mcp_server_manager.expand_permission_list(
                 obj_perm.mcp_servers or []
             )
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
                 obj_perm.mcp_access_groups or [],
                 requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
             )
@@ -3696,7 +3791,7 @@ class MCPRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_mcp_servers_from_access_groups(
+    async def get_mcp_servers_from_access_groups(
         access_groups: list[str],
         *,
         requires_fresh_policy: bool = False,
@@ -3734,6 +3829,8 @@ class MCPRequestHandler:
                 raise
             verbose_logger.warning("Failed to get MCP servers from access groups: %s", e)
             return []
+
+    _get_mcp_servers_from_access_groups = get_mcp_servers_from_access_groups
 
     @staticmethod
     async def get_mcp_access_groups(
@@ -3863,5 +3960,5 @@ class MCPRequestHandler:
         """
         Extract and parse the x-mcp-access-groups header from an ASGI scope.
         """
-        headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        headers: Final = MCPRequestHandler.safe_get_headers_from_scope(scope)
         return MCPRequestHandler.get_mcp_access_groups_from_headers(headers)

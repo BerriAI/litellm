@@ -279,7 +279,7 @@ class AzureAIAgentsHandler:
             headers["Authorization"] = f"Bearer {api_key}"
 
         api_version: Final = optional_params.get("api_version", self.config.DEFAULT_API_VERSION)
-        agent_id: Final = self.config._get_agent_id(model, optional_params)
+        agent_id: Final = self.config.get_agent_id(model, optional_params)
         thread_id: Final = optional_params.get("thread_id")
         api_base = api_base.rstrip("/")
 
@@ -313,10 +313,10 @@ class AzureAIAgentsHandler:
         headers: dict | None = None,
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
         if client is None:
-            client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
         (
             headers,

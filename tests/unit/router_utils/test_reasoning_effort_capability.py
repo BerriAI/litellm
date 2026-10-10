@@ -200,7 +200,7 @@ class TestNoneLevelPolarity:
         resolved = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
 
         assert resolved is not None
-        gate_accepts_none = AzureOpenAIGPT5Config._supports_reasoning_effort_level(model_key, "none")
+        gate_accepts_none = AzureOpenAIGPT5Config.supports_reasoning_effort_level(model_key, "none")
         assert ("none" in resolved) is gate_accepts_none
 
 

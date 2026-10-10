@@ -30,12 +30,15 @@ _UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdl
 _DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
 
 
-def _is_message_stop_chunk(chunk: object) -> bool:
+def is_message_stop_chunk(chunk: object) -> bool:
     if isinstance(chunk, dict):
         return chunk.get("type") == "message_stop"
     if isinstance(chunk, (bytes, bytearray)):
         return any(line == b"event: message_stop" for line in chunk.splitlines())
     return False
+
+
+_is_message_stop_chunk = is_message_stop_chunk
 
 
 def is_anthropic_ping_chunk(chunk: object) -> bool:
@@ -133,8 +136,11 @@ def _anthropic_error_body(chunk: object) -> Mapping[str, object] | None:
     return error_body if isinstance(error_body, dict) else None
 
 
-def _is_provider_error_chunk(chunk: object) -> bool:
+def is_provider_error_chunk(chunk: object) -> bool:
     return _anthropic_error_body(chunk) is not None
+
+
+_is_provider_error_chunk = is_provider_error_chunk
 
 
 def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
@@ -161,7 +167,7 @@ def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
 
 
 def _is_terminal_stream_chunk(chunk: object) -> bool:
-    return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
+    return is_message_stop_chunk(chunk) or is_provider_error_chunk(chunk)
 
 
 def _try_claim_detached_drain_slot() -> bool:
@@ -415,7 +421,7 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
-        logging_coroutine: Final = PassThroughStreamingHandler._route_streaming_logging_to_handler(
+        logging_coroutine: Final = PassThroughStreamingHandler.route_streaming_logging_to_handler(
             litellm_logging_obj=self.litellm_logging_obj,
             passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
             url_route="/v1/messages",

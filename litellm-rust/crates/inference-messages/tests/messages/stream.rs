@@ -346,6 +346,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         .execute(
             MessagesCall {
                 custom_llm_provider: Some(provider.into()),
+                litellm_params: Default::default(),
                 ..streaming(call, upstream.uri())
             },
             &(),
@@ -470,6 +471,7 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
     let host = RecordingStreamHost::new(
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
             ..streaming(call, upstream.uri())
         },
         usize::MAX,

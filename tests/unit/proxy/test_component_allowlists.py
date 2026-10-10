@@ -29,11 +29,10 @@ import sys
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from functools import partial
-from typing import Final, Literal
-from unittest.mock import AsyncMock, MagicMock, call
+from typing import Final, Literal, NoReturn
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -69,12 +68,9 @@ from backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from litellm.rust_bridge.trace.storage import ClickHouseStorage
-from litellm.tracing import Tenant, TraceReceiver
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -231,76 +227,31 @@ def test_composed_lifespan_propagates_lifecycle_failures(
     assert events == (["startup"] if phase == "startup" else ["startup", "serving", "shutdown"])
 
 
-@pytest.mark.parametrize(
-    "component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend")
-)
+@pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
 @pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
-def test_otlp_ingest_routes_authenticate_and_isolate_tenants_on_each_component(
-    component_lifespan: Lifespan[Starlette], endpoint: str
+@pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
+def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
+    component_lifespan: Lifespan[Starlette], endpoint: str, authorization: str | None
 ) -> None:
     application: Final = FastAPI()
     application.include_router(tracing_endpoints.router)
-    storage: Final = MagicMock(spec=ClickHouseStorage)
-    storage.ingest = AsyncMock(return_value=1)
-    application.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
 
-    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
-        return ()
+    def unused_dependency() -> NoReturn:
+        pytest.fail("Retired uploads must not resolve authentication, tenant, or storage dependencies")
 
-    application.dependency_overrides[get_log_team_lookup] = lambda: lookup
-
-    def authenticate(request: Request) -> UserAPIKeyAuth:
-        match request.headers.get("Authorization"):
-            case "Bearer team-a-key":
-                return UserAPIKeyAuth(
-                    user_id="user-a",
-                    token="hashed-a",
-                    team_id="team-a",
-                    org_id="org-a",
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                )
-            case "Bearer team-b-key":
-                return UserAPIKeyAuth(
-                    user_id="user-b",
-                    token="hashed-b",
-                    team_id="team-b",
-                    org_id="org-b",
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                )
-            case _:
-                raise HTTPException(status_code=401, detail="Invalid API key")
-
-    application.dependency_overrides[user_api_key_auth] = authenticate
-    application.router.lifespan_context = partial(
-        component_lifespan, lifespan=application.router.lifespan_context
+    application.dependency_overrides[tracing_endpoints.provide_receiver] = unused_dependency
+    application.dependency_overrides[get_log_team_lookup] = unused_dependency
+    application.dependency_overrides[user_api_key_auth] = unused_dependency
+    application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+    headers: Final = {"content-type": "application/json"} | (
+        {"Authorization": authorization} if authorization is not None else {}
     )
 
-    body: Final = b'{"resourceLogs": []}'
-    content_type: Final = "application/json"
     with TestClient(application) as client:
-        unauthenticated: Final = client.post(endpoint, content=body, headers={"content-type": content_type})
-        assert unauthenticated.status_code == 401, unauthenticated.text
+        response: Final = client.post(endpoint, content=b'{"resourceLogs": []}', headers=headers)
 
-        team_a: Final = client.post(
-            endpoint,
-            content=body,
-            headers={"Authorization": "Bearer team-a-key", "content-type": content_type},
-        )
-        assert team_a.status_code == 200, team_a.text
-
-        team_b: Final = client.post(
-            endpoint,
-            content=body,
-            headers={"Authorization": "Bearer team-b-key", "content-type": content_type},
-        )
-        assert team_b.status_code == 200, team_b.text
-
-    tenant_a: Final = Tenant(team_id="team-a", api_key_hash="hashed-a", org_id="org-a", user_id="user-a")
-    tenant_b: Final = Tenant(team_id="team-b", api_key_hash="hashed-b", org_id="org-b", user_id="user-b")
-    assert storage.ingest.await_args_list == [
-        call(body, content_type, tenant_a, endpoint == "/v1/logs"),
-        call(body, content_type, tenant_b, endpoint == "/v1/logs"),
-    ]
+    assert response.status_code == 410, response.text
+    assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
 
 
 def test_gateway_plus_backend_covers_full_app():

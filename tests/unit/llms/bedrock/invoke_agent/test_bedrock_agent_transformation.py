@@ -98,9 +98,7 @@ class TestAmazonInvokeAgentConfig:
         litellm_params = {}
         headers = {}
 
-        result = config.transform_request(
-            model, sample_messages, optional_params, litellm_params, headers
-        )
+        result = config.transform_request(model, sample_messages, optional_params, litellm_params, headers)
 
         expected = {
             "inputText": "What is the weather like?",

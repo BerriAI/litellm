@@ -871,3 +871,20 @@ describe("schema-bound dashboard responses", () => {
     expect(result.users[0]).toEqual(user);
   });
 });
+
+describe("modelCostMap", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the catalog-only map when catalogOnly is set and the full map otherwise", async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({})));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await Networking.modelCostMap(true);
+    await Networking.modelCostMap();
+
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/public\/litellm_model_cost_map\?catalog_only=true$/);
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/public\/litellm_model_cost_map$/);
+  });
+});

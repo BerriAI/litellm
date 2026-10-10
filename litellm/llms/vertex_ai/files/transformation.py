@@ -45,10 +45,10 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.llms.vertex_ai.batches.transformation import vertex_embedding_prompt_token_count
 from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_ai_fine_tuned_endpoint_id,
 )
-from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -67,7 +67,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
     PathLike,
 )
-from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingInput
+from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingElement, GeminiEmbeddingInput
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -555,18 +555,27 @@ def _is_responses_batch_entry(openai_entry: Mapping[str, object]) -> bool:
     return path == "responses" or path.endswith("/responses")
 
 
+def _own_embedding_input(
+    element: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+) -> GeminiEmbeddingInput:
+    if isinstance(element, (str, list)):
+        return element
+    file_block_alone: Final[list[GeminiEmbeddingElement]] = [element]
+    return file_block_alone
+
+
 def _openai_embedding_input_elements(
     embedding_input: GeminiEmbeddingInput,
-) -> tuple[str | list[str], ...]:
+) -> tuple[GeminiEmbeddingInput, ...]:
     """
     Split an OpenAI `input` into the elements that each get their own embedding.
 
-    A string is one embedding, a flat array is one embedding per element, and a nested
-    array is one combined embedding per inner array, matching the online
-    `batchEmbedContents` path.
+    A string or a file content block is one embedding, a flat array is one embedding
+    per element, and a nested array is one combined embedding per inner array,
+    matching the online `batchEmbedContents` path.
     """
     if isinstance(embedding_input, list):
-        return tuple(embedding_input)
+        return tuple(_own_embedding_input(element) for element in embedding_input)
     return (embedding_input,)
 
 
@@ -681,7 +690,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
-    vertex_request_body: Final = _transform_request_body(
+    vertex_request_body: Final = transform_request_body(
         messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
@@ -1125,7 +1134,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             purpose=response_object.get("purpose", "batch"),
             id=f"gs://{gcs_id}",
             filename=response_object.get("name", ""),
-            created_at=_convert_vertex_datetime_to_openai_datetime(
+            created_at=convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=response_object.get("timeCreated", "")
             ),
             status="uploaded",
@@ -1172,9 +1181,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         return OpenAIFileObject(
             id=f"gs://{gcs_id}",
             bytes=int(response_json.get("size", 0)),
-            created_at=_convert_vertex_datetime_to_openai_datetime(
-                vertex_datetime=response_json.get("timeCreated", "")
-            ),
+            created_at=convert_vertex_datetime_to_openai_datetime(vertex_datetime=response_json.get("timeCreated", "")),
             filename=response_json.get("name", ""),
             object="file",
             purpose=response_json.get("metadata", {}).get("purpose", "batch"),
@@ -1490,7 +1497,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Use existing VertexGeminiConfig transformation
             model_response: Final = ModelResponse()
 
-            transformed_response = vertex_gemini_config._transform_google_generate_content_to_openai_model_response(
+            transformed_response = vertex_gemini_config.transform_google_generate_content_to_openai_model_response(
                 completion_response=vertex_response,
                 model_response=model_response,
                 model=model,

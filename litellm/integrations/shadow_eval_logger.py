@@ -633,9 +633,9 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
         from litellm.exceptions import BudgetExceededError
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import (
-            _team_max_budget_check,
-            _virtual_key_max_budget_check,
             get_team_object,
+            team_max_budget_check,
+            virtual_key_max_budget_check,
         )
         from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
     except ImportError:
@@ -645,7 +645,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     if not isinstance(auth, UserAPIKeyAuth):
         return False
     try:
-        await _virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+        await virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
         if auth.team_id:
             team: Final = await get_team_object(
                 team_id=auth.team_id,
@@ -653,7 +653,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
                 user_api_key_cache=user_api_key_cache,
                 check_cache_only=True,
             )
-            await _team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+            await team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
     except BudgetExceededError:
         return True
     except Exception as e:  # noqa: BLE001  # advisory gate: a failed read must not block sampling

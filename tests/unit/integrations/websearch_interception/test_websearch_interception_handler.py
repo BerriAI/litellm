@@ -4,6 +4,8 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
+from collections.abc import Awaitable, Callable
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -20,7 +22,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 
 
 def test_initialize_from_proxy_config():
@@ -810,6 +812,71 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
     assert logging_obj.stream is False
 
 
+_STREAM_USAGE_OPTIONS = {"include_usage": True}
+
+
+_Convert = Callable[[WebSearchInterceptionLogger, dict[str, Any]], Awaitable[dict[str, Any] | None]]
+
+
+async def _convert_via_deployment_hook_chat(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+
+async def _convert_via_deployment_hook_responses(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await logger.async_pre_call_deployment_hook(
+        kwargs={**kwargs, "tools": [{"type": "web_search"}]}, call_type=CallTypes.aresponses
+    )
+
+
+async def _convert_via_pre_request_hook(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
+    return await logger.async_pre_request_hook(model=kwargs["model"], messages=kwargs["messages"], kwargs=kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "convert",
+    (_convert_via_deployment_hook_chat, _convert_via_deployment_hook_responses, _convert_via_pre_request_hook),
+    ids=("deployment_hook_chat", "deployment_hook_responses", "pre_request_hook"),
+)
+async def test_converted_stream_moves_stream_options_out_of_the_provider_request(convert: _Convert):
+    """Every site that flips a streamed web search request to stream=False must take
+    stream_options with it: a provider that validates its body (Azure chat completions)
+    rejects stream_options on a non-streaming request, so the converted kwargs carry no
+    stream_options and stash the client's value for the replayed stream instead."""
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["azure"])
+    kwargs: Final = {
+        "model": "azure/gpt-4o",
+        "messages": [{"role": "user", "content": "Search for LiteLLM"}],
+        "custom_llm_provider": "azure",
+        "litellm_params": {"custom_llm_provider": "azure"},
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {"type": "object"}},
+            }
+        ],
+        "stream": True,
+        "stream_options": dict(_STREAM_USAGE_OPTIONS),
+    }
+
+    result: Final = await convert(logger, kwargs)
+
+    assert result is not None
+    assert (
+        result["stream"],
+        "stream_options" in result,
+        result["_websearch_interception_converted_stream"],
+        result["_websearch_interception_stream_options"],
+    ) == (False, False, True, _STREAM_USAGE_OPTIONS)
+
+
+
 def test_sync_forced_tool_choice_repoints_converted_web_search():
     """Regression (tool_choice 400): a forced tool_choice naming the original
     web_search tool must be repointed to litellm_web_search after conversion.
@@ -1086,3 +1153,73 @@ async def test_execute_search_registered_tool_without_provider_follows_unregiste
             await logger._execute_search("what is litellm", kwargs=kwargs)
         assert exc_info.value.code == "403"
         mock_asearch.assert_not_awaited()
+
+
+def test_is_web_search_tool_detection():
+    """
+    PRIORITY TEST #3: Unit test for is_web_search_tool() utility.
+
+    Validates detection of all supported formats including future versions.
+    """
+    print("\n" + "=" * 80)
+    print("UNIT TEST: Web Search Tool Detection")
+    print("=" * 80)
+
+    from litellm.integrations.websearch_interception import is_web_search_tool
+
+    test_cases = [
+        ({"name": "litellm_web_search"}, True, "LiteLLM standard tool"),
+        (
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+            True,
+            "Current Anthropic native (2025)",
+        ),
+        (
+            {"type": "web_search_2026", "name": "web_search"},
+            True,
+            "Future Anthropic native (2026)",
+        ),
+        (
+            {"type": "web_search_20270615", "name": "web_search"},
+            True,
+            "Future Anthropic native (2027)",
+        ),
+        (
+            {"name": "web_search", "type": "web_search_20250305"},
+            True,
+            "Claude Code format",
+        ),
+        ({"name": "WebSearch"}, True, "Legacy WebSearch"),
+        ({"name": "calculator"}, False, "Non-web-search tool"),
+        ({"name": "some_tool", "type": "function"}, False, "Other tool with type"),
+        ({"type": "custom_tool"}, False, "Custom tool type"),
+    ]
+
+    passed = 0
+    failed = 0
+
+    for tool, expected, description in test_cases:
+        result = is_web_search_tool(tool)
+        if result == expected:
+            print(f"   ✅ PASS: {description}")
+            passed += 1
+        else:
+            print(f"   ❌ FAIL: {description}")
+            print(f"      Tool: {tool}")
+            print(f"      Expected: {expected}, Got: {result}")
+            failed += 1
+
+    print(f"\n📊 Results: {passed} passed, {failed} failed")
+    assert failed == 0
+
+    if failed == 0:
+        print("\n" + "=" * 80)
+        print("✅ ALL DETECTION TESTS PASSED!")
+        print("=" * 80)
+        print("✅ Detects all current formats")
+        print("✅ Future-proof for new web_search_* versions")
+        print("=" * 80)
+        return True
+    else:
+        print("\n❌ Some detection tests failed")
+        return False

@@ -1555,7 +1555,7 @@ class TestOpenAIPassthroughIntegration:
         )
 
         # Mock the _handle_logging method to capture calls
-        self.handler._handle_logging = AsyncMock()
+        self.handler.handle_logging = AsyncMock()
 
         # Act
         result = await self.handler.pass_through_async_success_handler(
@@ -1575,7 +1575,7 @@ class TestOpenAIPassthroughIntegration:
         )
 
         # Assert - Should call the base handler, not our OpenAI handler
-        self.handler._handle_logging.assert_called_once()
+        self.handler.handle_logging.assert_called_once()
 
     @patch("litellm.cost_calculator.default_image_cost_calculator")
     def test_calculate_image_generation_cost(self, mock_image_cost_calculator):

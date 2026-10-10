@@ -35,7 +35,10 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UserAPIKeyAuth,
     VirtualKeyEvent,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
@@ -713,7 +716,9 @@ async def _emit_management_endpoint_otel_span(
         )
 
         route = get_request_route(http_request)
-        request_body: dict = await _read_request_body(request=http_request)
+        request_body: dict = await read_request_body(  # rebind-ok: pre-existing rebinding on a rename-only line
+            request=http_request
+        )
     else:
         route = func.__name__
         request_body = {}

@@ -6,17 +6,20 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
 import anthropic
 import httpx
 import openai
 import pytest
+import yaml
 from _pytest.mark.structures import ParameterSet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
@@ -463,6 +466,26 @@ def _spend_row(*request_ids: str) -> Mapping[str, JsonValue]:
     return rows[0]
 
 
+def _spend_proxy_server_request(request_id: str) -> dict[str, JsonValue]:
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT proxy_server_request FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+            (request_id,),
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    return _JSON_OBJECT.validate_python(rows[0]["proxy_server_request"])
+
+
+def _config_storing_prompts(directory: Path) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["general_settings"]["store_prompts_in_spend_logs"] = True
+    path: Final = directory / "store-prompts.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
 def _assert_caller_id(endpoint: Endpoint, stream: bool, caller_id: str, response_id: str) -> None:
     if endpoint == "messages" and stream:
         assert caller_id.startswith("msg_"), caller_id
@@ -652,6 +675,74 @@ def test_gemini_own_tool_call_signature_is_still_replayed_on_the_function_call_p
             **_DECLARATIONS,
         }, replay
         assert _spend_row(rounds[1])["status"] == "success"
+
+
+def test_responses_previous_response_id_replays_gemini_session_history(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    first_prompt: Final = f"gemini-session-first-{uuid.uuid4().hex}"
+    second_prompt: Final = f"gemini-session-second-{uuid.uuid4().hex}"
+    first_answer: Final = f"gemini-answer-first-{uuid.uuid4().hex}"
+    second_answer: Final = f"gemini-answer-second-{uuid.uuid4().hex}"
+    first_provider_id: Final = f"gemini-response-first-{uuid.uuid4().hex}"
+    second_provider_id: Final = f"gemini-response-second-{uuid.uuid4().hex}"
+    calls: Final = itertools.count()
+
+    def respond(request: Request) -> Reply:
+        if next(calls) == 0:
+            return _reply(first_provider_id, stream=False, parts=({"text": first_answer},))
+        return _reply(second_provider_id, stream=False, parts=({"text": second_answer},))
+
+    with (
+        wire_server(respond) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_config_storing_prompts(tmp_path), workers=1) as prompt_gateway,
+        prompt_gateway.scenario() as scenario,
+    ):
+        model: Final = _register(prompt_gateway, scenario, "gemini", wire)
+        first_response: Final = prompt_gateway.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": first_prompt, **_CACHE_BUST},
+        )
+        assert first_response.status_code == 200, first_response.text
+        first_body: Final = _JSON_OBJECT.validate_json(first_response.content)
+        first_response_id: Final = str(first_body["id"])
+        assert _output_text(first_body) == first_answer
+        first_spend_id: Final = _upstream_response_id("responses", first_response_id)
+        assert _spend_row(first_spend_id)["status"] == "success"
+        first_proxy_request: Final = _spend_proxy_server_request(first_spend_id)
+        assert first_proxy_request["input"] == first_prompt, first_proxy_request
+
+        second_response: Final = prompt_gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": model,
+                "input": second_prompt,
+                "previous_response_id": first_response_id,
+                **_CACHE_BUST,
+            },
+        )
+        assert second_response.status_code == 200, second_response.text
+        second_body: Final = _JSON_OBJECT.validate_json(second_response.content)
+        second_response_id: Final = str(second_body["id"])
+        assert _output_text(second_body) == second_answer
+        assert _spend_row(_upstream_response_id("responses", second_response_id))["status"] == "success"
+
+        requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in requests] == [
+            ("POST", _target("gemini", False)),
+            ("POST", _target("gemini", False)),
+        ]
+        first_provider_body: Final = _JSON_OBJECT.validate_json(requests[0].body)
+        second_provider_body: Final = _JSON_OBJECT.validate_json(requests[1].body)
+        assert first_provider_body == _expected_body("responses", _user(first_prompt))
+        assert second_provider_body == _expected_body(
+            "responses",
+            _user(first_prompt),
+            _model_turn({"text": first_answer}),
+            _user(second_prompt),
+        )
 
 
 _FIVE_KB: Final = "s" * 5000

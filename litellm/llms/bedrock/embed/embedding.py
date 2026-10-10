@@ -16,13 +16,14 @@ from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import (
     AmazonEmbeddingRequest,
     CohereEmbeddingRequest,
+    TwelveLabsAsyncInvokeStatusResponse,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
@@ -122,7 +123,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_httpx_client(_params)
+            client = get_httpx_client(_params)
         else:
             client = client
         try:
@@ -191,11 +192,11 @@ class BedrockEmbedding(BaseAWSLLM):
         # Handle async invoke responses (single response with invocationArn)
         if is_async_invoke and len(response_list) == 1 and "invocationArn" in response_list[0]:
             if provider == "twelvelabs":
-                returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_async_invoke_response(
+                returned_response = TwelveLabsMarengoEmbeddingConfig().transform_async_invoke_response(
                     response=response_list[0], model=model
                 )
             elif provider == "nova":
-                returned_response = AmazonNovaEmbeddingConfig()._transform_async_invoke_response(
+                returned_response = AmazonNovaEmbeddingConfig().transform_async_invoke_response(
                     response=response_list[0], model=model
                 )
             else:
@@ -226,21 +227,21 @@ class BedrockEmbedding(BaseAWSLLM):
         else:
             # Handle regular invoke responses
             if model == "amazon.titan-embed-image-v1":
-                returned_response = AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                returned_response = AmazonTitanMultimodalEmbeddingG1Config().transform_response(
                     response_list=response_list, model=model, batch_data=batch_data
                 )
             elif model == "amazon.titan-embed-text-v1":
-                returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
+                returned_response = AmazonTitanG1Config().transform_response(response_list=response_list, model=model)
             elif model == "amazon.titan-embed-text-v2:0":
-                returned_response = AmazonTitanV2Config()._transform_response(response_list=response_list, model=model)
+                returned_response = AmazonTitanV2Config().transform_response(response_list=response_list, model=model)
             elif model == "amazon.titan-embed-g1-text-02":
-                returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
+                returned_response = AmazonTitanG1Config().transform_response(response_list=response_list, model=model)
             elif provider == "twelvelabs":
-                returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+                returned_response = TwelveLabsMarengoEmbeddingConfig().transform_response(
                     response_list=response_list, model=model, batch_data=batch_data
                 )
             elif provider == "nova":
-                returned_response = AmazonNovaEmbeddingConfig()._transform_response(
+                returned_response = AmazonNovaEmbeddingConfig().transform_response(
                     response_list=response_list, model=model, batch_data=batch_data
                 )
 
@@ -438,7 +439,7 @@ class BedrockEmbedding(BaseAWSLLM):
         data: CohereEmbeddingRequest | None = None
         batch_data: list | None = None
         if provider == "cohere":
-            data = BedrockCohereEmbeddingConfig()._transform_request(
+            data = BedrockCohereEmbeddingConfig().transform_request(
                 model=model, input=input, inference_params=inference_params
             )
         elif provider == "amazon" and model in [
@@ -451,20 +452,20 @@ class BedrockEmbedding(BaseAWSLLM):
             for i in input:
                 if model == "amazon.titan-embed-image-v1":
                     transformed_request: AmazonEmbeddingRequest = (
-                        AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                        AmazonTitanMultimodalEmbeddingG1Config().transform_request(
                             input=i, inference_params=inference_params
                         )
                     )
                 elif model == "amazon.titan-embed-text-v1":
-                    transformed_request = AmazonTitanG1Config()._transform_request(
+                    transformed_request = AmazonTitanG1Config().transform_request(
                         input=i, inference_params=inference_params
                     )
                 elif model == "amazon.titan-embed-text-v2:0":
-                    transformed_request = AmazonTitanV2Config()._transform_request(
+                    transformed_request = AmazonTitanV2Config().transform_request(
                         input=i, inference_params=inference_params
                     )
                 elif model == "amazon.titan-embed-g1-text-02":
-                    transformed_request = AmazonTitanG1Config()._transform_request(
+                    transformed_request = AmazonTitanG1Config().transform_request(
                         input=i, inference_params=inference_params
                     )
                 else:
@@ -483,7 +484,7 @@ class BedrockEmbedding(BaseAWSLLM):
         elif provider == "twelvelabs":
             batch_data = []
             for i in input:
-                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig(model=model)._transform_request(
+                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig(model=model).transform_request(
                     input=i,
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
@@ -495,7 +496,7 @@ class BedrockEmbedding(BaseAWSLLM):
         elif provider == "nova":
             batch_data = []
             for i in input:
-                nova_request = AmazonNovaEmbeddingConfig()._transform_request(
+                nova_request = AmazonNovaEmbeddingConfig().transform_request(
                     input=i,
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
@@ -665,3 +666,12 @@ class BedrockEmbedding(BaseAWSLLM):
             return response.json()
         else:
             raise Exception(f"Failed to get async invoke status: {response.status_code} - {response.text}")
+
+    async def get_async_invoke_status(
+        self,
+        invocation_arn: str,
+        aws_region_name: str,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+        **kwargs: object,  # kwargs-ok: mirrors private method extension kwargs
+    ) -> TwelveLabsAsyncInvokeStatusResponse:
+        return await self._get_async_invoke_status(invocation_arn, aws_region_name, logging_obj, **kwargs)

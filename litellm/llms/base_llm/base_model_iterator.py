@@ -108,6 +108,13 @@ class BaseModelResponseIterator:
             stripped_json_chunk = None
         return stripped_json_chunk
 
+    @classmethod
+    def string_to_dict_parser(
+        cls,
+        str_line: str,
+    ) -> dict[str, object] | None:  # mutable-ok: mirrors override contract
+        return cls._string_to_dict_parser(str_line)
+
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
         stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)

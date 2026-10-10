@@ -24,7 +24,7 @@ const invalid = (path: string, message: string): SystemOnePayloadValidation => (
   issues: [{ path, message, severity: "error" }],
 });
 
-function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
+export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
   try {
     return { ok: true, value: JSON.parse(raw) };
   } catch (error: unknown) {
@@ -54,7 +54,7 @@ export function validateSystemOnePayload(
     return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
   }
 
-  const schema = endpoint === "/v1/decisions" ? decisionsRequestSchema : systemOneRequestSchema;
+  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
   const result = schema.safeParse(json.value);
   if (!result.success) {
     return {

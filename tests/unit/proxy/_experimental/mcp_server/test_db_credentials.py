@@ -708,7 +708,8 @@ async def test_store_user_oauth_credential_does_not_persist_plaintext():
 
 
 @pytest.mark.asyncio
-async def test_oauth_round_trip_returns_payload():
+@pytest.mark.parametrize("cimd_client_id", [None, "https://gateway.example.com/oauth/client-metadata.json"])
+async def test_oauth_round_trip_returns_payload(cimd_client_id):
     access_token = "ya29.a0AfH6SMBverysecretaccesstoken"
     prisma = _make_prisma_with_existing(row=None)
     await store_user_oauth_credential(
@@ -719,6 +720,7 @@ async def test_oauth_round_trip_returns_payload():
         refresh_token="rfr-xyz",
         scopes=["a", "b"],
         identity_binding_proof="verified-proof",
+        cimd_client_id=cimd_client_id,
     )
 
     stored = _stored_value(prisma)
@@ -734,6 +736,7 @@ async def test_oauth_round_trip_returns_payload():
     assert result["refresh_token"] == "rfr-xyz"
     assert result["scopes"] == ["a", "b"]
     assert result["identity_binding_proof"] == "verified-proof"
+    assert result.get("cimd_client_id") == cimd_client_id
 
 
 @pytest.mark.asyncio
@@ -1541,7 +1544,7 @@ async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
         )
     )
 
-    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_old)
+    monkeypatch.setattr(enc, "get_salt_key", lambda: key_old)
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
@@ -1558,7 +1561,7 @@ async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
     assert store_update.await_args.kwargs["where"] == {"server_id": "config_faros"}
     rotated_blob = store_update.await_args.kwargs["data"]["credentials"]
 
-    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_new)
+    monkeypatch.setattr(enc, "get_salt_key", lambda: key_new)
     recovered = decrypt_credentials(credentials=json.loads(rotated_blob))
     assert recovered["client_id"] == "cid-123"
     assert recovered["client_secret"] == "sec-456"
@@ -1795,3 +1798,61 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
     await mcp_per_user_token_cache.set("alice", "srv", "bob", 60)
     assert await module.resolve_user_oauth_access_token("alice", server) is None
     assert await mcp_per_user_token_cache.get("alice", "srv") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["native", "legacy"])
+@pytest.mark.parametrize("capability", [None, False])
+async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_replica(monkeypatch, respx_mock, owner, capability):
+    from urllib.parse import parse_qs
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db as db_module
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _store_per_user_token_server_side
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
+        LazyPerUserOAuthTokenStore,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    identity = "https://gateway.example.com/oauth/client-metadata.json"
+    prisma = _make_prisma_with_existing(row=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    server = MCPServer(
+        server_id="saved-cimd", name="saved_cimd", transport="http", auth_type="oauth2",
+        client_id_metadata_document_supported=capability,
+        oauth2_flow="authorization_code", authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+    )
+    await _store_per_user_token_server_side(
+        server, "alice", {"access_token": "old", "refresh_token": "old-refresh", "expires_in": -10},
+        cimd_client_id=identity,
+    )
+
+    async def read_row(**kwargs):
+        return SimpleNamespace(credential_b64=_stored_value(prisma), user_id="alice", server_id=server.server_id)
+
+    prisma.db.litellm_mcpusercredentials.find_unique.side_effect = read_row
+    saved = await get_user_oauth_credential(prisma, "alice", server.server_id)
+    assert saved is not None and saved["cimd_client_id"] == identity
+    assert identity not in _stored_value(prisma)
+    monkeypatch.setenv("PROXY_BASE_URL", "https://renamed-gateway.example.com")
+    upstream = respx_mock.post("https://idp.example.com/token").respond(
+        200, json={"access_token": "fresh", "refresh_token": "rotated", "expires_in": 3600}
+    )
+    if owner == "native":
+        refreshed = await LazyPerUserOAuthTokenStore(lambda _: server).fetch("alice", server.server_id)
+        assert refreshed is not None and refreshed.access_token == "fresh"
+        assert refreshed.cimd_client_id == identity
+    else:
+        legacy = await db_module.refresh_user_oauth_token(prisma, "alice", server, saved)
+        assert legacy is not None and legacy["access_token"] == "fresh"
+    persisted = await get_user_oauth_credential(prisma, "alice", server.server_id)
+    assert persisted is not None
+    assert persisted["cimd_client_id"] == identity
+    assert persisted["refresh_token"] == "rotated"
+    assert upstream.call_count == 1
+    assert parse_qs(upstream.calls[0].request.content.decode())["client_id"] == [identity]
+    assert "client_secret" not in parse_qs(upstream.calls[0].request.content.decode())
+    assert server.client_id is None and server.client_id_metadata_document_supported is capability

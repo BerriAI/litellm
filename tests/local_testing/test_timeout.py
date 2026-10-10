@@ -2,8 +2,6 @@
 #    This tests the timeout decorator
 
 import os
-import time
-import traceback
 
 import httpx
 import openai
@@ -69,7 +67,7 @@ def test_hanging_request_azure():
     """
     litellm.set_verbose = True
     import asyncio
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     try:
         router = litellm.Router(

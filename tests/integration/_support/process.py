@@ -119,7 +119,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
 
 
 _PORT_ATTEMPTS: Final = 3
-_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE)
+_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE).lower()
 
 
 def _free_port() -> int:
@@ -151,7 +151,7 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
 
 
 def _lost_port_race(exit_code: int | None, log: Path) -> bool:
-    return exit_code is not None and _BIND_COLLISION in log.read_text()
+    return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
 def _wait_until_ready(launch: _Launch) -> None:
@@ -260,6 +260,8 @@ def owned_proxy_process(
         "127.0.0.1",
         "--num_workers",
         str(workers),
+        "--timeout_worker_healthcheck",
+        str(int(graceful_stop_seconds())),
         *database_setup,
         *extra_arguments,
     )
@@ -294,6 +296,8 @@ def owned_gateway_image(
         str(workers),
         "--host",
         "127.0.0.1",
+        "--timeout-worker-healthcheck",
+        str(int(graceful_stop_seconds())),
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     try:
@@ -397,9 +401,7 @@ class UpstreamSlot:
 
     __slots__ = ("certificate", "directory", "port", "process", "root")
 
-    def __init__(
-        self, directory: Path, port: int, root: Path, certificate: UpstreamCertificate | None = None
-    ) -> None:
+    def __init__(self, directory: Path, port: int, root: Path, certificate: UpstreamCertificate | None = None) -> None:
         self.directory = directory
         self.port = port
         self.root = root
