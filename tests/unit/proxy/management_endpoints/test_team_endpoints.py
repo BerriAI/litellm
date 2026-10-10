@@ -2591,6 +2591,8 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_model_max_budget=None,
+            user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
         ):
             # Remove team_member_budget from updated_kv as the real function does
@@ -3159,6 +3161,8 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_model_max_budget=None,
+            user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
         ):
             result_kv = updated_kv.copy()
@@ -10891,6 +10895,7 @@ async def test_create_team_member_budget_table_with_duration():
         team_alias="test-team",
         team_member_budget=20.0,
         team_member_budget_duration="30d",
+        team_member_model_max_budget={"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}},
     )
 
     with patch(
@@ -10904,13 +10909,179 @@ async def test_create_team_member_budget_table_with_duration():
             user_api_key_dict=mock_admin,
             team_member_budget=20.0,
             team_member_budget_duration="30d",
+            team_member_model_max_budget=data.team_member_model_max_budget,
         )
 
         mock_new_budget.assert_awaited_once()
         budget_request = mock_new_budget.call_args.kwargs["budget_obj"]
         assert budget_request.budget_duration == "30d"
         assert budget_request.max_budget == 20.0
+        assert budget_request.model_max_budget == data.team_member_model_max_budget
         assert result["metadata"]["team_member_budget_id"] == "budget-abc"
+
+
+@pytest.mark.asyncio
+async def test_upsert_team_member_model_max_budget_updates_default_budget_and_evicts_cache():
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    model_budget: Final = {"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}}
+    team_table: Final = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "member-budget-1"},
+        members_with_roles=[],
+    )
+    cache: Final = MagicMock()
+    cache.async_delete_cache = AsyncMock()
+    budget_cache: Final = MagicMock()
+    budget_cache.async_delete_cache = AsyncMock()
+    prisma: Final = MagicMock()
+    prisma.db.litellm_budgettable.update = AsyncMock(return_value=MagicMock(budget_id="member-budget-1"))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", budget_cache),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        result: Final = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            updated_kv={"team_id": "test-team", "team_member_model_max_budget": model_budget},
+            team_member_model_max_budget=model_budget,
+            user_api_key_cache=cache,
+            explicitly_set_fields={"team_member_model_max_budget"},
+        )
+
+    budget_update: Final = prisma.db.litellm_budgettable.update.call_args.kwargs
+    assert budget_update["where"]["budget_id"] == "member-budget-1"
+    assert budget_update["data"]["budget_id"] == "member-budget-1"
+    assert json.loads(budget_update["data"]["model_max_budget"]) == model_budget
+    assert result["metadata"]["team_member_budget_id"] == "member-budget-1"
+    assert "team_member_model_max_budget" not in result
+    cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:member-budget-1")
+    budget_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:member-budget-1")
+
+
+@pytest.mark.asyncio
+async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts_cache(
+    disable_audit_logging_for_mocked_team,
+):
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing: Final = _existing_team_with_model_caps({})
+    existing.metadata = {"team_member_budget_id": "member-budget-1"}
+    existing.members_with_roles = []
+    existing.model_dump.return_value["metadata"] = existing.metadata
+    existing.model_dump.return_value["members_with_roles"] = []
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    cache.async_delete_cache = AsyncMock()
+    updated: Final = _existing_team_with_model_caps({})
+    updated.metadata = {"team_member_budget_id": "member-budget-1"}
+    updated.model_dump.return_value.update({"metadata": updated.metadata, "members_with_roles": []})
+    updated.litellm_model_table = None
+    update_budget_response: Final = MagicMock(budget_id="member-budget-1")
+    prisma: Final = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+        prisma.jsonify_team_object = lambda db_data: db_data
+        prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+        prisma.db.litellm_budgettable.update = AsyncMock(return_value=update_budget_response)
+
+        request_data: Final = UpdateTeamRequest(team_id="standalone-team-123", team_member_model_max_budget=None)
+        await update_team(
+            data=request_data,
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    budget_update: Final = prisma.db.litellm_budgettable.update.call_args.kwargs
+    assert budget_update["where"]["budget_id"] == "member-budget-1"
+    assert budget_update["data"]["budget_id"] == "member-budget-1"
+    assert budget_update["data"]["model_max_budget"] == "{}"
+    assert "team_member_model_max_budget" in request_data.model_fields_set
+    assert "model_max_budget" in budget_update["data"]
+    assert cache.async_delete_cache.await_args_list == [
+        call(key="team_member_default_budget:member-budget-1"),
+        call(key="team_member_default_budget:member-budget-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_team_persists_member_model_budget_to_default_budget_row(
+    disable_audit_logging_for_mocked_team,
+):
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    member_caps: Final = {"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}}
+    existing: Final = _existing_team_with_model_caps({})
+    existing.metadata = {"team_member_budget_id": "member-budget-1"}
+    existing.members_with_roles = []
+    existing.model_dump.return_value["metadata"] = existing.metadata
+    existing.model_dump.return_value["members_with_roles"] = []
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    cache.async_delete_cache = AsyncMock()
+    updated: Final = _existing_team_with_model_caps({})
+    updated.metadata = {"team_member_budget_id": "member-budget-1"}
+    updated.model_dump.return_value.update({"metadata": updated.metadata, "members_with_roles": []})
+    updated.litellm_model_table = None
+    update_budget_response: Final = MagicMock(budget_id="member-budget-1")
+    prisma: Final = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+        prisma.jsonify_team_object = lambda db_data: db_data
+        prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+        prisma.db.litellm_budgettable.update = AsyncMock(return_value=update_budget_response)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="standalone-team-123", team_member_model_max_budget=member_caps),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    budget_update: Final = prisma.db.litellm_budgettable.update.call_args.kwargs
+    assert budget_update["where"]["budget_id"] == "member-budget-1"
+    assert budget_update["data"]["budget_id"] == "member-budget-1"
+    stored_member_model_caps: Final = json.loads(budget_update["data"]["model_max_budget"])
+    assert {
+        model: {
+            **budget,
+            "tpm_limit": budget.get("tpm_limit"),
+            "rpm_limit": budget.get("rpm_limit"),
+        }
+        for model, budget in stored_member_model_caps.items()
+    } == {
+        "gpt-4o": {
+            "max_budget": 5.0,
+            "budget_duration": "1d",
+            "tpm_limit": None,
+            "rpm_limit": None,
+        }
+    }
+    assert cache.async_delete_cache.await_args_list == [
+        call(key="team_member_default_budget:member-budget-1"),
+        call(key="team_member_default_budget:member-budget-1"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -12519,11 +12690,13 @@ async def _drive_team_write(
         **(existing_kwargs or {}),
     )
     auth = user or UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u")
+    user_api_key_cache: Final = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
 
     with (
         _patch("litellm.proxy.proxy_server.prisma_client") as pc,
         _patch("litellm.proxy.proxy_server.llm_router", None),
-        _patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        _patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         _patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         _patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         _patch(
@@ -16245,13 +16418,24 @@ def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_a
 
 
 @pytest.mark.asyncio
-async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_auth):
+@pytest.mark.parametrize(
+    ("member_caps", "member_budget_duration"),
+    [
+        ({"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}}, "30d"),
+        ({}, None),
+    ],
+)
+async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_auth, member_caps, member_budget_duration):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
     mock_db_client.db.litellm_modeltable = MagicMock()
     mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+    mock_db_client.db.litellm_budgettable = MagicMock()
+    mock_db_client.db.litellm_budgettable.create = AsyncMock(
+        side_effect=lambda *, data: MagicMock(budget_id=data["budget_id"])
+    )
 
     team_create_result = MagicMock(team_id="team-model-caps")
     team_create_result.model_dump.return_value = {"team_id": "team-model-caps"}
@@ -16269,11 +16453,18 @@ async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_aut
     from litellm.proxy._types import NewTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
-    with patch("litellm.proxy.proxy_server.premium_user", True):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    member_budget_cache: Final = MagicMock()
+    member_budget_cache.async_delete_cache = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", member_budget_cache),
+    ):
         await new_team(
             data=NewTeamRequest(
                 team_alias="model-caps",
                 model_max_budget={"gpt-4o": {"max_budget": 10.0, "budget_duration": "1d"}},
+                team_member_budget_duration=member_budget_duration,
+                team_member_model_max_budget=member_caps,
             ),
             http_request=MagicMock(spec=Request),
             user_api_key_dict=mock_admin_auth,
@@ -16283,6 +16474,75 @@ async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_aut
     assert team_data["model_max_budget"] == {
         "gpt-4o": {"max_budget": 10.0, "budget_duration": "1d", "tpm_limit": None, "rpm_limit": None}
     }
+    member_budget_row: Final = mock_db_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    member_budget_id: Final = member_budget_row["budget_id"]
+    assert team_data["metadata"]["team_member_budget_id"] == member_budget_id
+    assert member_budget_row.get("budget_duration") == member_budget_duration
+    stored_member_budget_model_caps: Final = json.loads(member_budget_row["model_max_budget"])
+    expected_member_model_caps: Final = (
+        {
+            "gpt-4o": {
+                "max_budget": 5.0,
+                "budget_duration": "1d",
+                "tpm_limit": None,
+                "rpm_limit": None,
+            }
+        }
+        if member_caps
+        else {}
+    )
+    assert {
+        model: {
+            **budget,
+            "tpm_limit": budget.get("tpm_limit"),
+            "rpm_limit": budget.get("rpm_limit"),
+        }
+        for model, budget in stored_member_budget_model_caps.items()
+    } == expected_member_model_caps
+    member_budget_cache.async_delete_cache.assert_awaited_once_with(
+        key=f"team_member_default_budget:{member_budget_id}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_name", ["new", "update"])
+@pytest.mark.parametrize(
+    ("premium_user", "model_budget", "expected_status"),
+    [
+        (False, {"gpt-4o": {"max_budget": 10.0, "budget_duration": "1d"}}, 403),
+        (True, {"gpt-4o": {"max_budget": 10.0}}, 400),
+    ],
+)
+async def test_team_member_model_budget_validation(endpoint_name, premium_user, model_budget, expected_status):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        new_team,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        update_team as update_team_endpoint,
+    )
+
+    endpoint: Final = new_team if endpoint_name == "new" else update_team_endpoint
+    data: Final = (
+        NewTeamRequest(team_alias="member-model-validation", team_member_model_max_budget=model_budget)
+        if endpoint_name == "new"
+        else UpdateTeamRequest(team_id="member-model-validation", team_member_model_max_budget=model_budget)
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", premium_user),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await endpoint(
+            data=data,
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert exc_info.value.code == str(expected_status)
 
 
 @pytest.mark.asyncio
@@ -17098,6 +17358,87 @@ def test_member_budget_patch_maps_temp_budget_fields() -> None:
     }
 
 
+def test_member_budget_patch_stores_model_max_budget_as_json_and_clears_on_empty() -> None:
+    from litellm.proxy.management_endpoints.common_utils import member_budget_patch
+
+    request: Final = TeamMemberUpdateRequest(
+        team_id="team-1",
+        user_id="user-1",
+        model_max_budget={"gpt-4o": {"budget_limit": 5, "time_period": "30d"}},
+    )
+    assert member_budget_patch(request) == {"model_max_budget": {"gpt-4o": {"max_budget": 5.0, "budget_duration": "30d"}}}
+
+    cleared: Final = TeamMemberUpdateRequest(team_id="team-1", user_id="user-1", model_max_budget={})
+    assert member_budget_patch(cleared) == {"model_max_budget": {}}
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_and_membership_clears_own_model_max_budget_to_empty_json() -> None:
+    from litellm.proxy.management_endpoints.common_utils import upsert_budget_and_membership
+
+    own_row: Final = SimpleNamespace(
+        model_dump=lambda: {
+            "budget_id": "member-b",
+            "max_budget": 50.0,
+            "model_max_budget": {"gpt-4o": {"max_budget": 2.5, "budget_duration": "7d"}},
+        }
+    )
+    tx: Final = MagicMock()
+    tx.litellm_budgettable.find_unique = AsyncMock(return_value=own_row)
+    tx.litellm_budgettable.update = AsyncMock()
+    tx.litellm_teammembership.update = AsyncMock()
+
+    await upsert_budget_and_membership(
+        tx,
+        team_id="team-1",
+        user_id="user-1",
+        existing_budget_id="member-b",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+        budget_patch={"model_max_budget": None},
+        team_default_budget_id="default-b",
+    )
+
+    assert tx.litellm_budgettable.update.await_args.kwargs["data"]["model_max_budget"] == "{}"
+    tx.litellm_teammembership.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_and_membership_clone_keeps_shared_default_model_max_budget_as_json() -> None:
+    from litellm.proxy.management_endpoints.common_utils import upsert_budget_and_membership
+
+    default_model_budget: Final = {"gpt-4o": {"max_budget": 5.0, "budget_duration": "30d"}}
+    default_row: Final = SimpleNamespace(
+        model_dump=lambda: {
+            "budget_id": "default-b",
+            "max_budget": 10.0,
+            "model_max_budget": default_model_budget,
+            "budget_reset_at": None,
+        }
+    )
+    tx: Final = MagicMock()
+    tx.litellm_budgettable.find_unique = AsyncMock(return_value=default_row)
+    tx.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="member-b"))
+    tx.litellm_teammembership.upsert = AsyncMock()
+
+    await upsert_budget_and_membership(
+        tx,
+        team_id="team-1",
+        user_id="user-1",
+        existing_budget_id="default-b",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+        budget_patch={"tpm_limit": 7},
+        team_default_budget_id="default-b",
+    )
+
+    create_data: Final = tx.litellm_budgettable.create.await_args.kwargs["data"]
+    assert create_data["tpm_limit"] == 7
+    assert create_data["max_budget"] == 10.0
+    assert json.loads(create_data["model_max_budget"]) == {}
+    assert tx.litellm_teammembership.upsert.await_args.kwargs["data"]["update"] == {
+        "litellm_budget_table": {"connect": {"budget_id": "member-b"}}
+    }
+
+
 def test_team_member_update_request_temp_budget_fields_must_be_set_together() -> None:
     with pytest.raises(ValidationError, match="temp_budget_increase and temp_budget_expiry must be set together"):
         TeamMemberUpdateRequest(team_id="team-1", user_id="user-1", temp_budget_increase=50.0)
@@ -17211,3 +17552,18 @@ def test_aggregated_date_range_error_accepts_canonical_dates_and_keeps_range_che
     assert aggregated_date_range_error("2026-09-24", "2026-09-26") is None
     assert aggregated_date_range_error("2026-09-26", "2026-09-24") == "end_date must be on or after start_date"
     assert aggregated_date_range_error("2020-01-01", "2026-12-31") == "Date range must be at most 400 days"
+
+
+@pytest.mark.asyncio
+async def test_default_budget_cache_eviction_does_not_fail_after_redis_error() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+
+    await TeamMemberBudgetHandler._evict_default_budget_cache(
+        budget_id="budget_456",
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    user_api_key_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:budget_456")

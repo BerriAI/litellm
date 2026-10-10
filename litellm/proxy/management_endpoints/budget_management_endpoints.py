@@ -19,6 +19,8 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from litellm._internal_context import service_target
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -141,7 +143,7 @@ async def update_budget(
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -199,6 +201,11 @@ async def update_budget(
         where={"budget_id": budget_obj.budget_id},
         data=budget_obj_jsonified,
     )
+    with service_target("team_member_budgets"):
+        try:
+            await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_obj.budget_id}")
+        except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget update.
+            verbose_proxy_logger.warning("Failed to evict the team member default budget cache", exc_info=True)
 
     return response
 

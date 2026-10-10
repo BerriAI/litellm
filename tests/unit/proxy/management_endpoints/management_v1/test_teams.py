@@ -85,6 +85,10 @@ def _matches(row: Mapping[str, object], where: Mapping[str, object]) -> bool:
     return all((wanted := _wanted(where, field)) is not None and row.get(field) in wanted for field in where)
 
 
+def _as_stored(data: Mapping[str, object]) -> dict[str, object]:
+    return {k: json.loads(v) if k == "model_max_budget" and isinstance(v, str) else v for k, v in data.items()}
+
+
 class _BudgetTable:
     def __init__(self, budgets: Sequence[_BudgetRow]) -> None:
         self.rows: dict[str, _BudgetRow] = {b.budget_id: b for b in budgets}
@@ -94,13 +98,13 @@ class _BudgetTable:
 
     async def update(self, where: Mapping[str, str], data: Mapping[str, object]) -> _BudgetRow:
         row: Final = self.rows[where["budget_id"]]
-        updated: Final = row.model_copy(update=dict(data))
+        updated: Final = row.model_copy(update=_as_stored(data))
         self.rows[row.budget_id] = updated
         return updated
 
     async def create(self, data: Mapping[str, object], include: Mapping[str, bool] | None = None) -> _BudgetRow:
         budget_id: Final = f"new-budget-{len(self.rows) + 1}"
-        row: Final = _BudgetRow.model_validate({**data, "budget_id": budget_id})
+        row: Final = _BudgetRow.model_validate({**_as_stored(data), "budget_id": budget_id})
         self.rows[budget_id] = row
         return row
 

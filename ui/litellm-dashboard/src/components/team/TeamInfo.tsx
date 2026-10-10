@@ -286,7 +286,7 @@ export interface TeamMembership {
     max_parallel_requests: number | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
-    model_max_budget: Record<string, number> | null;
+    model_max_budget: StoredModelMaxBudget | null;
     budget_duration: string | null;
     budget_reset_at: string | null;
     allowed_models?: string[] | null;
@@ -339,6 +339,7 @@ export interface TeamData {
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
+      model_max_budget?: StoredModelMaxBudget | null;
     } | null;
   };
   keys: any[];
@@ -631,6 +632,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, isViewOnly } = useAuthorized();
@@ -661,12 +663,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ] as const
     ).find(([failed]) => failed)?.[1] ?? null;
   const availableRateLimitModels = useMemo(() => {
-    const selected = watchedModels ?? teamData?.team_info?.models ?? [];
+    const selected = (isEditing ? watchedModels : undefined) ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
       return userModels;
     }
     return unfurlWildcardModelsInList(selected, userModels);
-  }, [watchedModels, teamData, userModels]);
+  }, [isEditing, watchedModels, teamData, userModels]);
+  const availableModelBudgetModels = useMemo(() => {
+    const selected = (isEditing ? watchedModels : undefined) ?? teamData?.team_info?.models ?? [];
+    if (selected.length === 0 || selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
+      return userModels;
+    }
+    const granted = [...selected, ...(teamData?.team_info?.access_group_models ?? [])];
+    return unfurlWildcardModelsInList(Array.from(new Set(granted)), userModels);
+  }, [isEditing, watchedModels, teamData, userModels]);
 
   const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
   const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
@@ -684,6 +694,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const startEditing = () => {
     form.reset(teamFormValues());
     setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
+    setTeamMemberModelMaxBudget(
+      (teamData?.team_info?.team_member_budget_table?.model_max_budget ?? {}) as ModelMaxBudget,
+    );
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
@@ -866,6 +879,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         allowed_models: values.allowed_models,
         temp_budget_increase: values.temp_budget_increase,
         temp_budget_expiry: values.temp_budget_expiry,
+        model_max_budget: modelMaxBudgetUpdate(values.model_max_budget ?? {}, selectedEditMember?.model_max_budget),
       };
       toast.dismiss(); // Remove all existing toasts
 
@@ -1221,6 +1235,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const modelBudgets = modelMaxBudgetUpdate(teamModelMaxBudget, info.model_max_budget);
       if (modelBudgets !== undefined) {
         updateData.model_max_budget = modelBudgets;
+      }
+
+      const teamMemberModelBudgets = modelMaxBudgetUpdate(
+        teamMemberModelMaxBudget,
+        info.team_member_budget_table?.model_max_budget,
+      );
+      if (teamMemberModelBudgets !== undefined) {
+        updateData.team_member_model_max_budget = teamMemberModelBudgets;
       }
 
       // Handle router_settings - read fresh values from DOM at save time.
@@ -1658,6 +1680,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             />
                           )}
                         </FormField>
+                        <ModelMaxBudgetField
+                          label="Default Per-Model Budget"
+                          premiumUser={premiumUser}
+                          value={teamMemberModelMaxBudget}
+                          onChange={setTeamMemberModelMaxBudget}
+                          availableModels={availableModelBudgetModels}
+                          hint="Set a default per-model spend cap for each team member, with an independent reset window."
+                        />
                         <FormField
                           control={form.control}
                           name="team_member_key_duration"
@@ -2347,6 +2377,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </p>
                 <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
+                {modelMaxBudgetToEntries(
+                  info.team_member_budget_table?.model_max_budget as ModelMaxBudget | null | undefined,
+                ).map(({ model, budgetLimit, timePeriod }) => (
+                  <div key={model}>
+                    Default Per-Model Budget ({model}):{" "}
+                    {budgetLimit !== null ? `$${formatNumberWithCommas(budgetLimit, 4)}` : "No Limit"} per {timePeriod}
+                  </div>
+                ))}
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                 <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
                 <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
@@ -2553,6 +2591,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </span>
               ),
               type: "utc-datetime" as const,
+            },
+            {
+              name: "model_max_budget",
+              label: (
+                <span>
+                  Per-Model Budgets{" "}
+                  <SimpleTooltip content="Spend cap per model for this member, each with its own reset period. Starts from the team's default per-model budget; saving a change stores a per-model budget for this member only.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </span>
+              ),
+              type: "model-max-budget" as const,
+              availableModels: availableModelBudgetModels,
+              premiumUser,
             },
             {
               name: "tpm_limit",
