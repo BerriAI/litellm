@@ -677,3 +677,6 @@ class PassThroughEndpointLogging:
             logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get("cost_per_request")
 
         return kwargs
+
+
+GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
