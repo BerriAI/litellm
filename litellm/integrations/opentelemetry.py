@@ -401,13 +401,13 @@ def _server_span_failure_redact(span: "Span") -> bool:
     from litellm.integrations._types.open_inference import ErrorAttributes
     from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 
-    attributes: Final = getattr(span, "attributes", None) or {}
+    attributes: Final[Mapping[str, object]] = getattr(span, "attributes", None) or {}
     if ErrorAttributes.ERROR_MESSAGE in attributes or ErrorAttributes.ERROR_STACK_TRACE in attributes:
         return (
             attributes.get(ErrorAttributes.ERROR_MESSAGE) == REDACTED_BY_LITELLM
             or attributes.get(ErrorAttributes.ERROR_STACK_TRACE) == REDACTED_BY_LITELLM
         )
-    return should_redact_message_logging({})  # mutable-ok: read-only probe for the global flag
+    return should_redact_message_logging({})
 
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
@@ -2268,14 +2268,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             redact: Final = should_redact_message_logging(kwargs) if redact_content is None else redact_content
 
             # Get the exception object if available
-            exception: Final = kwargs.get("exception")
+            exception: Final[object] = kwargs.get("exception")
 
             # Record the exception using OTEL's standard method
-            if exception is not None:
+            if isinstance(exception, BaseException):
                 if redact:
                     span.record_exception(
                         exception,
-                        attributes={  # mutable-ok: record_exception accepts a dict of event attributes
+                        attributes={
                             "exception.message": REDACTED_BY_LITELLM,
                             "exception.stacktrace": REDACTED_BY_LITELLM,
                         },
@@ -3630,8 +3630,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         error_information["error_code"] = str(status_code)
         self._record_exception_on_span(
             span=span,
-            kwargs={  # mutable-ok: _record_exception_on_span reads this kwargs dict
-                "standard_logging_object": {  # mutable-ok: standard_logging_object shape the recorder expects
+            kwargs={
+                "standard_logging_object": {
                     "error_information": redact_error_information(error_information) if redact else error_information
                 }
             },

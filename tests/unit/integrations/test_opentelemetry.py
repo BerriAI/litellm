@@ -6847,9 +6847,7 @@ SECRET_PROMPT = "secret-prompt-marker"
 
 class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
     def _run_hook(self, request_data, exception, redact):
-        original = litellm.turn_off_message_logging
-        litellm.turn_off_message_logging = redact
-        try:
+        with patch.object(litellm, "turn_off_message_logging", redact):
             exporter = InMemorySpanExporter()
             provider = TracerProvider()
             provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -6870,8 +6868,6 @@ class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
                     traceback_str=f"Traceback ... {SECRET_PROMPT} ...",
                 )
             )
-        finally:
-            litellm.turn_off_message_logging = original
 
         finished = {s.name: s for s in exporter.get_finished_spans()}
         return finished
@@ -6904,9 +6900,7 @@ class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
         assert secret in child.attributes["exception"]
 
     def test_record_error_attributes_on_span_redacts_via_global_gate(self):
-        original = litellm.turn_off_message_logging
-        litellm.turn_off_message_logging = True
-        try:
+        with patch.object(litellm, "turn_off_message_logging", True):
             otel = OpenTelemetry()
             span = MagicMock()
             otel.record_error_attributes_on_span(
@@ -6916,16 +6910,12 @@ class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
                 ),
                 status_code=400,
             )
-        finally:
-            litellm.turn_off_message_logging = original
         stamped = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
         assert stamped.get("error.message") == "redacted-by-litellm"
         assert stamped.get("error.type") == "BadRequestError"
 
     def _restamped_span(self, stamped_message, redact, exception):
-        original = litellm.turn_off_message_logging
-        litellm.turn_off_message_logging = redact
-        try:
+        with patch.object(litellm, "turn_off_message_logging", redact):
             exporter = InMemorySpanExporter()
             provider = TracerProvider()
             provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -6936,8 +6926,6 @@ class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
             otel.record_error_attributes_on_span(span=span, exception=exception, status_code=400)
             span.end()
             return exporter.get_finished_spans()[0]
-        finally:
-            litellm.turn_off_message_logging = original
 
     def test_record_error_attributes_on_span_preserves_request_opt_in_redaction(self):
         """Global flag off but the request opted in: the failure hook already

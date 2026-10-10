@@ -18,7 +18,7 @@ import datetime
 import os
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime as datetimeObj
 from typing import TYPE_CHECKING, Any, Final
 
@@ -287,7 +287,7 @@ class DataDogLogger(
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: str | None = None,

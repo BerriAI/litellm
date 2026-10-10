@@ -102,7 +102,7 @@ if TYPE_CHECKING:
 
 LITELLM_TRACER_NAME: Final = "litellm"
 _published_v2_provider: ApiTracerProvider | None = None
-_GLOBAL_REDACTION_PROBE: Final[dict[str, object]] = {}  # mutable-ok: read-only global-redaction probe
+_GLOBAL_REDACTION_PROBE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _span_failure_redact(span: "Span") -> bool:
@@ -110,7 +110,7 @@ def _span_failure_redact(span: "Span") -> bool:
     already marked: an existing ``error.message``/stack-trace attribute keeps
     its request-aware value, so a later restamp with the global probe can't
     leak an opt-in's raw text or clobber a valid opt-out."""
-    attributes: Final = getattr(span, "attributes", None) or {}
+    attributes: Final[Mapping[str, object]] = getattr(span, "attributes", None) or {}
     if Error.MESSAGE in attributes or LiteLLMError.STACK_TRACE in attributes:
         return (
             attributes.get(Error.MESSAGE) == REDACTED_BY_LITELLM
@@ -869,7 +869,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: "str | None" = None,

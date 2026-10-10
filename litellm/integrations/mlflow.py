@@ -1,5 +1,6 @@
 import json
 import threading
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -76,7 +77,7 @@ class MlflowLogger(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
-    def _handle_failure(self, kwargs, response_obj, start_time, end_time):
+    def _handle_failure(self, kwargs: Mapping, response_obj, start_time, end_time):
         """
         Log the failure event as an MLflow span.
         Note that this method is called *synchronously* unlike the success handler.
@@ -90,19 +91,19 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                if should_redact_message_logging(kwargs):
-                    span.add_event(
-                        SpanEvent(
-                            name="exception",
-                            attributes={  # mutable-ok: mlflow SpanEvent expects a plain dict of attributes
-                                "exception.type": type(exception).__name__,
-                                "exception.message": REDACTED_BY_LITELLM,
-                                "exception.stacktrace": REDACTED_BY_LITELLM,
-                            },
-                        )
+                exception_event: Final = (
+                    SpanEvent(
+                        name="exception",
+                        attributes={
+                            "exception.type": exception.__class__.__name__,
+                            "exception.message": REDACTED_BY_LITELLM,
+                            "exception.stacktrace": REDACTED_BY_LITELLM,
+                        },
                     )
-                else:
-                    span.add_event(SpanEvent.from_exception(exception))
+                    if should_redact_message_logging(kwargs)
+                    else SpanEvent.from_exception(exception)
+                )
+                span.add_event(exception_event)
 
             self._extract_and_set_chat_attributes(span, kwargs, response_obj)
             self._end_span_or_trace(

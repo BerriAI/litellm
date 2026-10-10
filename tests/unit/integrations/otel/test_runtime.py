@@ -90,18 +90,15 @@ def test_phase_span_forwards_redact_content_to_registered_logger(monkeypatch):
     logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
     monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: logger)
 
-    litellm.turn_off_message_logging = False
-    try:
-        secret = "secret-prompt-marker"
-        with pytest.raises(RuntimeError):
-            with runtime.phase_span("auth", redact_content=True):
-                raise RuntimeError(f"auth exploded: {secret}")
-        (span,) = exporter.get_finished_spans()
-        assert secret not in str(dict(span.attributes or {}))
-        assert secret not in str([dict(e.attributes or {}) for e in span.events])
-        assert secret not in str(span.status.description or "")
-    finally:
-        litellm.turn_off_message_logging = False
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    secret = "secret-prompt-marker"
+    with pytest.raises(RuntimeError):
+        with runtime.phase_span("auth", redact_content=True):
+            raise RuntimeError(f"auth exploded: {secret}")
+    (span,) = exporter.get_finished_spans()
+    assert secret not in str(dict(span.attributes or {}))
+    assert secret not in str([dict(e.attributes or {}) for e in span.events])
+    assert secret not in str(span.status.description or "")
 
 
 def test_phase_event_no_ops_when_runtime_absent(monkeypatch):

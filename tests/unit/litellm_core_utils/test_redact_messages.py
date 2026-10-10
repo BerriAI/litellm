@@ -1135,10 +1135,10 @@ def _request_data(metadata=None, litellm_metadata=None, turn_off_message_logging
 
 
 class TestShouldRedactFailedRequest:
-    def test_global_on(self):
+    def test_global_on(self, monkeypatch):
         from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
 
-        litellm.turn_off_message_logging = True
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
         assert should_redact_failed_request(_request_data()) is True
 
     def test_global_off(self):
@@ -1152,10 +1152,10 @@ class TestShouldRedactFailedRequest:
         request_data = _request_data(metadata={"headers": {"x-litellm-enable-message-redaction": "true"}})
         assert should_redact_failed_request(request_data) is True
 
-    def test_disable_header_overrides_global_on(self):
+    def test_disable_header_overrides_global_on(self, monkeypatch):
         from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
 
-        litellm.turn_off_message_logging = True
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
         request_data = _request_data(metadata={"headers": {"litellm-disable-message-redaction": "true"}})
         assert should_redact_failed_request(request_data) is False
 
@@ -1170,10 +1170,10 @@ class TestShouldRedactFailedRequest:
 
         assert should_redact_failed_request(_request_data(turn_off_message_logging=True)) is True
 
-    def test_dynamic_param_false_overrides_global_on(self):
+    def test_dynamic_param_false_overrides_global_on(self, monkeypatch):
         from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
 
-        litellm.turn_off_message_logging = True
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
         assert should_redact_failed_request(_request_data(turn_off_message_logging=False)) is False
 
     def test_dynamic_param_in_metadata_slot(self):
@@ -1186,10 +1186,10 @@ class TestShouldRedactFailedRequest:
 
         assert should_redact_failed_request(_request_data(litellm_metadata={"turn_off_message_logging": True})) is True
 
-    def test_top_level_dynamic_param_beats_metadata_slot(self):
+    def test_top_level_dynamic_param_beats_metadata_slot(self, monkeypatch):
         from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
 
-        litellm.turn_off_message_logging = True
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
         request_data = _request_data(
             metadata={"turn_off_message_logging": True},
             turn_off_message_logging=False,
