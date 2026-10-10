@@ -7,6 +7,7 @@ use litellm_http::request::{
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
+        SystemPrompt,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
@@ -383,6 +384,33 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
         _ => None,
     };
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
+}
+
+const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
+
+fn is_billing_header_block(block: &ContentBlock) -> bool {
+    block.block_type == Some(ContentBlockType::Text)
+        && block
+            .text
+            .as_deref()
+            .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
+}
+
+/// Python's `AnthropicMessagesConfig._filter_billing_headers_from_system`: the Claude Code
+/// attribution blocks the first-party API reads, dropped for hosts that reject them. `None`
+/// when nothing else was in the system prompt.
+pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
+    match system {
+        SystemPrompt::Text(text) if text.starts_with(BILLING_HEADER_PREFIX) => None,
+        SystemPrompt::Text(text) => Some(SystemPrompt::Text(text)),
+        SystemPrompt::Blocks(blocks) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_billing_header_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+        }
+    }
 }
 
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
@@ -1858,6 +1886,7 @@ mod tests {
                 supports_output_config: false,
                 supports_sampling_params: true,
                 supports_speed: false,
+                supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
             }
         );

@@ -63,7 +63,7 @@ describe("CredentialsTable", () => {
     expect(screen.getByText("Azure")).toBeInTheDocument();
   });
 
-  it("should mark only the credential that stores federation values as federated", () => {
+  it("should mark only the credentials the proxy federates as federated", () => {
     const credentials: CredentialItem[] = [
       {
         credential_name: "a-anthropic-federated",
@@ -75,12 +75,23 @@ describe("CredentialsTable", () => {
         credential_values: { api_key: "sk-a****" },
         credential_info: { custom_llm_provider: "anthropic" },
       },
+      {
+        credential_name: "c-openai-federated",
+        credential_values: { openai_service_account_id: "svc_stored" },
+        credential_info: { custom_llm_provider: "openai" },
+      },
+      {
+        credential_name: "d-openai-key-and-federation",
+        credential_values: { api_key: "sk-p****", openai_service_account_id: "svc_stored" },
+        credential_info: { custom_llm_provider: "openai" },
+      },
     ];
     render(<CredentialsTable {...defaultProps} credentials={credentials} />);
-    const [federatedRow, apiKeyRow] = screen.getAllByRole("row").slice(1);
-    expect(within(federatedRow).getByText("a-anthropic-federated")).toBeInTheDocument();
-    expect(within(federatedRow).getByText("Workload identity federation")).toBeInTheDocument();
-    expect(within(apiKeyRow).queryByText("Workload identity federation")).not.toBeInTheDocument();
+    const rows = screen.getAllByRole("row").slice(1);
+    const federatedNames = rows
+      .filter((row) => within(row).queryByText("Workload identity federation") !== null)
+      .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    expect(federatedNames).toEqual(["a-anthropic-federated", "c-openai-federated"]);
   });
 
   it("should render a dash when a credential has no provider", () => {

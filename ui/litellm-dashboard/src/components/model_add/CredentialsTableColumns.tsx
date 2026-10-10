@@ -22,7 +22,7 @@ import {
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { isFederatedCredential } from "./anthropic_federation";
+import { inferAuthMethod } from "./credential_federation";
 
 function CredentialProviderCell({ provider, federated }: { provider: string | undefined; federated: boolean }) {
   if (!provider) {
@@ -144,7 +144,7 @@ export const getCredentialsTableColumns = ({
       cell: ({ row }) => (
         <CredentialProviderCell
           provider={row.original.credential_info?.custom_llm_provider}
-          federated={isFederatedCredential(row.original.credential_values)}
+          federated={inferAuthMethod(row.original.credential_values) === "federation"}
         />
       ),
     },

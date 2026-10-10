@@ -17,15 +17,7 @@ use litellm_inference::provider::resolve_llm_provider;
 fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     match provider {
         LlmProviders::Bedrock => Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG),
-        LlmProviders::Anthropic
-        | LlmProviders::AwsTextract
-        | LlmProviders::AzureAi
-        | LlmProviders::Cohere
-        | LlmProviders::Mistral
-        | LlmProviders::Openai
-        | LlmProviders::OpenaiLike
-        | LlmProviders::Reducto
-        | LlmProviders::VertexAi => None,
+        _ => None,
     }
 }
 

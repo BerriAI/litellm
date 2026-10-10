@@ -51,6 +51,7 @@ from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.utils import is_valid_api_key
+from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -1021,6 +1022,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
@@ -2550,6 +2552,54 @@ class TestGetValidModelsWithCLI:
             assert "headers" in call_kwargs
             headers = call_kwargs["headers"]
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+
+
+@respx.mock
+def test_get_valid_models_bedrock_lists_what_the_deployment_credentials_can_invoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "eu-west-3"
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/*",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name=region,
+    )
+    expected_scope: Final = f"/{region}/bedrock/aws4_request"
+
+    def signed_by_the_deployment(request: httpx.Request, body: Mapping[str, object]) -> httpx.Response:
+        authorization: Final = request.headers.get("authorization", "")
+        if not authorization.startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"):
+            return httpx.Response(403, json={"message": "not signed with the deployment's key"})
+        if expected_scope not in authorization:
+            return httpx.Response(403, json={"message": "not signed for the deployment's region"})
+        return httpx.Response(200, json=body)
+
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(
+        side_effect=lambda request: signed_by_the_deployment(
+            request, {"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}
+        )
+    )
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles",
+        params={"typeEquals": "SYSTEM_DEFINED"},
+    ).mock(
+        side_effect=lambda request: signed_by_the_deployment(
+            request,
+            {
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+
+    assert litellm.get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider="bedrock", litellm_params=deployment
+    ) == ["amazon.nova-micro-v1:0", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"]
 
 
 class TestIsCachedMessage:
@@ -4095,15 +4145,6 @@ ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
     "databricks/databricks-claude-sonnet-4": 1024,
     "databricks/databricks-claude-sonnet-4-5": 1024,
     "databricks/databricks-claude-sonnet-4-6": 1024,
-    "openrouter/anthropic/claude-haiku-4.5": 4096,
-    "openrouter/anthropic/claude-opus-4": 1024,
-    "openrouter/anthropic/claude-opus-4.1": 1024,
-    "openrouter/anthropic/claude-opus-4.5": 4096,
-    "openrouter/anthropic/claude-opus-4.6": 4096,
-    "openrouter/anthropic/claude-opus-4.7": 2048,
-    "openrouter/anthropic/claude-sonnet-4": 1024,
-    "openrouter/anthropic/claude-sonnet-4.5": 1024,
-    "openrouter/anthropic/claude-sonnet-4.6": 1024,
     "replicate/anthropic/claude-4-sonnet": 1024,
     "replicate/anthropic/claude-4.5-haiku": 4096,
     "replicate/anthropic/claude-4.5-sonnet": 1024,
@@ -9331,3 +9372,91 @@ def my_pre_call_rule(input: str):
     if len(input) > 10:
         return False
     return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_with_retry_policy(sync_mode):
+    from litellm.types.router import RetryPolicy
+
+    retry_number = 1
+    retry_policy = RetryPolicy(
+        BadRequestErrorRetries=10,
+        ContentPolicyViolationErrorRetries=retry_number,
+        AuthenticationErrorRetries=0,
+    )
+
+    target_function = "completion_with_retries"
+
+    with patch.object(litellm, target_function) as mock_completion_with_retries:
+        data = {
+            "model": "azure/gpt-3.5-turbo",
+            "messages": [{"gm": "vibe", "role": "user"}],
+            "retry_policy": retry_policy,
+            "mock_response": "Exception: content_filter_policy",
+        }
+        try:
+            if sync_mode:
+                completion(**data)
+            else:
+                await completion(**data)
+        except Exception as e:
+            print(e)
+
+        mock_completion_with_retries.assert_called_once()
+        assert mock_completion_with_retries.call_args.kwargs["num_retries"] == retry_number
+        assert retry_policy.ContentPolicyViolationErrorRetries == retry_number
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRouter, monkeypatch):
+    """
+    Test that responses API actually retries when encountering authentication errors.
+    This validates that the @client decorator properly handles responses/aresponses retries.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Incorrect API key provided",
+                    "type": "invalid_request_error",
+                    "code": "invalid_api_key",
+                }
+            },
+        )
+    )
+    num_retries = 2
+
+    if sync_mode:
+        with patch.object(litellm, "responses_with_retries") as mock_retry:
+            mock_retry.return_value = None
+            try:
+                responses(
+                    model="gpt-4o",
+                    input="Test input",
+                    num_retries=num_retries,
+                    api_key="sk-invalid-key-12345",
+                )
+            except Exception:
+                pass
+
+            assert mock_retry.called
+            assert mock_retry.call_args.kwargs.get("num_retries") == num_retries
+    else:
+        with patch.object(litellm, "aresponses_with_retries") as mock_retry:
+            mock_retry.return_value = None
+            try:
+                await aresponses(
+                    model="gpt-4o",
+                    input="Test input",
+                    num_retries=num_retries,
+                    api_key="sk-invalid-key-12345",
+                )
+            except Exception:
+                pass
+
+            assert mock_retry.called
+            assert mock_retry.call_args.kwargs.get("num_retries") == num_retries

@@ -1,6 +1,8 @@
 """Proxy-wide allow-list of what a team admin may do on the teams they administer: team-settings fields on
-/team/update, the ``projects`` permission for /project/new and /project/update, and the
-``member_key_budgets`` permission for budget fields on other members' keys via /key/update."""
+/team/update, the ``raise_max_budget`` permission that lets a team admin grow the team's ``max_budget`` (never
+above the organization's budget, never removing the cap), the ``projects`` permission for /project/new and
+/project/update, and the ``member_key_budgets`` permission for budget fields on other members' keys via
+/key/update."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -25,9 +27,11 @@ TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_field
 
 # TODO(LIT-5722): add the remaining team settings one per PR, each with its value-diff tests and dashboard field
 SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset({"tpm_limit", "rpm_limit", "max_budget"})
+TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION: Final = "raise_max_budget"
 TEAM_ADMIN_PROJECTS_PERMISSION: Final = "projects"
 TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION: Final = "member_key_budgets"
 SUPPORTED_TEAM_ADMIN_PERMISSIONS: Final[frozenset[str]] = SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS | {
+    TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
     TEAM_ADMIN_PROJECTS_PERMISSION,
     TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION,
 }
@@ -104,6 +108,14 @@ def team_admin_may_edit_member_key_budgets(general_settings: Mapping[str, object
     return TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION in resolve_team_admin_editable_fields(
         general_settings, frozenset({TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION})
     )
+
+
+def team_admin_may_raise_max_budget(general_settings: Mapping[str, object]) -> bool:
+    """``raise_max_budget`` only takes effect alongside ``max_budget``: a grant to raise a field the team admin
+    may not edit at all is treated as not granted."""
+    return resolve_team_admin_editable_fields(
+        general_settings, frozenset({"max_budget", TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION})
+    ) >= {"max_budget", TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION}
 
 
 def _as_object(value: object) -> Mapping[str, object]:
