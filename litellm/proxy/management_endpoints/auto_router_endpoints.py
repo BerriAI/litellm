@@ -58,6 +58,10 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.request_models import (
+    AutoRouterRoutingTestRequest,
+    RequestComplexityRouterConfig,
+)
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
@@ -73,12 +77,10 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
-    AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
-    RequestComplexityRouterConfig,
     ShadowEvalDirection,
     ShadowEvalJobResponse,
     ShadowEvalJobTargetResponse,
