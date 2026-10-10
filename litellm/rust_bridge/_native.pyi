@@ -1,108 +1,86 @@
 from asyncio import Future
-from collections.abc import Coroutine, Mapping, Sequence
-from typing import Literal, Never, TypeAlias, final
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from typing import Never, final
+
+import httpx
+from pydantic import JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.ocr import LiteLLMOcrRequest
-
-_InputSource: TypeAlias = Literal["request", "deployment", "environment"]
+from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
+class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
+class ProcessReservedForForking(RuntimeError): ...
+
+def trace_encode_error(message: str) -> bytes: ...
+@final
+class NativeClickHouseSpendConfig:
+    def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
+
+@final
+class NativeClickHouseSpendStorage:
+    def __new__(cls, config: NativeClickHouseSpendConfig) -> NativeClickHouseSpendStorage: ...
+    def ensure_schema(self) -> Future[None]: ...
+    def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+
+@final
+class NativeDiagnosticProcessor:
+    def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
+    def redact_text(self, text: str) -> str: ...
+    def redact_structured_text(self, key: str | None, text: str) -> str: ...
+    def redact_client_message(self, text: str) -> str: ...
+    def process_diagnostic(
+        self,
+        message: str,
+        exception: str | None,
+        stack: str | None,
+        leaves: Sequence[tuple[str | None, str]],
+        policy: tuple[bool, int, int],
+    ) -> tuple[str, str | None, str | None, list[str], bool]: ...
+    def scrub_access_arguments(self, arguments: Sequence[str]) -> list[str]: ...
 
 def ocr(
-    model: str,
-    document: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    input_sources: Mapping[str, _InputSource] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
+    call: NativeCall,
+) -> OCRResponse: ...
 def aocr(
-    model: str,
-    document: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    input_sources: Mapping[str, _InputSource] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
-
-def _ocr_lifecycle(
-    request: LiteLLMOcrRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: bool,
-) -> OCRResponse | Coroutine[object, object, OCRResponse]: ...
+    call: NativeCall,
+) -> Coroutine[object, object, OCRResponse]: ...
+def ocr_health_check_document(model: str, custom_llm_provider: str | None) -> dict[str, object]: ...
+def ocr_passthrough_response(model: str, endpoint: str, body: bytes) -> dict[str, object] | None: ...
+def embedding(
+    call: NativeCall,
+) -> EmbeddingResponse: ...
+def aembedding(
+    call: NativeCall,
+) -> Coroutine[object, object, EmbeddingResponse]: ...
 def transcription(
-    model: str,
-    audio: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
+    call: NativeCall,
 ) -> dict[str, object]: ...
 def atranscription(
-    model: str,
-    audio: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
+    call: NativeCall,
 ) -> Future[dict[str, object]]: ...
+def completion(
+    call: NativeCall,
+) -> ModelResponse: ...
+def acompletion(
+    call: NativeCall,
+) -> Coroutine[object, object, ModelResponse]: ...
+def responses(
+    call: NativeCall,
+) -> ResponsesAPIResponse: ...
+def aresponses(
+    call: NativeCall,
+) -> Coroutine[object, object, ResponsesAPIResponse]: ...
 def messages(
-    model: str,
-    body: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
+    call: NativeCall,
+) -> AnthropicMessagesResponse | Iterator[bytes]: ...
 def amessages(
-    model: str,
-    body: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
-def chat_completions_decline(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    custom_llm_provider: str | None = None,
-) -> str | None: ...
-def chat_completions(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
-def achat_completions(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
+    call: NativeCall,
+) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
 
 @final
 class ResponsesWebSocketConnection:
@@ -120,29 +98,223 @@ class ResponsesWebSocketConnection:
 
 @final
 class TokenCounter:
-    def __new__(cls, tokenizer_json: str) -> TokenCounter: ...
     @staticmethod
-    def from_cl100k_ranks(rank_file: str) -> TokenCounter: ...
-    @staticmethod
-    def from_o200k_ranks(rank_file: str) -> TokenCounter: ...
+    def from_tokenizer(tokenizer: Tokenizer, fast: bool = False) -> TokenCounter: ...
     def acount_request(self, body: bytes) -> Future[dict[str, object]]: ...
 
+@final
+class Tokenizer:
+    @staticmethod
+    def from_tiktoken(encoding: str) -> Tokenizer: ...
+    @staticmethod
+    def from_json(tokenizer_json: str) -> Tokenizer: ...
+    @staticmethod
+    def from_pretrained(
+        identifier: str,
+        revision: str = "main",
+        token: str | None = None,
+    ) -> Tokenizer: ...
+    def encode(self, text: str) -> list[int]: ...
+    def decode(self, ids: Sequence[int], skip_special_tokens: bool = True) -> str: ...
+    def count(self, text: str, fast: bool = False) -> int: ...
+    # tiktoken encodings
+    def encode_special(self, text: str, allowed: Sequence[str]) -> list[int]: ...
+    def encode_with_unstable(self, text: str, allowed: Sequence[str]) -> tuple[list[int], list[list[int]]]: ...
+    def encode_single_token(self, piece: bytes) -> int: ...
+    def special_tokens(self) -> dict[str, int]: ...
+    def max_token_value(self) -> int: ...
+    def is_special_token(self, token: int) -> bool: ...
+    def token_byte_values(self) -> list[bytes]: ...
+    def decode_bytes(self, ids: Sequence[int]) -> bytes: ...
+    # Hugging Face tokenizers
+    def to_json(self, pretty: bool = False) -> str: ...
+    def token_to_id(self, token: str) -> int | None: ...
+    def id_to_token(self, id: int) -> str | None: ...
+    def get_vocab(self, with_added_tokens: bool = True) -> dict[str, int]: ...
+    def get_vocab_size(self, with_added_tokens: bool = True) -> int: ...
+    def added_tokens_decoder(self) -> list[tuple[int, tuple[str, bool, bool, bool, bool, bool]]]: ...
+    def padding(self) -> dict[str, object] | None: ...
+    def truncation(self) -> dict[str, object] | None: ...
+    def num_special_tokens_to_add(self, is_pair: bool) -> int: ...
+    def encode_special_tokens(self) -> bool: ...
+    def encode_huggingface(
+        self,
+        sequence: str | Sequence[str],
+        pair: str | Sequence[str] | None = None,
+        is_pretokenized: bool = False,
+        add_special_tokens: bool = True,
+        fast: bool = False,
+    ) -> HuggingFaceEncoding: ...
+    def encode_batch_huggingface(
+        self,
+        inputs: Sequence[tuple[str | Sequence[str], str | Sequence[str] | None]],
+        is_pretokenized: bool = False,
+        add_special_tokens: bool = True,
+        fast: bool = False,
+    ) -> list[HuggingFaceEncoding]: ...
+    @property
+    def name(self) -> str: ...
+
+@final
+class HuggingFaceEncoding:
+    def __new__(cls, json: str | None = None) -> HuggingFaceEncoding: ...
+    @staticmethod
+    def merge(encodings: Sequence[HuggingFaceEncoding], growing_offsets: bool = True) -> HuggingFaceEncoding: ...
+    def __len__(self) -> int: ...
+    def __reduce__(self) -> tuple[type[HuggingFaceEncoding], tuple[str]]: ...
+    def word_to_tokens(self, word_index: int, sequence_index: int = 0) -> tuple[int, int] | None: ...
+    def word_to_chars(self, word_index: int, sequence_index: int = 0) -> tuple[int, int] | None: ...
+    def token_to_sequence(self, token_index: int) -> int | None: ...
+    def token_to_chars(self, token_index: int) -> tuple[int, int] | None: ...
+    def token_to_word(self, token_index: int) -> int | None: ...
+    def char_to_token(self, char_pos: int, sequence_index: int = 0) -> int | None: ...
+    def char_to_word(self, char_pos: int, sequence_index: int = 0) -> int | None: ...
+    def set_sequence_id(self, sequence_id: int) -> None: ...
+    def pad(
+        self,
+        length: int,
+        direction: str = "right",
+        pad_id: int = 0,
+        pad_type_id: int = 0,
+        pad_token: str = "[PAD]",
+    ) -> None: ...
+    def truncate(self, max_length: int, stride: int = 0, direction: str = "right") -> None: ...
+    @property
+    def ids(self) -> list[int]: ...
+    @property
+    def tokens(self) -> list[str]: ...
+    @property
+    def offsets(self) -> list[tuple[int, int]]: ...
+    @property
+    def type_ids(self) -> list[int]: ...
+    @property
+    def attention_mask(self) -> list[int]: ...
+    @property
+    def special_tokens_mask(self) -> list[int]: ...
+    @property
+    def word_ids(self) -> list[int | None]: ...
+    @property
+    def sequence_ids(self) -> list[int | None]: ...
+    @property
+    def overflowing(self) -> list[HuggingFaceEncoding]: ...
+    @property
+    def n_sequences(self) -> int: ...
+
 def gil_stats() -> dict[str, int]: ...
+def process_state_started() -> bool: ...
+def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "ForkedAfterNativeRuntimeStarted",
+    "HuggingFaceEncoding",
+    "NativeClickHouseSpendConfig",
+    "NativeClickHouseSpendStorage",
+    "NativeDiagnosticProcessor",
+    "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
-    "_ocr_lifecycle",
-    "achat_completions",
+    "Tokenizer",
+    "acompletion",
+    "aembedding",
     "amessages",
     "aocr",
+    "aresponses",
     "atranscription",
-    "chat_completions",
-    "chat_completions_decline",
+    "completion",
+    "embedding",
     "gil_stats",
     "messages",
     "ocr",
+    "ocr_health_check_document",
+    "ocr_passthrough_response",
+    "process_state_started",
+    "reserve_process_for_forking",
+    "responses",
+    "trace_encode_error",
     "transcription",
 ]
+
+@final
+class _SecretManagerRuntime:
+    @staticmethod
+    def from_config(
+        system: str,
+        environment: Mapping[str, str],
+        settings: Mapping[str, object] | None = None,
+        enterprise_enabled: bool = False,
+    ) -> _SecretManagerRuntime: ...
+    @staticmethod
+    def from_client(client: object) -> _SecretManagerRuntime | None: ...
+    @property
+    def system(self) -> str: ...
+    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
+    def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
+    def async_write_secret(
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: str | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: object = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def async_delete_secret(
+        self,
+        secret_name: str,
+        recovery_window_in_days: int | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def async_rotate_secret(
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        primary_secret_name: str | None = None,
+    ) -> JsonValue: ...
+    def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        primary_secret_name: str | None = None,
+    ) -> Future[JsonValue]: ...
+
+@final
+class NativeCacheHandle:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    @staticmethod
+    def memory(
+        *,
+        ttl: float = 600.0,
+        capacity: int = 200,
+        max_entry_bytes: int = 4194304,
+    ) -> NativeCacheHandle: ...
+    @staticmethod
+    def redis(
+        url: str,
+        *,
+        namespace: str,
+        ttl: float = 600.0,
+        max_entry_bytes: int = 4194304,
+    ) -> NativeCacheHandle: ...
+    def get(self, key: str) -> object: ...
+    def set(self, key: str, value: object, *, ttl: float | None = None) -> None: ...
+    def async_get(self, key: str) -> Future[object]: ...
+    def async_set(self, key: str, value: object, *, ttl: float | None = None) -> Future[None]: ...
+    def async_set_many(self, entries: Sequence[tuple[str, object]], *, ttl: float | None = None) -> Future[None]: ...
+    def flush(self) -> None: ...
+    def async_flush(self) -> Future[None]: ...
+    def ping(self) -> Future[bool]: ...
+    def disconnect(self) -> Future[None]: ...
+    def delete(self, keys: Sequence[str]) -> Future[None]: ...

@@ -60,6 +60,13 @@ class AmazonNovaCanvasConfig:
         return False
 
     @classmethod
+    def is_nova_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_nova_model(model)
+
+    @classmethod
     def transform_request_body(cls, text: str, optional_params: dict) -> AmazonNovaCanvasRequestBase:
         """
         Transform the request body for Amazon Nova Canvas model

@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import tomlkit
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from tomlkit.container import OutOfOrderTableProxy
 from tomlkit.exceptions import TOMLKitError
 from tomlkit.items import InlineTable, Table
@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_bytes,
     stage_private_json,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .agents import CODEX_PROXY_PROVIDER, codex_proxy_provider
 
@@ -37,7 +38,7 @@ class CodexSettingsError(Exception):
     pass
 
 
-class _Receipt(BaseModel):
+class _Receipt(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     version: Literal[1] = 1
@@ -106,7 +107,6 @@ def _with(document: TOMLDocument, path: str, snapshot: str | None) -> TOMLDocume
     if section and section not in document and snapshot is not None:
         contents: Final = tomlkit.parse(tomlkit.dumps(MappingProxyType({key: tomlkit.parse(snapshot).item("value")})))
         return tomlkit.parse(document.as_string() + "\n" + tomlkit.dumps(MappingProxyType({section: contents})))
-    # mutable-ok: TOMLKit editing requires private node mutation to preserve comments and order
     updated: Final = tomlkit.parse(document.as_string())
     parent: Final = _table(_mapping(updated).get(section)) if section else updated
     if parent is None:

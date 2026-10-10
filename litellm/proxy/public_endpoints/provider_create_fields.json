@@ -210,6 +210,94 @@
     "default_model_placeholder": "claude-3-opus"
   },
   {
+    "provider": "AWS_Textract",
+    "provider_display_name": "Amazon Textract",
+    "litellm_provider": "aws_textract",
+    "credential_fields": [
+      {
+        "key": "aws_access_key_id",
+        "label": "AWS Access Key ID",
+        "placeholder": null,
+        "tooltip": "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_secret_access_key",
+        "label": "AWS Secret Access Key",
+        "placeholder": null,
+        "tooltip": "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_token",
+        "label": "AWS Session Token",
+        "placeholder": null,
+        "tooltip": "Temporary credentials session token. You can provide the raw token or the environment variable (e.g. `os.environ/MY_SESSION_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_region_name",
+        "label": "AWS Region Name",
+        "placeholder": "us-east-1",
+        "tooltip": "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_name",
+        "label": "AWS Session Name",
+        "placeholder": "my-session",
+        "tooltip": "Name for the AWS session. You can provide the raw value or the environment variable (e.g. `os.environ/MY_SESSION_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_profile_name",
+        "label": "AWS Profile Name",
+        "placeholder": "default",
+        "tooltip": "AWS profile name to use for authentication. You can provide the raw value or the environment variable (e.g. `os.environ/MY_PROFILE_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_role_name",
+        "label": "AWS Role Name",
+        "placeholder": "MyRole",
+        "tooltip": "AWS IAM role name to assume. You can provide the raw value or the environment variable (e.g. `os.environ/MY_ROLE_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_web_identity_token",
+        "label": "AWS Web Identity Token",
+        "placeholder": null,
+        "tooltip": "Web identity token for OIDC authentication. You can provide the raw token or the environment variable (e.g. `os.environ/MY_WEB_IDENTITY_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "detect-document-text"
+  },
+  {
     "provider": "BedrockMantle",
     "provider_display_name": "Amazon Bedrock Mantle",
     "litellm_provider": "bedrock_mantle",
@@ -587,6 +675,24 @@
     "default_model_placeholder": "azure_ai/command-r-plus"
   },
   {
+    "provider": "Azure_Speech",
+    "provider_display_name": "Azure AI Speech",
+    "litellm_provider": "azure_speech",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Azure AI Speech Subscription Key",
+        "placeholder": null,
+        "tooltip": "The Ocp-Apim-Subscription-Key for your Azure AI Speech resource. The proxy injects it on every /azure_speech/* pass-through request. Region and API base come from AZURE_SPEECH_REGION / AZURE_SPEECH_API_BASE",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "azure_speech/short-audio"
+  },
+  {
     "provider": "AZURE_TEXT",
     "provider_display_name": "Azure Text",
     "litellm_provider": "azure_text",
@@ -910,6 +1016,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "CORTECS",
+    "provider_display_name": "Cortecs",
+    "litellm_provider": "cortecs",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.cortecs.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "cortecs/gpt-6-sol"
+  },
+  {
     "provider": "CUSTOM",
     "provider_display_name": "Custom",
     "litellm_provider": "custom",
@@ -1023,12 +1157,12 @@
   },
   {
     "provider": "Qwen_AI_Platform",
-    "provider_display_name": "Qwen AI Platform",
+    "provider_display_name": "Qianwen AI Platform",
     "litellm_provider": "qwen_ai_platform",
     "credential_fields": [
       {
         "key": "api_key",
-        "label": "Qwen AI Platform API Key",
+        "label": "Qianwen AI Platform API Key",
         "placeholder": null,
         "tooltip": null,
         "required": true,
@@ -1040,7 +1174,7 @@
         "key": "api_base",
         "label": "API Base",
         "placeholder": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "tooltip": "The base URL for Qwen AI Platform. Defaults to https://dashscope.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "tooltip": "The base URL for Qianwen AI Platform. Defaults to https://dashscope.aliyuncs.com/compatible-mode/v1 if not specified.",
         "required": true,
         "field_type": "text",
         "options": null,
@@ -1214,6 +1348,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "EDENAI",
+    "provider_display_name": "Eden AI",
+    "litellm_provider": "edenai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.edenai.run/v3",
+        "tooltip": "Set to https://api.eu.edenai.run/v3 for the EU endpoint",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "edenai/openai/gpt-mini-latest"
   },
   {
     "provider": "ElevenLabs",
@@ -1974,6 +2136,84 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "MICROSOFT_365_COPILOT",
+    "provider_display_name": "Microsoft 365 Copilot",
+    "litellm_provider": "microsoft_365_copilot",
+    "credential_fields": [
+      {
+        "key": "token_exchange_endpoint",
+        "label": "Token Endpoint URL",
+        "placeholder": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token",
+        "tooltip": "Your IdP's OAuth 2.0 token endpoint. For Microsoft 365 Copilot this must be Microsoft Entra.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "token_exchange_profile",
+        "label": "Exchange Grant",
+        "placeholder": null,
+        "tooltip": "jwt_bearer_obo: on-behalf-of with the JWT bearer grant (Microsoft Entra). rfc8693: standard OAuth 2.0 token exchange.",
+        "required": false,
+        "field_type": "select",
+        "options": ["jwt_bearer_obo", "rfc8693"],
+        "default_value": "jwt_bearer_obo"
+      },
+      {
+        "key": "client_id",
+        "label": "Client ID",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "client_secret",
+        "label": "Client Secret",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "token_exchange_scope",
+        "label": "Scope",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://graph.microsoft.com/.default"
+      },
+      {
+        "key": "token_exchange_audience",
+        "label": "Audience",
+        "placeholder": null,
+        "tooltip": "Optional. Sent only with the rfc8693 grant.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "Delegated Access Token",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "microsoft_365_copilot/chat"
+  },
+  {
     "provider": "MistralAI",
     "provider_display_name": "Mistral AI",
     "litellm_provider": "mistral",
@@ -2506,6 +2746,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Nadir",
+    "provider_display_name": "Nadir",
+    "litellm_provider": "nadir",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "nadir/auto"
+  },
+  {
     "provider": "Oracle",
     "provider_display_name": "Oracle Cloud Infrastructure (OCI)",
     "litellm_provider": "oci",
@@ -2704,6 +2962,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "PRISM",
+    "provider_display_name": "Prism",
+    "litellm_provider": "prism",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.prisminference.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "prism/deepseek-v4.1-flash"
+  },
+  {
     "provider": "RECRAFT",
     "provider_display_name": "Recraft",
     "litellm_provider": "recraft",
@@ -2816,6 +3102,62 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "REKA",
+    "provider_display_name": "Reka",
+    "litellm_provider": "reka",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.reka.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "reka/reka-flash"
+  },
+  {
+    "provider": "Sail",
+    "provider_display_name": "Sail",
+    "litellm_provider": "sail",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Sail API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "sail/openai/gpt-oss-120b"
+  },
+  {
     "provider": "Sambanova",
     "provider_display_name": "Sambanova",
     "litellm_provider": "sambanova",
@@ -2926,6 +3268,62 @@
     "default_model_placeholder": "soniox/stt-async-v5"
   },
   {
+    "provider": "StrandsDecider",
+    "provider_display_name": "Strands Decider",
+    "litellm_provider": "strands_decider",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "http://localhost:8000",
+        "tooltip": "URL of your self-hosted Strands Decider server",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "strands_decider/strands-decider-2B-hobson-v19"
+  },
+  {
+    "provider": "Tencent",
+    "provider_display_name": "Tencent",
+    "litellm_provider": "tencent",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://tokenhub-intl.tencentcloudmaas.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "tencent/deepseek-v4-pro"
+  },
+  {
     "provider": "TEXT_COMPLETION_CODESTRAL",
     "provider_display_name": "Text-Completion-Codestral",
     "litellm_provider": "text-completion-codestral",
@@ -3026,6 +3424,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "TypeSafe",
+    "provider_display_name": "TypeSafe",
+    "litellm_provider": "typesafe",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.typesafe.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "typesafe/jev-latest"
   },
   {
     "provider": "V0",
@@ -3235,7 +3661,7 @@
   },
   {
     "provider": "Voyage",
-    "provider_display_name": "Voyage AI",
+    "provider_display_name": "VoyageAI by MongoDB",
     "litellm_provider": "voyage",
     "credential_fields": [
       {

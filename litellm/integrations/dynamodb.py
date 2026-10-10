@@ -3,10 +3,20 @@
 
 import os
 import traceback
-from typing import Any, Final
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from typing import Final, Protocol
 
 import litellm
 from litellm._uuid import uuid
+
+
+class _DynamoTable(Protocol):
+    def put_item(self, *, Item: Mapping[str, object]) -> object: ...
+
+
+class _DynamoResource(Protocol):
+    def Table(self, name: str) -> _DynamoTable: ...
 
 
 class DyanmoDBLogger:
@@ -16,15 +26,24 @@ class DyanmoDBLogger:
         # Instance variables
         import boto3
 
-        self.dynamodb: Any = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
+        self.dynamodb: Final[_DynamoResource] = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
         if litellm.dynamodb_table_name is None:
             raise ValueError(
                 "LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`"
             )
         self.table_name = litellm.dynamodb_table_name
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def async_log_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+
+    _async_log_event = async_log_event
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
@@ -41,7 +60,7 @@ class DyanmoDBLogger:
             id: Final = response_obj.get("id", str(uuid.uuid4()))
 
             # Build the initial payload
-            payload: Final = {
+            payload: Final[dict[str, object]] = {
                 "id": id,
                 "call_type": call_type,
                 "startTime": start_time,

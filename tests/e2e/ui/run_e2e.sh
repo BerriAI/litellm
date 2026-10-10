@@ -144,7 +144,7 @@ else
 fi
 
 # --- Credentials ---
-export LITELLM_MASTER_KEY="sk-1234"
+export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-$(openssl rand -hex 16)}"
 export MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}/v1"
 export E2E_MOCK_PRESIDIO_URL="http://127.0.0.1:${MOCK_PRESIDIO_PORT}"
 export DISABLE_SCHEMA_UPDATE="true"

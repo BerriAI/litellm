@@ -4,7 +4,8 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
@@ -22,18 +23,15 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
-from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
-from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
     MessageBlockDelta,
     MessageStartBlock,
-    UsageDelta,
 )
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -54,7 +52,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
-    _generate_id,
+    generate_id,
 )
 
 from ...base import BaseLLM
@@ -375,24 +373,22 @@ class AnthropicChatCompletion(BaseLLM):
             """Filter beta headers and emit pre_call, returning `(headers, data)`.
 
             The pair stays mutable because the streaming path rewrites it in
-            place (`data["stream"] = True`) before sending. A Rust attempt that
-            declined already emitted pre_call for this request, so skip it there.
+            place (`data["stream"] = True`) before sending.
             """
             request_headers, data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
             )
-            if not serves_via_rust:
-                logging_obj.pre_call(
-                    input=messages,
-                    api_key=api_key,
-                    additional_args={
-                        "complete_input_dict": data,
-                        "api_base": api_base,
-                        "headers": request_headers,
-                    },
-                )
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": api_base,
+                    "headers": request_headers,
+                },
+            )
             print_verbose(f"_is_function_call: {_is_function_call}")
             return request_headers, data
 
@@ -456,68 +452,6 @@ class AnthropicChatCompletion(BaseLLM):
                 timeout=timeout,
             )
 
-        # The Rust core owns the whole call for the subset it accepts, so ask
-        # before transforming: whichever path runs emits pre_call exactly once.
-        # `get_config` merges the class-level defaults (Anthropic's required
-        # `max_tokens` among them) that `transform_request` would have applied.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
-            **AnthropicConfig.get_config(model=model),
-            **optional_params,
-        }
-        serves_via_rust: Final = rust_chat_completions_accepts(
-            model=model,
-            messages=messages,
-            optional_params=rust_optional_params,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            stream=stream,
-        )
-        if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
-                    "model": model,
-                    "messages": messages,
-                    **rust_optional_params,
-                },
-                "api_base": api_base,
-                "headers": headers,
-            }
-            logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
-                messages=messages,
-                api_key=api_key,
-                additional_args=rust_logging_args,
-            )
-            if acompletion is True:
-                return rust_chat_completions_bridge.achat_completions_or_fallback(
-                    model=model,
-                    messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=headers,
-                    timeout=timeout,
-                    on_response=log_rust_post_call,
-                    python_fallback=acompletion_dispatch,
-                )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-                on_response=log_rust_post_call,
-            )
-            if rust_response is not None:
-                return rust_response
-
         if acompletion is True:
             return acompletion_dispatch()
         else:
@@ -562,7 +496,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    client = get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -623,6 +557,7 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -631,7 +566,7 @@ class ModelResponseIterator:
         # common case (no '/' or other invalid chars in any tool name).
         self.tool_name_reverse_map: dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
-        self.response_id = _generate_id()
+        self.response_id = generate_id()
         self.served_model: str | None = None
 
         # Track if we're currently streaming a response_format tool
@@ -661,7 +596,7 @@ class ModelResponseIterator:
         self.reasoning_content_chunks: list[str] = []
 
         # Track server tool use inputs and results for code_interpreter_results
-        self._server_tool_inputs: dict[str, Any] = {}
+        self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
         self._container_id: str | None = None
@@ -697,10 +632,12 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(self, anthropic_usage_chunk: dict | UsageDelta) -> Usage:
+    def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
+        # message_delta usage is cumulative but may omit fields reported at message_start.
+        self._cumulative_usage = MappingProxyType({**self._cumulative_usage, **anthropic_usage_chunk})
         reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
         usage: Final = AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk),
+            usage_object=self._cumulative_usage,
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
@@ -765,17 +702,7 @@ class ModelResponseIterator:
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking="".join(
-                            cast(str, block["delta"].get("thinking"))
-                            for block in self.content_blocks
-                            if isinstance(block["delta"].get("thinking"), str)
-                        ),
-                        signature=signature,
-                    )
-                ]
+                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
@@ -826,7 +753,7 @@ class ModelResponseIterator:
         return content_block_start
 
     def _web_search_call_snapshot(self) -> dict[str, object]:
-        return dict(self._web_search_calls)  # mutable-ok: stream payload snapshot
+        return dict(self._web_search_calls)
 
     def _complete_web_search_call(self, result: dict[str, object]) -> None:
         tool_use_id: Final = result.get("tool_use_id")
@@ -834,7 +761,7 @@ class ModelResponseIterator:
             return
         self._web_search_calls[tool_use_id] = build_web_search_call(
             tool_id=tool_use_id,
-            tool_input=self._server_tool_inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+            tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
         )
 
@@ -943,7 +870,7 @@ class ModelResponseIterator:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
-                                {"content": []},  # mutable-ok: no provider result yet
+                                {"content": []},
                                 status="in_progress",
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
@@ -1147,7 +1074,7 @@ class ModelResponseIterator:
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message: Final = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
+            message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
             if message is not None:
                 text = message.content or ""
                 tool_use = None
