@@ -35,6 +35,7 @@ from collections.abc import (
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
 
@@ -1410,6 +1411,7 @@ class Router:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
+        self._unregister_router_selectors(self._all_strategy_selectors())
 
         # Remove ForwardClientSideHeadersByModelGroup if it exists
         if self.optional_callbacks is not None:
@@ -1529,6 +1531,13 @@ class Router:
                 litellm.input_callback = [selector]
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(selector)
+
+    def _all_strategy_selectors(self) -> tuple[RouterStrategySelector | None, ...]:
+        default_selectors: Final = (
+            getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()
+        )
+        group_selectors: Final = chain.from_iterable(selectors.values() for selectors in self._group_selectors.values())
+        return (*default_selectors, *self._override_selectors.values(), *group_selectors)
 
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """

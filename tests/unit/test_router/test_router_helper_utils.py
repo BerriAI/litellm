@@ -1,5 +1,8 @@
+import asyncio
+import gc
 import json
 import os
+import weakref
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,6 +13,7 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
@@ -1523,6 +1527,71 @@ def test_discard(model_list):
     assert len(litellm._async_failure_callback) == 0
     assert len(litellm.input_callback) == 0
     assert len(litellm.service_callback) == 0
+
+
+def _callback_ids(list_name: str) -> list[int]:
+    return [id(callback) for callback in getattr(litellm, list_name)]
+
+
+@pytest.mark.parametrize(
+    "routing_strategy, selector_attr",
+    [
+        ("least-busy", "leastbusy_logger"),
+        ("usage-based-routing", "lowesttpm_logger"),
+        ("usage-based-routing-v2", "lowesttpm_logger_v2"),
+        ("latency-based-routing", "lowestlatency_logger"),
+        ("cost-based-routing", "lowestcost_logger"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_discard_releases_strategy_selector_across_router_lifecycles(routing_strategy, selector_attr):
+    def retire() -> weakref.ReferenceType[object]:
+        router: Final = Router(model_list=[], routing_strategy=routing_strategy)
+        selector: Final = getattr(router, selector_attr)
+        assert any(callback is selector for callback in litellm.callbacks)
+        router.discard()
+        return weakref.ref(selector)
+
+    selector_refs: Final = tuple(retire() for _ in range(3))
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert litellm.callbacks == []
+    assert litellm.input_callback == []
+    assert all(selector_ref() is None for selector_ref in selector_refs)
+
+
+def test_discard_keeps_callbacks_owned_by_other_live_routers():
+    survivor: Final = Router(model_list=[], routing_strategy="latency-based-routing")
+    unrelated: Final = CustomLogger()
+    litellm.logging_callback_manager.add_litellm_callback(unrelated)
+    before_ids: Final = {list_name: _callback_ids(list_name) for list_name in ("callbacks", "input_callback")}
+    retired: Final = Router(model_list=[], routing_strategy="least-busy")
+    assert any(callback is retired.leastbusy_logger for callback in litellm.callbacks)
+
+    retired.discard()
+
+    assert {list_name: _callback_ids(list_name) for list_name in before_ids} == before_ids
+    assert any(callback is survivor.lowestlatency_logger for callback in litellm.callbacks)
+    survivor.discard()
+
+
+def test_discard_drops_routing_group_selectors():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "grouped-model", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+        ],
+        routing_groups=[
+            {"group_name": "fast", "models": ["grouped-model"], "routing_strategy": "latency-based-routing"}
+        ],
+    )
+    _, group_selector = router._get_routing_context("grouped-model")
+    assert any(callback is group_selector for callback in litellm.callbacks)
+
+    router.discard()
+
+    assert litellm.callbacks == []
+    assert litellm.input_callback == []
 
 
 def test_initialize_assistants_endpoint(model_list):
