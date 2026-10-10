@@ -3265,6 +3265,220 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         self.assertEqual(parsed[0]["parts"][0]["content"], "Hello back!")
         self.assertEqual(parsed[0]["finish_reason"], "stop")
 
+    def test_output_messages_tool_call_response_emits_tool_call_part(self):
+        """
+        A ModelResponse whose message has content None and one tool call should
+        produce a tool_call part instead of an empty parts array.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "weather?"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = ModelResponse(
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "Paris"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        )
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        output_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list if call[0][0] == "gen_ai.output.messages"
+        ]
+        self.assertEqual(len(output_messages_calls), 1)
+
+        parsed = json.loads(output_messages_calls[0][0][1])
+        self.assertEqual(parsed[0]["role"], "assistant")
+        self.assertEqual(parsed[0]["finish_reason"], "tool_calls")
+        self.assertEqual(
+            parsed[0]["parts"],
+            [
+                {
+                    "type": "tool_call",
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            ],
+        )
+
+    def test_output_messages_text_and_parallel_tool_calls_part_order(self):
+        """
+        When the assistant message has both text content and parallel tool
+        calls, the text part comes first, then one tool_call part per call.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "weather in both cities?"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = ModelResponse(
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Checking.",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "Paris"}',
+                                },
+                            },
+                            {
+                                "id": "call_2",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "Berlin"}',
+                                },
+                            },
+                        ],
+                    },
+                }
+            ]
+        )
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        output_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list if call[0][0] == "gen_ai.output.messages"
+        ]
+        self.assertEqual(len(output_messages_calls), 1)
+
+        parsed = json.loads(output_messages_calls[0][0][1])
+        self.assertEqual(
+            parsed[0]["parts"],
+            [
+                {"type": "text", "content": "Checking."},
+                {
+                    "type": "tool_call",
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                },
+                {
+                    "type": "tool_call",
+                    "id": "call_2",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Berlin"}',
+                },
+            ],
+        )
+
+    def test_input_messages_tool_call_message_emits_tool_call_part(self):
+        """
+        A dict assistant message with tool_calls and content None in
+        kwargs["messages"] should produce a tool_call part in
+        gen_ai.input.messages.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Paris"}',
+                            },
+                        }
+                    ],
+                },
+            ],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Sunny."},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        input_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list if call[0][0] == "gen_ai.input.messages"
+        ]
+        self.assertEqual(len(input_messages_calls), 1)
+
+        parsed = json.loads(input_messages_calls[0][0][1])
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[1]["role"], "assistant")
+        self.assertEqual(
+            parsed[1]["parts"],
+            [
+                {
+                    "type": "tool_call",
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            ],
+        )
+
     def test_usage_tokens_use_new_naming_convention(self):
         """
         Test that token usage uses the OTEL 1.38 naming convention:

@@ -2782,7 +2782,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             ]
 
         transformed: Final = []
-        for msg in messages:
+        for raw_msg in messages:
+            msg: Final = self._to_dict(raw_msg)
+            if msg is None:
+                continue
             role = msg.get("role", "user")
             content = msg.get("content", "")
             parts = []
@@ -2797,16 +2800,35 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     else:
                         parts.append({"type": "text", "content": str(part)})
 
+            tool_calls: Final = msg.get("tool_calls") or []
+            parts.extend(
+                tool_call_part
+                for tool_call_part in (self._tool_call_to_otel_part(tool_call) for tool_call in tool_calls)
+                if tool_call_part is not None
+            )
+
             transformed_msg = {"role": role, "parts": parts}
-            if "id" in msg:
+            if msg.get("id") is not None:
                 transformed_msg["id"] = msg["id"]
-            if "tool_calls" in msg:
+            if msg.get("tool_calls") is not None:
                 transformed_msg["tool_calls"] = msg["tool_calls"]
-            if "tool_call_id" in msg:
+            if msg.get("tool_call_id") is not None:
                 transformed_msg["tool_call_id"] = msg["tool_call_id"]
             transformed.append(transformed_msg)
 
         return transformed
+
+    def _tool_call_to_otel_part(self, tool_call) -> dict | None:
+        tool_call_dict: Final = self._to_dict(tool_call)
+        if tool_call_dict is None:
+            return None
+        function: Final = self._to_dict(tool_call_dict.get("function")) or {}
+        return {
+            "type": "tool_call",
+            **({"id": tool_call_dict["id"]} if tool_call_dict.get("id") else {}),
+            "name": function.get("name", ""),
+            "arguments": function.get("arguments", ""),
+        }
 
     def _transform_choices_to_otel_semantic_conventions(self, choices: list[dict]) -> list[dict]:
         """
