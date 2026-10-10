@@ -93,10 +93,12 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             - return redis cache request
         """
         try:  # never block execution
+            if litellm.cache is None:
+                return None
             cache_key: str | None = None
             if "cache_key" in kwargs:
-                cache_key = kwargs["cache_key"]
-            elif litellm.cache is not None:
+                cache_key = litellm.cache._prepare_explicit_cache_key(kwargs["cache_key"], **kwargs)
+            else:
                 cache_key = litellm.cache.get_cache_key(
                     *args, **kwargs
                 )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
