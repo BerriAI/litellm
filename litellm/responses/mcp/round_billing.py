@@ -43,11 +43,27 @@ def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage |
     return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
 
 
-def summed_cost_breakdown(first: CostBreakdown | None, final: CostBreakdown | None) -> CostBreakdown | None:
-    """None when either round was priced without a breakdown, since a partial one would disagree with the billed cost."""
-    if first is None or final is None or first is final:
+def _served_from_cache(response: ResponsesAPIResponse) -> bool:
+    return response.hidden_params.get("cache_hit") is True
+
+
+def summed_cost_breakdown(
+    first: ResponsesAPIResponse,
+    first_breakdown: CostBreakdown | None,
+    final: ResponsesAPIResponse,
+    final_breakdown: CostBreakdown | None,
+) -> CostBreakdown | None:
+    """The breakdown of the charged rounds, or None when one of them was priced without a breakdown or the final round
+    kept the first round's, since a partial one would disagree with the billed cost."""
+    if first_breakdown is final_breakdown:
         return None
-    return _COST_BREAKDOWN.validate_python(_summed_mapping(first, final))
+    if _served_from_cache(first):
+        return None if _served_from_cache(final) else final_breakdown
+    if _served_from_cache(final):
+        return first_breakdown
+    if first_breakdown is None or final_breakdown is None:
+        return None
+    return _COST_BREAKDOWN.validate_python(_summed_mapping(first_breakdown, final_breakdown))
 
 
 def billed_for_every_round(first: ResponsesAPIResponse, final: ResponsesAPIResponse) -> ResponsesAPIResponse:

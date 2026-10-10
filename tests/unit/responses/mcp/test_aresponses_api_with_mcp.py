@@ -1388,18 +1388,25 @@ async def _settle(condition: Callable[[], bool]) -> None:
     await asyncio.sleep(0.2)
 
 
-async def _auto_execute_echo(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
-) -> ResponsesAPIResponse:
+_ECHO_MCP_TOOL: Final = MappingProxyType(
+    {"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}
+)
+
+
+def _serve_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, bodies: Sequence[Mapping[str, object]]
+) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    respx_mock.post(url__regex=r"https://mcp-rounds\.example\.com/.*responses").mock(
-        side_effect=[
-            httpx.Response(200, content=json.dumps(_ROUND_ONE_BODY, default=dict)),
-            httpx.Response(200, content=json.dumps(_ROUND_TWO_BODY, default=dict)),
-        ]
+    return respx_mock.post(url__regex=r"https://mcp-rounds\.example\.com/.*responses").mock(
+        side_effect=[httpx.Response(200, content=json.dumps(body, default=dict)) for body in bodies]
     )
+
+
+async def _auto_execute(
+    logging_obj: Logging, mcp_tool: Mapping[str, object], tool_result: str
+) -> ResponsesAPIResponse:
     echo_tool: Final = MCPTool.model_validate(
         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
         by_name=False,
@@ -1413,19 +1420,26 @@ async def _auto_execute_echo(
         patch.object(
             LiteLLM_Proxy_MCP_Handler,
             "execute_tool_calls",
-            AsyncMock(return_value=[{"tool_call_id": "call_echo", "result": "PING", "name": "echo"}]),
+            AsyncMock(return_value=[{"tool_call_id": "call_echo", "result": tool_result, "name": "echo"}]),
         ),
     ):
         response: Final = await litellm.aresponses(
             model="openai/gpt-5.6",
             input="Call echo with PING",
-            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            tools=[dict(mcp_tool)],
             api_key="sk-mcp-rounds",
             api_base="https://mcp-rounds.example.com/v1",
             litellm_logging_obj=logging_obj,
         )
     assert isinstance(response, ResponsesAPIResponse)
     return response
+
+
+async def _auto_execute_echo(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> ResponsesAPIResponse:
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    return await _auto_execute(logging_obj, _ECHO_MCP_TOOL, "PING")
 
 
 def _rounds_logging_obj(recorder: _RoundRecorder, call_id: str) -> Logging:
@@ -1513,3 +1527,41 @@ async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(
         71 + 149,
         19 + 5,
     )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_nothing_for_rounds_served_from_the_response_cache(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    provider: Final = _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY, _ROUND_TWO_BODY))
+    warm: Final = _RoundRecorder()
+    await _auto_execute(_rounds_logging_obj(warm, "mcp-cache-warm"), _ECHO_MCP_TOOL, "PING")
+    await _settle(lambda: len(warm.logged) > 0)
+
+    first_cached: Final = _RoundRecorder()
+    first_cached_response: Final = await _auto_execute(
+        _rounds_logging_obj(first_cached, "mcp-cache-first-round"),
+        {**_ECHO_MCP_TOOL, "server_description": "echo server"},
+        "PONG",
+    )
+    all_cached: Final = _RoundRecorder()
+    all_cached_response: Final = await _auto_execute(
+        _rounds_logging_obj(all_cached, "mcp-cache-every-round"),
+        {**_ECHO_MCP_TOOL, "server_description": "echo server, same tools"},
+        "PONG",
+    )
+    await _settle(lambda: len(first_cached.logged) > 0 and len(all_cached.logged) > 0)
+
+    assert provider.call_count == 3
+    for logged, client in ((first_cached.logged, first_cached_response), (all_cached.logged, all_cached_response)):
+        assert len(logged) == 1
+        assert logged[0]["id"] == client.id
+        assert _output_types(logged[0]["response"]["output"]) == _output_types(client.output)
+        assert "function_call" not in _output_types(client.output)
+        assert (logged[0]["prompt_tokens"], logged[0]["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert first_cached.logged[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
+    assert first_cached.logged[0]["cost_breakdown"]["total_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
+    assert first_cached_response.hidden_params["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
+    assert all_cached.logged[0]["response_cost"] == 0.0
+    assert all_cached_response.hidden_params["response_cost"] == 0.0

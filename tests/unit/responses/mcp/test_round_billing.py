@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -8,7 +9,7 @@ from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown
 
 
-def _round(response_id: str, response_cost: object) -> ResponsesAPIResponse:
+def _round(response_id: str, response_cost: object, served_from_cache: bool = False) -> ResponsesAPIResponse:
     response: Final = ResponsesAPIResponse.model_validate(
         MappingProxyType(
             {
@@ -23,6 +24,8 @@ def _round(response_id: str, response_cost: object) -> ResponsesAPIResponse:
         )
     )
     response.hidden_params["response_cost"] = response_cost
+    if served_from_cache:
+        response.hidden_params["cache_hit"] = True
     return response
 
 
@@ -46,7 +49,9 @@ def test_summed_cost_breakdown_adds_each_charge_and_keeps_the_final_round_rates(
         "service_tier": "default",
     }
 
-    summed: Final = summed_cost_breakdown(first, final)
+    summed: Final = summed_cost_breakdown(
+        first=_round("resp_first", 0.003), first_breakdown=first, final=_round("resp_final", 0.009), final_breakdown=final
+    )
 
     assert summed is not None
     assert summed["input_cost"] == pytest.approx(0.005)
@@ -59,9 +64,20 @@ def test_summed_cost_breakdown_adds_each_charge_and_keeps_the_final_round_rates(
 
 def test_summed_cost_breakdown_is_none_when_the_final_round_was_not_repriced():
     breakdown: Final[CostBreakdown] = {"input_cost": 0.001, "output_cost": 0.002, "total_cost": 0.003}
+    first: Final = _round("resp_first", 0.003)
+    final: Final = _round("resp_final", 0.003)
 
-    assert summed_cost_breakdown(breakdown, breakdown) is None
-    assert summed_cost_breakdown(None, breakdown) is None
+    assert summed_cost_breakdown(first=first, first_breakdown=breakdown, final=final, final_breakdown=breakdown) is None
+    assert summed_cost_breakdown(first=first, first_breakdown=None, final=final, final_breakdown=breakdown) is None
+    assert (
+        summed_cost_breakdown(
+            first=_round("resp_first", 0.003, served_from_cache=True),
+            first_breakdown=breakdown,
+            final=final,
+            final_breakdown=breakdown,
+        )
+        is None
+    )
 
 
 def test_merged_round_usage_sums_token_details_and_keeps_provider_flags():
@@ -111,3 +127,31 @@ def test_billed_for_every_round_does_not_rebill_the_final_round_object():
 
     assert billed.hidden_params["response_cost"] == pytest.approx(0.005)
     assert final.hidden_params["response_cost"] == 0.004
+
+
+@pytest.mark.parametrize(
+    ("first_cached", "final_cached", "kept_breakdown"),
+    [
+        (True, False, "final"),
+        (False, True, "first"),
+        (True, True, None),
+    ],
+)
+def test_a_round_served_from_the_response_cache_drops_out_of_the_breakdown(
+    first_cached: bool, final_cached: bool, kept_breakdown: str | None
+):
+    breakdowns: Final[Mapping[str, CostBreakdown]] = MappingProxyType(
+        {
+            "first": {"input_cost": 0.001, "output_cost": 0.002, "total_cost": 0.003},
+            "final": {"input_cost": 0.004, "output_cost": 0.005, "total_cost": 0.009},
+        }
+    )
+
+    breakdown: Final = summed_cost_breakdown(
+        first=_round("resp_first", 0.003, served_from_cache=first_cached),
+        first_breakdown=breakdowns["first"],
+        final=_round("resp_final", 0.009, served_from_cache=final_cached),
+        final_breakdown=breakdowns["final"],
+    )
+
+    assert breakdown == (None if kept_breakdown is None else breakdowns[kept_breakdown])

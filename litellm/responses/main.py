@@ -432,7 +432,10 @@ async def aresponses_api_with_mcp(
                     )
                     if isinstance(logging_obj, LiteLLMLoggingObj):
                         logging_obj.cost_breakdown = summed_cost_breakdown(
-                            first_round_breakdown, logging_obj.cost_breakdown
+                            first=response,
+                            first_breakdown=first_round_breakdown,
+                            final=final_response,
+                            final_breakdown=logging_obj.cost_breakdown,
                         )
                     return billed_for_every_round(
                         first=response,
