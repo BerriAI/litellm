@@ -346,3 +346,73 @@ def test_expired_pubsub_client_closes_connections_after_eviction() -> None:
 
     with patch("litellm.in_memory_llm_clients_cache", clients):
         asyncio.run(exercise())
+
+
+def test_init_async_client_returns_one_cluster_client_per_event_loop() -> None:
+    clients = LLMClientCache()
+    with (
+        patch("litellm.in_memory_llm_clients_cache", clients),
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch("redis.Redis", return_value=MagicMock()),
+    ):
+        cache = RedisClusterCache(startup_nodes=[{"host": "127.0.0.1", "port": 7000}])
+        loop_a = asyncio.new_event_loop()
+        loop_b = asyncio.new_event_loop()
+
+        async def get_client() -> RedisCluster:
+            return cache.init_async_client()
+
+        async def get_client_pair() -> tuple[RedisCluster, RedisCluster]:
+            return cache.init_async_client(), cache.init_async_client()
+
+        try:
+            client_a, client_a_again = loop_a.run_until_complete(get_client_pair())
+            client_b, client_b_again = loop_b.run_until_complete(get_client_pair())
+
+            assert isinstance(client_a, RedisCluster)
+            assert isinstance(client_b, RedisCluster)
+            assert client_a is client_a_again
+            assert client_b is client_b_again
+            assert client_a is not client_b
+
+            loop_a.close()
+            assert loop_b.run_until_complete(get_client()) is client_b
+        finally:
+            loop_a.close()
+            loop_b.close()
+
+
+@pytest.mark.parametrize("cluster", [True, False])
+def test_evicted_async_client_is_closed_only_for_cluster(cluster: bool) -> None:
+    clients = LLMClientCache(evicted_client_closer=EvictedClientCloser(grace_seconds=0))
+    with (
+        patch("litellm.in_memory_llm_clients_cache", clients),
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch("redis.Redis", return_value=MagicMock()),
+    ):
+        cache = (
+            RedisClusterCache(startup_nodes=[{"host": "127.0.0.1", "port": 7000}])
+            if cluster
+            else RedisCache(host="standalone-evicted-client", port=6379)
+        )
+
+        async def exercise() -> None:
+            client = cache.init_async_client()
+            closed = asyncio.Event()
+            client.aclose = AsyncMock(side_effect=closed.set)
+            cache_key = clients.update_cache_key_with_event_loop(cache._get_async_client_cache_key())
+            clients.ttl_dict[cache_key] = 0
+
+            replacement = cache.init_async_client()
+
+            assert replacement is not client
+            if cluster:
+                await asyncio.wait_for(closed.wait(), timeout=1)
+                client.aclose.assert_awaited_once()
+            else:
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                client.aclose.assert_not_awaited()
+
+        asyncio.run(exercise())
