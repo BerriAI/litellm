@@ -4,12 +4,13 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import click
 import pytest
 import requests
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
@@ -28,6 +29,7 @@ from litellm.proxy.client.cli.commands.agents import (
     run_agent,
     verify_proxy_key,
 )
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
@@ -1665,13 +1667,20 @@ class TestAgentCommands:
 
 
 class TestGatewayPrompt:
-    def setup_method(self):
-        self.runner = CliRunner()
+    def setup_method(self) -> None:
+        self.runner: CliRunner = CliRunner()
 
-    def _launch_claude(self, args, *, interactive, input=None, env=None):
+    def _launch_claude(
+        self,
+        args: list[str],
+        *,
+        interactive: bool,
+        input: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[Result, dict[str, str | None]]:
         from litellm.proxy.client.cli.main import cli
 
-        captured = {}
+        captured: Final[dict[str, str | None]] = {}
         with (
             patch(f"{AGENTS_MODULE}._is_interactive", return_value=interactive),
             patch(
@@ -1681,8 +1690,12 @@ class TestGatewayPrompt:
                 ),
             ),
         ):
-            result = self.runner.invoke(
-                cli, [*args, "claude"], input=input, env={"LITELLM_PROXY_URL": None, **(env or {})}
+            result: Final = self.runner.invoke(
+                cli,
+                [*args, "claude"],
+                input=input,
+                env={"LITELLM_PROXY_URL": None, "LITELLM_PROXY_API_KEY": None, **(env or {})},
+                obj={"secret_vault": FakeSecretVault()},
             )
         return result, captured
 
@@ -1717,13 +1730,33 @@ class TestGatewayPrompt:
         assert "must be a full http:// or https:// URL" in result.output
         assert launched["base_url"] == "https://gateway.example.com"
 
-    def test_stored_login_is_looked_up_for_the_entered_gateway(self):
-        with patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-stored") as mock_get:
-            result, launched = self._launch_claude([], interactive=True, input="https://gateway.example.com\n")
+    def test_stored_login_for_the_entered_gateway_is_used(self) -> None:
+        from litellm.proxy.client.cli.commands.config import get_config_file_path
+
+        litellm_home: Final = Path(get_config_file_path()).parent
+        litellm_home.mkdir(parents=True, exist_ok=True)
+        (litellm_home / "token.json").write_text(
+            json.dumps({"base_url": "https://gateway.example.com", "key": "sk-stored"})
+        )
+
+        result, launched = self._launch_claude([], interactive=True, input="https://gateway.example.com\n")
 
         assert result.exit_code == 0, result.output
-        assert launched["api_key"] == "sk-stored"
-        assert mock_get.call_args.kwargs["expected_base_url"] == "https://gateway.example.com"
+        assert launched == {"base_url": "https://gateway.example.com", "api_key": "sk-stored"}
+        assert "starting login" not in result.output
+
+    def test_unwritable_config_dir_still_launches_with_the_entered_gateway(self) -> None:
+        from litellm.proxy.client.cli.commands.config import get_config_file_path
+
+        Path(get_config_file_path()).parent.write_text("not a directory")
+
+        result, launched = self._launch_claude(
+            ["--api-key", "sk-key"], interactive=True, input="https://gateway.example.com\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "using it for this run only" in result.output
+        assert launched == {"base_url": "https://gateway.example.com", "api_key": "sk-key"}
 
     @pytest.mark.parametrize(
         "args, env",

@@ -765,6 +765,14 @@ def resolve_api_key(ctx: click.Context) -> str:
 _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
+def _save_base_url(base_url: str) -> OSError | None:
+    try:
+        save_config({**load_config(), "base_url": base_url})
+    except OSError as error:
+        return error
+    return None
+
+
 def with_prompted_gateway(ctx: click.Context, ctx_obj: CliContextObj) -> tuple[click.Context, CliContextObj]:
     """Ask a terminal user for the gateway URL when none came from a flag, env var, or `lite config`."""
     if ctx_obj.get("base_url_explicit", True) or not _is_interactive():
@@ -772,8 +780,13 @@ def with_prompted_gateway(ctx: click.Context, ctx_obj: CliContextObj) -> tuple[c
     base_url: Final[str] = click.prompt(
         "LiteLLM gateway URL", default=ctx_obj["base_url"], value_proc=normalize_base_url
     )
-    save_config({**load_config(), "base_url": base_url})
-    click.echo(f"Saved base_url to {get_config_file_path()}, change it with `lite config set base_url <url>`")
+    save_error: Final = _save_base_url(base_url)
+    click.echo(
+        f"Saved base_url to {get_config_file_path()}, change it with `lite config set base_url <url>`"
+        if save_error is None
+        else f"Could not save base_url to {get_config_file_path()} ({save_error}), using it for this run only",
+        err=save_error is not None,
+    )
     api_key: Final = (
         get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
         if ctx_obj.get("api_key_from_token_file")
