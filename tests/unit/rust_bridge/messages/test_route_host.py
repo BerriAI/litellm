@@ -108,8 +108,7 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
     hidden: Final = route_host.stream_hidden_params(
-        (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41")),
-        (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41")),
+        (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41"))
     )
 
     additional: Final = hidden["additional_headers"]

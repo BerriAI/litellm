@@ -72,7 +72,7 @@ async fn handle(
         ),
         (),
         headers.clone(),
-        litellm_host_http::Unary::new(crate::response::json),
+        litellm_host_http::Unary::new(litellm_host_http::provider_json),
         None,
     )
     .await?;

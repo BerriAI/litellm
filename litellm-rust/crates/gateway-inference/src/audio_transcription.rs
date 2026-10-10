@@ -18,7 +18,7 @@ pub(crate) async fn create(
 ) -> Result<impl IntoResponse, Error> {
     handle(&gateway, &identity, body)
         .await
-        .map(crate::response::json)
+        .map(litellm_host_http::provider_json)
 }
 
 async fn handle(
@@ -28,7 +28,7 @@ async fn handle(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
+) -> Result<http::Response<Value>, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let audio = match upload {

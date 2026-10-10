@@ -92,18 +92,10 @@ fn map_media_error(error: MediaError) -> Error {
         MediaError::TooManyRedirects => Error::TooManyRedirects,
         MediaError::MissingRedirectLocation => Error::MissingRedirectLocation,
         MediaError::InvalidRedirect => Error::InvalidRedirect,
-        MediaError::Http(status) => TransportError::Http {
-            status,
-            body: "OCR document download failed".into(),
-            headers: Vec::new(),
+        MediaError::Http(status) => Error::DocumentDownload { status },
+        MediaError::Timeout => {
+            TransportError::Timeout("OCR document download timed out".into()).into()
         }
-        .into(),
-        MediaError::Timeout => TransportError::Http {
-            status: 408,
-            body: "OCR document download timed out".into(),
-            headers: Vec::new(),
-        }
-        .into(),
         MediaError::Transport(error) => error.into(),
     }
 }

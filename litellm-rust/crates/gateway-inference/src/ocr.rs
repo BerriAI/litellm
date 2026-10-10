@@ -21,7 +21,7 @@ pub(crate) async fn create(
 ) -> Result<impl IntoResponse, Error> {
     handle(&gateway, &identity, &headers, body)
         .await
-        .map(crate::response::json)
+        .map(litellm_host_http::provider_json)
 }
 
 async fn handle(
@@ -32,7 +32,7 @@ async fn handle(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
+) -> Result<http::Response<Value>, Error> {
     let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())

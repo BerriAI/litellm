@@ -291,7 +291,10 @@ async fn response_mode_follows_the_intercepted_request(
                 }
                 MessagesCallResponse::Complete(message) => {
                     assert_eq!(expected_stream, Some(false));
-                    assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
+                    assert_eq!(
+                        *message.into_body(),
+                        serde_json::from_value(message_body()).unwrap()
+                    );
                 }
             }
             Ok::<_, Error>(())

@@ -183,10 +183,11 @@ async fn a_multi_page_rejection_reaches_the_caller_with_the_single_page_limit(#[
         .await
         .unwrap_err();
 
-    let Error::Provider { status, body, .. } = error else {
+    let Error::Rejected(rejected) = error else {
         panic!("expected a provider error, got {error:?}");
     };
-    assert_eq!(status, 400);
+    assert_eq!(rejected.status().as_u16(), 400);
+    let body = rejected.text();
     assert!(
         body.contains("multi-page documents are not supported"),
         "{body}"

@@ -1,45 +1,41 @@
-use axum::response::{IntoResponse, Response};
+use axum::{
+    Json,
+    http::{HeaderValue, header::CONTENT_TYPE},
+    response::{IntoResponse, Response},
+};
 use bytes::Bytes;
-use http::{HeaderValue, header::CONTENT_TYPE};
 use litellm_host::protocol::Protocol;
+use serde::Serialize;
 
 use crate::{Error, ResponseEncoder, StreamEncoder, Unary};
 
-pub struct Sse<P: Protocol, C, F, H = fn(<P as Protocol>::StreamHead) -> http::HeaderMap> {
-    response: Unary<P, C>,
-    stream_error: F,
-    stream_headers: H,
+/// A provider reply as JSON, with the provider's forwardable headers on it.
+pub fn provider_json<T: Serialize>(response: http::Response<T>) -> Response {
+    let (parts, body) = response.into_parts();
+    let mut response = Json(body).into_response();
+    litellm_http::response::forward(response.headers_mut(), &parts.headers);
+    response
 }
 
-impl<P: Protocol, C, F> Sse<P, C, F> {
+pub struct Sse<P, C, F> {
+    response: Unary<P, C>,
+    stream_error: F,
+}
+
+impl<P, C, F> Sse<P, C, F> {
     pub fn new(response: C, stream_error: F) -> Self {
         Self {
             response: Unary::new(response),
             stream_error,
-            stream_headers: |_| http::HeaderMap::new(),
         }
     }
 }
 
-impl<P: Protocol, C, F, H> Sse<P, C, F, H> {
-    pub fn with_stream_headers<J: Fn(P::StreamHead) -> http::HeaderMap>(
-        self,
-        stream_headers: J,
-    ) -> Sse<P, C, F, J> {
-        Sse {
-            response: self.response,
-            stream_error: self.stream_error,
-            stream_headers,
-        }
-    }
-}
-
-impl<P, C, F, H, R> ResponseEncoder for Sse<P, C, F, H>
+impl<P, C, F, R> ResponseEncoder for Sse<P, C, F>
 where
     P: Protocol,
     C: Fn(P::Response) -> R + Send + Sync,
     F: Send + Sync,
-    H: Send + Sync,
     R: IntoResponse,
 {
     type Protocol = P;
@@ -49,17 +45,16 @@ where
     }
 }
 
-impl<P, C, F, H, R> StreamEncoder for Sse<P, C, F, H>
+impl<P, C, F, R> StreamEncoder for Sse<P, C, F>
 where
-    P: Protocol<Chunk = Bytes>,
+    P: Protocol<Chunk = Bytes, StreamHead = http::response::Parts>,
     C: Fn(P::Response) -> R + Send + Sync + 'static,
     F: Fn(Error<P::Error>) -> Bytes + Send + Sync + 'static,
-    H: Fn(P::StreamHead) -> http::HeaderMap + Send + Sync + 'static,
     R: IntoResponse,
 {
     fn encode_stream_head(&self, head: P::StreamHead) -> Result<http::Response<()>, P::Error> {
         let mut response = http::Response::new(());
-        *response.headers_mut() = (self.stream_headers)(head);
+        litellm_http::response::forward(response.headers_mut(), &head.headers);
         response
             .headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));

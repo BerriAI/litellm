@@ -204,7 +204,7 @@ async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
         Some("2099-01-01")
     );
     assert_eq!(
-        serde_json::to_value(&result.pages[0].dimensions).unwrap(),
+        serde_json::to_value(&result.body().pages[0].dimensions).unwrap(),
         json!({"width": 612, "height": 792, "dpi": 72})
     );
 }
@@ -470,12 +470,11 @@ async fn provider_headers_come_from_the_completed_operation(#[case] polled: bool
         .unwrap();
     assert_eq!(
         response
-            .headers
+            .headers()
+            .get_all("x-provider-trace")
             .iter()
-            .filter(|(name, _)| name == "x-provider-trace")
-            .map(|(_, value)| value.as_str())
             .collect::<Vec<_>>(),
         ["first", "second"]
     );
-    assert!(response.pages.is_empty());
+    assert!(response.body().pages.is_empty());
 }

@@ -35,7 +35,7 @@ struct TestRoute;
 
 impl Protocol for TestRoute {
     type Request = Value;
-    type Response = Value;
+    type Response = http::Response<Value>;
     type Error = RouteError;
     type HostCall = Infallible;
     type Chunk = Bytes;
@@ -44,6 +44,7 @@ impl Protocol for TestRoute {
 
 impl Cachable for TestRoute {
     const SURFACE: &'static str = "test";
+    type Body = Value;
 }
 
 impl StreamCachable for TestRoute {
@@ -101,9 +102,9 @@ async fn call(
         &(),
         None,
         || async {
-            Ok(CallOutput::Complete(
+            Ok(CallOutput::Complete(http::Response::new(
                 json!({"call": calls.fetch_add(1, Ordering::SeqCst)}),
-            ))
+            )))
         },
     )
     .await
@@ -111,7 +112,7 @@ async fn call(
     let CallOutput::Complete(response) = output else {
         panic!("expected a response");
     };
-    response
+    response.into_body()
 }
 
 #[rstest]
@@ -567,6 +568,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             || async { panic!("a cache hit must not call the provider") },
         )
         .await
+        .map(http::Response::into_body)
     };
     if reject {
         assert!(matches!(
@@ -589,7 +591,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
 
 impl Protocol for UnaryTestRoute {
     type Request = Value;
-    type Response = Value;
+    type Response = http::Response<Value>;
     type Error = RouteError;
     type HostCall = Infallible;
     type Chunk = Infallible;
@@ -598,6 +600,7 @@ impl Protocol for UnaryTestRoute {
 
 impl Cachable for UnaryTestRoute {
     const SURFACE: &'static str = "unary-test";
+    type Body = Value;
 }
 
 async fn unary_call(
@@ -612,10 +615,15 @@ async fn unary_call(
         options,
         &(),
         None,
-        || async { Ok(json!({"call":calls.fetch_add(1, Ordering::SeqCst)})) },
+        || async {
+            Ok(http::Response::new(
+                json!({"call":calls.fetch_add(1, Ordering::SeqCst)}),
+            ))
+        },
     )
     .await
     .unwrap()
+    .into_body()
 }
 
 #[rstest]

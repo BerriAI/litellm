@@ -6,7 +6,7 @@ use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
-    route::{Messages, MessagesStreamHead},
+    route::Messages,
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
@@ -20,9 +20,10 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::{rejected_to_pyerr, route_error_to_pyerr, timeout_to_pyerr},
     marshal::{
-        optional_timeout, project_optional_fields, public_provider_response, python_timeout_seconds,
+        forwarded_header_pairs, optional_timeout, project_optional_fields,
+        public_provider_response, python_timeout_seconds,
     },
     python_settings::missing_module,
 };
@@ -96,11 +97,8 @@ fn project_litellm_params<'py>(
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
-        Error::Transport(TransportError::Http {
-            status,
-            body,
-            headers,
-        }) => upstream_error(py, status, body, headers),
+        Error::Rejected(rejected) => rejected_to_pyerr(py, &rejected),
+        Error::Transport(TransportError::Timeout(_)) => timeout_to_pyerr(py, &error),
         Error::InvalidRequest(message) => {
             let error = PyValueError::new_err(message.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
@@ -113,17 +111,6 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         }
         other => Ok(route_error_to_pyerr(other)),
     }
-}
-
-fn upstream_error(
-    py: Python<'_>,
-    status: u16,
-    body: String,
-    headers: Vec<(String, String)>,
-) -> PyResult<PyErr> {
-    let error = RustUpstreamError::new_err((status, body));
-    error.value(py).setattr("headers", headers)?;
-    Ok(error)
 }
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
@@ -300,9 +287,7 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: litellm_http::response::ProviderResponse<
-            Box<litellm_llms_types::formats::messages::MessagesResponse>,
-        >,
+        response: ::http::Response<Box<litellm_llms_types::formats::messages::MessagesResponse>>,
     ) -> PyResult<Py<PyAny>> {
         public_provider_response(py, ROUTE_HOST_MODULE, response)
     }
@@ -310,19 +295,11 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_stream_head(
         &mut self,
         py: Python<'_>,
-        head: MessagesStreamHead,
+        head: ::http::response::Parts,
     ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
-            .call1((
-                to_py(py, &head.headers)?,
-                to_py(
-                    py,
-                    &litellm_http::request::response_headers(
-                        &litellm_http::response::forwarded_headers(&head.headers),
-                    ),
-                )?,
-            ))
+            .call1((to_py(py, &forwarded_header_pairs(&head.headers))?,))
             .map(Bound::unbind)
     }
 
@@ -522,10 +499,8 @@ mod tests {
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
-    #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into(), headers: Vec::new() }),
-        false,
-    )]
+    #[case::upstream_failure(Error::Rejected(crate::errors::rejected(400, "bad", &[])), false)]
+    #[case::timeout(Error::Transport(TransportError::Timeout("deadline".into())), false)]
     fn only_request_rejections_carry_the_request_error_marker(
         #[case] error: Error,
         #[case] marked: bool,
@@ -547,17 +522,21 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let headers = vec![
-                ("Retry-After".into(), "17".into()),
-                ("x-provider-trace".into(), "first".into()),
-                ("x-provider-trace".into(), "second".into()),
+                ("retry-after".to_string(), "17".to_string()),
+                ("x-provider-trace".to_string(), "first".to_string()),
+                ("x-provider-trace".to_string(), "second".to_string()),
             ];
             let failure = native_error(
                 py,
-                Error::Transport(TransportError::Http {
-                    status: 429,
-                    body: "rate limited".into(),
-                    headers: headers.clone(),
-                }),
+                Error::Rejected(crate::errors::rejected(
+                    429,
+                    "rate limited",
+                    &[
+                        ("Retry-After", "17"),
+                        ("x-provider-trace", "first"),
+                        ("x-provider-trace", "second"),
+                    ],
+                )),
             )
             .unwrap();
             assert_eq!(

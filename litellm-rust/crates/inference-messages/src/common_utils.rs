@@ -1,6 +1,5 @@
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_http::request::string_headers as shared_string_headers;
-pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
@@ -74,7 +73,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{MessagesProvider, messages_provider, string_headers, truncate_error_body};
+    use super::{MessagesProvider, messages_provider, string_headers};
     use crate::Error;
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
@@ -103,19 +102,6 @@ mod tests {
         #[case] model: &str,
     ) {
         assert_eq!(messages_provider(provider, model), None);
-    }
-
-    #[test]
-    fn truncate_error_body_caps_long_payloads() {
-        let body = "x".repeat(400);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.ends_with("... (truncated)"));
-        let prefix_chars = truncated
-            .strip_suffix("... (truncated)")
-            .expect("truncated marker present")
-            .chars()
-            .count();
-        assert_eq!(prefix_chars, 256);
     }
 
     #[test]

@@ -43,9 +43,10 @@ async fn execute(
     })
     .await
     .map_err(route_error_to_pyerr)?;
+    let (parts, body) = response.into_parts();
     litellm_host_python::attach_blocking(context, move |py| {
-        let public = litellm_host_python::to_py(py, &response.body)?;
-        crate::marshal::provider_metadata(py, public, &response.headers)
+        let public = litellm_host_python::to_py(py, &body)?;
+        crate::marshal::provider_metadata(py, public, &parts.headers)
     })
     .await?
 }

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+http.workspace = true
 base64.workspace = true
 bytes.workspace = true
 futures-util.workspace = true

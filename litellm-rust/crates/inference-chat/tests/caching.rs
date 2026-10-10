@@ -91,7 +91,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             .await
             .unwrap();
         assert_eq!(
-            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            serde_json::to_value(response.body()).unwrap()["usage"]["total_tokens"],
             15
         );
     }
@@ -321,7 +321,7 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
             api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
         }, &hooks, None).await.unwrap();
         assert_eq!(
-            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            serde_json::to_value(response.body()).unwrap()["usage"]["total_tokens"],
             5
         );
     }

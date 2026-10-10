@@ -65,7 +65,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         };
         response
     };
-    assert_eq!(serde_json::to_value(response).unwrap(), body);
+    assert_eq!(serde_json::to_value(response.body()).unwrap(), body);
     let sent = only_request(&upstream).await;
     assert_eq!(sent.url.path(), "/responses");
     assert_eq!(sent.header("authorization"), Some("Bearer test-key"));
@@ -106,7 +106,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         ..call
     });
     let (headers, bytes) = if hosted {
-        assert_eq!(
+        assert!(matches!(
             litellm_host_native::in_process::run_hosted(
                 responses_route(no_secrets())
                     .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
@@ -115,7 +115,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
             .await
             .unwrap(),
             HostedCompletion::StreamEnded
-        );
+        ));
         (
             host.head.lock().unwrap().take().unwrap().headers,
             host.chunks.lock().unwrap().concat(),
@@ -146,7 +146,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
             chunks.try_collect::<Vec<_>>().await.unwrap().concat(),
         )
     };
-    assert!(headers.contains(&("x-request-id".into(), "response-stream".into())));
+    assert_eq!(headers["x-request-id"], "response-stream");
     assert_eq!(bytes, body.as_bytes());
     assert!(matches!(
         &host.events.0.lock().unwrap()[..],
@@ -446,10 +446,10 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
             .unwrap();
             assert_eq!(
                 connection
-                    .response_headers()
+                    .handshake()
+                    .headers
+                    .get_all("x-provider-trace")
                     .iter()
-                    .filter(|(name, _)| name == "x-provider-trace")
-                    .map(|(_, value)| value.as_str())
                     .collect::<Vec<_>>(),
                 ["first", "second"]
             );
@@ -512,20 +512,12 @@ async fn upstream_errors_preserve_response_headers(call: ResponsesCall, #[case] 
         .await
         .err()
         .expect("provider rejection");
-    let litellm_inference_responses::Error::Transport(litellm_http::transport::Error::Http {
-        status,
-        body,
-        headers,
-    }) = error
-    else {
+    let litellm_inference_responses::Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(status, 429);
-    assert_eq!(body, "rate limited");
-    assert_eq!(
-        litellm_http::request::header_value(&headers, "retry-after"),
-        Some("17")
-    );
+    assert_eq!(rejected.status().as_u16(), 429);
+    assert_eq!(rejected.text(), "rate limited");
+    assert_eq!(rejected.headers()["retry-after"], "17");
 }
 
 #[expect(

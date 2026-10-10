@@ -124,27 +124,35 @@ pub(crate) fn public_response(
         .map(Bound::unbind)
 }
 
+/// The provider's forwardable headers as `(name, value)` pairs, the one shape Python reads.
+pub(crate) fn forwarded_header_pairs(headers: &::http::HeaderMap) -> Vec<(String, String)> {
+    litellm_http::response::header_pairs(&litellm_http::response::forwarded(headers))
+}
+
+/// Records the provider's forwardable headers on a public response's hidden params.
 pub(crate) fn provider_metadata(
     py: Python<'_>,
     response: Py<PyAny>,
-    headers: &[(String, String)],
+    headers: &::http::HeaderMap,
 ) -> PyResult<Py<PyAny>> {
-    let forwarded = litellm_http::request::response_headers(
-        &litellm_http::response::forwarded_headers(headers),
-    );
+    let forwarded = forwarded_header_pairs(headers);
+    if forwarded.is_empty() {
+        return Ok(response);
+    }
     py.import("litellm.rust_bridge.response_metadata")?
         .getattr("with_provider_headers")?
-        .call1((response, to_py(py, headers)?, to_py(py, &forwarded)?))
+        .call1((response, to_py(py, &forwarded)?))
         .map(Bound::unbind)
 }
 
 pub(crate) fn public_provider_response<T: Serialize>(
     py: Python<'_>,
     module: &str,
-    response: litellm_http::response::ProviderResponse<T>,
+    response: ::http::Response<T>,
 ) -> PyResult<Py<PyAny>> {
-    let public = public_response(py, module, &response.body)?;
-    provider_metadata(py, public, &response.headers)
+    let (parts, body) = response.into_parts();
+    let public = public_response(py, module, &body)?;
+    provider_metadata(py, public, &parts.headers)
 }
 
 struct RequestFieldSources<'py> {

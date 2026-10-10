@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_http::{Client, request::truncate_error_body};
+use litellm_http::Client;
 use litellm_llms::base_llm::auth::resolve_auth;
 use serde_json::Value;
 
@@ -13,7 +13,7 @@ pub async fn execute_audio_transcription_provider_call(
     http: &Client,
     auth: &litellm_auth::AuthServices,
     request: ProviderAudioTranscriptionRequest,
-) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
+) -> Result<http::Response<Value>, Error> {
     let env_lookup = |key: &str| request.secrets.get(key);
     let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
     let outbound = litellm_inference::outbound::outbound_request(
@@ -26,34 +26,21 @@ pub async fn execute_audio_transcription_provider_call(
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
     )?;
-    let response = litellm_inference::outbound::send(outbound, http)
-        .await
-        .map_err(|error| {
-            Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-        })?;
-    let status = response.status();
-    let headers = litellm_http::request::response_headers(response.headers());
-    let text = response.text().await.map_err(|error| {
-        Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-    })?;
-    if !status.is_success() {
-        return Err(Error::Transport(litellm_http::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-            headers,
-        }));
-    }
-    let response_json = serde_json::from_str(&text).map_err(|error| {
+    let response = litellm_inference::outbound::send(outbound, http).await?;
+    let (parts, body) = litellm_inference::outbound::read(response)
+        .await?
+        .into_parts();
+    let response_json = serde_json::from_slice(&body).map_err(|error| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
             "audio response JSON",
             error,
         ))
     })?;
-    Ok(litellm_http::response::ProviderResponse {
-        body: request
+    Ok(http::Response::from_parts(
+        parts,
+        request
             .config
             .transform_audio_transcription_response(&request.model, response_json)?
             .into_json(),
-        headers,
-    })
+    ))
 }

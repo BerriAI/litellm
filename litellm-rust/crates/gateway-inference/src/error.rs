@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::{
     Json,
     response::{IntoResponse, Response},
@@ -64,8 +64,9 @@ impl Error {
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
-                StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
+            Self::Route(RouteError::Rejected(rejected)) => rejected.status(),
+            Self::Route(RouteError::Transport(TransportError::Timeout(_))) => {
+                StatusCode::REQUEST_TIMEOUT
             }
             Self::Route(RouteError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
                 StatusCode::UNAUTHORIZED
@@ -75,19 +76,24 @@ impl Error {
         }
     }
 
-    fn headers(&self) -> &[(String, String)] {
+    fn headers(&self) -> Option<&HeaderMap> {
         match self {
-            Self::Route(RouteError::Transport(TransportError::Http { headers, .. }))
-            | Self::Ocr(OcrError::Transport(TransportError::Http { headers, .. }))
-            | Self::Ocr(OcrError::Provider { headers, .. }) => headers,
-            _ => &[],
+            Self::Route(RouteError::Rejected(rejected))
+            | Self::Ocr(OcrError::Rejected(rejected)) => Some(rejected.headers()),
+            _ => None,
         }
     }
 
-    pub fn messages_response(self, request_id: Option<&str>) -> Response {
-        let mut response = (self.status(), Json(self.body(request_id))).into_response();
-        litellm_http::response::append_provider_headers(response.headers_mut(), self.headers());
+    fn with_provider_headers(&self, mut response: Response) -> Response {
+        if let Some(headers) = self.headers() {
+            litellm_http::response::forward(response.headers_mut(), headers);
+        }
         response
+    }
+
+    pub fn messages_response(self, request_id: Option<&str>) -> Response {
+        let response = (self.status(), Json(self.body(request_id))).into_response();
+        self.with_provider_headers(response)
     }
 
     pub fn openai_response(self) -> Response {
@@ -96,7 +102,7 @@ impl Error {
             Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
             _ => self.to_string(),
         };
-        let mut response = (
+        let response = (
             status,
             Json(json!({"error": {
                 "message": message,
@@ -106,15 +112,14 @@ impl Error {
             }})),
         )
             .into_response();
-        litellm_http::response::append_provider_headers(response.headers_mut(), self.headers());
-        response
+        self.with_provider_headers(response)
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
         let raw = match self {
-            Self::Route(RouteError::Transport(TransportError::Http { body, .. })) => body.clone(),
+            Self::Route(RouteError::Rejected(rejected)) => rejected.text().into_owned(),
             other => other.to_string(),
         };
         let parsed = serde_json::from_str::<Value>(&raw).ok();
@@ -187,16 +192,18 @@ fn with_request_id(envelope: Map<String, Value>, request_id: Option<&str>) -> Ma
 
 #[cfg(test)]
 mod tests {
+    use litellm_http::response::Rejected;
     use rstest::rstest;
 
     use super::*;
 
     fn upstream(status: u16, body: &str) -> Error {
-        Error::Route(RouteError::Transport(TransportError::Http {
-            status,
-            body: body.into(),
-            headers: Vec::new(),
-        }))
+        Error::Route(RouteError::Rejected(Rejected::new(
+            http::Response::builder()
+                .status(status)
+                .body(bytes::Bytes::from(body.to_owned()))
+                .unwrap(),
+        )))
     }
 
     #[rstest]
@@ -254,6 +261,10 @@ mod tests {
     #[case::lost_connection(
         Error::Route(RouteError::Transport(TransportError::Network("reset".into()))),
         StatusCode::INTERNAL_SERVER_ERROR,
+    )]
+    #[case::timeout(
+        Error::Route(RouteError::Transport(TransportError::Timeout("deadline".into()))),
+        StatusCode::REQUEST_TIMEOUT,
     )]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
         assert_eq!(error.status(), status);

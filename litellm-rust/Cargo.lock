@@ -3787,6 +3787,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
@@ -3899,7 +3900,9 @@ dependencies = [
  "http 1.4.2",
  "litellm-host",
  "litellm-host-native",
+ "litellm-http",
  "rstest",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -3936,6 +3939,7 @@ dependencies = [
 name = "litellm-http"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "http 1.4.2",
  "hyper-util",
@@ -3965,6 +3969,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",
@@ -3992,7 +3997,9 @@ dependencies = [
 name = "litellm-inference-chat"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
@@ -4019,6 +4026,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache-memory",
@@ -4050,6 +4058,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
@@ -4080,6 +4089,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",
@@ -4117,6 +4127,7 @@ name = "litellm-inference-transcription"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-core-utils",
  "litellm-http",
@@ -4142,6 +4153,7 @@ dependencies = [
  "bytes",
  "data-url",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",
@@ -4205,6 +4217,7 @@ dependencies = [
  "criterion",
  "fancy-regex 0.19.2",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",

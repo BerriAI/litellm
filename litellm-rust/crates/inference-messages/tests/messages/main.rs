@@ -118,7 +118,7 @@ async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
 
 async fn run_message(call: MessagesCall) -> MessagesResponse {
     match run(call).await.expect("messages call succeeds") {
-        MessagesOutput::Complete(message) => *message.body,
+        MessagesOutput::Complete(message) => *message.into_body(),
         MessagesOutput::StreamEnded | MessagesOutput::Detached => {
             panic!("a non-streaming call returned a stream")
         }

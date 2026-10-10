@@ -23,6 +23,7 @@ litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 base64.workspace = true
 bytes.workspace = true
+http.workspace = true
 data-url = "0.3.2"
 futures-util.workspace = true
 reqwest.workspace = true

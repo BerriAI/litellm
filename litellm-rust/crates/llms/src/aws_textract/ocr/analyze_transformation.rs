@@ -119,13 +119,8 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         decode_and_normalize_response(model, raw_response, request_format, normalize_response)
     }
 
-    fn get_error_class(
-        &self,
-        error_message: String,
-        status_code: u16,
-        headers: Vec<(String, String)>,
-    ) -> Error {
-        error_class(error_message, status_code, headers)
+    fn get_error_class(&self, rejected: litellm_http::response::Rejected) -> Error {
+        error_class(rejected)
     }
 }
 

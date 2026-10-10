@@ -39,13 +39,13 @@ pub(crate) async fn create(
         timeout: deployment.timeout,
     };
     let machine = route.machine(call, cache_options.policy);
-    let stream = Sse::<Responses, _, _>::new(crate::response::json, |error| {
+    let stream = Sse::<Responses, _, _>::new(litellm_host_http::provider_json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(
             "event: error\ndata: {}\n\n",
             json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
         ))
-    }).with_stream_headers(|head| litellm_http::response::forwarded_headers(&head.headers));
+    });
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))

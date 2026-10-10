@@ -1,10 +1,9 @@
 use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
-use litellm_http::response::ProviderResponse;
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
+use litellm_http::{Client, outbound::OutboundRequest};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
@@ -23,7 +22,7 @@ pub(super) async fn execute(
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
+) -> Result<http::Response<ChatCompletionsResponse>, Error> {
     let ProviderChatCompletionsRequest {
         model,
         custom_llm_provider,
@@ -80,32 +79,11 @@ pub(super) async fn execute(
                 timeout,
             )?;
 
-            let response = litellm_inference::outbound::send(outbound, http)
-                .await
-                .map_err(|err| {
-                    // Failing to establish the connection means the request never went out,
-                    // so the host can still serve it. Everything else here, a timeout
-                    // above all, may have reached the provider and been answered.
-                    if err.is_connect() || err.is_builder() {
-                        Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
-                    } else {
-                        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-                    }
-                })?;
-
-            let status = response.status();
-            let headers = litellm_http::request::response_headers(response.headers());
-            let text = response.text().await.map_err(|err| {
-                Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-            })?;
-
-            if !status.is_success() {
-                return Err(Error::Transport(litellm_http::transport::Error::Http {
-                    status: status.as_u16(),
-                    body: truncate_error_body(&text),
-                    headers,
-                }));
-            }
+            let response = litellm_inference::outbound::send(outbound, http).await?;
+            let (parts, body) = litellm_inference::outbound::read(response)
+                .await?
+                .into_parts();
+            let text = litellm_inference::outbound::text(&body);
             let raw = RawResponse { body: text.clone() };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
@@ -127,7 +105,7 @@ pub(super) async fn execute(
                 .transform_response(&model, ProviderChatResponseData { body })
                 .map_err(Error::from)
                 .map_err(as_response_error)
-                .map(|body| ProviderResponse { body, headers })
+                .map(|body| http::Response::from_parts(parts, body))
         },
     )
     .await
@@ -144,8 +122,7 @@ pub(super) async fn execute(
 /// can only mean the provider was already called.
 pub(super) fn as_response_error(err: Error) -> Error {
     match err {
-        already @ (Error::InvalidResponse(_)
-        | Error::Transport(litellm_http::transport::Error::Http { .. })) => already,
+        already @ (Error::InvalidResponse(_) | Error::Rejected(_)) => already,
         other => Error::InvalidResponse(other.to_string().into()),
     }
 }
@@ -304,10 +281,7 @@ mod tests {
         .await
         .expect_err("the upstream failure fails the call");
 
-        assert!(matches!(
-            error,
-            Error::Transport(litellm_http::transport::Error::Http { status: 500, .. })
-        ));
+        assert!(matches!(&error, Error::Rejected(rejected) if rejected.status().as_u16() == 500));
         assert!(interceptors.raw.into_inner().unwrap().is_empty());
     }
 
@@ -325,11 +299,12 @@ mod tests {
                 "{label} must not stay retryable once the provider has answered"
             );
         }
-        let upstream = Error::Transport(litellm_http::transport::Error::Http {
-            status: 500,
-            body: "boom".to_string(),
-            headers: Vec::new(),
-        });
+        let upstream = Error::Rejected(litellm_http::response::Rejected::new(
+            http::Response::builder()
+                .status(500)
+                .body(::bytes::Bytes::from_static(b"boom"))
+                .unwrap(),
+        ));
         assert_eq!(as_response_error(upstream.clone()), upstream);
     }
 }

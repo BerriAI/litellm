@@ -360,7 +360,7 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     assert!(events.0.lock().unwrap().is_empty());
     assert!(received(&upstream).await.is_empty());
     let result = builder.await.unwrap();
-    assert_eq!(result.pages[0].markdown, "direct");
+    assert_eq!(result.body().pages[0].markdown, "direct");
     assert_eq!(
         only_request(&upstream).await.header("x-direct-hook"),
         Some("called")

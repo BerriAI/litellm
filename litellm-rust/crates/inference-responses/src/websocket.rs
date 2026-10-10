@@ -26,12 +26,13 @@ pub fn is_terminal_event(event_type: &ResponsesWsEventType) -> bool {
 #[derive(Clone)]
 pub struct ResponsesWebSocketConnection {
     socket: Arc<Mutex<Option<UpstreamWebSocket>>>,
-    headers: Arc<[(String, String)]>,
+    handshake: Arc<http::response::Parts>,
 }
 
 impl ResponsesWebSocketConnection {
-    pub fn response_headers(&self) -> &[(String, String)] {
-        &self.headers
+    /// The upstream handshake reply: its status line and headers.
+    pub fn handshake(&self) -> &http::response::Parts {
+        &self.handshake
     }
 
     #[tracing::instrument(
@@ -68,11 +69,9 @@ impl ResponsesWebSocketConnection {
             };
             let (socket, response) = result.map_err(|error| match *error {
                 tokio_tungstenite::tungstenite::Error::Http(response) => {
-                    Error::Transport(litellm_http::transport::Error::Http {
-                        status: response.status().as_u16(),
-                        body: String::new(),
-                        headers: litellm_http::request::response_headers(response.headers()),
-                    })
+                    Error::Rejected(litellm_http::response::Rejected::new(
+                        response.map(|body| bytes::Bytes::from(body.unwrap_or_default())),
+                    ))
                 }
                 other => {
                     Error::Transport(litellm_http::transport::Error::Network(other.to_string()))
@@ -80,7 +79,7 @@ impl ResponsesWebSocketConnection {
             })?;
             Ok(Self {
                 socket: Arc::new(Mutex::new(Some(socket))),
-                headers: litellm_http::request::response_headers(response.headers()).into(),
+                handshake: Arc::new(response.map(|_| ()).into_parts().0),
             })
         })
         .await

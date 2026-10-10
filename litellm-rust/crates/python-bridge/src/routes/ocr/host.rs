@@ -112,7 +112,7 @@ impl PythonBinding for OcrPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: litellm_http::response::ProviderResponse<LiteLLMOcrResponse>,
+        response: ::http::Response<LiteLLMOcrResponse>,
     ) -> PyResult<Py<PyAny>> {
         public_provider_response(py, "litellm.rust_bridge.ocr.route_host", response)
     }

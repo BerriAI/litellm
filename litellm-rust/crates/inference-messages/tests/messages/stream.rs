@@ -5,10 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use litellm_inference_messages::{
-    MessagesCallResponse,
-    route::{Messages, MessagesStreamHead},
-};
+use litellm_inference_messages::{MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
@@ -88,8 +85,10 @@ impl RecordingStreamHost {
 }
 
 impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStreamHost {
-    async fn open_stream(&self, head: MessagesStreamHead) -> Result<ControlFlow<()>, Error> {
-        Ok(self.record(Seen::Open(head.headers)))
+    async fn open_stream(&self, head: http::response::Parts) -> Result<ControlFlow<()>, Error> {
+        Ok(self.record(Seen::Open(litellm_http::response::header_pairs(
+            &head.headers,
+        ))))
     }
     async fn send_chunk(&self, chunk: Bytes) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Deliver(chunk)))
@@ -248,16 +247,11 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         .await
         .expect_err("upstream error propagates");
 
-    let Error::Transport(litellm_http::transport::Error::Http {
-        status: actual_status,
-        body: actual_body,
-        ..
-    }) = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(actual_status, 429);
-    assert_eq!(actual_body, body);
+    assert_eq!(rejected.status().as_u16(), 429);
+    assert_eq!(rejected.text(), body);
     assert!(host.seen.into_inner().unwrap().is_empty());
 }
 
@@ -362,7 +356,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         panic!("a streaming request returns a stream");
     };
     for (name, value) in UPSTREAM_HEADERS {
-        assert!(head.headers.contains(&(name.into(), value.into())));
+        assert_eq!(head.headers[name], value);
     }
     let delivered = chunks.try_collect::<Vec<_>>().await.unwrap().concat();
     assert_eq!(delivered, SSE_BODY.as_bytes());
@@ -379,16 +373,11 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         .err()
         .expect("upstream failure is returned by messages()");
 
-    let Error::Transport(litellm_http::transport::Error::Http {
-        status: actual_status,
-        body,
-        ..
-    }) = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(actual_status, 429);
-    assert_eq!(body, "slow down");
+    assert_eq!(rejected.status().as_u16(), 429);
+    assert_eq!(rejected.text(), "slow down");
 }
 
 #[rstest]

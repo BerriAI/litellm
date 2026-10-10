@@ -10,7 +10,7 @@ const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
 async fn transcribe(
     request: AudioTranscriptionRequest<'_>,
-) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
+) -> Result<http::Response<Value>, Error> {
     audio_transcription_route().execute(request).await
 }
 
@@ -59,7 +59,7 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
     .await
     .expect("transcription");
 
-    assert_eq!(response.body, json!({"text": "hello"}));
+    assert_eq!(response.body(), &json!({"text": "hello"}));
     let sent = only_request(&upstream).await;
     assert_eq!(sent.method.as_str(), "POST");
     assert_eq!(sent.url.path(), format!("/model/{MODEL}/converse"));
@@ -225,20 +225,12 @@ async fn an_upstream_error_keeps_its_status_and_body(
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(litellm_http::transport::Error::Http {
-        status: actual_status,
-        body,
-        headers,
-    }) = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(actual_status, status);
-    assert_eq!(body, "upstream said no");
-    assert_eq!(
-        litellm_http::request::header_value(&headers, "retry-after"),
-        Some("17")
-    );
+    assert_eq!(rejected.status().as_u16(), status);
+    assert_eq!(rejected.text(), "upstream said no");
+    assert_eq!(rejected.headers()["retry-after"], "17");
 }
 
 #[rstest]

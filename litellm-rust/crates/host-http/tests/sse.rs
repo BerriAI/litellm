@@ -36,7 +36,20 @@ impl Protocol for TestProtocol {
     type Request = ();
     type HostCall = Infallible;
     type Chunk = Bytes;
-    type StreamHead = ();
+    type StreamHead = http::response::Parts;
+}
+
+fn provider_head() -> http::response::Parts {
+    http::Response::builder()
+        .header("x-provider-trace", "first")
+        .header("x-provider-trace", "second")
+        .header("connection", "x-private")
+        .header("x-private", "hop")
+        .header("content-type", "application/vendor+json")
+        .body(())
+        .unwrap()
+        .into_parts()
+        .0
 }
 
 #[rstest]
@@ -57,7 +70,10 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
                 },
             ])
             .boxed();
-            Ok(CallOutput::Stream { head: (), chunks })
+            Ok(CallOutput::Stream {
+                head: provider_head(),
+                chunks,
+            })
         });
     let errors = Arc::new(AtomicUsize::new(0));
     let formatted_errors = errors.clone();
@@ -68,6 +84,16 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
     let response = serve(machine, (), (), adapter, None).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-provider-trace")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert!(!response.headers().contains_key("connection"));
+    assert!(!response.headers().contains_key("x-private"));
     assert_eq!(errors.load(Ordering::SeqCst), 0);
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     assert_eq!(

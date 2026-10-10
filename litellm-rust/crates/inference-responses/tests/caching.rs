@@ -171,7 +171,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
             None,
             || async {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResponsesApiResponse {
+                Ok(http::Response::new(ResponsesApiResponse {
                     id: "fresh-response".into(),
                     model: "test".into(),
                     output: vec![
@@ -180,14 +180,13 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
                     extra: [("status".into(), json!("completed"))]
                         .into_iter()
                         .collect(),
-                }
-                .into())
+                }))
             },
         )
         .await
         .unwrap();
-        assert_eq!(response.id, "fresh-response");
-        assert_eq!(response.output[0]["content"][0]["text"], "fresh");
+        assert_eq!(response.body().id, "fresh-response");
+        assert_eq!(response.body().output[0]["content"][0]["text"], "fresh");
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -214,18 +213,17 @@ async fn responses_cache_only_reuses_completed_responses(
             None,
             || async {
                 let call = calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResponsesApiResponse {
+                Ok(http::Response::new(ResponsesApiResponse {
                     id: call.to_string(),
                     model: "test".into(),
                     output: Vec::new(),
                     extra: [("status".into(), json!(status))].into_iter().collect(),
-                }
-                .into())
+                }))
             },
         )
         .await
         .unwrap();
-        assert_eq!(response.extra.get("status"), Some(&json!(status)));
+        assert_eq!(response.body().extra.get("status"), Some(&json!(status)));
     }
     assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
 }

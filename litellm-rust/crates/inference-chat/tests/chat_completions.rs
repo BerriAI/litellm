@@ -19,7 +19,7 @@ const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assist
 
 async fn complete(
     request: ChatCompletionsRequest<'_>,
-) -> Result<litellm_http::response::ProviderResponse<ChatCompletionsResponse>, Error> {
+) -> Result<http::Response<ChatCompletionsResponse>, Error> {
     chat_completions_route().execute(request, &(), None).await
 }
 
@@ -86,10 +86,10 @@ async fn anthropic_round_trip_translates_the_conversation_and_normalizes_the_res
     );
     assert_eq!(body["max_tokens"], 16);
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body().choices[0].message.content.as_deref(),
         Some("hello")
     );
-    assert_eq!(response.usage.total_tokens, 15);
+    assert_eq!(response.body().usage.total_tokens, 15);
 }
 
 #[rstest]
@@ -155,10 +155,10 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
         json!([{"role": "user", "content": [{"text": "hi"}]}])
     );
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body().choices[0].message.content.as_deref(),
         Some("hello")
     );
-    assert_eq!(response.usage.total_tokens, 15);
+    assert_eq!(response.body().usage.total_tokens, 15);
 }
 
 #[rstest]
@@ -206,20 +206,12 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     .await
     .expect_err("upstream rejects");
 
-    let Error::Transport(TransportError::Http {
-        status: actual_status,
-        body,
-        headers,
-    }) = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(actual_status, status);
-    assert_eq!(body, "slow down");
-    assert_eq!(
-        litellm_http::request::header_value(&headers, "retry-after"),
-        Some("17")
-    );
+    assert_eq!(rejected.status().as_u16(), status);
+    assert_eq!(rejected.text(), "slow down");
+    assert_eq!(rejected.headers()["retry-after"], "17");
 }
 
 #[rstest]
@@ -242,7 +234,9 @@ async fn a_connection_that_is_never_established_returns_a_connect_error(
 
 #[rstest]
 #[tokio::test]
-async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsRequest<'static>) {
+async fn a_timeout_after_sending_is_a_timeout_not_a_connect_failure(
+    request: ChatCompletionsRequest<'static>,
+) {
     let upstream =
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
     let base = upstream.uri();
@@ -256,7 +250,7 @@ async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletion
     .expect_err("the call times out");
 
     assert!(
-        matches!(error, Error::Transport(TransportError::Network(_))),
+        matches!(error, Error::Transport(TransportError::Timeout(_))),
         "{error:?}"
     );
 }
@@ -314,7 +308,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
             .unwrap()
     };
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body().choices[0].message.content.as_deref(),
         Some("hello")
     );
     assert_eq!(
@@ -426,20 +420,16 @@ async fn success_keeps_raw_provider_headers_separate_from_the_normalized_body(
     .unwrap();
     assert_eq!(
         response
-            .headers
+            .headers()
+            .get_all("x-provider-trace")
             .iter()
-            .filter(|(name, _)| name == "x-provider-trace")
-            .map(|(_, value)| value.as_str())
             .collect::<Vec<_>>(),
         ["first", "second"]
     );
-    assert!(
-        response
-            .headers
-            .iter()
-            .any(|(name, value)| name == "set-cookie" && value == "session=private")
+    assert_eq!(response.headers()["set-cookie"], "session=private");
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        response.body().choices[0].message.content.as_deref(),
+        Some("hello")
     );
-    let public = serde_json::to_value(&response).unwrap();
-    assert_eq!(public["choices"][0]["message"]["content"], "hello");
-    assert!(public.get("headers").is_none());
 }

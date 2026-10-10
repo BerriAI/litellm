@@ -7,10 +7,10 @@
 
 use std::sync::Arc;
 
-use litellm_http::transport::Error as TransportError;
+use litellm_http::{response::Rejected, transport::Error as TransportError};
 use litellm_llms::Error as LlmError;
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum RouteError {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
@@ -29,6 +29,8 @@ pub enum RouteError {
     Unsupported(&'static str),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
+    #[error(transparent)]
+    Rejected(#[from] Rejected),
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
@@ -68,6 +70,7 @@ impl RouteError {
             | Self::Headers(_) => true,
             Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
             Self::InvalidResponse(_)
+            | Self::Rejected(_)
             | Self::Transport(_)
             | Self::Http(_)
             | Self::Secret(_)

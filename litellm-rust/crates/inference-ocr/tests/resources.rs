@@ -120,7 +120,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             timeout_seconds: Some(5.0),
         }).unwrap();
         let result = route.execute(request, &(), None).await.unwrap();
-        assert!(!result.pages.is_empty());
+        assert!(!result.body().pages.is_empty());
     }
     let requests = upstream.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2);

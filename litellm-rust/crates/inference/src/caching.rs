@@ -24,8 +24,11 @@ use tokio_util::codec::Decoder;
 
 use crate::RouteError;
 
-pub trait Cachable: Protocol<Error = RouteError> {
+/// A route whose response is the provider's reply. Only the body is cached: a replayed
+/// response carries no provider headers.
+pub trait Cachable: Protocol<Error = RouteError, Response = http::Response<Self::Body>> {
     const SURFACE: &'static str;
+    type Body: Serialize + DeserializeOwned + Send + 'static;
 
     fn reusable(_response: &Self::Response) -> bool {
         true
@@ -86,18 +89,21 @@ impl CacheSession {
         Some(Self { service, request })
     }
 
-    async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
-    where
-        P::Response: DeserializeOwned,
-    {
+    async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>> {
         if !self.request.controls.reads() {
             return None;
         }
         match self.service.lookup(&self.request, now()).await {
             Ok(Some(value)) => {
-                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(value)
+                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Body>>>(value)
                     .ok()
                     .and_then(|entry| entry.decode(P::SURFACE))
+                    .map(|output| match output {
+                        CachedOutput::Response(body) => {
+                            CachedOutput::Response(http::Response::new(body))
+                        }
+                        CachedOutput::Stream(data) => CachedOutput::Stream(data),
+                    })
             }
             Ok(None) => None,
             Err(_) => {
@@ -121,14 +127,11 @@ impl CacheSession {
         }
     }
 
-    async fn store_response<P: Cachable>(&self, response: &P::Response)
-    where
-        P::Response: Serialize,
-    {
+    async fn store_response<P: Cachable>(&self, response: &P::Response) {
         if !self.request.controls.writes() || !P::reusable(response) {
             return;
         }
-        if let Ok(value) = serde_json::to_value(response)
+        if let Ok(value) = serde_json::to_value(response.body())
             && let Ok(entry) = serde_json::to_value(ResponseEnvelope::new(
                 P::SURFACE,
                 CachedOutput::Response(value),
@@ -149,7 +152,6 @@ pub async fn execute_unary<P, F, Fut>(
 ) -> Result<P::Response, RouteError>
 where
     P: Cachable,
-    P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<P::Response, RouteError>>,
 {
@@ -193,7 +195,6 @@ pub async fn execute_streaming<P, F, Fut>(
 ) -> Result<OutputOf<P>, RouteError>
 where
     P: StreamCachable,
-    P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
 {
@@ -254,10 +255,7 @@ impl<P: StreamCachable> CallCache<P> {
         }
     }
 
-    pub async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)>
-    where
-        P::Response: DeserializeOwned,
-    {
+    pub async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)> {
         let session = self.session.as_ref()?;
         let output = match session.lookup::<P>().await? {
             CachedOutput::Response(response) => CallOutput::Complete(response),
@@ -271,10 +269,7 @@ impl<P: StreamCachable> CallCache<P> {
         ))
     }
 
-    pub async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>
-    where
-        P::Response: Serialize,
-    {
+    pub async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P> {
         let Some(session) = self.session.filter(|session| {
             *source == ResultSource::Provider && session.request.controls.writes()
         }) else {

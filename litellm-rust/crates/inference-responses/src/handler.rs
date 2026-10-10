@@ -8,7 +8,7 @@ use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
 
 use super::{
     Error,
-    types::{ProviderResponsesRequest, ResponsesOutput, ResponsesStreamHead},
+    types::{ProviderResponsesRequest, ResponsesOutput},
 };
 
 pub(super) async fn execute(
@@ -61,39 +61,19 @@ pub(super) async fn execute(
                 &wire.body,
                 Some(request.timeout.unwrap_or(Duration::from_secs(600))),
             )?;
-            let response = litellm_inference::outbound::send(outbound, http)
-                .await
-                .map_err(network)?;
-            let status = response.status().as_u16();
-            if !response.status().is_success() {
-                let headers = litellm_http::request::response_headers(response.headers());
-                let body = response.text().await.map_err(network)?;
-                return Err(litellm_http::transport::Error::Http {
-                    status,
-                    body: litellm_http::request::truncate_error_body(&body),
-                    headers,
-                }
-                .into());
-            }
+            let response = litellm_inference::outbound::send(outbound, http).await?;
             if stream {
-                let headers = response
-                    .headers()
-                    .iter()
-                    .filter_map(|(name, value)| {
-                        Some((name.to_string(), value.to_str().ok()?.to_owned()))
-                    })
-                    .collect();
+                let head = litellm_http::transport::parts(&response);
                 let chunks = response
                     .bytes_stream()
                     .map(|chunk| chunk.map_err(network))
                     .boxed();
-                return Ok(ResponsesOutput::Stream {
-                    head: ResponsesStreamHead { headers },
-                    chunks,
-                });
+                return Ok(ResponsesOutput::Stream { head, chunks });
             }
-            let headers = litellm_http::request::response_headers(response.headers());
-            let body = response.text().await.map_err(network)?;
+            let (parts, body) = litellm_inference::outbound::read(response)
+                .await?
+                .into_parts();
+            let body = litellm_inference::outbound::text(&body);
             let raw = RawResponse { body: body.clone() };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
@@ -109,12 +89,7 @@ pub(super) async fn execute(
             request
                 .config
                 .transform_response_api_response(value)
-                .map(|body| {
-                    ResponsesOutput::Complete(litellm_http::response::ProviderResponse {
-                        body,
-                        headers,
-                    })
-                })
+                .map(|body| ResponsesOutput::Complete(http::Response::from_parts(parts, body)))
                 .map_err(Error::from)
         },
     )
@@ -122,5 +97,5 @@ pub(super) async fn execute(
 }
 
 fn network(error: reqwest::Error) -> Error {
-    litellm_http::transport::Error::Network(error.to_string()).into()
+    litellm_http::transport::Error::from(error).into()
 }

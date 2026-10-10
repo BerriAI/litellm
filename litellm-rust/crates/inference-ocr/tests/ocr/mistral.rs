@@ -92,28 +92,18 @@ async fn an_upstream_error_keeps_its_status_whole_body_and_headers(
         .unwrap_err();
 
     assert_eq!(received(&upstream).await.len(), 1);
-    let Error::Provider {
-        status,
-        body,
-        headers,
-    } = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("expected provider error, got {error:?}");
     };
-    assert_eq!(status, 422);
+    assert_eq!(rejected.status().as_u16(), 422);
     for (name, value) in [
         ("retry-after", "17"),
         ("x-request-id", "request-123"),
         ("x-future-header", "retained"),
     ] {
-        assert!(
-            headers
-                .iter()
-                .any(|(key, actual)| key.eq_ignore_ascii_case(name) && actual == value),
-            "{name} missing from {headers:?}"
-        );
+        assert_eq!(rejected.headers()[name], value, "{name}");
     }
-    assert_eq!(body, expected_body);
+    assert_eq!(rejected.text(), expected_body);
 }
 
 #[rstest]

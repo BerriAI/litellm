@@ -25,6 +25,7 @@ litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
+http.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true

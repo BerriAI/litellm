@@ -2,7 +2,6 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
@@ -50,7 +49,7 @@ async fn calls_defer_execution_until_polled(
         panic!("expected a completed message");
     };
     assert_eq!(
-        response.content,
+        response.body().content,
         message_body()["content"].as_array().unwrap().as_slice()
     );
     assert!(secrets.requested().contains(&"ANTHROPIC_API_KEY".into()));
@@ -166,11 +165,14 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body, .. }) = error else {
+    let Error::Rejected(rejected) = error else {
         panic!("{error:?}");
     };
-    assert_eq!(status, 400);
-    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), envelope);
+    assert_eq!(rejected.status().as_u16(), 400);
+    assert_eq!(
+        serde_json::from_str::<Value>(&rejected.text()).unwrap(),
+        envelope
+    );
 }
 
 #[rstest]
@@ -187,16 +189,11 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http {
-        status: actual_status,
-        body,
-        ..
-    }) = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(actual_status, 500);
-    assert_eq!(body, format!("{}... (truncated)", &long[..256]));
+    assert_eq!(rejected.status().as_u16(), 500);
+    assert_eq!(rejected.text(), format!("{}... (truncated)", &long[..256]));
 }
 
 #[rstest]
@@ -225,23 +222,19 @@ async fn an_upstream_error_keeps_its_status_body_and_headers(
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http {
-        status: actual_status,
-        body,
-        headers,
-    }) = error
-    else {
+    let Error::Rejected(rejected) = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert_eq!(actual_status, status);
-    assert_eq!(body, "upstream said no");
+    assert_eq!(rejected.status().as_u16(), status);
+    assert_eq!(rejected.text(), "upstream said no");
+    assert_eq!(rejected.headers()["retry-after"], "17");
     assert_eq!(
-        litellm_http::request::header_value(&headers, "Retry-After"),
-        Some("17")
-    );
-    assert_eq!(
-        litellm_http::request::header_values(&headers, "X-Provider-Trace").collect::<Vec<_>>(),
-        vec!["first", "second"]
+        rejected
+            .headers()
+            .get_all("x-provider-trace")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["first", "second"]
     );
 }
 
@@ -314,7 +307,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     let MessagesCallResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
     };
-    assert_eq!(message.id, "msg_1");
+    assert_eq!(message.body().id, "msg_1");
     let sent = only_request(&upstream).await;
     assert_eq!(sent.header("x-api-key"), Some("sk-ant"));
     assert_eq!(sent.header("user-agent"), Some("host-owned/1"));
@@ -404,7 +397,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
             panic!("expected a completed message");
         };
         assert_eq!(
-            response.content,
+            response.body().content,
             message_body()["content"].as_array().unwrap().as_slice()
         );
     }
@@ -475,7 +468,7 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
         else {
             panic!("expected a completed message");
         };
-        assert_eq!(response.id, expected["id"].as_str().unwrap());
+        assert_eq!(response.body().id, expected["id"].as_str().unwrap());
     }
     assert_eq!(received(&upstream).await.len(), 2);
 }

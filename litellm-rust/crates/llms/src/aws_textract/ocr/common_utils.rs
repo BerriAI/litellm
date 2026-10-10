@@ -321,21 +321,17 @@ struct AwsError {
 /// Textract answers both an unsupported format and a multi-page PDF or TIFF
 /// with a bare "unsupported document format", which reads like a corrupt file.
 /// Say what the synchronous API accepts.
-pub(super) fn error_class(body: String, status: u16, headers: Vec<(String, String)>) -> Error {
-    let unsupported = serde_json::from_str::<AwsError>(&body)
+pub(super) fn error_class(rejected: litellm_http::response::Rejected) -> Error {
+    let unsupported = serde_json::from_str::<AwsError>(&rejected.text())
         .ok()
         .filter(|error| error.kind.ends_with(UNSUPPORTED_DOCUMENT));
-    Error::Provider {
-        status,
-        body: match unsupported {
-            Some(error) => format!(
-                "{UNSUPPORTED_DOCUMENT}: {}. aws_textract uses Textract's synchronous API, which reads a JPEG, PNG, or a single-page PDF or TIFF; other formats and multi-page documents are not supported",
-                error.message
-            ),
-            None => body,
-        },
-        headers,
-    }
+    Error::Rejected(match unsupported {
+        Some(error) => rejected.with_text(format!(
+            "{UNSUPPORTED_DOCUMENT}: {}. aws_textract uses Textract's synchronous API, which reads a JPEG, PNG, or a single-page PDF or TIFF; other formats and multi-page documents are not supported",
+            error.message
+        )),
+        None => rejected,
+    })
 }
 
 pub(super) fn lines_by_page(blocks: &[Block]) -> Vec<(i64, String)> {
@@ -559,19 +555,19 @@ mod tests {
         #[case] body: &str,
         #[case] hinted_message: Option<&str>,
     ) {
-        let response_headers = vec![("x-amzn-requestid".to_string(), "abc".to_string())];
+        let reply = http::Response::builder()
+            .status(400)
+            .header("x-amzn-requestid", "abc")
+            .body(bytes::Bytes::from(body.to_owned()))
+            .unwrap();
 
-        let Error::Provider {
-            status,
-            body: reported,
-            headers,
-        } = error_class(body.into(), 400, response_headers.clone())
-        else {
+        let Error::Rejected(rejected) = error_class(reply.into()) else {
             panic!("expected a provider error");
         };
 
-        assert_eq!(status, 400);
-        assert_eq!(headers, response_headers);
+        assert_eq!(rejected.status().as_u16(), 400);
+        assert_eq!(rejected.headers()["x-amzn-requestid"], "abc");
+        let reported = rejected.text();
         match hinted_message {
             Some(message) => {
                 assert!(reported.contains(message), "{reported}");

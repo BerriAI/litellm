@@ -1,11 +1,9 @@
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    #[error("upstream OCR error ({status}): {body}")]
-    Provider {
-        status: u16,
-        body: String,
-        headers: Vec<(String, String)>,
-    },
+    #[error(transparent)]
+    Rejected(#[from] litellm_http::response::Rejected),
+    #[error("OCR document download failed with status {status}")]
+    DocumentDownload { status: u16 },
     #[error("File is empty or could not be read")]
     EmptyFile,
     #[error("Failed to read OCR file {}: {source}", path.display())]
@@ -133,8 +131,9 @@ impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
 impl Error {
     pub fn http_status_code(&self) -> Option<u16> {
         match self {
-            Self::Provider { status, .. }
-            | Self::Transport(litellm_http::transport::Error::Http { status, .. }) => Some(*status),
+            Self::Rejected(rejected) => Some(rejected.status().as_u16()),
+            Self::DocumentDownload { status } => Some(*status),
+            Self::Transport(litellm_http::transport::Error::Timeout(_)) => Some(408),
             error if error.is_request() => Some(400),
             _ => None,
         }

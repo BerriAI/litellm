@@ -55,40 +55,42 @@ async fn messages_cache_identity_includes_provider_native_parameters(
 
     let calls = AtomicUsize::new(0);
     for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
-        let response =
-            execute_unary::<Messages, _, _>(
-                CacheRequest::from_wire(
-                    ProviderIdentity {
-                        model: "test".into(),
-                        provider: "anthropic".into(),
-                    },
-                    Some(&WireRequest {
-                        url: "https://example.test/v1/messages".into(),
-                        headers: vec![],
-                        body: json!({
-                            "model":"test", "messages":[{"role":"user","content":"hello"}],
-                            "max_tokens":32, (field):value
-                        }),
-                    }),
-                ),
-                Some(cache.clone()),
-                Some(CacheOptions::new(CacheScope::Shared)),
-                &(),
-                None,
-                || async {
-                    let call = calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
-                    "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
-                    "content":[{"type":"text","text":format!("answer {call}")}],
-                    "stop_reason":"end_turn", "stop_sequence":null
-                })).unwrap()).into())
+        let response = execute_unary::<Messages, _, _>(
+            CacheRequest::from_wire(
+                ProviderIdentity {
+                    model: "test".into(),
+                    provider: "anthropic".into(),
                 },
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.id, expected_call.to_string());
+                Some(&WireRequest {
+                    url: "https://example.test/v1/messages".into(),
+                    headers: vec![],
+                    body: json!({
+                        "model":"test", "messages":[{"role":"user","content":"hello"}],
+                        "max_tokens":32, (field):value
+                    }),
+                }),
+            ),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+            &(),
+            None,
+            || async {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                Ok(http::Response::new(Box::new(
+                    serde_json::from_value::<MessagesResponse>(json!({
+                        "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
+                        "content":[{"type":"text","text":format!("answer {call}")}],
+                        "stop_reason":"end_turn", "stop_sequence":null
+                    }))
+                    .unwrap(),
+                )))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.body().id, expected_call.to_string());
         assert_eq!(
-            response.content[0]["text"],
+            response.body().content[0]["text"],
             format!("answer {expected_call}")
         );
     }

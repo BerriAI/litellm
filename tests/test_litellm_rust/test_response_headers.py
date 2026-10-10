@@ -1,15 +1,23 @@
 from collections.abc import AsyncIterator
-from typing import Final, Literal, assert_never
+from typing import Final, Literal, assert_never, cast  # noqa: TID251  # narrows the native stream after isinstance
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.response_metadata import mark_rust_response
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES_EVENTS, MESSAGES_RESPONSE, OCR_DOCUMENT, OCR_RESPONSE
+from tests.test_litellm_rust.support.requests import (
+    MESSAGES_EVENTS,
+    MESSAGES_RESPONSE,
+    OCR_DOCUMENT,
+    OCR_RESPONSE,  # pyright: ignore[reportUnknownVariableType]  # shared fixture is an untyped dict literal
+)
 
 pytestmark = pytest.mark.requires_rust_extension
+_HEADERS: Final = TypeAdapter(dict[str, str])
+_ADDITIONAL: Final = TypeAdapter(dict[str, object])
 RouteName = Literal["messages", "chat", "responses", "ocr", "transcription"]
 
 
@@ -121,19 +129,16 @@ async def test_native_response_headers_reach_python_metadata(
     call: Final = NativeCall(args=(), kwargs=supplied, base=supplied)
     response: Final = await call_async(route, call) if asynchronous else call_sync(route, call)
     hidden: Final = get_hidden_params_dict(mark_rust_response(response))
-    raw: Final = hidden["provider_response_headers"]
-    assert isinstance(raw, tuple)
-    assert ("x-provider-trace", "trace") in raw
-    assert ("set-cookie", "session=private") in raw
-    additional: Final = hidden["additional_headers"]
-    assert additional["x-provider-trace"] == "trace"
+    headers: Final = _HEADERS.validate_python(hidden["headers"])
+    assert headers["x-provider-trace"] == "trace"
+    assert headers["retry-after"] == "7"
+    additional: Final = _ADDITIONAL.validate_python(hidden["additional_headers"])
     assert additional["llm_provider-x-provider-trace"] == "trace"
-    assert additional["retry-after"] == "7"
+    assert additional["llm_provider-retry-after"] == "7"
     assert additional["x-litellm-rust"] == "true"
-    assert "x-private" not in additional
-    assert "connection" not in additional
-    assert "set-cookie" not in additional
-    assert "content-length" not in additional
+    for forbidden in ("x-private", "connection", "set-cookie", "content-length"):
+        assert forbidden not in headers
+        assert f"llm_provider-{forbidden}" not in additional
 
 
 @pytest.mark.asyncio
@@ -150,7 +155,7 @@ async def test_native_messages_stream_headers_use_the_same_python_metadata(recor
             },
         )
     )
-    supplied: Final = {
+    supplied: Final[dict[str, object]] = {
         "model": "anthropic/test-model",
         "api_key": "test-key",
         "api_base": recording_server.base_url,
@@ -160,9 +165,13 @@ async def test_native_messages_stream_headers_use_the_same_python_metadata(recor
     }
     response: Final = await call_async("messages", NativeCall(args=(), kwargs=supplied, base=supplied))
     assert isinstance(response, AsyncIterator)
-    hidden: Final = get_hidden_params_dict(mark_rust_response(response))
-    assert hidden["additional_headers"]["x-provider-trace"] == "stream"
-    assert hidden["additional_headers"]["x-litellm-rust"] == "true"
-    assert "x-private" not in hidden["additional_headers"]
-    assert ("x-private", "hop") in hidden["provider_response_headers"]
-    assert b"message_stop" in b"".join([chunk async for chunk in response])
+    stream: Final = cast(
+        AsyncIterator[bytes], response
+    )  # cast-ok: isinstance above only narrows to AsyncIterator[Unknown]
+    additional: Final = _ADDITIONAL.validate_python(
+        get_hidden_params_dict(mark_rust_response(response))["additional_headers"]
+    )
+    assert additional["llm_provider-x-provider-trace"] == "stream"
+    assert additional["x-litellm-rust"] == "true"
+    assert "llm_provider-x-private" not in additional
+    assert b"message_stop" in b"".join([chunk async for chunk in stream])

@@ -6,12 +6,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["json"] }
 bytes.workspace = true
 futures-util.workspace = true
 http.workspace = true
 litellm-host.workspace = true
 litellm-host-native.workspace = true
+litellm-http.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

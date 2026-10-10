@@ -3,7 +3,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
-use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
@@ -15,10 +14,7 @@ use litellm_llms_types::formats::messages::MessagesResponse;
 use litellm_tracing::ByteChunk;
 use serde_json::Value;
 
-use super::{
-    Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
-    prepare::ProviderMessagesRequest,
-};
+use super::{Error, MessagesCallResponse, MessagesRoute, prepare::ProviderMessagesRequest};
 use crate::constants::MESSAGES_TIMEOUT_SECS;
 use litellm_inference::{context::CallContext, outbound::outbound_request};
 
@@ -126,9 +122,6 @@ impl MessagesRoute {
             timeout,
         )
         .await?;
-        if !response.status().is_success() {
-            return Err(provider_error(response).await);
-        }
         let config = provider.config();
         if stream {
             return Ok(streaming_response(
@@ -137,15 +130,14 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
-        let headers = litellm_http::request::response_headers(response.headers());
-        let text = response.text().await.map_err(network)?;
+        let (parts, body) = litellm_inference::outbound::read(response)
+            .await?
+            .into_parts();
+        let text = litellm_inference::outbound::text(&body);
         log_response_body(&text);
         context.response_received(&text).await?;
         decode_response(config, &identity.model, &text).map(|message| {
-            MessagesCallResponse::Complete(litellm_http::response::ProviderResponse {
-                body: Box::new(message),
-                headers,
-            })
+            MessagesCallResponse::Complete(http::Response::from_parts(parts, Box::new(message)))
         })
     }
 }
@@ -158,7 +150,7 @@ fn serialize_failure(err: serde_json::Error) -> Error {
 }
 
 fn network(error: reqwest::Error) -> Error {
-    Error::Transport(TransportError::Network(error.to_string()))
+    Error::Transport(error.into())
 }
 
 async fn send(
@@ -174,25 +166,7 @@ async fn send(
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    litellm_inference::outbound::send(request, http)
-        .await
-        .map_err(network)
-}
-
-async fn provider_error(response: reqwest::Response) -> Error {
-    let status = response.status().as_u16();
-    let headers = litellm_http::request::response_headers(response.headers());
-    match response.text().await {
-        Ok(text) => {
-            log_error_body(status, &text);
-            Error::Transport(TransportError::Http {
-                status,
-                body: truncate_error_body(&text),
-                headers,
-            })
-        }
-        Err(error) => network(error),
-    }
+    litellm_inference::outbound::send(request, http).await
 }
 
 fn decode_response(
@@ -216,11 +190,7 @@ fn streaming_response(
     decoder: Option<StreamDecoder>,
     provider: &'static str,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let head = litellm_http::transport::parts(&response);
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
             let chunk = response.chunk().await.map_err(network)?;
@@ -232,10 +202,7 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
-    MessagesCallResponse::Stream {
-        head: super::route::MessagesStreamHead { headers },
-        chunks,
-    }
+    MessagesCallResponse::Stream { head, chunks }
 }
 
 fn decoded_chunks(
@@ -265,10 +232,6 @@ fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
 
 fn log_response_body(body: &str) {
     tracing::debug!(body, "provider response body");
-}
-
-fn log_error_body(status: u16, body: &str) {
-    tracing::debug!(status, body, "provider error body");
 }
 
 fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {

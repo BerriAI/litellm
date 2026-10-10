@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_llms::base_llm::ocr::{error::Error, handler::read_response_bytes};
+use litellm_llms::base_llm::ocr::{error::Error, handler::read};
 use rstest::rstest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -9,7 +9,10 @@ use tokio::{
 
 /// Answers one request with raw `response` bytes and then holds the connection open, so a
 /// read that waits for the rest of an oversized body hangs instead of passing.
-async fn read_bounded(response: String, limit: usize) -> Result<bytes::Bytes, Error> {
+async fn read_bounded(
+    response: String,
+    limit: usize,
+) -> Result<http::Response<bytes::Bytes>, Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -24,8 +27,7 @@ async fn read_bounded(response: String, limit: usize) -> Result<bytes::Bytes, Er
         .send()
         .await
         .unwrap();
-    let result =
-        tokio::time::timeout(Duration::from_secs(2), read_response_bytes(response, limit)).await;
+    let result = tokio::time::timeout(Duration::from_secs(2), read(response, limit)).await;
     server.abort();
     result.expect("bounded reads must finish without waiting for the rest of an oversized body")
 }
@@ -37,7 +39,10 @@ async fn read_bounded(response: String, limit: usize) -> Result<bytes::Bytes, Er
 )]
 #[tokio::test]
 async fn a_body_of_exactly_the_limit_is_read(#[case] response: &str) {
-    assert_eq!(read_bounded(response.into(), 8).await.unwrap(), "abcdefgh");
+    assert_eq!(
+        read_bounded(response.into(), 8).await.unwrap().body(),
+        "abcdefgh"
+    );
 }
 
 #[rstest]
@@ -64,25 +69,14 @@ async fn an_oversized_error_keeps_its_status_and_a_bounded_body_without_draining
         false => prefix.clone(),
     };
 
-    let error = read_bounded(
+    let reply = read_bounded(
         format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\nRetry-After: 17\r\n\r\n{body}"),
         prefix.len(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
 
-    let Error::Transport(litellm_http::transport::Error::Http {
-        status,
-        body,
-        headers,
-    }) = error
-    else {
-        panic!("unexpected error: {error}");
-    };
-    assert_eq!(status, 429);
-    assert_eq!(body, prefix);
-    assert_eq!(
-        litellm_http::request::header_value(&headers, "retry-after"),
-        Some("17")
-    );
+    assert_eq!(reply.status().as_u16(), 429);
+    assert_eq!(reply.body(), prefix.as_bytes());
+    assert_eq!(reply.headers()["retry-after"], "17");
 }

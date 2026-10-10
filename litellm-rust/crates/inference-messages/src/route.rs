@@ -9,23 +9,18 @@ use litellm_llms_types::formats::messages::MessagesResponse;
 
 use super::{Error, MessagesCall};
 
-pub type MessagesOutput =
-    HostedCompletion<litellm_http::response::ProviderResponse<Box<MessagesResponse>>>;
-
-/// The upstream response as the caller sees it at stream hand-off, before any chunk.
-pub struct MessagesStreamHead {
-    pub headers: Vec<(String, String)>,
-}
+pub type MessagesOutput = HostedCompletion<http::Response<Box<MessagesResponse>>>;
 
 pub struct Messages;
 
 impl Protocol for Messages {
-    type Response = litellm_http::response::ProviderResponse<Box<MessagesResponse>>;
+    type Response = http::Response<Box<MessagesResponse>>;
     type Error = Error;
     type Request = MessagesCall;
     type HostCall = Infallible;
     type Chunk = Bytes;
-    type StreamHead = MessagesStreamHead;
+    /// The upstream status line and headers, as the caller sees them before any chunk.
+    type StreamHead = http::response::Parts;
 }
 
 pub type MessagesMachine = HostedMachine<Messages>;
@@ -59,6 +54,7 @@ impl super::MessagesRoute {
 
 impl litellm_inference::caching::Cachable for Messages {
     const SURFACE: &'static str = "messages";
+    type Body = Box<MessagesResponse>;
 }
 
 impl litellm_inference::caching::StreamCachable for Messages {
@@ -66,9 +62,7 @@ impl litellm_inference::caching::StreamCachable for Messages {
 
     fn replay(data: bytes::Bytes) -> Option<litellm_host::call::OutputOf<Self>> {
         Some(litellm_host::call::CallOutput::Stream {
-            head: MessagesStreamHead {
-                headers: Vec::new(),
-            },
+            head: http::Response::new(()).into_parts().0,
             chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
         })
     }

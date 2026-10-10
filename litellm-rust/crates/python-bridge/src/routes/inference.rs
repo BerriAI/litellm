@@ -6,7 +6,6 @@ use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_host_python::{PythonBinding, PythonHostCalls, from_py, present};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_secrets::source::SecretSource;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -15,7 +14,7 @@ use serde_json::{Map, Value};
 
 use super::NativeCall;
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::route_error_to_pyerr,
     marshal::{
         RouteOptions, optional_timeout, project_optional_fields, public_provider_response,
         python_timeout_seconds,
@@ -110,7 +109,7 @@ impl InferenceHost {
     pub fn response<T: Serialize>(
         &self,
         py: Python<'_>,
-        response: litellm_http::response::ProviderResponse<T>,
+        response: ::http::Response<T>,
     ) -> PyResult<Py<PyAny>> {
         public_provider_response(py, self.module, response)
     }
@@ -121,18 +120,7 @@ impl InferenceHost {
         {
             return Ok(original);
         }
-        let native = match error {
-            RouteError::Transport(TransportError::Http {
-                status,
-                body,
-                headers,
-            }) => {
-                let error = RustUpstreamError::new_err((status, body));
-                error.value(py).setattr("headers", headers)?;
-                error
-            }
-            other => route_error_to_pyerr(other),
-        };
+        let native = route_error_to_pyerr(error);
         let mapped = py
             .import(self.module)?
             .getattr("map_failure")?

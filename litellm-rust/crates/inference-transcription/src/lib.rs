@@ -43,17 +43,15 @@ impl AudioTranscriptionRoute {
     pub async fn execute(
         &self,
         request: AudioTranscriptionRequest<'_>,
-    ) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
+    ) -> Result<http::Response<Value>, Error> {
         litellm_inference::diagnostic::unary(async {
             let request =
                 prepare_audio_transcription_provider_call(request, self.secrets.as_ref()).await?;
             litellm_inference::diagnostic::provider(&request.model, &request.custom_llm_provider);
-            let execute: futures_util::future::BoxFuture<
-                '_,
-                Result<litellm_http::response::ProviderResponse<Value>, Error>,
-            > = Box::pin(execute_audio_transcription_provider_call(
-                &self.http, &self.auth, request,
-            ));
+            let execute: futures_util::future::BoxFuture<'_, Result<http::Response<Value>, Error>> =
+                Box::pin(execute_audio_transcription_provider_call(
+                    &self.http, &self.auth, request,
+                ));
             execute.await
         })
         .await

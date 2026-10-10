@@ -21,16 +21,8 @@ pub struct ResponsesCall {
     pub timeout: Option<Duration>,
 }
 
-pub struct ResponsesStreamHead {
-    pub headers: Vec<(String, String)>,
-}
-
-pub type ResponsesOutput = CallOutput<
-    litellm_http::response::ProviderResponse<ResponsesApiResponse>,
-    ResponsesStreamHead,
-    Bytes,
-    Error,
->;
+pub type ResponsesOutput =
+    CallOutput<http::Response<ResponsesApiResponse>, http::response::Parts, Bytes, Error>;
 
 pub(super) struct ProviderResponsesRequest {
     pub config: &'static dyn BaseResponsesApiConfig,

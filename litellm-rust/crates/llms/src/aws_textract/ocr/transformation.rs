@@ -100,13 +100,8 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         decode_and_normalize_response(model, raw_response, request_format, normalize_response)
     }
 
-    fn get_error_class(
-        &self,
-        error_message: String,
-        status_code: u16,
-        headers: Vec<(String, String)>,
-    ) -> Error {
-        error_class(error_message, status_code, headers)
+    fn get_error_class(&self, rejected: litellm_http::response::Rejected) -> Error {
+        error_class(rejected)
     }
 }
 
@@ -235,9 +230,13 @@ mod tests {
     #[rstest]
     fn provider_errors_go_through_the_shared_textract_error_class() {
         let error = TextractDetectTextConfig.get_error_class(
-            r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#.into(),
-            400,
-            Vec::new(),
+            http::Response::builder()
+                .status(400)
+                .body(bytes::Bytes::from_static(
+                    br#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#,
+                ))
+                .unwrap()
+                .into(),
         );
 
         assert!(

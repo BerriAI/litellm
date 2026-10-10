@@ -1,5 +1,4 @@
 use litellm_host::observation::ObservationSender;
-use litellm_http::response::ProviderResponse;
 pub mod route;
 pub mod types;
 pub use litellm_inference::RouteError as Error;
@@ -49,7 +48,7 @@ impl ChatCompletionsRoute {
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
-    ) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
+    ) -> Result<http::Response<ChatCompletionsResponse>, Error> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
@@ -72,7 +71,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
+    ) -> Result<http::Response<ChatCompletionsResponse>, Error> {
         let resolved = resolve_request(request)?;
         let snapshot = self
             .secrets
@@ -82,7 +81,7 @@ impl ChatCompletionsRoute {
         litellm_inference::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
         let execute: futures_util::future::BoxFuture<
             '_,
-            Result<ProviderResponse<ChatCompletionsResponse>, Error>,
+            Result<http::Response<ChatCompletionsResponse>, Error>,
         > = Box::pin(handler::execute(
             &self.http,
             &self.auth,

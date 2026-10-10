@@ -1,5 +1,4 @@
 use litellm_host::observation::ObservationSender;
-use litellm_http::response::ProviderResponse;
 use std::sync::Arc;
 
 use litellm_host::interceptors::Interceptors;
@@ -26,7 +25,7 @@ impl OcrRoute {
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
         observers: Option<ObservationSender>,
-    ) -> Result<ProviderResponse<LiteLLMOcrResponse>, Error> {
+    ) -> Result<http::Response<LiteLLMOcrResponse>, Error> {
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
             self.run(request, interceptors, observers.as_ref()),
@@ -47,13 +46,13 @@ impl OcrRoute {
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ProviderResponse<LiteLLMOcrResponse>, Error> {
+    ) -> Result<http::Response<LiteLLMOcrResponse>, Error> {
         litellm_inference::diagnostic::unary(async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
             let prepared = prepare_request_document(request).await?;
             let execute: futures_util::future::BoxFuture<
                 '_,
-                Result<ProviderResponse<LiteLLMOcrResponse>, Error>,
+                Result<http::Response<LiteLLMOcrResponse>, Error>,
             > = Box::pin(perform_ocr_request(
                 &self.client,
                 prepared,

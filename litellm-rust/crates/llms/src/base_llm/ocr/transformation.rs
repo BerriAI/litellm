@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::base_llm::ocr::{
     error::Error,
-    handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
+    handler::{CallHooks, OcrClient, transform_request_body},
     settings::OcrSettings,
 };
 
@@ -187,7 +187,6 @@ pub fn response_format(optional_params: &CallArguments) -> Result<OcrResponseFor
 
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
-    pub headers: Vec<(String, String)>,
     pub data: T,
     pub native: Option<Map<String, Value>>,
     pub text: String,
@@ -232,7 +231,6 @@ pub fn decode_response<T: DeserializeOwned>(
         None
     };
     Ok(DecodedOcrResponse {
-        headers: Vec::new(),
         data,
         native,
         text: String::from_utf8_lossy(bytes).into_owned(),
@@ -353,35 +351,23 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, Error>;
 
+    /// Normalizes a successful reply; the provider's status line and headers stay on it.
     fn async_transform_ocr_response(
         &self,
         model: &str,
-        raw_response: reqwest::Response,
+        raw_response: http::Response<bytes::Bytes>,
         context: OcrResponseContext<'_>,
-    ) -> impl Future<
-        Output = Result<litellm_http::response::ProviderResponse<LiteLLMOcrResponse>, Error>,
-    > + Send {
+    ) -> impl Future<Output = Result<http::Response<LiteLLMOcrResponse>, Error>> + Send {
         async move {
-            let headers = litellm_http::request::response_headers(raw_response.headers());
-            let bytes =
-                read_response_bytes(raw_response, context.connection.max_response_bytes).await?;
+            let (parts, bytes) = raw_response.into_parts();
             context.hooks.response_received(&bytes).await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
-                .map(|body| litellm_http::response::ProviderResponse { body, headers })
+                .map(|response| http::Response::from_parts(parts, response))
         }
     }
 
-    fn get_error_class(
-        &self,
-        error_message: String,
-        status_code: u16,
-        headers: Vec<(String, String)>,
-    ) -> Error {
-        Error::Provider {
-            status: status_code,
-            body: error_message,
-            headers,
-        }
+    fn get_error_class(&self, rejected: litellm_http::response::Rejected) -> Error {
+        Error::Rejected(rejected)
     }
 
     /// Provider-specific check applied to the composed body, both before and

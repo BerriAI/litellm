@@ -225,10 +225,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     async fn async_transform_ocr_response(
         &self,
         model: &str,
-        raw_response: reqwest::Response,
+        raw_response: http::Response<bytes::Bytes>,
         context: OcrResponseContext<'_>,
-    ) -> Result<litellm_http::response::ProviderResponse<LiteLLMOcrResponse>, Error> {
-        let decoded = read_operation_response(
+    ) -> Result<http::Response<LiteLLMOcrResponse>, Error> {
+        let (parts, decoded) = read_operation_response(
             context.client.polling_http(),
             raw_response,
             context.url,
@@ -237,10 +237,11 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             context.request_format == OcrResponseFormat::Native,
             context.hooks,
         )
-        .await?;
-        Ok(litellm_http::response::ProviderResponse {
-            headers: decoded.headers,
-            body: LiteLLMOcrResponse {
+        .await?
+        .into_parts();
+        Ok(http::Response::from_parts(
+            parts,
+            LiteLLMOcrResponse {
                 provider_native_response: decoded.native,
                 ..transform_completed_response(
                     model,
@@ -248,7 +249,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                     context.connection.settings.document_intelligence_dpi,
                 )?
             },
-        })
+        ))
     }
 }
 
@@ -439,25 +440,18 @@ fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, E
 
 async fn read_operation_response(
     http_client: &litellm_http::Client,
-    response: reqwest::Response,
+    response: http::Response<bytes::Bytes>,
     original_url: &str,
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
     hooks: &dyn CallHooks<Error>,
-) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
-    if response.status() != reqwest::StatusCode::ACCEPTED {
-        let response_headers = litellm_http::request::response_headers(response.headers());
-        let bytes = crate::base_llm::ocr::handler::read_response_bytes(
-            response,
-            connection.max_response_bytes,
-        )
-        .await?;
+) -> Result<http::Response<DecodedOcrResponse<AzureDocumentIntelligenceOperation>>, Error> {
+    if response.status() != http::StatusCode::ACCEPTED {
+        let (parts, bytes) = response.into_parts();
         hooks.response_received(&bytes).await?;
-        return decode_response(&bytes, native).map(|decoded| DecodedOcrResponse {
-            headers: response_headers,
-            ..decoded
-        });
+        return decode_response(&bytes, native)
+            .map(|decoded| http::Response::from_parts(parts, decoded));
     }
     let location = response
         .headers()
@@ -473,10 +467,7 @@ async fn read_operation_response(
     {
         return Err(Error::PollOrigin);
     }
-    let bytes =
-        crate::base_llm::ocr::handler::read_response_bytes(response, connection.max_response_bytes)
-            .await?;
-    hooks.response_received(&bytes).await?;
+    hooks.response_received(response.body()).await?;
     poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
 
@@ -487,7 +478,7 @@ async fn poll_operation(
     connection: &OcrConnection,
     native: bool,
     hooks: &dyn CallHooks<Error>,
-) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
+) -> Result<http::Response<DecodedOcrResponse<AzureDocumentIntelligenceOperation>>, Error> {
     let deadline = Instant::now()
         .checked_add(connection.settings.poll_timeout)
         .ok_or(Error::PollTimeout)?;
@@ -508,11 +499,10 @@ async fn poll_operation(
                 "authorization",
             ]),
         );
-        let response =
-            tokio::time::timeout_at(deadline, litellm_http::request::http_request(builder))
-                .await
-                .map_err(|_| Error::PollTimeout)?
-                .map_err(litellm_http::transport::Error::from)?;
+        let response = tokio::time::timeout_at(deadline, builder.send())
+            .await
+            .map_err(|_| Error::PollTimeout)?
+            .map_err(litellm_http::transport::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -530,9 +520,11 @@ async fn poll_operation(
         )
         .await
         .map_err(|_| Error::PollTimeout)??;
-        match &decoded.data.status {
+        match &decoded.body().data.status {
             Some(OperationStatus::Succeeded) => {
-                hooks.response_received(decoded.text.as_bytes()).await?;
+                hooks
+                    .response_received(decoded.body().text.as_bytes())
+                    .await?;
                 return Ok(decoded);
             }
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {

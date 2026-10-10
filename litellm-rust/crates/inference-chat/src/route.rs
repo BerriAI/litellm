@@ -1,5 +1,4 @@
 use litellm_host::observation::ObservationSender;
-use litellm_http::response::ProviderResponse;
 use std::convert::Infallible;
 
 use litellm_host::{
@@ -16,7 +15,7 @@ use super::{
 pub struct ChatCompletions;
 
 impl Protocol for ChatCompletions {
-    type Response = ProviderResponse<ChatCompletionsResponse>;
+    type Response = http::Response<ChatCompletionsResponse>;
     type Error = Error;
     type Request = ChatCompletionsCall;
     type HostCall = Infallible;
@@ -59,7 +58,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
+    ) -> Result<http::Response<ChatCompletionsResponse>, Error> {
         litellm_inference::diagnostic::unary(async {
             let request = ChatCompletionsRequest {
                 model: &call.model,
@@ -80,4 +79,5 @@ impl ChatCompletionsRoute {
 
 impl litellm_inference::caching::Cachable for ChatCompletions {
     const SURFACE: &'static str = "chat_completions";
+    type Body = ChatCompletionsResponse;
 }
