@@ -43931,6 +43931,10 @@
               ],
               "title": "Content"
             },
+            "is_error": {
+              "title": "Is Error",
+              "type": "boolean"
+            },
             "role": {
               "const": "tool",
               "title": "Role",

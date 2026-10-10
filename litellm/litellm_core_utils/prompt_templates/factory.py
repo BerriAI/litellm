@@ -1586,11 +1586,9 @@ def convert_to_gemini_tool_call_result(
         # Not valid JSON, wrap in content field
         response_data = {"content": content_str}
 
-    # We can't determine from openai message format whether it's a successful or
-    # error call result so default to the successful result template
     _function_response: Final = VertexFunctionResponse(
         name=name,
-        response=response_data,
+        response={"error": content_str} if message.get("is_error") is True else response_data,
     )
     if gemini_call_id:
         _function_response["id"] = gemini_call_id

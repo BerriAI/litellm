@@ -1128,6 +1128,36 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     )
 
 
+def test_convert_gemini_tool_call_result_error_goes_to_response_error():
+    """https://github.com/BerriAI/litellm/issues/44979"""
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "deploy", "arguments": "{}"},
+            }
+        ],
+    }
+
+    failed = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool", tool_call_id="call_1", content="exit code 1: migration failed", is_error=True
+        ),
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    succeeded = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(role="tool", tool_call_id="call_1", content="deployed"),
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert failed["function_response"]["response"] == {"error": "exit code 1: migration failed"}
+    assert succeeded["function_response"]["response"] == {"content": "deployed"}
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
