@@ -291,7 +291,7 @@ async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore) -> str:
         return await async_convert_url_to_base64(url)
 
 
-async def _fetch_data_urls(remote_urls: tuple[str, ...]) -> tuple[str, ...]:
+async def async_convert_urls_to_base64(remote_urls: tuple[str, ...]) -> tuple[str, ...]:
     in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
     fetches: Final = tuple(asyncio.create_task(_fetch_data_url(url, in_flight)) for url in remote_urls)
     try:
@@ -329,6 +329,6 @@ async def async_inline_remote_media(
     remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
     if not remote_urls:
         return messages
-    data_urls: Final = await _fetch_data_urls(remote_urls)
+    data_urls: Final = await async_convert_urls_to_base64(remote_urls)
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
     return [_inline_message(message, inlined, should_inline) for message in messages]
