@@ -18,6 +18,7 @@ API_VERSION: Final = "2025-04-01-preview"
 SEARCH_TOOL: Final = "litellm_web_search"
 SEARCH_TARGET: Final = "/tavily/search"
 STREAM_OPTIONS_REFUSAL: Final = "The 'stream_options' parameter is only allowed when 'stream' is enabled."
+FOLLOWUP_FAILURE: Final = "scripted follow-up failure"
 FIRST_USAGE: Final = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 FOLLOWUP_USAGE: Final = {"prompt_tokens": 23, "completion_tokens": 5, "total_tokens": 28}
 RESPONSES_FIRST_USAGE: Final = {"input_tokens": 13, "output_tokens": 6, "total_tokens": 19}
@@ -99,7 +100,7 @@ def _chat(name: str, body: Mapping[str, JsonValue]) -> Reply:
     messages: Final = _ITEMS.validate_python(body["messages"])
     if any(message.get("role") == "tool" for message in messages):
         if name.endswith("-followup-fails"):
-            return _azure_error(500, "scripted follow-up failure")
+            return _azure_error(500, FOLLOWUP_FAILURE)
         return _chat_completion(
             _minted(f"chatcmpl-{name}-2-"), {"role": "assistant", "content": answer(name)}, "stop", FOLLOWUP_USAGE
         )
@@ -154,7 +155,7 @@ def _responses(body: Mapping[str, JsonValue]) -> Reply:
     items: Final = _ITEMS.validate_python(body["input"]) if isinstance(body.get("input"), list) else []
     if any(item.get("type") == "function_call_output" for item in items):
         if name.endswith("-followup-fails"):
-            return _azure_error(500, "scripted follow-up failure")
+            return _azure_error(500, FOLLOWUP_FAILURE)
         return _response(
             _minted(f"resp_{name}_2_"), name, (_text_item(f"{name}_2", answer(name)),), RESPONSES_FOLLOWUP_USAGE
         )

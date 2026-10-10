@@ -618,6 +618,7 @@ def test_failed_follow_up_call_reaches_the_caller_as_an_error(rig: _Rig, scenari
     deployment: Final = _deploy(rig, scenario, "followup-fails")
     stream: Final = _chat(rig, _chat_body(deployment, extra={**_NO_CACHE, "stream_options": dict(_USAGE)}))
     assert stream.status == 200, stream.text
+    assert iv.FOLLOWUP_FAILURE in stream.text and stream.content == "", stream.text
     received: Final = _upstream(rig, deployment)
     _assert_upstream(received, model_calls=2, searches=1)
     assert rig.gateway.chat(_deploy(rig, scenario, "plain").model)["object"] == "chat.completion"
@@ -780,6 +781,14 @@ def _holding(release: threading.Event, held: SimpleQueue[str]) -> Callable[[Requ
     return respond
 
 
+@contextmanager
+def _releasing(release: threading.Event) -> Generator[None, None, None]:
+    try:
+        yield
+    finally:
+        release.set()
+
+
 def _open_upstream_connections(pid: int, upstream: str) -> int:
     port: Final = urlsplit(upstream).port
     return sum(
@@ -813,7 +822,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_restreaming_with_usag
     release: Final = threading.Event()
     held: Final[SimpleQueue[str]] = SimpleQueue()
     deployment: Final = _Deployment(_BURST_MODEL, _BURST_DEPLOYMENT)
-    with _interception_proxy(tmp_path, _holding(release, held), {}, _burst_models) as owned:
+    with _interception_proxy(tmp_path, _holding(release, held), {}, _burst_models) as owned, _releasing(release):
         workers: Final = eventually(
             lambda: _worker_pids(owned.proxy.log.read_text()),
             lambda pids: len(pids) == 2,
