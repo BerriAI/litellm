@@ -203,11 +203,11 @@ mod tests {
             c"
 import sys
 import types
-timeouts = types.ModuleType('litellm.rust_bridge.timeouts')
+timeouts = types.ModuleType('litellm.rust_bridge.host.timeouts')
 timeouts.timeout_to_seconds = lambda timeout: None if timeout is None else float(timeout)
 sys.modules.setdefault('litellm', types.ModuleType('litellm'))
 sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-sys.modules['litellm.rust_bridge.timeouts'] = timeouts
+sys.modules['litellm.rust_bridge.host.timeouts'] = timeouts
 ",
         );
     }

@@ -9,6 +9,8 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
+const TIMEOUTS_MODULE: &str = "litellm.rust_bridge.host.timeouts";
+
 /// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
     pub(crate) model: String,
@@ -47,7 +49,7 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration>
 }
 
 pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyResult<Option<f64>> {
-    py.import("litellm.rust_bridge.timeouts")?
+    py.import(TIMEOUTS_MODULE)?
         .getattr("timeout_to_seconds")?
         .call1((timeout,))?
         .extract()
