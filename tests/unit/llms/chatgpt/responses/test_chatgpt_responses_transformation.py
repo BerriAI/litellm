@@ -129,6 +129,27 @@ class TestChatGPTResponsesAPITransformation:
         assert model_info["mode"] == "responses"
         assert resolved_model == model_name
 
+    @pytest.mark.parametrize(
+        "openai_chat_row",
+        [None, {"litellm_provider": "openai", "mode": "chat", "max_tokens": 4096}],
+        ids=["absent-from-cost-map", "only-an-openai-chat-row"],
+    )
+    def test_chatgpt_model_missing_from_cost_map_still_bridges_to_responses(
+        self,
+        openai_chat_row: dict[str, object] | None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        model_name: Final = "gpt-unregistered-chatgpt-model"
+        if openai_chat_row is not None:
+            monkeypatch.setitem(litellm.model_cost, model_name, openai_chat_row)
+        litellm.get_model_info.cache_clear()
+
+        model_info, resolved_model = responses_api_bridge_check(model=model_name, custom_llm_provider="chatgpt")
+        litellm.get_model_info.cache_clear()
+
+        assert model_info["mode"] == "responses"
+        assert resolved_model == model_name
+
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
     def test_chatgpt_responses_endpoint_url(self, mock_authenticator_class):
         mock_auth_instance = MagicMock()

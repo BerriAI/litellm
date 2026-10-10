@@ -1130,6 +1130,10 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
+    # The ChatGPT Codex backend only serves /responses, so a model missing from the cost map must still bridge
+    if custom_llm_provider == "chatgpt":
+        model_info["mode"] = "responses"
+
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
