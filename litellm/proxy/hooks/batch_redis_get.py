@@ -97,7 +97,9 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 return None
             cache_key: str | None = None
             if "cache_key" in kwargs:
-                cache_key = litellm.cache._prepare_explicit_cache_key(kwargs["cache_key"], **kwargs)
+                cache_key = litellm.cache._prepare_explicit_cache_key(  # rebind-ok: normalize explicit caller key
+                    kwargs["cache_key"], **kwargs
+                )
             else:
                 cache_key = litellm.cache.get_cache_key(
                     *args, **kwargs
