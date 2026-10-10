@@ -2393,6 +2393,11 @@ def __getattr__(name: str) -> Any:
         return harness_module if name == "harness" else getattr(harness_module, name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
+    if name == "proxy":
+        import importlib
+
+        return importlib.import_module("litellm.proxy")
+
     if name == "encoding":
         from ._lazy_imports import get_litellm_globals
 
