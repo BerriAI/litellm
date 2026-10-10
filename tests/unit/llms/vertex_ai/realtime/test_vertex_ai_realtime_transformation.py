@@ -223,6 +223,36 @@ def test_vertex_session_update_normalizes_ga_remapped_fields(
     )
 
 
+def test_vertex_keeps_turn_detection_tuning_when_auto_response_is_off():
+    session_update: Final = {
+        "type": "session.update",
+        "session": {
+            "audio": {
+                "input": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "create_response": False,
+                        "prefix_padding_ms": 200,
+                        "silence_duration_ms": 700,
+                    }
+                },
+            },
+        },
+    }
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"] == {
+        "disabled": True,
+        "prefixPaddingMs": 200,
+        "silenceDurationMs": 700,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Round-trip test: text-in / text-out via RealTimeStreaming
 # ---------------------------------------------------------------------------

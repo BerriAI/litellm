@@ -47,6 +47,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _include_function_response_id(self) -> bool:
         return False
 
+    def _rejects_vad_tuning_with_detection_off(self) -> bool:
+        return False
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------

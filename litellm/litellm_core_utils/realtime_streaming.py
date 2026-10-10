@@ -4,8 +4,10 @@ import traceback
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -106,6 +108,66 @@ class _LoggingWorker(Protocol):
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
     return json.loads(payload)
+
+
+_GUARDRAIL_TURN_DETECTION_GATE: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "server_vad", "create_response": False}
+)
+_EMPTY_SESSION: Final[Mapping[str, object]] = MappingProxyType({})
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, Mapping) else None
+
+
+def _mapping_field(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    return _json_object(container.get(key))
+
+
+def _turn_detection_with_auto_response_off(turn_detection: object) -> Mapping[str, object]:
+    client_turn_detection: Final = _json_object(turn_detection)
+    if client_turn_detection is None:
+        return dict(_GUARDRAIL_TURN_DETECTION_GATE)
+    return {**client_turn_detection, "create_response": False}
+
+
+def _nested_turn_detection_part(session: Mapping[str, object]) -> Mapping[str, object]:
+    audio: Final = _mapping_field(session, "audio")
+    if audio is None:
+        return {}
+    audio_input: Final = _mapping_field(audio, "input")
+    if audio_input is None or "turn_detection" not in audio_input:
+        return {}
+    gated_input: Final = {
+        **audio_input,
+        "turn_detection": _turn_detection_with_auto_response_off(audio_input["turn_detection"]),
+    }
+    return {"audio": {**audio, "input": gated_input}}
+
+
+def _with_create_response_disabled(session: Mapping[str, object]) -> Mapping[str, object] | None:
+    """``session`` with every turn_detection the client sent unable to auto-respond, or None when it sent none."""
+    flat_part: Final = (
+        {"turn_detection": _turn_detection_with_auto_response_off(session["turn_detection"])}
+        if "turn_detection" in session
+        else {}
+    )
+    nested_part: Final = _nested_turn_detection_part(session)
+    if not flat_part and not nested_part:
+        return None
+    return {**session, **flat_part, **nested_part}
+
+
+def _gate_session_update(session: object, inject_gate_when_absent: bool) -> Mapping[str, object] | None:
+    """The session to forward under a transcript guardrail, or None when the frame needs no change."""
+    client_session: Final = _json_object(session)
+    if client_session is None:
+        return None
+    gated: Final = _with_create_response_disabled(client_session)
+    if gated is not None or not inject_gate_when_absent:
+        return gated
+    return {**client_session, "turn_detection": dict(_GUARDRAIL_TURN_DETECTION_GATE)}
 
 
 class RealtimeEventNormalizer(Protocol):
@@ -712,10 +774,7 @@ class RealTimeStreaming:
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
-        turn_detection: Final[dict[str, str | bool]] = {
-            "type": "server_vad",
-            "create_response": False,
-        }
+        turn_detection: Final = dict(_GUARDRAIL_TURN_DETECTION_GATE)
         if self._backend_uses_beta_protocol:
             session: dict[str, object] = {"turn_detection": turn_detection}
         else:
@@ -1445,19 +1504,19 @@ class RealTimeStreaming:
                         and self.session_configuration_request is None
                         and not self._guardrail_turn_detection_update_sent
                         and self._should_disable_vad_auto_response()
-                    ):
-                        session: Mapping[str, object] | None = msg_obj.setdefault("session", {})
-                        if isinstance(session, dict):
-                            existing_td = session.get("turn_detection")
-                            if not isinstance(existing_td, dict):
-                                existing_td = {}
-                            existing_td["create_response"] = False
-                            session["turn_detection"] = existing_td
-                            message = json.dumps(msg_obj)
-                            guardrail_turn_detection_injected = True
-                            verbose_logger.debug(
-                                "Injected turn_detection into first session.update for audio transcription guardrails"
+                        and (
+                            gated_first := _gate_session_update(
+                                client_event.get("session", _EMPTY_SESSION), inject_gate_when_absent=True
                             )
+                        )
+                        is not None
+                    ):
+                        msg_obj["session"] = gated_first
+                        message = json.dumps(msg_obj)
+                        guardrail_turn_detection_injected = True
+                        verbose_logger.debug(
+                            "Injected turn_detection into first session.update for audio transcription guardrails"
+                        )
 
                     ## GUARDRAIL: Force ``create_response`` to False in any
                     # client-provided ``turn_detection`` so a later
@@ -1465,52 +1524,22 @@ class RealTimeStreaming:
                     # and bypass the transcription guardrail after the
                     # initial disable. Covers both the flat beta key and the
                     # nested GA ``audio.input.turn_detection`` shape, since
-                    # the GA remap below also accepts either form. Skipped
-                    # when the injection block above already ran for this
-                    # message, to avoid redundant double-serialization.
+                    # the GA remap below also accepts either form. A later
+                    # update with no turn_detection is forwarded as is, since
+                    # the provider keeps the earlier disable for an unset field.
                     if (
                         msg_type == "session.update"
                         and not guardrail_turn_detection_injected
                         and self._should_disable_vad_auto_response()
+                        and (
+                            gated_later := _gate_session_update(
+                                client_event.get("session"), inject_gate_when_absent=False
+                            )
+                        )
+                        is not None
                     ):
-                        session = client_event.get("session")
-                        if isinstance(session, dict):
-                            td_overridden = False
-                            flat_td = session.get("turn_detection")
-                            flat_td_present = flat_td is not None
-                            if flat_td_present:
-                                if not isinstance(flat_td, dict):
-                                    flat_td = {}
-                                if flat_td.get("create_response") is not False:
-                                    flat_td["create_response"] = False
-                                    session["turn_detection"] = flat_td
-                                    td_overridden = True
-                            nested_td_present = False
-                            audio = session.get("audio")
-                            if isinstance(audio, dict):
-                                audio_input = audio.get("input")
-                                if isinstance(audio_input, dict):
-                                    nested_td = audio_input.get("turn_detection")
-                                    if nested_td is not None:
-                                        nested_td_present = True
-                                        if not isinstance(nested_td, dict):
-                                            nested_td = {}
-                                        if nested_td.get("create_response") is not False:
-                                            nested_td["create_response"] = False
-                                            audio_input["turn_detection"] = nested_td
-                                            td_overridden = True
-                            # Symmetric with the first-update injection block:
-                            # if the client omitted turn_detection entirely on
-                            # a subsequent session.update, still inject the
-                            # ``create_response: False`` override so the
-                            # transcription guardrail cannot be re-enabled by
-                            # any downstream merge that drops the original
-                            # disable.
-                            if not flat_td_present and not nested_td_present:
-                                session["turn_detection"] = {"create_response": False}
-                                td_overridden = True
-                            if td_overridden:
-                                message = json.dumps(msg_obj)
+                        msg_obj["session"] = gated_later
+                        message = json.dumps(msg_obj)
 
                     # GA compatibility: remap beta-style session fields only when
                     # the upstream is in GA mode. Beta upstreams expect the flat
