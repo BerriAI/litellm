@@ -27,7 +27,12 @@ import {
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 const QUESTION_TYPES: readonly QuestionType[] = ["choice", "noul", "score"];
-const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "Yes / no", score: "Score" };
+const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "noul", score: "Score" };
+const TYPE_HELP: Record<QuestionType, string | undefined> = {
+  choice: undefined,
+  noul: "noul is a yes / no question",
+  score: undefined,
+};
 
 const isQuestionType = (value: unknown): value is QuestionType => QUESTION_TYPES.some((type) => type === value);
 
@@ -219,7 +224,7 @@ function QuestionCard({ name, question, taken, onChange, onRename, onRemove }: Q
           </SelectTrigger>
           <SelectContent>
             {QUESTION_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
+              <SelectItem key={type} value={type} title={TYPE_HELP[type]}>
                 {TYPE_LABELS[type]}
               </SelectItem>
             ))}
