@@ -10,8 +10,6 @@ from typing_extensions import assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.prisma_query_span import sql_relation
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
     ExportCursor,
@@ -146,6 +144,9 @@ class DailyActivityRepository:
         self._proxy_reads = proxy_reads
 
     async def _query(self, query: SqlQuery) -> tuple[Mapping[str, object], ...]:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         first_line: Final = query.sql.lstrip().splitlines()[0].lstrip("(").strip()
         verbose_proxy_logger.debug("DailyActivityRepository query: %s", first_line)
         async with db_span("daily_activity_query", sql_relation(query.sql)):
