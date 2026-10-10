@@ -514,6 +514,29 @@ def test_messages_request_strips_effort_for_haiku_45():
     assert opus_result["output_config"] == {"effort": "high"}
 
 
+def test_messages_request_moves_output_format_into_output_config():
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    output_format: Final = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_format": output_format,
+            "output_config": {"effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_format" not in result
+    assert result["output_config"] == {"effort": "high", "format": output_format}
+
+
 def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():
     """
     Regression test: repeated provider config lookups for the same Vertex Claude model

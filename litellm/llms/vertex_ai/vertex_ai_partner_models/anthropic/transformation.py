@@ -159,7 +159,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         Override parent method so VertexAI uses tool-based structured outputs
         unless the vertex map entry advertises native structured output
-        (``output_format``, which Vertex AI Claude forwards for those models).
+        (sent to Vertex AI Claude as ``output_config.format``).
         """
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 

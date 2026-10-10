@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
@@ -155,6 +155,41 @@ def convert_tool_response_to_message(
 
 
 _convert_tool_response_to_message = convert_tool_response_to_message
+
+
+class ResponseFormatSchema(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    properties: Mapping[str, object] | None = None
+    required: tuple[str, ...] = ()
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+def as_json_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _is_schema_object(
+    value: Mapping[str, object], schema: ResponseFormatSchema, property_names: frozenset[str]
+) -> bool:
+    return not property_names.isdisjoint(value) and all(key in value for key in schema.required)
+
+
+def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema) -> object:
+    property_names: Final = frozenset(schema.properties or ())
+    payload_object: Final = as_json_object(payload)
+    if payload_object is None or _is_schema_object(payload_object, schema, property_names):
+        return payload
+    nested_objects: Final = tuple(as_json_object(value) for value in payload_object.values())
+    candidates: Final = tuple(
+        nested for nested in nested_objects if nested is not None and _is_schema_object(nested, schema, property_names)
+    )
+    return candidates[0] if len(candidates) == 1 else payload
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:

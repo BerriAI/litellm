@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messag
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -35,7 +36,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionToolCallChunk, ServerToolUse, Usage
+from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -7258,6 +7259,183 @@ def test_convert_tool_response_to_message_no_arguments():
     message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is None
+
+
+_RISK_SCHEMA: Final = {
+    "$defs": {"Owner": {"title": "Owner", "type": "object", "properties": {"team": {"type": "string"}}}},
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"title": "Tier", "type": "integer"},
+        "summary": {"title": "Summary", "type": "string"},
+        "owner": {"$ref": "#/$defs/Owner"},
+    },
+    "required": ["tier", "summary"],
+}
+_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
+_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+_OPTIONAL_FIELDS_SCHEMA: Final = {"type": "object", "properties": {"note": {"type": "string"}, "score": {"type": "integer"}}}
+_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"value": {"type": "integer"}, "child": {"type": "object"}},
+    "required": ["value"],
+}
+
+
+def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
+    return [
+        ChatCompletionToolCallChunk(
+            id="toolu_1",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=json.dumps(arguments)),
+            index=0,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "schema, tool_input, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="name_and_parameters_envelope",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": _RISK_OBJECT}, _RISK_OBJECT, id="input_wrapper"),
+        pytest.param(_RISK_SCHEMA, {"arguments": _RISK_OBJECT}, _RISK_OBJECT, id="arguments_wrapper"),
+        pytest.param(
+            _PERSON_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="envelope_key_shared_with_a_schema_property",
+        ),
+        pytest.param(_OPTIONAL_FIELDS_SCHEMA, {"input": {"score": 7}}, {"score": 7}, id="optional_fields_wrapper"),
+        pytest.param(_RISK_SCHEMA, _RISK_OBJECT, _RISK_OBJECT, id="plain_schema_object"),
+        pytest.param(
+            _TREE_SCHEMA,
+            {"value": 1, "child": {"value": 2}},
+            {"value": 1, "child": {"value": 2}},
+            id="schema_object_whose_property_holds_a_schema_shaped_object",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": {"tier": 3}}, {"input": {"tier": 3}}, id="inner_object_missing_required_key"),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            id="two_candidate_objects",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"meta": {"source": "change-request"}},
+            {"meta": {"source": "change-request"}},
+            id="inner_object_without_schema_keys",
+        ),
+        pytest.param(
+            {"type": "object", "properties": {}, "additionalProperties": True},
+            {"input": _RISK_OBJECT},
+            {"input": _RISK_OBJECT},
+            id="json_object_mode_without_schema_properties",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
+    schema: dict, tool_input: dict, expected_content: dict
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call(tool_input),
+        response_format_schema=ResponseFormatSchema.model_validate(schema),
+    )
+
+    assert message is not None
+    assert json.loads(message.content) == expected_content
+
+
+def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=1,
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[*_json_tool_call({"input": _RISK_OBJECT}), user_tool_call],
+        response_format_schema=ResponseFormatSchema.model_validate(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
+
+
+def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_model_wrapped():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_change_window",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"system": {"type": "string"}},
+                            "required": ["system"],
+                        },
+                    },
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "input": {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
 
 
 def test_anthropic_tool_with_image():
