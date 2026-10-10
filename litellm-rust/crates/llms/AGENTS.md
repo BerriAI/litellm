@@ -24,7 +24,7 @@
 
 - Every file is `# rules` then `# references`, both concise bullets. Split a long `# rules` into `##` topic sections
 - A folder gets an AGENTS.md only when it adds something: a deviation, an explicit reuse of another provider, or upstream docs no other file lists. A folder without one follows its nearest parent
-- Every `src/<provider>/<format>/` folder gets one, since it talks to its own upstream endpoint
+- Every `src/<provider>/<format>/` folder gets one, since it talks to its own upstream endpoint. `.greptile/files.json` lists them all
 - A rule lives in the highest file where it holds. Never restate a parent's rule
 - Each upstream URL appears in exactly one AGENTS.md, the one owning that contract. Others point to that file by path
   - Format specs: `litellm-llms-types/src/formats/<format>/`
@@ -32,23 +32,13 @@
   - Provider-wide docs (auth, errors, regions): `src/<provider>/`
   - One host's endpoint docs: `src/<provider>/<format>/`
 
-## Nested files
-
-- `src/base_llm/messages/`
-- `src/anthropic/`, with `batches/`, `chat/`, `count_tokens/` and `messages/`
-- `src/aws_textract/ocr/`
-- `src/azure_ai/messages/` and `src/azure_ai/ocr/`
-- `src/bedrock/`, with `audio_transcription/`, `chat/` and `messages/`
-- `src/cohere/ocr/`, `src/deepseek/messages/`, `src/mistral/ocr/`, `src/reducto/ocr/`
-- `src/openai/responses/` and `src/openai_like/chat/`
-- `src/vertex_ai/messages/` and `src/vertex_ai/ocr/`
-
 ## Python pairs
 
 - Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
 - Keep operation and parameter names when responsibilities match. Rust types keep the Python name with Rust acronym casing (`BaseOCRConfig` -> `BaseOcrConfig`). Private Python helpers drop the leading underscore
 - Give Rust-only helpers distinct responsibility names instead of reusing trait method names
 - Use trait defaults for unchanged inherited behavior and explicit delegation for shared provider behavior. Config traits represent real provider contracts, so do not recreate inheritance with extra traits
+- Every provider format writes out its own `impl Base<Format>Config for <Provider><Format>Config`. Do not route several providers' methods through one cross-provider wrapper
 - The base OCR and Mistral OCR pairs are the reference when aligning transformations
 
 ## Method order
