@@ -7,7 +7,7 @@
 	test-rust-extension rust-sqlx-prepare \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-type-discipline \
-	lint-ruff-strict lint-gate lint-test-quality \
+	lint-ruff-strict lint-gate lint-test-quality lint-openapi-docs \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
 	lint-install lint-fetch-base bootstrap
@@ -35,6 +35,7 @@ help:
 	@echo "  make lint-ruff-strict   - Gate each strict ruff rule's codebase total against its merge-base count"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches the default branch, simulates the merge)"
 	@echo "  make lint-test-quality  - Gate the test suite's TQ counts against their merge-base counts"
+	@echo "  make lint-openapi-docs  - Gate undocumented POST routes in the proxy OpenAPI document against their merge-base counts"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -219,6 +220,12 @@ lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/test_quality_gate.py --base "$(BASE_REF)"
 
+# OpenAPI docs gate (POST routes without a request body schema, a description or a
+# 200 schema in app.openapi()), counted the same delta-vs-base way so a new endpoint
+# has to show up documented in Swagger UI.
+lint-openapi-docs: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
+	$(UV_RUN) python scripts/openapi_docs_gate.py --base "$(BASE_REF)"
+
 lint-format: format-check
 
 lint-ruff-strict: install-dev
@@ -250,7 +257,7 @@ lint-inner: lint-install
 	@base_ref=$$($(RESOLVE_BASE)) && \
 	$(MAKE) BASE_REF="$$base_ref" -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-openapi-docs lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
