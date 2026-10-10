@@ -1657,7 +1657,9 @@ class LiteLLMAnthropicMessagesAdapter:
             ) is not None:
                 return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices):
-                thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
+                thinking_blocks = (
+                    choice.delta.thinking_blocks if hasattr(choice.delta, "thinking_blocks") else None
+                ) or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
                     if thinking_block["type"] == "thinking":
@@ -1681,24 +1683,18 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def _streaming_reasoning_fields(choice: StreamingChoices) -> tuple[str, str]:
-        reasoning_content = ""
-        reasoning_signature = ""
-        thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
-        for thinking_block in thinking_blocks:
-            if thinking_block["type"] == "thinking":
-                thinking = thinking_block.get("thinking") or ""
-                signature = thinking_block.get("signature") or ""
-
-                assert isinstance(thinking, str)
-                assert isinstance(signature, str)
-
-                reasoning_content += thinking
-                reasoning_signature += signature
+        thinking_blocks: Final = choice.delta.thinking_blocks if hasattr(choice.delta, "thinking_blocks") else None
+        reasoning_content: Final = "".join(
+            block.get("thinking") or "" for block in thinking_blocks or () if block["type"] == "thinking"
+        )
+        reasoning_signature: Final = "".join(
+            block.get("signature") or "" for block in thinking_blocks or () if block["type"] == "thinking"
+        )
 
         if reasoning_content or reasoning_signature:
             return reasoning_content, reasoning_signature
 
-        fallback = getattr(choice.delta, "reasoning_content", None)
+        fallback: Final = choice.delta.reasoning_content if hasattr(choice.delta, "reasoning_content") else None
         return fallback or "", ""
 
     def _translate_streaming_openai_chunk_to_anthropic(
