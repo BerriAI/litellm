@@ -4449,21 +4449,14 @@ def test_spend_log_for_background_response_cost_poll_counts_tokens():
     assert payload["total_tokens"] == 6000
 
 
-def test_spend_log_for_background_response_retrieval_counts_tokens():
-    """A background create answers queued carrying no usage, so its retrieval is the first and only
-    place the job's tokens are ever visible. Zeroing that read bills the whole job nothing on any
-    proxy that is not running the enterprise cost poller."""
+def test_spend_log_for_background_response_retrieval_counts_nothing():
+    """A finished background job replays the same usage on every GET, so a user's read of it writes
+    a zero-token, zero-spend row whatever the response says about itself; the cost poll's stamped
+    read above is the one read that bills the job."""
     payload = _spend_log_for_call_type("aget_responses", background=True)
 
-    assert payload["total_tokens"] == 6000
-
-
-def test_spend_log_for_foreground_response_retrieval_still_counts_nothing():
-    """Guards the test above against a blanket exemption: an explicit background=false read was
-    already billed by its create and must stay at zero."""
-    payload = _spend_log_for_call_type("aget_responses", background=False)
-
     assert payload["total_tokens"] == 0
+    assert payload["spend"] == 0.0
 
 
 def test_spend_log_for_response_creation_still_counts_tokens():

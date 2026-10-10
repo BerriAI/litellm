@@ -255,6 +255,135 @@ async def test_responses_api_background_polling_accepts_input_from_prompt_templa
     assert request_data["input"] == "hello from prompt"
 
 
+@pytest.mark.asyncio
+async def test_responses_api_background_create_persists_the_creating_keys_attribution():
+    """The cost poll bills a background job off its managed object row, so the create must persist
+    the key hash and tags the poll bills against, the way the batch create does, plus the client's
+    User-Agent tags that a spend-by-client view groups the charge under."""
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    queued = ResponsesAPIResponse(
+        id="resp_background", object="response", status="queued", created_at=1, output=[], usage=None
+    )
+    queued._hidden_params = {"model_id": "deployment-1"}
+    processor = MagicMock()
+    processor.data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "background": True,
+        "litellm_metadata": {"tags": ["env:prod"]},
+        "proxy_server_request": {"headers": {"user-agent": "codex_cli_rs/0.44.0"}},
+    }
+    processor.base_process_llm_request = AsyncMock(return_value=queued)
+    managed_files = MagicMock()
+    managed_files.store_unified_object_id = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files)
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","input":"hello","background":true}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=False,
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy singletons at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy singletons at call time
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ),
+    ):
+        result = await responses_api(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert result is queued
+    store_kwargs = managed_files.store_unified_object_id.await_args.kwargs
+    assert store_kwargs["file_purpose"] == "response"
+    assert store_kwargs["persist_attribution"] is True
+    assert store_kwargs["request_tags"] == (
+        "env:prod",
+        "User-Agent: codex_cli_rs",
+        "User-Agent: codex_cli_rs/0.44.0",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_as_background, status, expected_billed_reads",
+    [(True, "completed", 1), (True, "in_progress", 0), (False, "completed", 0)],
+)
+async def test_reading_a_finished_background_response_bills_it(
+    stored_as_background: bool, status: str, expected_billed_reads: int
+):
+    """The read that first sees a background response finished bills it, since the provider may drop
+    a store=false response before the hourly cost poll reaches it; other reads stay free."""
+    from types import SimpleNamespace
+
+    from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+    from litellm.proxy.response_api_endpoints.endpoints import _bill_finished_background_response
+
+    read = ResponsesAPIResponse(
+        id="resp_read", object="response", status=status, created_at=1, output=[], usage=None
+    )
+    stored_row = SimpleNamespace(
+        id="job-read",
+        unified_object_id="resp_read",
+        status="queued",
+        file_object={"model": "gpt-5"},
+        created_by=None,
+        api_key=None,
+        team_id=None,
+        org_id=None,
+        request_tags=None,
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=stored_row if stored_as_background else None
+    )
+    prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.aget_responses", new_callable=AsyncMock, return_value=read) as provider_read,
+    ):
+        await _bill_finished_background_response(response=read, response_id="resp_read")
+
+    billed_reads = [
+        call
+        for call in provider_read.call_args_list
+        if not is_unbilled_non_inference_call("aget_responses", call.kwargs["litellm_metadata"])
+    ]
+    assert len(billed_reads) == expected_billed_reads
+
+
 class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")

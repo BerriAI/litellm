@@ -1654,7 +1654,7 @@ class LiteLLMCompletionResponsesConfig:
                     import json as _json
 
                     return _json.dumps(output)
-                except Exception:
+                except (TypeError, ValueError, RecursionError):
                     return str(output)
 
             # Fallback for dict/number/etc.
@@ -1662,7 +1662,7 @@ class LiteLLMCompletionResponsesConfig:
                 import json as _json
 
                 return _json.dumps(output)
-            except Exception:
+            except (TypeError, ValueError, RecursionError):
                 return str(output)
 
         tool_output_message: Final = ChatCompletionToolMessage(

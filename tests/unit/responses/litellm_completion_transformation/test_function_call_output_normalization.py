@@ -6,6 +6,8 @@ as tool/function response parts; if the tool output is passed as a list of input
 we normalize it to text/image blocks or a string.
 """
 
+import pytest
+
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -40,3 +42,20 @@ def test_function_call_output_string_passthrough():
     )
     assert len(out) == 1
     assert out[0]["content"] == '{"ok":true}'
+
+
+@pytest.mark.parametrize(
+    "output",
+    [{"rows": {1, 2}}, [{"type": "custom", "rows": {1, 2}}]],
+    ids=["dict", "list_without_text_parts"],
+)
+def test_function_call_output_that_is_not_json_serializable_falls_back_to_its_string_form(output):
+    out = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+        tool_call_output={
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": output,
+        }
+    )
+    assert len(out) == 1
+    assert out[0]["content"] == str(output)

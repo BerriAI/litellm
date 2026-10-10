@@ -224,7 +224,7 @@ class GenAIMetricRecorder:
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s: Final = (end_time - start_time).total_seconds()
         usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
-            kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
+            kwargs.get("call_type"), kwargs.get("litellm_params")
         )
 
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)

@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -36,6 +37,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_request_data,
+)
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -51,6 +55,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
+_PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -421,6 +426,8 @@ async def responses_api(
                             model_object_id=response.id,
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
+                            request_tags=_background_response_spend_tags(processor.data),
+                            persist_attribution=True,
                         )
 
                         verbose_proxy_logger.info(
@@ -767,7 +774,7 @@ async def get_response(
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -792,6 +799,40 @@ async def get_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    await _bill_finished_background_response(response=response, response_id=response_id)
+    return response
+
+
+def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
+    proxy_server_request: Final = data.get("proxy_server_request")
+    client_tags: Final = (
+        StandardLoggingPayloadSetup.get_request_tags(
+            {}, _PROXY_SERVER_REQUEST_ADAPTER.validate_python(proxy_server_request)
+        )
+        if isinstance(proxy_server_request, dict)
+        else []
+    )
+    tags: Final = (*(request_tags_from_request_data(data) or ()), *client_tags)
+    return tags or None
+
+
+async def _bill_finished_background_response(response: object, response_id: str) -> None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj
+
+    if not isinstance(response, ResponsesAPIResponse):
+        return
+    if prisma_client is None or llm_router is None or response.status is None:
+        return
+    try:
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+
+        await CheckResponsesCost(
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+        ).bill_if_finished(unified_object_id=response_id, status=response.status)
+    except Exception as e:
+        verbose_proxy_logger.warning("Billing a finished background response on read failed: %s", e)
 
 
 @router.delete(

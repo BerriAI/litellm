@@ -2366,17 +2366,21 @@ class TestBatchCostAttribution:
     """CheckBatchCost rebuilds the creator's spend metadata from the managed-object row so
     the batch-cost log is attributed like a non-batch request."""
 
-    def _instance(self, key_row=None, team_row=None, user_row=None):
-        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
-
+    def _prisma(self, key_row=None, team_row=None, user_row=None):
         prisma = MagicMock()
         prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
-        return CheckBatchCost(
-            proxy_logging_obj=MagicMock(),
-            prisma_client=prisma,
-            llm_router=MagicMock(),
+        return prisma
+
+    def _instance(self, key_row=None, team_row=None, user_row=None, prisma=None):
+        from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
+            ManagedObjectCreatorAttribution,
+        )
+
+        return ManagedObjectCreatorAttribution(
+            prisma_client=prisma if prisma is not None else self._prisma(key_row, team_row, user_row),
+            poller_name="CheckBatchCost",
         )
 
     def _job(self, **overrides):
@@ -2402,7 +2406,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata["user_api_key_hash"] == "hash-alice"
@@ -2419,7 +2423,7 @@ class TestBatchCostAttribution:
         instance = self._instance()
         job = self._job(api_key=None, request_tags=None)
 
-        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+        metadata = await instance.build(job, "batch-1")
 
         assert metadata["user_api_key"] is None
         assert metadata["user_api_key_user_id"] == "alice"
@@ -2432,15 +2436,16 @@ class TestBatchCostAttribution:
         a None user_id) and the key hash still drives key-level attribution."""
         from types import SimpleNamespace
 
-        instance = self._instance(key_row=SimpleNamespace(key_alias="svc-key"))
+        prisma = self._prisma(key_row=SimpleNamespace(key_alias="svc-key"))
+        instance = self._instance(prisma=prisma)
         job = self._job(created_by=None)
 
-        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+        metadata = await instance.build(job, "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata["user_api_key_user_id"] is None
         assert metadata["user_api_key_alias"] == "svc-key"
-        instance.prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+        prisma.db.litellm_usertable.find_unique.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_metadata_drops_non_string_tags(self):
@@ -2449,7 +2454,7 @@ class TestBatchCostAttribution:
         instance = self._instance()
         job = self._job(request_tags=["env:prod", 7, None, "team:ml"])
 
-        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+        metadata = await instance.build(job, "batch-1")
 
         assert metadata["tags"] == ["env:prod", "team:ml"]
 
@@ -2457,10 +2462,11 @@ class TestBatchCostAttribution:
     async def test_key_alias_lookup_failure_does_not_break_attribution(self):
         """An alias lookup failure must not lose the spend row; the key hash and team still
         attribute it."""
-        instance = self._instance()
-        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        prisma = self._prisma()
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        instance = self._instance(prisma=prisma)
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata.get("user_api_key_alias") is None
@@ -2469,7 +2475,7 @@ class TestBatchCostAttribution:
     async def test_cli_session_batch_keeps_its_alias_without_a_key_row(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(api_key="cli-session-alice"), "batch-1")
+        metadata = await instance.build(self._job(api_key="cli-session-alice"), "batch-1")
 
         assert metadata["user_api_key"] == "cli-session-alice"
         assert metadata["user_api_key_alias"] == "cli-session-alice"
@@ -2478,7 +2484,7 @@ class TestBatchCostAttribution:
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance._build_creator_attribution_metadata(
+        metadata = await instance.build(
             self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
         )
 
@@ -2496,7 +2502,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "Alice Chen"
         assert metadata["user_api_key"] == "hash-alice"
@@ -2512,7 +2518,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "Alice Chen"
 
@@ -2527,7 +2533,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "prod-key"
 
@@ -2542,7 +2548,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(org_id="org-at-creation"), "batch-1")
+        metadata = await instance.build(self._job(org_id="org-at-creation"), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-at-creation"
 
@@ -2557,7 +2563,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-42"
 
@@ -2572,7 +2578,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-team"
 
@@ -2582,12 +2588,11 @@ class TestBatchCostAttribution:
         organization: the two lookups fail independently, so org spend still lands."""
         from types import SimpleNamespace
 
-        instance = self._instance(
-            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
-        )
-        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        prisma = self._prisma(team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"))
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        instance = self._instance(prisma=prisma)
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-team"
 
@@ -2602,7 +2607,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.build(self._job(), "batch-1")
 
         assert "user_api_key_org_id" not in metadata
 
@@ -2625,7 +2630,7 @@ class TestBatchCostAttribution:
             key_row=SimpleNamespace(key_alias="prod-key"),
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
         )
-        metadata = await instance._build_creator_attribution_metadata(self._job(api_key=token_hash), "batch-1")
+        metadata = await instance.build(self._job(api_key=token_hash), "batch-1")
 
         assert metadata["user_api_key"] == token_hash
         assert metadata["user_api_key_hash"] == token_hash

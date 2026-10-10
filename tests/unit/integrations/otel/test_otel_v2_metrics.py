@@ -214,10 +214,10 @@ def test_response_read_does_not_replay_the_generation_usage():
     assert RESPONSE_DURATION in metrics
 
 
-def test_background_response_read_still_records_usage():
-    """A background=true create returns no usage, so its completed read is the only
-    place the generation's tokens are ever seen. Skipping it would lose them
-    entirely rather than deduplicate them."""
+def test_background_response_read_does_not_replay_the_generation_usage_either():
+    """A finished background job replays the same usage on every read, so the two
+    usage-derived instruments stay quiet for it too, whatever the response says about
+    itself; the cost poll's stamped read is the one read that counts those tokens."""
     reader = InMemoryMetricReader()
     logger = _logger(reader, enable_metrics=True)
     kwargs, response_obj, start, end = _build_call(call_type="aget_responses")
@@ -225,10 +225,9 @@ def test_background_response_read_still_records_usage():
     asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
 
     metrics = _metrics_by_name(reader)
-    by_type = {dp.attributes[TOKEN_TYPE]: dp for dp in metrics[TOKEN_USAGE]}
-    assert by_type["input"].sum == PROMPT_TOKENS
-    assert by_type["output"].sum == COMPLETION_TOKENS
-    assert TIME_PER_OUTPUT_TOKEN in metrics
+    assert TOKEN_USAGE not in metrics
+    assert TIME_PER_OUTPUT_TOKEN not in metrics
+    assert OPERATION_DURATION in metrics
 
 
 def test_metrics_disabled_records_nothing():
