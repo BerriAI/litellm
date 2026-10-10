@@ -690,6 +690,24 @@
         "interactions": false
       }
     },
+    "hostinger_router": {
+      "display_name": "Hostinger Router (`hostinger_router`)",
+      "url": "https://docs.litellm.ai/docs/providers/hostinger_router",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "crusoe": {
       "display_name": "Crusoe (`crusoe`)",
       "url": "https://docs.litellm.ai/docs/providers/crusoe",

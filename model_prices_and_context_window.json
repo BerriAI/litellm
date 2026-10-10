@@ -37407,6 +37407,42 @@
             "/v1/images/generations"
         ]
     },
+    "hostinger_router/gpt-5.2": {
+        "input_cost_per_token": 0.0000021,
+        "litellm_provider": "hostinger_router",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0000168,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        "source": "https://router.hostinger.com/v1/models"
+    },
+    "hostinger_router/claude-sonnet-5": {
+        "cache_creation_input_token_cost": 0.000003,
+        "cache_creation_input_token_cost_above_1hr": 0.0000048,
+        "cache_read_input_token_cost": 0.00000024,
+        "input_cost_per_token": 0.0000024,
+        "litellm_provider": "hostinger_router",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.000012,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/messages"],
+        "source": "https://router.hostinger.com/v1/models"
+    },
     "hyperbolic/NousResearch/Hermes-3-Llama-3.1-70B": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "hyperbolic",
