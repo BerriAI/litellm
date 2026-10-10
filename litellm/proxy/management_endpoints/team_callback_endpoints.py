@@ -290,9 +290,9 @@ async def add_team_callbacks(
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
-        - capture_message_content: For OTel v2 callbacks, one of "no_content", "span_only", "event_only", or "span_and_event".
+        - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
           An explicit value overrides the global setting for this destination; omitted follows the global setting.
-          "no_content" and "event_only" omit content from span attributes, while "span_only" and "span_and_event" capture it
+          "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback

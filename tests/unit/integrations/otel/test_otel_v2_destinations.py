@@ -4696,7 +4696,7 @@ class TestCaptureMessageContent:
         assert carries_content(by_name(tenant)["chat gpt-4o"])
 
     @pytest.mark.usefixtures("allow_test_hosts")
-    @pytest.mark.parametrize("setting", ["no_content", "span_only", "event_only", "span_and_event", None])
+    @pytest.mark.parametrize("setting", ["no_content", "span_only", None])
     def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(
         self, monkeypatch: pytest.MonkeyPatch, setting: str | None
     ) -> None:
@@ -4727,11 +4727,44 @@ class TestCaptureMessageContent:
         assert destinations["langfuse_otel"].capture_message_content == setting
         assert destinations["arize"].capture_message_content is None, "the setting stays on its own callback"
 
-    @pytest.mark.parametrize("value", ["full", "NO_CONTENT", "", "true"])
+    @pytest.mark.usefixtures("allow_test_hosts")
+    @pytest.mark.parametrize("setting", ["event_only", "span_and_event"])
+    def test_a_stored_event_mode_is_skipped_like_any_invalid_entry(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth: Final = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-team",
+                            "langfuse_secret_key": "sk-team",
+                            "langfuse_host": "http://team.local",
+                            "capture_message_content": setting,
+                        },
+                    },
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_api_key": "k", "arize_space_id": "s"},
+                    },
+                ]
+            }
+        )
+
+        destinations: Final = [d.callback_name for d in resolve_tenant_otel_destinations(auth)]
+
+        assert destinations == ["arize"]
+
+    @pytest.mark.parametrize("value", ["full", "NO_CONTENT", "", "true", "event_only", "span_and_event"])
     def test_an_unsupported_value_fails_registration(self, value: str) -> None:
         with pytest.raises(
             ValueError,
-            match=r"Invalid capture_message_content .*\['event_only', 'no_content', 'span_and_event', 'span_only'\]",
+            match=r"Invalid capture_message_content .*\['no_content', 'span_only'\]",
         ):
             AddTeamCallback(
                 callback_name="langfuse_otel",
@@ -4743,7 +4776,7 @@ class TestCaptureMessageContent:
                 },
             )
 
-    @pytest.mark.parametrize("value", ["no_content", "span_only", "event_only", "span_and_event"])
+    @pytest.mark.parametrize("value", ["no_content", "span_only"])
     def test_a_supported_value_is_stored_as_given(self, value: str) -> None:
         saved: Final = AddTeamCallback(
             callback_name="langfuse_otel",

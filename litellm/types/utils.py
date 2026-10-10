@@ -3736,13 +3736,10 @@ class CaptureMessageContent(str):
     SPAN_AND_EVENT = "span_and_event"
 
 
+# The values a team or key destination may set. OTel v2 writes content only to span attributes,
+# so the event modes stay global-only settings
 CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(
-    {
-        CaptureMessageContent.NO_CONTENT,
-        CaptureMessageContent.SPAN_ONLY,
-        CaptureMessageContent.EVENT_ONLY,
-        CaptureMessageContent.SPAN_AND_EVENT,
-    }
+    {CaptureMessageContent.NO_CONTENT, CaptureMessageContent.SPAN_ONLY}
 )
 
 

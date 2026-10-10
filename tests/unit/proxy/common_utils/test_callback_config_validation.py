@@ -277,7 +277,7 @@ def otel_v2_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.mark.usefixtures("otel_v2_on")
 @pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
-@pytest.mark.parametrize("value", ["no_content", "span_only", "event_only", "span_and_event"])
+@pytest.mark.parametrize("value", ["no_content", "span_only"])
 def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callback_name: str, value: str) -> None:
     assert callback_config_error(callback_name, {"capture_message_content": value}) is None
 
@@ -301,14 +301,15 @@ def test_capture_message_content_is_rejected_where_it_would_never_take_effect(ca
 
 
 @pytest.mark.usefixtures("otel_v2_on")
-def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metadata() -> None:
+@pytest.mark.parametrize("value", ["full", "event_only", "span_and_event"])
+def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metadata(value: str) -> None:
     error: Final = logging_metadata_config_error(
         {
             "logging": [
                 {
                     "callback_name": "langfuse_otel",
                     "callback_type": "success",
-                    "callback_vars": {"capture_message_content": "full"},
+                    "callback_vars": {"capture_message_content": value},
                 }
             ]
         }

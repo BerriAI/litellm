@@ -15,7 +15,10 @@ from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VALUES, CaptureMessageCo
 def test_capture_message_content_members_are_plain_strings(mode: str) -> None:
     assert type(mode) is str
     assert (str(mode), f"{mode}", repr(mode)) == (mode, mode, repr(str(mode)))
-    assert mode in CAPTURE_MESSAGE_CONTENT_VALUES
+
+
+def test_a_destination_may_only_set_the_span_capture_modes() -> None:
+    assert CAPTURE_MESSAGE_CONTENT_VALUES == {"no_content", "span_only"}
 
 
 def test_capture_message_content_constructor_accepts_any_string() -> None:

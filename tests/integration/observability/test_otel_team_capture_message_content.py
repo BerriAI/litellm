@@ -33,7 +33,7 @@ CALL_ID: Final = "litellm.call_id"
 OPERATION: Final = "gen_ai.operation.name"
 INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
 Endpoint = Literal["chat", "responses", "messages"]
-Capture = Literal["no_content", "span_only", "event_only", "span_and_event"]
+Capture = Literal["no_content", "span_only"]
 
 
 def _marker(kind: str = "") -> str:

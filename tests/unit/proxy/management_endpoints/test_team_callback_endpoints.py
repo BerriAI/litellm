@@ -1750,7 +1750,7 @@ def otel_v2_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.mark.usefixtures("otel_v2_on")
 @pytest.mark.asyncio
-@pytest.mark.parametrize("capture", ["no_content", "span_only", "event_only", "span_and_event"])
+@pytest.mark.parametrize("capture", ["no_content", "span_only"])
 async def test_add_team_callbacks_stores_capture_message_content_in_the_existing_callback_metadata(
     patched_prisma, capture: str
 ) -> None:
