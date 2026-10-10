@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -190,10 +190,11 @@ def _create_batch(
     routes: RoutedResponse,
     *,
     unrelated_user: bool = False,
+    provider_model: str = "openai/gpt-4o-mini",
 ) -> _OpenAIBatch:
     handle: Final = register_scenario(f"batch-output-listing-{uuid.uuid4().hex}", routes)
     scenario.cleanups.callback(delete_scenario, handle)
-    model: Final = scenario.model(api_base=handle.api_base())
+    model: Final = scenario.model(model=provider_model, api_base=handle.api_base())
     owner_id: Final = scenario.user(user_role="internal_user")
     owner_key: Final = scenario.key(user_id=owner_id, models=[model])
     unrelated_key: Final = (
@@ -383,10 +384,11 @@ def test_fallback_output_file_details_refresh_once_provider_recovers(gateway: Ga
             _batch_routes(model=batch.model),
             control_url=batch.scenario.control_url,
         )
-        details_response: Final = gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key)
-        assert details_response.status_code == 200, details_response.text
-        details: Final = JSON_OBJECT.validate_json(details_response.content)
-        assert details["bytes"] == OUTPUT_BYTES, details
+        details: Final = eventually(
+            lambda: _file_details(gateway, batch.owner_key, output_id),
+            lambda observed: observed["bytes"] == OUTPUT_BYTES,
+            seconds=30,
+        )
         assert (details["filename"], details["purpose"]) == ("output.jsonl", "batch_output"), details
         assert "litellm_details_fallback" not in details, details
         assert _metadata_hit_count(gateway, batch.scenario) == 1
@@ -649,3 +651,145 @@ def test_repeated_batch_retrieve_does_not_refetch_saved_file_details(gateway: Ga
         assert output_after == output_before, output_after
         additional_hits: Final = _metadata_hit_count(gateway, batch.scenario)
         assert additional_hits == 0, f"Repeated batch retrieval fetched metadata {additional_hits} more times"
+
+
+MISTRAL_MODEL: Final = "mistral/mistral-small-latest"
+MISTRAL_OUTPUT_FILENAME: Final = "batch:mistral-small-latest:integration_results.jsonl"
+
+
+def _mistral_batch_routes(*, metadata_fails: bool = False) -> RoutedResponse:
+    job: Final[dict[str, JsonValue]] = {
+        "id": "job-$REQUEST_ID",
+        "object": "batch",
+        "input_files": ["in-$REQUEST_ID"],
+        "endpoint": "/v1/chat/completions",
+        "model": "mistral-small-latest",
+        "status": "SUCCESS",
+        "created_at": 1,
+        "started_at": 1,
+        "completed_at": 2,
+        "total_requests": 1,
+        "completed_requests": 1,
+        "succeeded_requests": 1,
+        "failed_requests": 0,
+        "output_file": "out-$REQUEST_ID",
+        "error_file": None,
+        "errors": [],
+    }
+    return RoutedResponse(
+        content_type="application/x-routed",
+        routes={
+            "POST /v1/files": JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "in-$REQUEST_ID",
+                    "object": "file",
+                    "bytes": 100,
+                    "created_at": 1,
+                    "filename": "input.jsonl",
+                    "purpose": "batch",
+                    "sample_type": "batch_request",
+                    "source": "upload",
+                },
+            ),
+            "POST /v1/batch/jobs": JsonResponse(
+                content_type="application/json",
+                body={**job, "status": "QUEUED", "output_file": None, "completed_at": None},
+            ),
+            "GET /v1/batch/jobs/job-$REQUEST_ID": JsonResponse(content_type="application/json", body=job),
+            "GET /v1/files/out-$REQUEST_ID": JsonResponse(
+                content_type="application/json",
+                body=(
+                    {"detail": "provider metadata unavailable"}
+                    if metadata_fails
+                    else {
+                        "id": "out-$REQUEST_ID",
+                        "object": "file",
+                        "bytes": OUTPUT_BYTES,
+                        "created_at": 1,
+                        "filename": MISTRAL_OUTPUT_FILENAME,
+                        "purpose": "batch",
+                        "sample_type": "batch_result",
+                        "source": "mistral",
+                    }
+                ),
+                status=500 if metadata_fails else 200,
+            ),
+            "GET /v1/files/out-$REQUEST_ID/content": TextResponse(
+                content_type="application/jsonl",
+                body=_output_content("mistral-small-latest"),
+            ),
+        },
+    )
+
+
+def _file_details(gateway: Gateway, key: str, file_id: str) -> dict[str, JsonValue]:
+    response: Final = gateway.request("GET", f"/v1/files/{file_id}", key=key)
+    assert response.status_code == 200, response.text
+    return JSON_OBJECT.validate_json(response.content)
+
+
+def test_mistral_batch_output_file_lists_under_batch_output(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        batch: Final = _create_batch(scenario, _mistral_batch_routes(), provider_model=MISTRAL_MODEL)
+        retrieved: Final = _retrieve_batch(gateway, batch)
+        assert retrieved["status"] == "completed", retrieved
+        output_id: Final = string_value(retrieved["output_file_id"])
+        output_files: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
+        assert tuple(string_value(file["id"]) for file in output_files) == (output_id,), output_files
+        details: Final = _file_details(gateway, batch.owner_key, output_id)
+        assert (details["purpose"], details["bytes"], details["filename"]) == (
+            "batch_output",
+            OUTPUT_BYTES,
+            MISTRAL_OUTPUT_FILENAME,
+        ), details
+        input_files: Final = _list_files(gateway, batch.owner_key, purpose="batch")
+        assert tuple(string_value(file["id"]) for file in input_files) == (batch.input_file_id,), input_files
+        assert _file_details(gateway, batch.owner_key, batch.input_file_id)["purpose"] == "batch"
+
+
+def test_mistral_output_file_keeps_batch_output_purpose_when_details_refresh_on_retrieve(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        batch: Final = _create_batch(scenario, _mistral_batch_routes(metadata_fails=True), provider_model=MISTRAL_MODEL)
+        output_id: Final = string_value(_retrieve_batch(gateway, batch)["output_file_id"])
+        basic_output: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
+        assert tuple(string_value(file["id"]) for file in basic_output) == (output_id,), basic_output
+        assert basic_output[0]["filename"] != MISTRAL_OUTPUT_FILENAME, basic_output
+        register_scenario(
+            batch.scenario.scenario_id,
+            _mistral_batch_routes(),
+            control_url=batch.scenario.control_url,
+        )
+        details: Final = eventually(
+            lambda: _file_details(gateway, batch.owner_key, output_id),
+            lambda observed: observed["filename"] == MISTRAL_OUTPUT_FILENAME,
+            seconds=30,
+        )
+        assert details["bytes"] == OUTPUT_BYTES, details
+        assert details["purpose"] == "batch_output", details
+        refreshed: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
+        assert tuple(string_value(file["id"]) for file in refreshed) == (output_id,), refreshed
+        assert refreshed[0]["filename"] == MISTRAL_OUTPUT_FILENAME, refreshed
+
+
+_LEGACY_PURPOSE_SQL: Final = (
+    "UPDATE \"LiteLLM_ManagedFileTable\" SET file_object = jsonb_set(file_object::jsonb, '{purpose}', '\"batch\"') "
+    "WHERE unified_file_id = %s"
+)
+
+
+def test_output_file_saved_with_provider_purpose_before_upgrade_lists_under_batch_output(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        batch: Final = _create_batch(scenario, _mistral_batch_routes(), provider_model=MISTRAL_MODEL)
+        output_id: Final = string_value(_retrieve_batch(gateway, batch)["output_file_id"])
+        write_rows(_LEGACY_PURPOSE_SQL, (output_id,))
+        stored: Final = read_rows(
+            'SELECT file_object FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id = %s', (output_id,)
+        )
+        assert object_value(stored[0]["file_object"])["purpose"] == "batch", stored
+        output_files: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
+        assert tuple(string_value(file["id"]) for file in output_files) == (output_id,), output_files
+        assert output_files[0]["filename"] == MISTRAL_OUTPUT_FILENAME, output_files
+        assert _file_details(gateway, batch.owner_key, output_id)["purpose"] == "batch_output"
+        input_files: Final = _list_files(gateway, batch.owner_key, purpose="batch")
+        assert tuple(string_value(file["id"]) for file in input_files) == (batch.input_file_id,), input_files

@@ -4,6 +4,7 @@
 import asyncio
 import base64
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
@@ -183,8 +184,32 @@ def _batch_output_file_object(
     )
 
 
+def _batch_output_file_uuid(model_id: str, output_file_id: str) -> str:
+    return str(uuid5(uuid5(NAMESPACE_URL, model_id), output_file_id))
+
+
+_BATCH_OUTPUT_FILE_ID_FIELDS: Final = re.compile(
+    r";unified_id,(?P<uuid>[^;]+);target_model_names,[^;]*;"
+    r"llm_output_file_id,(?P<file_id>[^;]+);llm_output_file_model_id,(?P<model_id>[^;]+)$"
+)
+
+
+def _is_batch_output_file_id(unified_file_id: str) -> bool:
+    decoded: Final = _is_base64_encoded_unified_file_id(unified_file_id)
+    fields: Final = _BATCH_OUTPUT_FILE_ID_FIELDS.search(decoded) if decoded else None
+    return fields is not None and fields["uuid"] == _batch_output_file_uuid(fields["model_id"], fields["file_id"])
+
+
+def _with_batch_output_purpose(file_object: OpenAIFileObject, unified_file_id: str) -> OpenAIFileObject:
+    if not _is_batch_output_file_id(unified_file_id):
+        return file_object
+    return file_object.model_copy(update={"purpose": "batch_output"})
+
+
 def _public_file_object(file_object: OpenAIFileObject, unified_file_id: str) -> OpenAIFileObject:
-    return file_object.model_copy(update={"id": unified_file_id, "litellm_details_fallback": None})
+    return _with_batch_output_purpose(
+        file_object.model_copy(update={"id": unified_file_id, "litellm_details_fallback": None}), unified_file_id
+    )
 
 
 def _is_transient_file_retrieve_error(error: Exception) -> bool:
@@ -341,6 +366,11 @@ def _iter_provider_file_id_pairs(
         for provider_file_id in row.flat_model_file_ids:
             if provider_file_id in requested_provider_file_ids:
                 yield provider_file_id, row.unified_file_id
+
+
+def _public_row_file_object(row: _ManagedFileRow) -> OpenAIFileObject | None:
+    parsed_file_object: Final = _parse_managed_file_object(row.file_object, row.unified_file_id)
+    return _public_file_object(parsed_file_object, row.unified_file_id) if parsed_file_object is not None else None
 
 
 def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
@@ -910,7 +940,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
 
         file_object: Final = (
-            provider_object
+            _with_batch_output_purpose(provider_object, unified_file_id)
             if provider_object is not None
             else (
                 stored_object.model_copy(update={"bytes": size_bytes})
@@ -1743,10 +1773,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
 
     def get_unified_output_file_id(self, output_file_id: str, model_id: str, model_name: Optional[str]) -> str:
-        deterministic_uuid: Final = uuid5(uuid5(NAMESPACE_URL, model_id), output_file_id)
         unified_output_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
             "application/json",
-            str(deterministic_uuid),
+            _batch_output_file_uuid(model_id, output_file_id),
             model_name or "",
             output_file_id,
             model_id,
@@ -1941,7 +1970,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
-                    await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
+                    await self._save_refreshed_file_object(
+                        stored_file_object, _with_batch_output_purpose(refreshed_file_object, file_id)
+                    )
                     return _public_file_object(refreshed_file_object, file_id)
                 except Exception as error:
                     verbose_logger.warning(
@@ -2040,10 +2071,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 **cursor_args,
             )
             matches.extend(
-                _public_file_object(parsed_file_object, row.unified_file_id)
-                for row in chunk
-                if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
-                and (purpose is None or parsed_file_object.purpose == purpose)
+                public_file_object
+                for public_file_object in map(_public_row_file_object, chunk)
+                if public_file_object is not None and (purpose is None or public_file_object.purpose == purpose)
             )
             if len(chunk) < chunk_size:
                 break
