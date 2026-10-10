@@ -476,18 +476,22 @@ async def test_decisions_calls_share_the_concurrency_cap_across_requests():
         )
 
     router.adecisions = AsyncMock(side_effect=_adecisions)
-    guardrail: Final = _make_guardrail(max_concurrent_decision_calls=3, router_provider=lambda: router)
+    budget: Final = 1000
+    chunks_per_text: Final = 4
+    guardrail: Final = _make_guardrail(
+        max_input_chars=budget, max_concurrent_decision_calls=3, router_provider=lambda: router
+    )
 
     await asyncio.gather(
         guardrail.apply_guardrail(
-            {"texts": [f"prompt a{index}" for index in range(10)]}, _request_data(), "request"
+            {"texts": ["a" * (budget * (chunks_per_text - 1))]}, _request_data(), "request"
         ),
         guardrail.apply_guardrail(
-            {"texts": [f"prompt b{index}" for index in range(10)]}, _request_data(), "request"
+            {"texts": ["b" * (budget * (chunks_per_text - 1))]}, _request_data(), "request"
         ),
     )
 
-    assert router.adecisions.await_count == 20
+    assert router.adecisions.await_count == 2 * chunks_per_text
     assert in_flight["peak"] == 3
 
 
@@ -679,3 +683,84 @@ async def test_all_calls_failing_under_fail_closed_gives_502_not_400():
         await guardrail.apply_guardrail({"texts": ["a", "b", "c"]}, _request_data(), "request")
 
     assert exc_info.value.status_code == 502
+
+
+def _tracking_router(sleep: float = 0.01) -> tuple[MagicMock, list[str], dict[str, int]]:
+    """Decisions call records call order and tracks peak in-flight count."""
+    from litellm import Router
+
+    router: Final = MagicMock(spec=Router)
+    router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
+    order: Final[list[str]] = []  # mutable-ok: shared recorder across coroutines
+    in_flight: Final = {"count": 0, "peak": 0}  # mutable-ok: shared recorder across coroutines
+
+    async def _adecisions(**kwargs):
+        in_flight["count"] += 1
+        in_flight["peak"] = max(in_flight["peak"], in_flight["count"])
+        order.append(kwargs["input"])
+        await asyncio.sleep(sleep)
+        in_flight["count"] -= 1
+        return OpenAIDecisionResponse(
+            model="jev-latest",
+            answers=(OpenAIPredicateAnswer(name="prompt_injection", probability=0.01),),
+            usage=OpenAIDecisionUsage(input_tokens=10, output_tokens=1, total_tokens=11),
+        )
+
+    router.adecisions = AsyncMock(side_effect=_adecisions)
+    return router, order, in_flight
+
+
+@pytest.mark.asyncio
+async def test_texts_are_screened_sequentially_one_call_at_a_time():
+    router, order, in_flight = _tracking_router()
+    guardrail: Final = _make_guardrail(router_provider=lambda: router)
+    texts: Final = ["first text", "second text", "third text"]
+
+    await guardrail.apply_guardrail({"texts": texts}, _request_data(), "request")
+
+    assert in_flight["peak"] == 1
+    assert order == texts
+
+
+@pytest.mark.asyncio
+async def test_chunks_of_one_long_text_still_run_concurrently():
+    budget: Final = 1000
+    text: Final = "z" * (budget * 3)
+    router, order, in_flight = _tracking_router()
+    guardrail: Final = _make_guardrail(
+        max_input_chars=budget, max_concurrent_decision_calls=4, router_provider=lambda: router
+    )
+
+    await guardrail.apply_guardrail({"texts": [text]}, _request_data(), "request")
+
+    assert router.adecisions.await_count == len(order)
+    assert 1 < in_flight["peak"] <= 4
+
+
+@pytest.mark.asyncio
+async def test_flagged_first_text_stops_screening_of_remaining_texts():
+    marker: Final = "FLAG-ME-NOW"
+    router: Final = _marker_router(marker)
+    guardrail: Final = _make_guardrail(router_provider=lambda: router)
+    texts: Final = [marker, "second text never screened", "third text never screened"]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail({"texts": texts}, _request_data(), "request")
+
+    assert exc_info.value.status_code == 400
+    sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
+    assert sent == [marker]
+
+
+@pytest.mark.asyncio
+async def test_erroring_first_text_does_not_stop_later_texts_from_blocking():
+    marker: Final = "late detection"
+    router: Final = _flaky_chunk_router(marker)
+    guardrail: Final = _make_guardrail(unreachable_fallback="fail_open", router_provider=lambda: router)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail({"texts": ["BOOM", "clean", marker]}, _request_data(), "request")
+
+    assert exc_info.value.status_code == 400
+    detail: Final[dict[str, object]] = cast(dict[str, object], exc_info.value.detail)
+    assert detail["flagged_checks"] == ["prompt_injection"]

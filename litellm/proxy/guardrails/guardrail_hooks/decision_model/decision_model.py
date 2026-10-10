@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 from asyncio import AbstractEventLoop, Semaphore
 from collections.abc import Callable, Mapping, Sequence
-from itertools import chain
 from time import time
 from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
@@ -161,6 +160,21 @@ class DecisionModelGuardrail(CustomGuardrail):
             raise TypeError(f"decisions call returned {type(raw_response).__name__}, expected OpenAI format")
         return raw_response
 
+    async def _screen_text(
+        self, text: str, questions: Sequence[Mapping[str, object]], semaphore: asyncio.Semaphore
+    ) -> tuple[tuple[OpenAIDecisionResponse, ...], tuple[Exception, ...]]:
+        results: Final = await asyncio.gather(
+            *(self._run_checks(segment, questions, semaphore) for segment in _chunk_text(text, self.max_input_chars)),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+        return (
+            tuple(result for result in results if isinstance(result, OpenAIDecisionResponse)),
+            tuple(result for result in results if isinstance(result, Exception)),
+        )
+
     def _check_verdict(
         self, check: DecisionModelCheck, answers_by_call: Sequence[Mapping[str | None, object]]
     ) -> _CheckVerdict:
@@ -254,21 +268,18 @@ class DecisionModelGuardrail(CustomGuardrail):
             return inputs
         start_time: Final = time()
 
-        segments: Final = tuple(chain.from_iterable(_chunk_text(text, self.max_input_chars) for text in texts))
         questions: Final = [
             {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
         ]
         semaphore: Final = self._get_decision_semaphore()
-        results: Final = await asyncio.gather(
-            *(self._run_checks(segment, questions, semaphore) for segment in segments),
-            return_exceptions=True,
-        )
-        for result in results:
-            if isinstance(result, BaseException) and not isinstance(result, Exception):
-                raise result
-
-        responses: Final = tuple(result for result in results if isinstance(result, OpenAIDecisionResponse))
-        errors: Final = tuple(result for result in results if isinstance(result, Exception))
+        responses: Final[list[OpenAIDecisionResponse]] = []  # mutable-ok: sequential per-text accumulator
+        errors: Final[list[Exception]] = []  # mutable-ok: sequential per-text accumulator
+        for text in texts:
+            text_responses, text_errors = await self._screen_text(text, questions, semaphore)
+            responses.extend(text_responses)
+            errors.extend(text_errors)
+            if any(v["flagged"] and v["action"] == "block" for v in self._verdicts(responses)):
+                break
         if errors and not responses:
             self._log(request_data, (), "guardrail_failed_to_respond", start_time)
             self._handle_call_failure(errors[0])
