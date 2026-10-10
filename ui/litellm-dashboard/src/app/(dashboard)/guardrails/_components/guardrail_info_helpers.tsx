@@ -158,7 +158,7 @@ export const getLoggingOnlyScopeUpdate = (
     | undefined,
   choice: LoggingOnlyScopeChoice | undefined,
   continueToggle: boolean | undefined,
-): { logging_only_scope?: LoggingOnlyScope | null; logging_only_continue_on_input_failure?: boolean | null } => {
+): { logging_only_scope?: LoggingOnlyScope | null; logging_only_continue_on_input_failure?: boolean } => {
   if (
     choice === undefined ||
     (choice === loggingOnlyScopeToChoice(litellmParams?.logging_only_scope) &&
