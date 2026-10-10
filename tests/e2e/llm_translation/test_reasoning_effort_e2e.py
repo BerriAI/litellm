@@ -9,9 +9,17 @@ from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, met
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
+from pydantic import BaseModel, ConfigDict
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
+
+
+class _ReasoningExtras(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    reasoning_content: str | None = None
+
 
 ANTHROPIC_MODEL: Final = "anthropic/claude-fable-5-1"
 AZURE_AI_MODEL: Final = "azure_ai/claude-fable-5-1"
@@ -133,6 +141,8 @@ class TestReasoningEffort:
         assert response.choices, f"{route_name} returned no choices: {response!r}"
         assert response.choices[0].finish_reason == "stop", f"{route_name} did not finish: {response!r}"
         assert response.choices[0].message.content, f"{route_name} returned an empty answer: {response!r}"
+        extras: Final = _ReasoningExtras.model_validate(response.choices[0].message.model_extra or {})
+        assert extras.reasoning_content, f"{route_name} returned no reasoning: {response!r}"
 
     @pytest.mark.covers("llm.messages.bedrock_invoke.thinking.nonstream.works")
     @meta(
