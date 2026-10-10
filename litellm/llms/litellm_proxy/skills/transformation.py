@@ -136,7 +136,7 @@ class LiteLLMSkillsTransformationHandler:
         """Async implementation of create_skill."""
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-        from litellm.proxy._types import NewSkillRequest
+        from litellm.models.skills import NewSkillRequest
 
         skill_request: Final = NewSkillRequest(
             display_title=display_title,

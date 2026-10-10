@@ -1927,19 +1927,9 @@ class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
 ######## Skills API Types ########
 
 
-class NewSkillRequest(LiteLLMPydanticObjectBase):
-    """Request to create a new skill in LiteLLM database"""
-
-    display_title: str | None = None
-    description: str | None = None
-    instructions: str | None = None
-    file_content: bytes | None = None  # Binary content of skill files (zip)
-    file_name: str | None = None  # Original filename
-    file_type: str | None = None  # MIME type (e.g., "application/zip")
-    metadata: dict[str, Any] | None = None
-    authorization_url: str | None = None
-    token_url: str | None = None
-    registration_url: str | None = None
+from litellm.models.skills import (  # noqa: E402  # public re-export
+    NewSkillRequest as NewSkillRequest,  # noqa: PLC0414  # public re-export
+)
 
 
 class UpdateSkillRequest(LiteLLMPydanticObjectBase):
