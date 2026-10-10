@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._models import Headers, Response
@@ -10,9 +10,9 @@ import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,
     convert_content_list_to_str,
     extract_images_from_message,
+    extract_reasoning_content,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -31,9 +31,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 from ..common_utils import OllamaError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -118,13 +117,13 @@ class OllamaChatConfig(BaseConfig):
         system: str | None = None,
         template: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
@@ -267,7 +266,7 @@ class OllamaChatConfig(BaseConfig):
                             )
                         )
                         new_tools.append(ollama_tool_call)
-            reasoning_content, parsed_content = _extract_reasoning_content(cast(dict, m))
+            reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
 
@@ -321,7 +320,7 @@ class OllamaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -350,10 +349,10 @@ class OllamaChatConfig(BaseConfig):
             elif response_json_message.get("content") is not None:
                 # parse reasoning content from content
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                    _parse_content_for_reasoning,
+                    parse_content_for_reasoning,
                 )
 
-                reasoning_content, content = _parse_content_for_reasoning(response_json_message["content"])
+                reasoning_content, content = parse_content_for_reasoning(response_json_message["content"])
                 response_json_message["reasoning_content"] = reasoning_content
                 response_json_message["content"] = content
 
@@ -418,6 +417,18 @@ class OllamaChatConfig(BaseConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+
+def _done_chunk_usage(chunk: Mapping[str, object]) -> ChatCompletionUsageBlock | None:
+    prompt_eval_count: Final = chunk.get("prompt_eval_count")
+    eval_count: Final = chunk.get("eval_count")
+    if chunk.get("done") is not True or not isinstance(prompt_eval_count, int) or not isinstance(eval_count, int):
+        return None
+    return ChatCompletionUsageBlock(
+        prompt_tokens=prompt_eval_count,
+        completion_tokens=eval_count,
+        total_tokens=prompt_eval_count + eval_count,
+    )
 
 
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
@@ -528,17 +539,11 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     )
                 ]
 
-            usage: Final = ChatCompletionUsageBlock(
-                prompt_tokens=chunk.get("prompt_eval_count", 0),
-                completion_tokens=chunk.get("eval_count", 0),
-                total_tokens=chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0),
-            )
-
             return ModelResponseStream(
                 id=str(uuid.uuid4()),
                 object="chat.completion.chunk",
                 created=int(time.time()),  # ollama created_at is in UTC
-                usage=usage,
+                usage=_done_chunk_usage(chunk),
                 model=chunk["model"],
                 choices=choices,
             )

@@ -18,13 +18,13 @@ import ast
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-
 from litellm_proxy_extras.prisma_toolchain import (
     DEFAULT_PRISMA_COMMAND_TIMEOUT,
     DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT,
@@ -35,10 +35,15 @@ from litellm_proxy_extras.prisma_toolchain import (
     heal_incomplete_nodeenv_cache,
     node_binary_path,
     prisma_bootstrap_timeout,
+    prisma_cli_available,
     prisma_command_timeout,
     prisma_migrate_deploy_timeout,
+    resolve_prisma_argv,
+    run_prisma,
 )
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+from tests._process_helpers import process_is_gone
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROXY_EXTRAS = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
@@ -47,6 +52,7 @@ FAKE_PRISMA = """#!{python}
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import time
 
@@ -66,6 +72,9 @@ with log_path.open("a") as log:
 time.sleep(float(os.environ.get("FAKE_PRISMA_SLEEP", "0")))
 if args[:2] == ["migrate", "deploy"]:
     if earlier_same_command == 0:
+        if os.environ.get("FAKE_PRISMA_GRANDCHILD_PIDFILE"):
+            grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+            pathlib.Path(os.environ["FAKE_PRISMA_GRANDCHILD_PIDFILE"]).write_text(str(grandchild.pid))
         time.sleep(float(os.environ.get("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "0")))
     elif os.environ.get("FAKE_PRISMA_LATER_DEPLOY_STDERR"):
         print(os.environ["FAKE_PRISMA_LATER_DEPLOY_STDERR"], file=sys.stderr)
@@ -272,12 +281,38 @@ def test_migrate_deploy_stops_at_its_own_timeout(
     assert elapsed < 30
 
 
+def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
+    toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The real CLI forks Node and a schema engine; a timeout must not leave them running."""
+    _, log_path = toolchain_env
+    pidfile = tmp_path / "grandchild.pid"
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, "1")
+    monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "60")
+    monkeypatch.setenv("FAKE_PRISMA_LATER_DEPLOY_STDERR", "Error: P3018 permission denied for schema public")
+    monkeypatch.setenv("FAKE_PRISMA_GRANDCHILD_PIDFILE", str(pidfile))
+
+    with pytest.raises(RuntimeError, match="insufficient permissions"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    grandchild_pid = int(pidfile.read_text())
+    try:
+        assert len(_deploy_calls(log_path)) == 2
+        assert process_is_gone(grandchild_pid, within_seconds=5)
+    finally:
+        try:
+            os.kill(grandchild_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def test_db_push_timeout_hint_names_the_per_command_budget(
     toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """``db push`` keeps the per-command budget, so its timeout hint has to name that variable."""
     _, log_path = toolchain_env
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "1")
     monkeypatch.setenv("FAKE_PRISMA_FIRST_PUSH_SLEEP", "3")
 
@@ -359,3 +394,95 @@ def test_every_prisma_command_timeout_is_overridable(module: str) -> None:
         f"{module} still hardcodes a Prisma timeout at lines {literals}; "
         "route it through prisma_command_timeout() so it can be raised without a release"
     )
+
+
+FAKE_PRISMA_MODULE_MAIN = """import json
+import sys
+
+print(json.dumps({"module_argv": sys.argv[1:]}))
+"""
+
+
+def _write_fake_prisma_module(tmp_path: Path) -> Path:
+    package_dir = tmp_path / "fakemodule" / "prisma"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("")
+    (package_dir / "__main__.py").write_text(FAKE_PRISMA_MODULE_MAIN)
+    return package_dir.parent
+
+
+def _empty_bin(tmp_path: Path) -> Path:
+    bin_dir = tmp_path / "emptybin"
+    bin_dir.mkdir()
+    return bin_dir
+
+
+def test_run_prisma_uses_the_module_when_the_console_script_is_not_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty_bin = _empty_bin(tmp_path)
+    module_root = _write_fake_prisma_module(tmp_path)
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    result = run_prisma(
+        ["prisma", "migrate", "deploy"],
+        timeout=60,
+        env={"PATH": str(empty_bin), "PYTHONPATH": str(module_root)},
+    )
+
+    assert json.loads(result.stdout) == {"module_argv": ["migrate", "deploy"]}
+
+
+def test_run_prisma_prefers_the_console_script_on_path(
+    toolchain_env: tuple[Path, Path], tmp_path: Path
+) -> None:
+    _, log_path = toolchain_env
+    module_root = _write_fake_prisma_module(tmp_path)
+
+    result = run_prisma(
+        ["prisma", "--version"],
+        timeout=60,
+        env={**os.environ, "PYTHONPATH": str(module_root)},
+    )
+
+    assert [call["args"] for call in _fake_prisma_calls(log_path)] == [["--version"]]
+    assert "module_argv" not in result.stdout
+
+
+def test_resolve_prisma_argv_leaves_an_explicit_cli_path_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", str(_empty_bin(tmp_path)))
+    explicit = ("/app/.cache/prisma-python/prisma", "migrate", "deploy")
+
+    assert resolve_prisma_argv(explicit) == explicit
+
+
+def test_prisma_cli_is_unavailable_with_neither_script_nor_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", str(_empty_bin(tmp_path)))
+    monkeypatch.delitem(sys.modules, "prisma", raising=False)
+    monkeypatch.setattr(sys, "path", [])
+
+    assert prisma_cli_available() is False
+
+
+def test_prisma_cli_is_available_through_the_package_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", str(_empty_bin(tmp_path)))
+    monkeypatch.delitem(sys.modules, "prisma", raising=False)
+    monkeypatch.setattr(sys, "path", [str(_write_fake_prisma_module(tmp_path))])
+
+    assert prisma_cli_available() is True
+
+
+def test_prisma_cli_is_available_through_the_console_script_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", str(_write_fake_prisma(tmp_path)))
+    monkeypatch.delitem(sys.modules, "prisma", raising=False)
+    monkeypatch.setattr(sys, "path", [])
+
+    assert prisma_cli_available() is True

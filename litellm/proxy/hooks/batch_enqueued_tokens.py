@@ -9,6 +9,7 @@ the reservation is refunded when the batch reaches a terminal state
 """
 
 import asyncio
+import logging
 import math
 import time
 import uuid
@@ -16,11 +17,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -144,12 +148,12 @@ def resolve_batch_enqueued_token_scopes(
 
 def canonical_provider_batch_id(batch_id: str) -> str:
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # canonical unified-id decoder has no public wrapper
         get_batch_id_from_unified_batch_id,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # canonical unified-id decoder has no public wrapper
     )
 
-    decoded: Final = _is_base64_encoded_unified_file_id(batch_id)
+    decoded: Final = is_base64_encoded_unified_file_id(batch_id)
     if isinstance(decoded, str):
         if "llm_batch_id" in decoded or "generic_response_id" in decoded:
             return get_batch_id_from_unified_batch_id(decoded)
@@ -157,7 +161,7 @@ def canonical_provider_batch_id(batch_id: str) -> str:
     return get_original_file_id(batch_id)
 
 
-class _BatchResponseView(BaseModel):
+class _BatchResponseView(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str
@@ -219,6 +223,7 @@ class BatchEnqueuedTokenStore:
     def _record_key(batch_id: str) -> str:
         return f"batch_enqueued_token_reservation:{batch_id}"
 
+    @with_service_target("rate_limits")
     async def reserve(
         self,
         tokens: int,
@@ -233,8 +238,11 @@ class BatchEnqueuedTokenStore:
             try:
                 return await self._reserve_via_redis(reserve_script, refund_script, tokens=tokens, scopes=scopes)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
-                verbose_proxy_logger.warning(
-                    "Redis enqueued-token reserve failed, falling back to in-memory: %s", str(e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "Redis enqueued-token reserve failed, falling back to in-memory",
+                    e,
                 )
         return await self._reserve_in_memory(tokens=tokens, scopes=scopes, span=litellm_parent_otel_span)
 
@@ -320,6 +328,7 @@ class BatchEnqueuedTokenStore:
             tokens=tokens, scopes=scopes, backend="memory", owner=self._owner_token, reserved_at_monotonic=started
         )
 
+    @with_service_target("rate_limits")
     async def refund(
         self,
         reservation: BatchEnqueuedTokenReservation,
@@ -358,6 +367,7 @@ class BatchEnqueuedTokenStore:
                 "Redis enqueued-token refund failed; leaked increments expire with the TTL: %s", str(e)
             )
 
+    @with_service_target("rate_limits")
     async def save_reservation(
         self,
         batch_id: str,
@@ -374,8 +384,11 @@ class BatchEnqueuedTokenStore:
                     (serialized, ttl),
                 )
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
-                verbose_proxy_logger.warning(
-                    "Redis enqueued-token reservation save failed, falling back to in-memory: %s", str(e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "Redis enqueued-token reservation save failed, falling back to in-memory",
+                    e,
                 )
             else:
                 return
@@ -387,6 +400,7 @@ class BatchEnqueuedTokenStore:
             local_only=True,
         )
 
+    @with_service_target("rate_limits")
     async def pop_reservation(
         self,
         batch_id: str,
@@ -421,8 +435,11 @@ class BatchEnqueuedTokenStore:
                 await pop_script((self._record_key(batch_id),), (BATCH_ENQUEUED_TOKEN_TTL_SECONDS,))
             )
         except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
-            verbose_proxy_logger.warning(
-                "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.WARNING,
+                "Redis enqueued-token reservation pop failed, falling back to in-memory",
+                e,
             )
             return None
 

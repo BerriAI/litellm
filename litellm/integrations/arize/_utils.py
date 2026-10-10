@@ -2,7 +2,8 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from typing_extensions import override
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, override
 
 from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
@@ -28,6 +29,8 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
     ToolCallAttributes,
 )
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
@@ -492,12 +495,12 @@ def _sanitize_optional_params(optional_params: dict | None) -> dict:
     return optional_params
 
 
-def _set_metadata_attributes(span: "Span", metadata: Any | None, span_attrs) -> None:
+def _set_metadata_attributes(span: "Span", metadata: object | None, span_attrs) -> None:
     if metadata is not None:
         safe_set_attribute(span, span_attrs.METADATA, safe_dumps(metadata))
 
 
-def _extract_metadata_tools(metadata: Any | None) -> list | None:
+def _extract_metadata_tools(metadata: object | None) -> list | None:
     if not isinstance(metadata, dict):
         return None
     llm_obj: Final = metadata.get("llm")
@@ -609,9 +612,7 @@ def _coerce_response_obj_for_attrs(response_obj):
     text: Final = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
-            parsed: Final = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(text))
         except Exception:
             pass
     return response_obj
@@ -670,7 +671,22 @@ def _get_tool_calls(message) -> list | None:
     return tool_calls if isinstance(tool_calls, list) and tool_calls else None
 
 
-def _normalize_tool_call(raw_tc) -> dict[str, Any] | None:
+class _NormalizedToolCallFunction(TypedDict):
+    """The ``function`` sub-object of a normalized tool call."""
+
+    name: ReadOnly[object]
+    arguments: ReadOnly[object]
+
+
+class _NormalizedToolCall(TypedDict):
+    """A tool call reduced to the stable shape the OpenInference emitters read."""
+
+    id: ReadOnly[object]
+    type: ReadOnly[object]
+    function: ReadOnly[_NormalizedToolCallFunction]
+
+
+def _normalize_tool_call(raw_tc) -> _NormalizedToolCall | None:
     """Normalize a single tool_call (dict or Pydantic) into a stable shape:
 
         {"id": str|None, "type": str, "function": {"name": str|None, "arguments": str|None}}
@@ -1047,9 +1063,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
             inner = candidate.get("response")
             if isinstance(inner, str):
                 try:
-                    parsed = json.loads(inner)
-                    if isinstance(parsed, dict):
-                        return parsed
+                    return _JSON_OBJECT.validate_python(json.loads(inner))
                 except Exception:
                     continue
             if isinstance(inner, dict):
@@ -1063,9 +1077,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
         return original
     if isinstance(original, str):
         try:
-            parsed = json.loads(original)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(original))
         except Exception:
             return None
     return None
@@ -1124,7 +1136,10 @@ def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
         return
 
-    structured: Final[object] = coerced_response_obj.get("structuredContent")
+    structured: Final[object] = coerced_response_obj.get(
+        "structured_content",
+        coerced_response_obj.get("structuredContent"),  # pyright: ignore[reportUnknownMemberType]  # tolerant dual-spelling lookup on untyped payloads
+    )
     payload: Final[object] = content if content else structured if structured is not None else content
     if payload is None:
         return

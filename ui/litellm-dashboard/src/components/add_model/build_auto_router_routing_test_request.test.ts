@@ -1,5 +1,11 @@
-import { buildAutoRouterRoutingTestRequest } from "./build_auto_router_routing_test_request";
+import { describe, expect, it } from "vitest";
+import {
+  buildAutoRouterRoutingTestRequest,
+  buildSavedJevConnectionTestRequest,
+  JEV_CONNECTION_TEST_PROMPT,
+} from "./build_auto_router_routing_test_request";
 import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+import { defaultJevClassifierConfig } from "./jev_classifier_config";
 
 const CONFIG = {
   tiers: { SIMPLE: ["cheap"], MEDIUM: ["mid"], COMPLEX: ["strong"], REASONING: ["o3"] },
@@ -15,6 +21,77 @@ const params = {
 };
 
 describe("buildAutoRouterRoutingTestRequest", () => {
+  it("references the saved deployment without copying masked credentials or client overrides", () => {
+    const request = buildSavedJevConnectionTestRequest(
+      {
+        classifier_type: "jev",
+        tiers: CONFIG.tiers,
+        jev_classifier_config: { api_key: "sk-masked****", api_base: "https://custom-jev.test" },
+      },
+      "saved-id",
+    );
+    const expectedRequest = {
+      prompt: JEV_CONNECTION_TEST_PROMPT,
+      complexity_router_config: {
+        classifier_type: "oss_classifier",
+        tiers: CONFIG.tiers,
+        opensource_classifier_config: defaultJevClassifierConfig(),
+      },
+      saved_model_id: "saved-id",
+    };
+    expect(request).toEqual(expectedRequest);
+    expect(request?.complexity_router_config.opensource_classifier_config).not.toHaveProperty("api_key");
+    expect(request?.complexity_router_config.opensource_classifier_config).not.toHaveProperty("api_base");
+  });
+  it.each([
+    ["jev", "jev-latest", "object"],
+    ["jev", "jev-latest", "json"],
+    ["laya", "english", "object"],
+    ["laya", "english", "json"],
+    ["bespoke", "nimble-latest", "object"],
+    ["bespoke", "nimble-latest", "json"],
+    ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "object"],
+    ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "json"],
+    ["databricks", "databricks-openjev-qwen35-4b", "object"],
+    ["databricks", "databricks-openjev-qwen35-4b", "json"],
+  ])("probes saved %s/%s %s configuration with custom tiers and team context", (provider, model, format) => {
+    const config = {
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: { provider, model, timeout_ms: 900 },
+      tiers: { QUICK: ["fast"], DEEP: ["strong"] },
+      tier_definitions: { QUICK: "Simple questions", DEEP: "Complex questions" },
+      fallback_tier: "DEEP",
+      classifier_context_window_size: 4,
+    };
+    const expectedRequest = {
+      prompt: JEV_CONNECTION_TEST_PROMPT,
+      complexity_router_config: config,
+      saved_model_id: "saved-id",
+      team_id: "team-1",
+    };
+    expect(
+      buildSavedJevConnectionTestRequest(format === "json" ? JSON.stringify(config) : config, "saved-id", "team-1"),
+    ).toEqual(expectedRequest);
+  });
+  it.each([
+    ["laya", "unsupported"],
+    ["bespoke", "unsupported"],
+    ["databricks", "serving-endpoints/openjev"],
+    ["databricks", ".."],
+  ])("does not probe unsupported %s model %s", (provider, model) => {
+    const config = {
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: { provider, model },
+      tiers: CONFIG.tiers,
+    };
+    expect(buildSavedJevConnectionTestRequest(config, "saved-id")).toBeUndefined();
+  });
+  it.each([undefined, null, "not json", "[]", {}, { classifier_type: "llm", tiers: {} }, { classifier_type: "jev" }])(
+    "does not build a JEV probe for invalid or other classifier configurations: %j",
+    (config) => {
+      expect(buildSavedJevConnectionTestRequest(config, "saved-id")).toBeUndefined();
+    },
+  );
   it("sends the prompt with the config being edited", () => {
     const request = buildAutoRouterRoutingTestRequest(params);
 

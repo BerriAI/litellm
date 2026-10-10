@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -18,8 +19,8 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -53,6 +54,9 @@ class EndpointsConfig(TypedDict):
     endpoints: ReadOnly[Sequence[EndpointConfig]]
 
 
+_ENDPOINTS_CONFIG: Final = TypeAdapter(EndpointsConfig)
+
+
 class ContainerErrorDetail(TypedDict, total=False):
     """The ``error`` object of a container API error body."""
 
@@ -81,7 +85,7 @@ def _load_endpoints_config() -> EndpointsConfig:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
-        return json.load(f)
+        return _ENDPOINTS_CONFIG.validate_python(json.load(f))
 
 
 def _get_endpoint_config(endpoint_name: str) -> EndpointConfig | None:
@@ -139,9 +143,9 @@ def _build_query_params(
     return {name: value if isinstance(value, str) else str(value) for name, value in supplied if value is not None}
 
 
-def _error_message_from_response(response: httpx.Response) -> str:
+def error_message_from_response(response: httpx.Response) -> str:
     try:
-        body: Final = response.json()
+        body: Final[object] = response.json()
     except ValueError:
         return response.text
 
@@ -151,6 +155,16 @@ def _error_message_from_response(response: httpx.Response) -> str:
             return message
 
     return response.text
+
+
+def raise_for_error_status(response: httpx.Response, container_provider_config: "BaseContainerConfig") -> None:
+    if not httpx.codes.is_error(response.status_code):
+        return
+    raise container_provider_config.get_error_class(
+        error_message=error_message_from_response(response),
+        status_code=response.status_code,
+        headers=response.headers,
+    )
 
 
 def _transform_response(
@@ -163,7 +177,7 @@ def _transform_response(
     if httpx.codes.is_error(response.status_code):
         raise BaseLLMException(
             status_code=response.status_code,
-            message=_error_message_from_response(response),
+            message=error_message_from_response(response),
             headers=dict(response.headers),
         )
 
@@ -241,7 +255,7 @@ def _sync_http_client(
 ) -> HTTPHandler:
     """The sync HTTP client for a container request, reusing the caller's when usable."""
     if client is None or not isinstance(client, HTTPHandler):
-        return _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        return get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
     return client
 
 
@@ -330,7 +344,7 @@ class GenericContainerHandler:
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs: object,
-    ) -> Any:
+    ) -> ContainerEndpointResponse:
         """Synchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
         if not endpoint_config:
@@ -410,7 +424,7 @@ class GenericContainerHandler:
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs: object,
-    ) -> Any:
+    ) -> ContainerEndpointResponse:
         """Asynchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
         if not endpoint_config:

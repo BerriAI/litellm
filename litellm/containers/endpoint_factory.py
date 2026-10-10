@@ -11,7 +11,9 @@ import json
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Final, Literal
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -33,13 +35,14 @@ RESPONSE_TYPES: Final[dict[str, type]] = {
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
+_ENDPOINTS_DOCUMENT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent / "endpoints.json"
     with open(config_path) as f:
-        return json.load(f)
+        return _ENDPOINTS_DOCUMENT.validate_python(json.load(f))
 
 
 def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
@@ -56,9 +59,9 @@ def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
     def endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: dict[str, Any] | None = None,
-        extra_query: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, object] | None = None,
+        extra_query: dict[str, object] | None = None,
+        extra_body: dict[str, object] | None = None,
         **kwargs,
     ):
         local_vars: Final = locals()
@@ -145,9 +148,9 @@ def create_async_endpoint_function(
     async def async_endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: dict[str, Any] | None = None,
-        extra_query: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, object] | None = None,
+        extra_query: dict[str, object] | None = None,
+        extra_body: dict[str, object] | None = None,
         **kwargs,
     ):
         local_vars: Final = locals()

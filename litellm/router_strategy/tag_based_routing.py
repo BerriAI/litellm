@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
 
 from litellm._logging import verbose_logger
-from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY, ROUTING_REQUEST_TAGS_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.types.router import ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
@@ -217,9 +217,7 @@ def _strip_routing_prefix(tags: Sequence[str], prefix: str) -> tuple[tuple[str, 
 
 def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
     required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
-    positive: Final = [
-        t for t in tags if not t.startswith("!") and not t.startswith("&")
-    ]  # mutable-ok: feeds _match_deployment's existing list[str]-typed request_tags param
+    positive: Final = [t for t in tags if not t.startswith("!") and not t.startswith("&")]
     excluded: Final = tuple(tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1)
     return required, positive, excluded
 
@@ -385,7 +383,7 @@ def _all_deployments_or_fallback(
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
     try:
-        return llm_router_instance._get_all_deployments(model_name=model)
+        return llm_router_instance.get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
         return fallback
 
@@ -444,7 +442,7 @@ def _tag_known_to_group(
     if tag_set & routing_confirmed:
         return True
     try:
-        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+        all_deployments: Final = llm_router_instance.get_all_deployments(model_name=model)
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
     return any(
@@ -461,7 +459,10 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     if not isinstance(metadata, Mapping):
         return None
     typed_metadata: Final[Mapping[str, object]] = metadata
-    request_tags: Final = _tags_in_metadata(typed_metadata)
+    request_tags: Final = _tags_in_metadata(
+        typed_metadata,
+        key=ROUTING_REQUEST_TAGS_METADATA_KEY if ROUTING_REQUEST_TAGS_METADATA_KEY in typed_metadata else "tags",
+    )
     stamp: Final = typed_metadata.get(CONSUMED_REQUEST_TAGS_METADATA_KEY)
     if not isinstance(stamp, ConsumedRequestTagsStamp) or stamp.model_group != model:
         return request_tags
@@ -646,7 +647,7 @@ async def get_deployments_for_tag(
     return healthy_deployments
 
 
-def _tags_in_metadata(metadata: object) -> list[str]:
+def _tags_in_metadata(metadata: object, key: str = "tags") -> list[str]:
     """
     Tags out of a metadata bucket the caller controls the shape of.
 
@@ -657,16 +658,16 @@ def _tags_in_metadata(metadata: object) -> list[str]:
     if not isinstance(metadata, Mapping):
         return []
     typed_metadata: Final[Mapping[str, object]] = metadata
-    tags: Final = typed_metadata.get("tags")
+    tags: Final = typed_metadata.get(key)
     if isinstance(tags, str) or not isinstance(tags, Sequence):
         return []
     typed_tags: Final[Sequence[object]] = tags
     return [tag for tag in typed_tags if isinstance(tag, str)]
 
 
-def _get_tags_from_request_kwargs(
+def get_tags_from_request_kwargs(
     request_kwargs: Mapping[str, object] | None = None,
-    metadata_variable_name: Literal["metadata", "litellm_metadata"] | None = None,
+    metadata_variable_name: str | None = None,
 ) -> list[str]:
     """
     Helper to get tags from request kwargs
@@ -692,3 +693,6 @@ def _get_tags_from_request_kwargs(
         typed_litellm_params: Final[Mapping[str, object]] = litellm_params
         return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
+
+
+_get_tags_from_request_kwargs = get_tags_from_request_kwargs

@@ -5,10 +5,12 @@ Maps OpenAI TTS spec to MiniMax TTS API (WebSocket-based HTTP API)
 Reference: https://platform.minimax.io/docs
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx import Headers
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -24,6 +26,9 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class MinimaxException(BaseLLMException):
@@ -86,8 +91,8 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
-        voice: str | dict[str, Any] | None,
-        params: dict[str, Any],
+        voice: str | Mapping[str, object] | None,
+        params: dict[str, object],
     ) -> str:
         """
         Determine the MiniMax voice_id based on provided voice input or parameters.
@@ -122,12 +127,12 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict[str, Any] | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to MiniMax TTS parameters
         """
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
         params: Final = dict(optional_params) if optional_params else {}
@@ -242,7 +247,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         # Output format: 'url' or 'hex' (default is 'hex')
         output_format: Final = params.pop("output_format", "hex")
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "model": model,
             "text": input,
             "stream": False,  # HTTP endpoint doesn't support streaming
@@ -298,7 +303,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         try:
             # Parse JSON response
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # MiniMax API response format check
             # The API can return different structures:
@@ -319,7 +324,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
             # Extract audio data
             # MiniMax returns audio in "data" field
-            data: Final = response_json.get("data", {})
+            data: Final = _JSON_OBJECT.validate_python(response_json.get("data", {}))
 
             # Check if response contains a URL (output_format='url')
             audio_url: Final = data.get("audio_url", None)
@@ -333,7 +338,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 )
 
             # Get hex-encoded audio data
-            audio_hex: Final = data.get("audio", "") or response_json.get("audio_file", "")
+            audio_hex: Final = _STR.validate_python(data.get("audio", "") or response_json.get("audio_file", "") or "")
 
             if not audio_hex:
                 raise MinimaxException(

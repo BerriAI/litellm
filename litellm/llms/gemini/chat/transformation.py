@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, cast
 
 import litellm
@@ -12,7 +13,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
-from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
+from ...vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX, gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 
@@ -68,7 +69,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         candidate_count: int | None = None,
         stop_sequences: list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -96,13 +97,14 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "logprobs",
             "frequency_penalty",
             "presence_penalty",
+            "seed",
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
             "include_server_side_tool_invocations",
             "service_tier",
         ]
-        if supports_reasoning(model, custom_llm_provider="gemini"):
+        if supports_reasoning(model, custom_llm_provider="gemini") or self._is_gemini_3_or_newer(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
         if self.is_model_gemini_audio_model(model):
@@ -127,7 +129,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                     if element.get("type") == "image_url":
                         img_element = cast(ChatCompletionImageObject, element)  # cast-ok: runtime type tag checked
                         _image_url, format, detail = _image_url_fields(img_element)
-                        if _image_url and "https://" in _image_url:
+                        if (
+                            _image_url
+                            and "https://" in _image_url
+                            and not _image_url.startswith(GEMINI_FILES_API_URI_PREFIX)
+                        ):
                             image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
                             converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
                             if detail is not None:
@@ -147,7 +153,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                                 llm_provider="gemini",
                             )
                         file_id = _file_field.get("file_id")
-                        if file_id and ("http://" in file_id or "https://" in file_id):
+                        if (
+                            file_id
+                            and ("http://" in file_id or "https://" in file_id)
+                            and not file_id.startswith(GEMINI_FILES_API_URI_PREFIX)
+                        ):
                             # Convert HTTP/HTTPS file URL to base64 data
                             try:
                                 base64_data = convert_url_to_base64(file_id)
@@ -156,9 +166,17 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                             except Exception:
                                 # If conversion fails, leave as is and let the API handle it
                                 pass
-        return _gemini_convert_messages_with_history(
+        return gemini_convert_messages_with_history(
             messages=messages,
             model=model,
             litellm_params=litellm_params,
             custom_llm_provider="gemini",
         )
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str | None = None,
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
+    ) -> list[ContentType]:  # mutable-ok: mirrors override contract
+        return self._transform_messages(messages, model, litellm_params)

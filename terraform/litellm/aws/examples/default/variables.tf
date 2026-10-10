@@ -158,3 +158,15 @@ variable "backend_extra_secrets" {
   type        = map(string)
   default     = {}
 }
+
+variable "gateway_metrics_port" {
+  description = "Port for the Prometheus metrics sidecar in the gateway task. Null keeps /metrics on the gateway port only."
+  type        = number
+  default     = null
+}
+
+variable "gateway_metrics_scrape_cidrs" {
+  description = "CIDRs allowed to scrape gateway_metrics_port."
+  type        = list(string)
+  default     = []
+}

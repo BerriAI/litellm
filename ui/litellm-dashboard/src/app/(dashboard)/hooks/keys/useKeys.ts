@@ -40,6 +40,7 @@ export interface KeyListCallOptions {
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
+  search?: string | null;
   sortBy?: string | null;
   sortOrder?: string | null;
   expand?: string | null;
@@ -61,6 +62,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
+        search: options.search,
         user_id: options.userID,
         page,
         size: pageSize,
@@ -108,13 +110,14 @@ export const useKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
+  queryOptions: { enabled?: boolean } = {},
 ): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
   return useQuery<KeysResponse>({
     queryKey: keyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, options),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && (queryOptions.enabled ?? true),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,
   });

@@ -129,7 +129,7 @@ export const getOrganizationsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)" },
+    meta: { title: "Spend (USD)", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
     size: 120,
     enableSorting: true,
@@ -137,7 +137,7 @@ export const getOrganizationsTableColumns = ({
   },
   {
     id: "max_budget",
-    meta: { title: "Budget (USD)" },
+    meta: { title: "Budget (USD)", numeric: true },
     header: "Budget (USD)",
     size: 120,
     enableSorting: false,
@@ -163,7 +163,7 @@ export const getOrganizationsTableColumns = ({
   },
   {
     id: "members",
-    meta: { title: "Members" },
+    meta: { title: "Members", numeric: true },
     header: "Members",
     size: 100,
     enableSorting: false,

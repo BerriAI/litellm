@@ -1,1 +1,1 @@
-Read @CLAUDE.md for coding guidelines
+Read @AGENTS.md for coding guidelines

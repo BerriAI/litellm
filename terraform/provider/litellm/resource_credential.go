@@ -39,6 +39,15 @@ func resourceLiteLLMCredential() *schema.Resource {
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				Description: "Sensitive credential values (API keys, tokens, etc.)",
 			},
+			"adopt_existing": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+				Description: "Take over a credential of this name that already exists on the proxy instead of failing. " +
+					"Off by default: create reports the conflict and points at `terraform import`, so an apply never " +
+					"silently overwrites a credential it does not manage. Turning this on overwrites the existing " +
+					"credential's values with the ones in this configuration.",
+			},
 		},
 	}
 }

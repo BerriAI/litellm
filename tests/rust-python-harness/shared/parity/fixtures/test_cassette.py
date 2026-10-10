@@ -10,9 +10,6 @@ from vcr import VCR
 from vcr.request import Request
 
 from ..fixture_models import ParityCase, SdkInputBase
-from .cassette import deserialize_cassette
-from .recording import RecordedInteraction
-from .store import load_fixture, save_fixture
 from ..recorded_http import (
     HttpHeader,
     RecordedHttpResponse,
@@ -21,6 +18,9 @@ from ..recorded_http import (
     RecordedStreamChunk,
 )
 from ..replay import replay_server
+from .cassette import deserialize_cassette
+from .recording import RecordedInteraction
+from .store import load_fixture, save_fixture
 
 _URI: Final = "http://parity-provider.invalid/operation?api-version=1"
 
@@ -93,3 +93,18 @@ def test_cassette_preserves_duplicate_response_headers(tmp_path: Path) -> None:
     save_fixture(tmp_path, sdk_input, case, (RecordedInteraction(Request("POST", _URI, b"", {}), response),))
 
     assert load_fixture(tmp_path, sdk_input, ParityCase[_Input]) == case
+
+
+def test_local_replay_skips_recorded_retry_delay() -> None:
+    response: Final = RecordedHttpResponse.from_bytes(
+        200,
+        (HttpHeader(name="retry-after", value="5"),),
+        b"{}",
+    )
+
+    with replay_server() as server:
+        server.enqueue_response(response)
+        replayed: Final = httpx.post(f"{server.url}/operation", content=b"{}")
+        server.take_requests(1)
+
+    assert replayed.headers["retry-after"] == "0"

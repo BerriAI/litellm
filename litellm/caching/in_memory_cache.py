@@ -13,6 +13,7 @@ import json
 import sys
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -24,20 +25,23 @@ from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
 
 from .base_cache import BaseCache
 
+DEFAULT_MAX_SIZE_IN_MEMORY: Final = 200
+
 
 class InMemoryCache(BaseCache):
     def __init__(
         self,
-        max_size_in_memory: int | None = 200,
+        max_size_in_memory: int | None = DEFAULT_MAX_SIZE_IN_MEMORY,
         default_ttl: int
         | None = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
         max_size_per_item: int | None = 1024,  # 1MB = 1024KB
+        clock: Callable[[], float] | None = None,
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
         """
         self.max_size_in_memory = (
-            max_size_in_memory if max_size_in_memory is not None else 200
+            max_size_in_memory if max_size_in_memory is not None else DEFAULT_MAX_SIZE_IN_MEMORY
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
         self.max_size_per_item = max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB  # 1MB = 1024KB
@@ -47,6 +51,7 @@ class InMemoryCache(BaseCache):
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
         self._increment_lock = threading.Lock()
+        self._clock = clock if clock is not None else lambda: time.time()
 
     def check_value_size(self, value: Any):
         """
@@ -89,7 +94,7 @@ class InMemoryCache(BaseCache):
         """
         Check if a specific key is expired
         """
-        return key in self.ttl_dict and time.time() > self.ttl_dict[key]
+        return key in self.ttl_dict and self._clock() > self.ttl_dict[key]
 
     def _remove_key(self, key: str) -> None:
         """
@@ -111,7 +116,7 @@ class InMemoryCache(BaseCache):
         - 3. the size of in-memory cache is bounded
 
         """
-        current_time: Final = time.time()
+        current_time: Final = self._clock()
 
         # Step 1: Remove expired or outdated items
         while self.expiration_heap:
@@ -145,7 +150,7 @@ class InMemoryCache(BaseCache):
         Check if ttl is set for a key
         """
         ttl_time: Final = self.ttl_dict.get(key)
-        if ttl_time is None or float(ttl_time) < time.time():  # if ttl is not set, allow override
+        if ttl_time is None or float(ttl_time) < self._clock():  # if ttl is not set, allow override
             return True
         else:
             return False
@@ -165,10 +170,10 @@ class InMemoryCache(BaseCache):
         self.cache_dict[key] = value
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
-                self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
+                self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                 heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
             else:
-                self.ttl_dict[key] = time.time() + self.default_ttl
+                self.ttl_dict[key] = self._clock() + self.default_ttl
                 heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):

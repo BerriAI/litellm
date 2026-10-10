@@ -18,6 +18,9 @@ import { cn } from "@/lib/cva.config";
 
 import type { passThroughItem } from "./PassThroughSettings";
 
+const CONFIG_ENDPOINT_HINT =
+  "This endpoint is defined in the config file and cannot be edited or deleted on the dashboard.";
+
 function HeaderWithTooltip({ title, tooltip }: { title: string; tooltip: string }) {
   return (
     <div className="flex items-center gap-1">
@@ -73,6 +76,7 @@ interface EndpointRowActionsProps {
 
 function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: EndpointRowActionsProps) {
   const endpointId = endpoint.id;
+  const isFromConfig = endpoint.is_from_config ?? false;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -85,8 +89,8 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="endpoint-action-edit"
-          disabled={!endpointId}
-          onClick={() => endpointId && onEndpointClick(endpointId)}
+          disabled={isFromConfig || !endpointId}
+          onClick={() => !isFromConfig && endpointId && onEndpointClick(endpointId)}
         >
           <Pencil />
           Edit
@@ -95,12 +99,17 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
         <DropdownMenuItem
           variant="destructive"
           data-testid="endpoint-action-delete"
-          disabled={!endpointId}
-          onClick={() => endpointId && onDeleteClick(endpointId)}
+          disabled={isFromConfig || !endpointId}
+          onClick={() => !isFromConfig && endpointId && onDeleteClick(endpointId)}
         >
           <Trash2 />
           Delete
         </DropdownMenuItem>
+        {isFromConfig && (
+          <div data-testid="endpoint-config-hint" className="px-2 py-1.5 text-xs text-muted-foreground">
+            {CONFIG_ENDPOINT_HINT}
+          </div>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -124,7 +133,9 @@ export const getPassThroughEndpointsTableColumns = ({
     enableSorting: false,
     cell: ({ row }) => {
       const endpointId = row.original.id;
-      if (!endpointId) return <span className="font-mono text-xs text-muted-foreground">—</span>;
+      if (!endpointId || row.original.is_from_config) {
+        return <span className="font-mono text-xs text-muted-foreground">—</span>;
+      }
       return (
         <IdentityCell
           title={endpointId}
@@ -132,6 +143,17 @@ export const getPassThroughEndpointsTableColumns = ({
           onClick={() => onEndpointClick(endpointId)}
         />
       );
+    },
+  },
+  {
+    id: "source",
+    meta: { title: "Source", skeleton: "badge" },
+    header: "Source",
+    size: 100,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const isFromConfig = row.original.is_from_config ?? false;
+      return <StatusBadge tone={isFromConfig ? "neutral" : "info"} label={isFromConfig ? "Config" : "DB"} />;
     },
   },
   {

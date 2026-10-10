@@ -175,7 +175,7 @@ async def acreate(
         else:
             response = init_response
 
-        maybe_schedule_background_interaction_cost_polling(
+        await maybe_schedule_background_interaction_cost_polling(
             response=response,
             create_kwargs=kwargs,
             custom_llm_provider=custom_llm_provider,
@@ -229,7 +229,7 @@ def create(
 ) -> (
     InteractionsAPIResponse
     | Iterator[InteractionsAPIStreamingResponse]
-    | Coroutine[Any, Any, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
+    | Coroutine[object, object, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
 ):
     """
     Sync: Create a new interaction using Google's Interactions API.
@@ -406,7 +406,7 @@ def get(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> InteractionsAPIResponse | Coroutine[Any, Any, InteractionsAPIResponse]:
+) -> InteractionsAPIResponse | Coroutine[object, object, InteractionsAPIResponse]:
     """Sync: Get an interaction by its ID."""
     local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or "gemini"
@@ -464,7 +464,7 @@ async def adelete(
     extra_headers: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteInteractionResult:
     """Async: Delete an interaction by its ID."""
     local_vars: Final = locals()
@@ -472,7 +472,7 @@ async def adelete(
         loop: Final = asyncio.get_event_loop()
         kwargs["adelete_interaction"] = True
 
-        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id)
+        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id, delete_kwargs=kwargs)
 
         func: Final = partial(
             delete,
@@ -510,7 +510,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> DeleteInteractionResult | Coroutine[Any, Any, DeleteInteractionResult]:
+) -> DeleteInteractionResult | Coroutine[object, object, DeleteInteractionResult]:
     """Sync: Delete an interaction by its ID."""
     local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or "gemini"
@@ -612,7 +612,7 @@ def cancel(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> CancelInteractionResult | Coroutine[Any, Any, CancelInteractionResult]:
+) -> CancelInteractionResult | Coroutine[object, object, CancelInteractionResult]:
     """Sync: Cancel an interaction by its ID."""
     local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or "gemini"

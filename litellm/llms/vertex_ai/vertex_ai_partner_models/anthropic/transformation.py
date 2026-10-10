@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -13,7 +14,7 @@ from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAIError(Exception):
@@ -50,6 +51,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
+
+    def inlines_remote_media(self, media: RemoteMedia) -> bool:
+        return inline_remote_image_urls(media)
 
     def should_strip_billing_metadata(self) -> bool:
         return True
@@ -193,7 +197,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
