@@ -1,9 +1,11 @@
+from typing import Final
+
 import pytest
 
 import litellm
 from litellm.types.utils import Usage
 
-SCALEDOWN_MODELS = (
+SCALEDOWN_MODELS: Final = (
     "scaledown/classify",
     "scaledown/decisions",
     "scaledown/extract",
@@ -13,12 +15,12 @@ SCALEDOWN_MODELS = (
 
 # Source: ScaleDown's standard rate of $0.05 per million input tokens with output unbilled,
 # as shown in the ScaleDown usage dashboard (checked 2026-10-09) and its billing service.
-INPUT_COST_PER_MILLION_TOKENS = 0.05
+INPUT_COST_PER_MILLION_TOKENS: Final = 0.05
 
 
 @pytest.mark.parametrize("model", SCALEDOWN_MODELS)
 def test_scaledown_model_is_priced_on_input_tokens_only(model: str) -> None:
-    entry = litellm.model_cost[model]
+    entry: Final = litellm.model_cost[model]
 
     assert entry["litellm_provider"] == "scaledown"
     assert entry["mode"] == "chat"
@@ -39,6 +41,6 @@ def test_scaledown_cost_ignores_output_tokens(model: str) -> None:
 
 
 def test_every_scaledown_entry_in_the_cost_map_is_covered_here() -> None:
-    in_map = {key for key in litellm.model_cost if key.startswith("scaledown/")}
+    in_map: Final = {key for key in litellm.model_cost if key.startswith("scaledown/")}
 
     assert in_map == set(SCALEDOWN_MODELS)
