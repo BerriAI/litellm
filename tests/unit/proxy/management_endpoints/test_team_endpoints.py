@@ -9,8 +9,9 @@ from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import httpx
+import litellm
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -30,6 +31,7 @@ from litellm.proxy._types import (
     LitellmTableNames,
     LitellmUserRoles,
     Member,
+    NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
     ResetSpendRequest,
@@ -60,6 +62,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     aggregated_date_range_error,
     delete_team,
     list_available_teams,
+    new_team,
     reset_team_member_budget_fn,
     reset_team_member_spend_fn,
     router,
@@ -11706,6 +11709,147 @@ async def test_update_team_blocks_non_admin_disable_global_guardrails(mock_db_cl
     assert "disable_global_guardrails" in str(exc.value.message)
 
 
+@pytest.mark.asyncio
+async def test_new_team_blocks_org_admin_require_trace_id(mock_db_client: MagicMock) -> None:
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+
+    with (
+        _org_admins(("u-team-admin", "org-1")),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._should_auto_add_team_creator",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._check_org_team_limits",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        exc: Final[pytest.ExceptionInfo[ProxyException]]
+        with pytest.raises(ProxyException) as exc:
+            await new_team(
+                data=NewTeamRequest(
+                    team_alias="t",
+                    organization_id="org-1",
+                    require_trace_id=True,
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set `require_trace_id` on a team." in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_blocks_org_admin_require_trace_id_change(mock_db_client: MagicMock) -> None:
+    existing: Final[MagicMock] = MagicMock()
+    existing.metadata = {"require_trace_id": True}
+    existing.model_dump.return_value = {
+        "team_id": "t1",
+        "organization_id": "org-1",
+        "metadata": {"require_trace_id": True},
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+
+    with _org_admins(("u-team-admin", "org-1")):
+        exc: Final[pytest.ExceptionInfo[ProxyException]]
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="t1", require_trace_id=False),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set `require_trace_id` on a team." in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_blocks_org_admin_null_metadata_clear_require_trace_id(
+    mock_db_client: MagicMock,
+) -> None:
+    existing: Final[MagicMock] = MagicMock()
+    existing.metadata = {"require_trace_id": True}
+    existing.model_dump.return_value = {
+        "team_id": "t1",
+        "organization_id": "org-1",
+        "metadata": {"require_trace_id": True},
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+
+    with _org_admins(("u-team-admin", "org-1")):
+        exc: Final[pytest.ExceptionInfo[ProxyException]]
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="t1", metadata=None),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set `require_trace_id` on a team." in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_ignores_explicit_null_require_trace_id_and_preserves_metadata(
+    mock_db_client: MagicMock,
+    mock_admin_auth: UserAPIKeyAuth,
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    mock_cache: Final[MagicMock]
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()),
+    ):
+        existing_team: Final[MagicMock] = MagicMock(
+            team_id="trace-null-team",
+            organization_id=None,
+            model_id=None,
+            metadata={"require_trace_id": True},
+            members_with_roles=[],
+            models=[],
+        )
+        existing_team.model_dump.return_value = {
+            "team_id": "trace-null-team",
+            "organization_id": None,
+            "metadata": {"require_trace_id": True},
+            "members_with_roles": [],
+            "models": [],
+        }
+        mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+        mock_db_client.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+        updated_team: Final[MagicMock] = MagicMock(
+            team_id="trace-null-team",
+            organization_id=None,
+            litellm_model_table=None,
+            metadata={"require_trace_id": True},
+        )
+        updated_team.model_dump.return_value = {
+            "team_id": "trace-null-team",
+            "organization_id": None,
+            "metadata": {"require_trace_id": True},
+        }
+        mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="trace-null-team", require_trace_id=None),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    written: Final = mock_db_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert "require_trace_id" not in written
+    assert written.get("metadata", existing_team.metadata)["require_trace_id"] is True
+    assert updated_team.metadata["require_trace_id"] is True
+
+
 def test_set_budget_reset_at_clears_when_budget_duration_null():
     """
     When budget_duration is explicitly set to null, _set_budget_reset_at
@@ -14635,6 +14779,26 @@ def _wire_new_team_prisma(mock_db_client):
     mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
 
     return mock_db_client.db.litellm_teamtable.create
+
+
+@pytest.mark.asyncio
+async def test_new_team_persists_require_trace_id_in_metadata(
+    mock_db_client: MagicMock,
+    mock_admin_auth: UserAPIKeyAuth,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {})
+    mock_team_create: Final = _wire_new_team_prisma(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="trace-required-team", require_trace_id=True),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data: Final = mock_team_create.call_args.kwargs["data"]
+    assert team_data["metadata"]["require_trace_id"] is True
 
 
 @pytest.mark.asyncio
