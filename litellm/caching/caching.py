@@ -546,7 +546,7 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        dynamic_cache_control: Final[DynamicCacheControl] = kwargs.get("cache", {})
+        dynamic_cache_control: Final[DynamicCacheControl] = kwargs.get("cache") or {}
         metadata: Final = kwargs.get("metadata") or {}
         namespace: Final = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
         if namespace:
@@ -649,7 +649,7 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)
                 if cache_key is not None:
-                    cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
+                    cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache") or {}
                     max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
                     cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
                     if dynamic_cache_object is not None:
@@ -682,7 +682,7 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)
                 if cache_key is not None:
-                    cache_control_args: Final = kwargs.get("cache", {})
+                    cache_control_args: Final = kwargs.get("cache") or {}
                     max_age: Final = cache_control_args.get(
                         "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                     )
