@@ -39,7 +39,9 @@ from litellm.utils import supports_thinking_cache_preservation
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
-_PROVIDER_HEADERS: Final = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
+_PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]] = TypeAdapter(
+    ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None
+)
 _MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 _SYSTEM: Final = TypeAdapter(str | list[dict[str, JsonValue]] | None)
 _counter: Final = AnthropicCountTokensHandler()
@@ -643,7 +645,7 @@ def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> M
             **_HEADERS.validate_python(request.get("headers") or {}),
             **_HEADERS.validate_python(request.get("extra_headers") or {}),
             **_HEADERS.validate_python(
-                ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                ProviderSpecificHeaderUtils.get_provider_specific_headers(  # pyright: ignore[reportUnknownMemberType]  # header owner returns an untyped dict validated here
                     _PROVIDER_HEADERS.validate_python(request.get("provider_specific_header")), "anthropic"
                 )
             ),

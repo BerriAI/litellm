@@ -5,7 +5,8 @@ import json
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import accumulate
-from typing import Final, cast
+from types import MappingProxyType
+from typing import Final, cast  # noqa: TID251  # legacy injection adapters accept provider extensions beyond SDK types
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -27,16 +28,14 @@ from litellm.router_utils.baseline_request import (
 )
 from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
 from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
-from litellm.utils import token_counter
+from litellm.utils import (
+    token_counter,  # pyright: ignore[reportUnknownVariableType]  # only the typed model/text arguments are used
+)
 
 _OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
-_INPUT: Final[TypeAdapter[str | list[dict[str, JsonValue]]]] = TypeAdapter(str | list[dict[str, JsonValue]])
-_SYSTEM: Final[TypeAdapter[str | list[dict[str, JsonValue]] | None]] = TypeAdapter(
-    str | list[dict[str, JsonValue]] | None
-)
-_TTLS: Final = {"5m": 300, "30m": 1800, "1h": 3600, "24h": 86400}
-_COUNT: Final = TypeAdapter(int | None)
+_TTLS: Final = MappingProxyType({"5m": 300, "30m": 1800, "1h": 3600, "24h": 86400})
+_COUNT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _CONTROLS: Final = ("cache_control", "prompt_cache_breakpoint")
 
 
@@ -54,11 +53,11 @@ class _Part:
     control: Mapping[str, JsonValue]
 
 
-def _parts(message: dict[str, JsonValue]) -> Iterator[_Part]:
+def _parts(message: Mapping[str, JsonValue]) -> Iterator[_Part]:
     content: Final = message.get("content")
     role: Final = message.get("role")
     if not isinstance(content, list) or not content:
-        yield _Part(message, role, True, message)
+        yield _Part(dict(message), role, True, message)
         return
     yield _Part({key: value for key, value in message.items() if key != "content"}, role, False, {})
     for index, part in enumerate(content):
@@ -77,7 +76,7 @@ def _parts(message: dict[str, JsonValue]) -> Iterator[_Part]:
         )
 
 
-def _tool_cache_control(tool: dict[str, JsonValue]) -> dict[str, JsonValue]:
+def _tool_cache_control(tool: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     function: Final = tool.get("function")
     if tool.get("type") not in ("function", "custom") or "input_schema" in tool or not isinstance(function, dict):
         return tool
@@ -91,7 +90,7 @@ def _tool_cache_control(tool: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 def prepare_cache_request(
     kwargs: Mapping[str, object], model: str | None = None, provider: str | None = None, *, native: bool = False
-) -> dict[str, JsonValue] | None:
+) -> Mapping[str, JsonValue] | None:
     selected: Final = {
         key: kwargs[key] for key in (*BASELINE_PARAMETERS, "messages", "input", "extra_body") if key in kwargs
     }
@@ -112,17 +111,23 @@ def prepare_cache_request(
 
 
 def _prepare_cache_injections(
-    request: dict[str, JsonValue], model: str, provider: str, *, native: bool, user_agent: str | None
-) -> dict[str, JsonValue] | None:
+    request: Mapping[str, JsonValue], model: str, provider: str, *, native: bool, user_agent: str | None
+) -> Mapping[str, JsonValue] | None:
     tools: Final = _MESSAGES.validate_python(request.get("tools") or [])
     transport: Final = (
         {"proxy_server_request": {"headers": {"user-agent": user_agent}}} if user_agent is not None else {}
     )
     if native:
-        native_options: Final[dict[str, object]] = {**request, **transport}
+        native_options: Final[dict[str, object]] = {  # mutable-ok: native preparation updates injection options
+            **request,
+            **transport,
+        }
+        supplied_system: Final = request.get("system")
         native_messages, system = prepare_native_messages(
             _MESSAGES.validate_python(request.get("messages")),
-            _SYSTEM.validate_python(request.get("system")),
+            supplied_system
+            if isinstance(supplied_system, str) or supplied_system is None
+            else _MESSAGES.validate_python(supplied_system),
             native_options,
             model=model,
             custom_llm_provider=provider,
@@ -138,7 +143,7 @@ def _prepare_cache_injections(
     messages: Final = cast(  # cast-ok: JSON validation retains provider extensions accepted by the shared hook
         list[AllMessageValues], _MESSAGES.validate_python(options.get("messages"))
     )
-    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(  # pyright: ignore[reportUnknownMemberType]  # legacy hook's tools parameter lacks item types
         options,
         messages,
         model,
@@ -146,25 +151,29 @@ def _prepare_cache_injections(
         tools=tools,
         enable_prompt_caching=request.get("enable_prompt_caching") is True,
     )
-    _, injected, remaining = hook.get_chat_completion_prompt(model, messages, options, None, None, {})
+    result: Final = hook.get_chat_completion_prompt(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy optional parameters are JSON-validated below
+        model, messages, options, None, None, {}
+    )
+    remaining: Final = _OBJECT.validate_python(result[2])
     if remaining.get("cache_control_injection_points"):
         return None
     return _OBJECT.validate_python(
         {
             **{key: value for key, value in request.items() if key not in ("input", "instructions")},
-            "messages": injected,
+            "messages": result[1],
         }
     )
 
 
 def _responses_cache_input(
-    request: dict[str, JsonValue], hook: AnthropicCacheControlHook, model: str
-) -> dict[str, JsonValue]:
+    request: Mapping[str, JsonValue], hook: AnthropicCacheControlHook, model: str
+) -> Mapping[str, JsonValue]:
+    supplied: Final = request["input"]
     original: Final = cast(  # cast-ok: the shared Responses adapter accepts JSON input extensions beyond SDK fields
-        str | ResponseInputParam, _INPUT.validate_python(request["input"])
+        str | ResponseInputParam, supplied if isinstance(supplied, str) else _MESSAGES.validate_python(supplied)
     )
     provisional: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(original)
-    _, marked, deferred = hook.get_chat_completion_prompt(
+    result: Final = hook.get_chat_completion_prompt(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy optional parameters are JSON-validated below
         model,
         provisional,
         {**request, CARRY_UNMATCHED_MESSAGE_POINTS: True},
@@ -172,10 +181,10 @@ def _responses_cache_input(
         None,
         {},
     )
-    merged: Final = ResponsesAPIRequestUtils.merge_prompt_management_input(original, provisional, marked)
+    merged: Final = ResponsesAPIRequestUtils.merge_prompt_management_input(original, provisional, result[1])
     return _OBJECT.validate_python(
         {
-            **_OBJECT.validate_python(deferred),
+            **_OBJECT.validate_python(result[2]),
             "messages": resolve_structured_messages(None, {**request, "input": merged}),
         }
     )
@@ -193,7 +202,7 @@ def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _ttl(control: object, default: int) -> int:
+def _ttl(control: JsonValue, default: int) -> int:
     value: Final = control.get("ttl") if isinstance(control, dict) else None
     return _TTLS.get(value, default) if isinstance(value, str) else default
 
@@ -227,7 +236,7 @@ def cache_ttl_upper_bound(request: Mapping[str, JsonValue] | None, provider: str
 
 
 def estimate_cache_plan(
-    request: dict[str, JsonValue],
+    request: Mapping[str, JsonValue],
     model: str,
     provider: str,
     prices: ModelInfo | None,
@@ -388,7 +397,7 @@ def normalize_cache_usage(usage: Usage) -> Usage:
     parsed: Final = parse_prompt_tokens_details(usage)
     other: Final = parsed["audio_tokens"] + parsed["image_tokens"] + parsed["video_tokens"]
     cached: Final = getattr(details, "cached_tokens_details", None)
-    cached_text: Final = (cached.text_tokens or 0) if cached is not None else 0
+    cached_text: Final = _COUNT.validate_python(getattr(cached, "text_tokens", None)) or 0
     return usage.model_copy(
         update={
             "prompt_tokens_details": details.model_copy(

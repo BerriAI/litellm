@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
-_METADATA: Final = TypeAdapter(Mapping[str, object])
+_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _PRICES: Final[TypeAdapter[ModelInfo | None]] = TypeAdapter(ModelInfo | None)
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 _COUNT_TIMEOUT: Final = 3.0
@@ -94,7 +94,7 @@ class BaselineCacheContext:
     capture: CapturedBaselineObservation
     target: NativePredictionTarget | UnsupportedPredictionTarget
     baseline_deployment_id: str | None
-    estimated_request: dict[str, JsonValue] | None = field(default=None, repr=False)
+    estimated_request: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     estimated: bool = False
     baseline_body: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     selected_body_digest: str | None = field(default=None, repr=False)
@@ -125,7 +125,7 @@ class _ResponseUsage(LiteLLMBaseModel):
 
 
 class _UsageContainer(pydantic.BaseModel):
-    model_config = ConfigDict(strict=True, from_attributes=True)
+    model_config = ConfigDict(strict=True, from_attributes=True, frozen=True)
     usage: object | None = None
 
 
@@ -186,11 +186,11 @@ class AutoRouterBaselineCache(CustomLogger):
             return
         try:
             raw_metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
-            metadata: Final = _METADATA.validate_python(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            metadata: Final = _METADATA.validate_python(raw_metadata if isinstance(raw_metadata, Mapping) else {})
             if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return
             if logging_obj.baseline_cache_context is not None:
-                if call_type.value != logging_obj.call_type:
+                if call_type.value != logging_obj.call_type:  # pyright: ignore[reportUnknownMemberType]  # legacy logger sets this attribute dynamically
                     return
                 await invalidate_baseline_cache(logging_obj, "retried_request")
                 return
@@ -217,14 +217,14 @@ class AutoRouterBaselineCache(CustomLogger):
             target: Final = (
                 resolve_baseline_prediction_target(deployment.litellm_params)
                 if deployment
-                else UnsupportedPredictionTarget("direct_model_baseline")
+                else UnsupportedPredictionTarget("unsupported_deployment_configuration")
             )
             prices: Final = _PRICES.validate_python(
                 _effective_model_info(router, request.route.baseline_deployment_id, request.route.baseline_model)
                 or _model_info(identity)
             )
-            params: Final = (
-                _METADATA.validate_python(deployment.litellm_params.model_dump(mode="json")) if deployment else {}
+            params: Final = _METADATA.validate_python(
+                deployment.litellm_params.model_dump(mode="json") if deployment else {}
             )
             selected_model: Final = kwargs.get("model")
             selected_provider: Final = kwargs.get("custom_llm_provider")
@@ -340,10 +340,11 @@ class AutoRouterBaselineCache(CustomLogger):
                 else None,
                 reason,
             )
-        if self.estimate_slots.locked() or context.estimated_request is None:
+        request: Final = context.estimated_request
+        if self.estimate_slots.locked() or request is None:
             return (
                 None,
-                "unsupported_cache_request" if context.estimated_request is None else "estimation_capacity_exhausted",
+                "unsupported_cache_request" if request is None else "estimation_capacity_exhausted",
             )
         await self.estimate_slots.acquire()
 
@@ -351,7 +352,7 @@ class AutoRouterBaselineCache(CustomLogger):
             async with self.estimate_workers:
                 return await asyncio.to_thread(
                     estimate_cache_plan,
-                    context.estimated_request,
+                    request,
                     context.capture.model,
                     context.capture.provider,
                     context.capture.prices,
@@ -576,7 +577,7 @@ async def _capture_estimated(
     serialized: Final = raw_usage.model_dump() if isinstance(raw_usage, pydantic.BaseModel) else raw_usage
     usage: Final = (
         normalize_cache_usage(
-            StandardLoggingPayloadSetup.get_usage_from_response_obj(
+            StandardLoggingPayloadSetup.get_usage_from_response_obj(  # pyright: ignore[reportUnknownMemberType]  # shared usage normalizer accepts legacy response shapes
                 {"usage": serialized}, combined_usage_object=raw_usage if isinstance(raw_usage, Usage) else None
             )
         )
