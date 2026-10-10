@@ -105,6 +105,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}",
                     rate_limit_type=triggered_type,
                     requested_model=data.get("model") if data else None,
+                    descriptor_key=rate_limit_type,
                 )
             new_val = {
                 "current_requests": 1,
@@ -143,6 +144,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 rate_limit_type=triggered_type,
                 model=resolved_model,
                 llm_provider=llm_provider,
+                descriptor_key=rate_limit_type,
             )
 
         await self.internal_usage_cache.async_batch_set_cache(
@@ -170,6 +172,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         additional_details: str | None = None,
         rate_limit_type: RateLimitType | None = None,
         requested_model: str | None = None,
+        descriptor_key: str | None = None,
     ) -> NoReturn:
         """
         Raise a 429 with a retry-after header for litellm-proxy parallel-request limits.
@@ -207,6 +210,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             rate_limit_type=rate_limit_type or RateLimitType.CONCURRENT_REQUESTS,
             model=resolved_model,
             llm_provider=llm_provider,
+            descriptor_key=descriptor_key,
         )
 
     @with_service_target("rate_limits")
