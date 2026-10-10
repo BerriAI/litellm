@@ -122,41 +122,70 @@ export const toModeArray = (raw: unknown): string[] => {
   return [];
 };
 
-export type LoggingOnlyScope = "input" | "output" | "both";
+export type LoggingOnlyScope = "input" | "output";
 export type LoggingOnlyScopeChoice = "default" | LoggingOnlyScope;
 export type LoggingOnlyScopeOption = { label: string; value: LoggingOnlyScopeChoice };
 
 export const normalizeLoggingOnlyScopeChoice = (
   choice: LoggingOnlyScopeChoice,
   directionalScopeSupported: boolean,
-): LoggingOnlyScopeChoice =>
-  directionalScopeSupported || choice === "default" || choice === "both" ? choice : "default";
+): LoggingOnlyScopeChoice => (directionalScopeSupported || choice === "default" ? choice : "default");
 
 const LOGGING_ONLY_SCOPE_OPTIONS: LoggingOnlyScopeOption[] = [
   { label: "Default (request and response)", value: "default" },
   { label: "Input only (request)", value: "input" },
   { label: "Output only (response)", value: "output" },
-  { label: "Both (request and response)", value: "both" },
 ];
 
 export const loggingOnlyScopeToChoice = (v: string | null | undefined): LoggingOnlyScopeChoice =>
-  v === "input" || v === "output" || v === "both" ? v : "default";
+  v === "input" || v === "output" ? v : "default";
 
 export const choiceToLoggingOnlyScope = (choice: LoggingOnlyScopeChoice | undefined): LoggingOnlyScope | null =>
-  choice === "input" || choice === "output" || choice === "both" ? choice : null;
+  choice === "input" || choice === "output" ? choice : null;
+
+export const loggingOnlyContinueFromParams = (
+  litellmParams:
+    | {
+        logging_only_scope?: string | null;
+        logging_only_continue_on_input_failure?: boolean | null;
+      }
+    | null
+    | undefined,
+): boolean =>
+  litellmParams?.logging_only_continue_on_input_failure === true &&
+  (litellmParams?.logging_only_scope === null || litellmParams?.logging_only_scope === undefined);
+
+export const effectiveLoggingOnlyContinue = (
+  choice: LoggingOnlyScopeChoice | undefined,
+  toggle: boolean | undefined,
+): boolean => choice === "default" && toggle === true;
 
 export const getLoggingOnlyScopeUpdate = (
-  litellmParams: { logging_only_scope?: string | null } | null | undefined,
+  litellmParams:
+    | {
+        logging_only_scope?: string | null;
+        logging_only_continue_on_input_failure?: boolean | null;
+      }
+    | null
+    | undefined,
   choice: LoggingOnlyScopeChoice | undefined,
-): { logging_only_scope?: LoggingOnlyScope | null } => {
-  if (choice === undefined || choice === loggingOnlyScopeToChoice(litellmParams?.logging_only_scope)) return {};
-  return { logging_only_scope: choiceToLoggingOnlyScope(choice) };
+  continueToggle: boolean | undefined,
+): { logging_only_scope?: LoggingOnlyScope | null; logging_only_continue_on_input_failure?: boolean } => {
+  if (
+    choice === undefined ||
+    (choice === loggingOnlyScopeToChoice(litellmParams?.logging_only_scope) &&
+      effectiveLoggingOnlyContinue(choice, continueToggle) === loggingOnlyContinueFromParams(litellmParams))
+  )
+    return {};
+  return {
+    logging_only_scope: choiceToLoggingOnlyScope(choice),
+    logging_only_continue_on_input_failure: effectiveLoggingOnlyContinue(choice, continueToggle),
+  };
 };
 
 export const formatLoggingOnlyScope = (v: string | null | undefined): string => {
   if (v === "input") return "Input only (request)";
   if (v === "output") return "Output only (response)";
-  if (v === "both") return "Both (request and response)";
   return "Default (request and response)";
 };
 
@@ -175,7 +204,7 @@ export const modeIncludesLoggingOnly = (raw: unknown): boolean => {
 export const getLoggingOnlyScopeOptions = (directionalScopeSupported: boolean): LoggingOnlyScopeOption[] =>
   directionalScopeSupported
     ? LOGGING_ONLY_SCOPE_OPTIONS
-    : LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => option.value === "default" || option.value === "both");
+    : LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => option.value === "default");
 
 export const supportsDirectionalLoggingOnlyScope = (
   settings: { providers_without_directional_logging_only_scope?: string[] } | null,

@@ -993,7 +993,7 @@ def runtime_stream_scope(
     return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
 
 
-LoggingOnlyScope = Literal["input", "output", "both"]
+LoggingOnlyScope = Literal["input", "output"]
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
@@ -1267,8 +1267,18 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     logging_only_scope: LoggingOnlyScope | None = Field(
         default=None,
         description=(
-            "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' "
-            "(default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking."
+            "which direction a logging_only scan observes: 'input' (request) or 'output' (response); "
+            "unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the "
+            "same guardrail keep blocking."
+        ),
+    )
+
+    logging_only_continue_on_input_failure: bool | None = Field(
+        default=None,
+        description=(
+            "when True, a flagged or raising logging_only request scan is logged and the response is "
+            "still scanned, so both verdicts land. Only applies to mode logging_only and is ignored "
+            "when logging_only_scope is 'input' or 'output'."
         ),
     )
 

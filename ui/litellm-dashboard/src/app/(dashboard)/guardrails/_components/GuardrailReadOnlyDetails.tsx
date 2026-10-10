@@ -63,6 +63,7 @@ export const GuardrailReadOnlyDetails = ({
     guardrail?: string;
     decision_model?: string;
     checks?: DecisionModelCheckView[];
+    logging_only_continue_on_input_failure?: boolean | null;
   };
   streamScope: unknown;
   defaultOn: boolean | undefined;

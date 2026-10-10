@@ -142,11 +142,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           >
             <SelectTrigger className="w-80" aria-label="Decision endpoint">
               <SelectValue>
-                {endpoint === "/v1/systemone" ? "System One · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
+                {endpoint === "/v1/systemone" ? "Decisions · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="/v1/systemone">System One · /v1/systemone</SelectItem>
+              <SelectItem value="/v1/systemone">Decisions · /v1/systemone</SelectItem>
               <SelectItem value="/typesafe/v1/systemone">TypeSafe · /typesafe/v1/systemone</SelectItem>
             </SelectContent>
           </Select>
@@ -231,7 +231,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         <Alert role="note" aria-label="Decision endpoint notice">
           <Info />
           <AlertTitle>
-            {endpoint === "/v1/systemone" ? "Decision models · System One" : "TypeSafe Jev · System One"}
+            {endpoint === "/v1/systemone" ? "Decision models · /v1/systemone" : "TypeSafe Jev · /typesafe/v1/systemone"}
           </AlertTitle>
           <AlertDescription>
             {endpoint === "/v1/systemone"
@@ -249,7 +249,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       </section>
 
       <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="System One request editor">
+        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="Decisions request editor">
           <Tabs
             value={view}
             onValueChange={(value) => (value === "form" || value === "json") && setView(value)}
@@ -272,7 +272,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             </TabsContent>
           </Tabs>
         </section>
-        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="System One results">
+        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
           <ResponseView
             response={systemOne.data?.response}
             fallbackModel={validation.payload?.model}

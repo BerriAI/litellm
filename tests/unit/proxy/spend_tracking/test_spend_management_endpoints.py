@@ -9,6 +9,7 @@ import sqlite3
 from datetime import timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import prisma
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -277,6 +278,7 @@ from litellm.proxy._types import (
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.management.teams import authz as team_access
 from litellm.proxy.proxy_server import app
+from litellm.proxy.utils import PrismaClient
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
@@ -7999,3 +8001,61 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
     scope = await resolve_owned_read_scope(auth.user_id, lookup)
     assert scope == OwnedRows("caller")
     assert team_reads == []
+
+
+class _PrismaJournal:
+    def __init__(self) -> None:
+        self.statements: tuple[tuple[str, str], ...] = ()
+
+    def __call__(self, **kwargs: object) -> "_ReadOnlyReplicaPrisma":
+        return _ReadOnlyReplicaPrisma(self, "reader" if "datasource" in kwargs else "writer")
+
+    def record(self, role: str, query: str) -> None:
+        self.statements = (*self.statements, (role, query.strip()))
+
+
+class _ReadOnlyReplicaPrisma:
+    def __init__(self, journal: _PrismaJournal, role: str) -> None:
+        self.journal = journal
+        self.role = role
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def connect(self, timeout: object = None) -> None:
+        return None
+
+    def _run(self, query: str) -> None:
+        self.journal.record(self.role, query)
+        if self.role == "reader" and not query.lstrip().upper().startswith("SELECT"):
+            raise Exception(f"cannot execute {query.split()[0]} in a read-only transaction")
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, str]]:
+        self._run(query)
+        return [{"relname": "MonthlyGlobalSpend", "relkind": "m"}]
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        self._run(query)
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final = _PrismaJournal()
+    monkeypatch.setattr(prisma, "Prisma", journal)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://writer@localhost/litellm")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader@localhost/litellm")
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        PrismaClient(database_url="postgresql://writer@localhost/litellm", proxy_logging_obj=ps.proxy_logging_obj),
+    )
+
+    response: Final = await spend_management_endpoints.global_spend_refresh()
+
+    assert response == {"message": "MonthlyGlobalSpend view refreshed", "status": "success"}, journal.statements
+    assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
+        ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
+    ]
