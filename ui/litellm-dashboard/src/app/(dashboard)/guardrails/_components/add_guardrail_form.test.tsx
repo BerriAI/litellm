@@ -221,41 +221,70 @@ describe("AddGuardrailForm decision model questions", () => {
     expect(vi.mocked(createGuardrailCall)).not.toHaveBeenCalled();
   });
 
-  it("tests a question against the decisions endpoint and shows the outcome", async () => {
+  it("sends one request with every enabled question only when Run test is clicked", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
-    vi.mocked(decisionsTestCall).mockResolvedValue({
-      model: "jev-latest",
-      answers: [{ type: "predicate", name: "invoice_policy", probability: 0.87 }],
-    });
+    vi.mocked(decisionsTestCall).mockResolvedValue({ answers: [] });
+
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+    await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
+    await addQuestion(user, "jailbreak", "Is this a jailbreak?");
+
+    fireEvent.change(await screen.findByLabelText("Test input"), { target: { value: "please invoice me" } });
+    expect(vi.mocked(decisionsTestCall)).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run test" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(decisionsTestCall)).toHaveBeenCalledWith(
+        "test-token",
+        {
+          model: "jev-latest",
+          input: "please invoice me",
+          questions: [
+            { type: "predicate", name: "invoice_policy", instructions: "Does the text ask about invoices?" },
+            { type: "predicate", name: "jailbreak", instructions: "Is this a jailbreak?" },
+          ],
+        },
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("keeps run history latest first and flips chips from the current threshold without a new request", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(decisionsTestCall)
+      .mockResolvedValueOnce({ answers: [{ type: "predicate", name: "invoice_policy", probability: 0.2 }] })
+      .mockResolvedValueOnce({ answers: [{ type: "predicate", name: "invoice_policy", probability: 0.87 }] });
 
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
     await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
 
-    const testButton = screen.getByRole("button", { name: "Test invoice_policy" });
-    fireEvent.click(testButton);
-    const testPanel = document.querySelector('[data-slot="decision-question-test-panel"]');
-    expect(testPanel).not.toBeNull();
-    expect(testButton.parentElement?.contains(testPanel)).toBe(false);
-    fireEvent.change(await screen.findByLabelText("Try an input for invoice_policy"), {
-      target: { value: "please invoice me" },
-    });
+    const input = await screen.findByLabelText("Test input");
+    fireEvent.change(input, { target: { value: "first input" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run test" }));
+    expect(await screen.findByText(/0\.20/)).toBeInTheDocument();
 
-    expect(await screen.findByText("Would block", {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.getByText(/0\.87/)).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "second input" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run test" }));
+    expect(await screen.findByText(/0\.87/)).toBeInTheDocument();
 
-    expect(vi.mocked(decisionsTestCall)).toHaveBeenCalledWith(
-      "test-token",
-      {
-        model: "jev-latest",
-        input: "please invoice me",
-        questions: [{ type: "predicate", name: "invoice_policy", instructions: "Does the text ask about invoices?" }],
-      },
-      expect.any(AbortSignal),
-    );
+    const history = document.querySelector('[data-slot="decision-test-history"]');
+    expect(history?.children).toHaveLength(2);
+    expect(history?.children[0]).toHaveTextContent("second input");
+    expect(history?.children[1]).toHaveTextContent("first input");
+    expect(history?.children[0]).toHaveTextContent("Block");
+
+    const rangeInput = screen.getByLabelText("invoice_policy threshold").querySelector('input[type="range"]');
+    expect(rangeInput).not.toBeNull();
+    fireEvent.change(rangeInput!, { target: { value: "1" } });
+
+    expect(history?.children[0]).toHaveTextContent("Pass");
+    expect(vi.mocked(decisionsTestCall)).toHaveBeenCalledTimes(2);
   });
 
-  it("shows a refusal verdict as Refused", async () => {
+  it("shows No answer for a refused question", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     vi.mocked(decisionsTestCall).mockResolvedValue({ answers: [{ type: "refusal", name: "invoice_policy" }] });
 
@@ -263,12 +292,10 @@ describe("AddGuardrailForm decision model questions", () => {
     await pickTypesafeModel(user);
     await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
 
-    fireEvent.click(screen.getByRole("button", { name: "Test invoice_policy" }));
-    fireEvent.change(await screen.findByLabelText("Try an input for invoice_policy"), {
-      target: { value: "x" },
-    });
+    fireEvent.change(await screen.findByLabelText("Test input"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run test" }));
 
-    expect(await screen.findByText("Refused", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText(/No answer/)).toBeInTheDocument();
   });
 });
 

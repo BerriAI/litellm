@@ -1,3 +1,5 @@
+import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
+
 export interface DecisionModelGroup {
   model_group: string;
   providers?: string[] | null;
@@ -25,23 +27,36 @@ export interface DecisionTestBody {
   questions: Array<{ type: "predicate"; name: string; instructions: string }>;
 }
 
+export function enabledDecisionQuestions(checks: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft[] {
+  return checks.filter((check) => check.enabled !== false && check.instructions.trim().length > 0);
+}
+
 export function buildDecisionTestBody(
   model: string,
   input: string,
-  name: string,
-  instructions: string,
+  checks: readonly DecisionModelCheckDraft[],
 ): DecisionTestBody {
   return {
     model,
     input,
-    questions: [{ type: "predicate", name, instructions }],
+    questions: enabledDecisionQuestions(checks).map((check) => ({
+      type: "predicate" as const,
+      name: check.name,
+      instructions: check.instructions,
+    })),
   };
 }
 
-export type DecisionTestVerdict =
+export type DecisionTestResult =
   | { kind: "probability"; probability: number }
   | { kind: "refused" }
-  | { kind: "error"; message: string };
+  | { kind: "missing" };
+
+export type DecisionTestResults = Record<string, DecisionTestResult>;
+
+export type DecisionTestRun =
+  | { id: number; input: string; results: DecisionTestResults }
+  | { id: number; input: string; error: string };
 
 interface DecisionsApiAnswer {
   type?: string;
@@ -49,37 +64,58 @@ interface DecisionsApiAnswer {
   probability?: number;
 }
 
-export function parseDecisionTestResponse(body: unknown, questionName: string): DecisionTestVerdict {
-  if (typeof body !== "object" || body === null) {
-    return { kind: "error", message: "Unexpected response from the decision model" };
+export function parseDecisionTestResponse(body: unknown, questionNames: readonly string[]): DecisionTestResults {
+  const answers =
+    typeof body === "object" && body !== null ? (body as { answers?: DecisionsApiAnswer[] }).answers ?? [] : [];
+  const byName = new Map(answers.filter((answer) => answer.name != null).map((answer) => [answer.name, answer]));
+  const results: DecisionTestResults = {};
+  for (const name of questionNames) {
+    const answer = byName.get(name);
+    if (!answer) {
+      results[name] = { kind: "missing" };
+    } else if (answer.type === "refusal") {
+      results[name] = { kind: "refused" };
+    } else if (typeof answer.probability === "number") {
+      results[name] = { kind: "probability", probability: answer.probability };
+    } else {
+      results[name] = { kind: "missing" };
+    }
   }
-  const answers = (body as { answers?: DecisionsApiAnswer[] }).answers;
-  if (!Array.isArray(answers)) {
-    const message = (body as { error?: { message?: string } }).error?.message;
-    return { kind: "error", message: message ?? "Unexpected response from the decision model" };
-  }
-  const answer = answers.find((entry) => entry.name === questionName) ?? answers[0];
-  if (!answer) {
-    return { kind: "error", message: "The decision model returned no answers" };
-  }
-  if (answer.type === "refusal") {
-    return { kind: "refused" };
-  }
-  if (typeof answer.probability !== "number") {
-    return { kind: "error", message: "The decision model returned no probability" };
-  }
-  return { kind: "probability", probability: answer.probability };
+  return results;
 }
 
-export type DecisionTestOutcome = "would_block" | "would_log" | "pass" | "refused" | "error";
+export type DecisionTestChip = "block" | "pass" | "logged" | "no_answer";
 
-export function decisionTestOutcome(
-  verdict: DecisionTestVerdict,
-  action: "block" | "log",
-  threshold: number,
-): DecisionTestOutcome {
-  if (verdict.kind === "refused") return "refused";
-  if (verdict.kind === "error") return "error";
-  if (verdict.probability >= threshold) return action === "block" ? "would_block" : "would_log";
+export function decisionTestChip(result: DecisionTestResult, check: DecisionModelCheckDraft): DecisionTestChip {
+  if (result.kind !== "probability") return "no_answer";
+  if (result.probability >= check.threshold) return check.action === "block" ? "block" : "logged";
   return "pass";
+}
+
+export function decisionTestOverall(
+  results: DecisionTestResults,
+  checks: readonly DecisionModelCheckDraft[],
+): "block" | "pass" {
+  const byName = new Map(checks.map((check) => [check.name, check]));
+  for (const [name, result] of Object.entries(results)) {
+    const check = byName.get(name);
+    if (check && decisionTestChip(result, check) === "block") return "block";
+  }
+  return "pass";
+}
+
+export function visibleTestResults(
+  results: DecisionTestResults,
+  checks: readonly DecisionModelCheckDraft[],
+): Array<{ check: DecisionModelCheckDraft; result: DecisionTestResult }> {
+  return checks.flatMap((check) => {
+    const result = results[check.name];
+    return result ? [{ check, result }] : [];
+  });
+}
+
+export const DECISION_TEST_HISTORY_CAP = 20;
+
+export function prependTestRun(runs: readonly DecisionTestRun[], run: DecisionTestRun): DecisionTestRun[] {
+  return [run, ...runs].slice(0, DECISION_TEST_HISTORY_CAP);
 }
