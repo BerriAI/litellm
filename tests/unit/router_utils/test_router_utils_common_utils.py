@@ -14,6 +14,7 @@ from litellm.router_utils.common_utils import (
     filter_web_search_deployments,
     provider_for_generic_call,
     resolve_model_group_alias,
+    resolve_served_model,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
@@ -564,6 +565,25 @@ class TestResolveModelGroupAlias:
         assert router.get_model_from_alias("group-a") == "group-b"
         assert router.get_model_from_alias("group-item") == "group-b"
         assert router.get_model_from_alias("group-b") is None
+
+
+@pytest.mark.parametrize(
+    "model, model_alias_map, key_aliases, model_group_alias, expected",
+    [
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-key-router-order"),
+        pytest.param("a", {}, ["a", "b"], {}, "a", id="non-mapping-key-aliases-ignored"),
+        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
+        pytest.param("a", {}, {}, {}, "a", id="no-alias"),
+    ],
+)
+def test_resolves_served_model_aliases_in_order(
+    model: str,
+    model_alias_map: object,
+    key_aliases: object,
+    model_group_alias: object,
+    expected: str,
+) -> None:
+    assert resolve_served_model(model, model_alias_map, key_aliases, model_group_alias) == expected
 
 
 class TestTruncateFallbackErrorDetail:

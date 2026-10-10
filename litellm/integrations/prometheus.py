@@ -21,6 +21,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
+    AUTH_OBJECTS_TARGET,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -49,13 +50,9 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.proxy._types import (
-    LiteLLM_DeletedVerificationToken,
-    LiteLLM_TeamTable,
-    LiteLLM_UserTable,
-    UserAPIKeyAuth,
-)
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.user import LiteLLM_UserTable
+from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -69,6 +66,7 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
