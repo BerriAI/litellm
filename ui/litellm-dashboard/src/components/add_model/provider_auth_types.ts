@@ -86,9 +86,7 @@ export const hiddenAuthFieldKeys = (authTypes: readonly ProviderAuthType[], sele
   const selectedFieldKeys = selectedAuthType?.fieldKeys ?? [];
   const fieldsToHide = [
     ...(selectedAuthType?.hiddenFieldKeys ?? []),
-    ...authTypes
-      .filter(({ id }) => id !== selectedId)
-      .flatMap(({ fieldKeys }) => fieldKeys),
+    ...authTypes.filter(({ id }) => id !== selectedId).flatMap(({ fieldKeys }) => fieldKeys),
   ];
 
   return fieldsToHide.filter(
