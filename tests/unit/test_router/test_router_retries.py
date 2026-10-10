@@ -935,7 +935,17 @@ async def test_router_retry_num_retries_single_retry():
                 ), f"Expected max_retries to be 1, got {e.max_retries}"
 
 
-def _single_deployment_router(num_retries: int) -> Router:
+_MODULE_LEVEL_FALLBACKS: Final = (
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+
+
+def _single_deployment_router(num_retries: int, monkeypatch: pytest.MonkeyPatch) -> Router:
+    for name in _MODULE_LEVEL_FALLBACKS:
+        monkeypatch.setattr(litellm, name, None)
     return Router(
         model_list=[
             {
@@ -985,7 +995,7 @@ async def test_router_sleeps_only_before_a_retry_that_will_happen(
     num_retries: int, failed_attempts: int, expected_sleeps: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sleep: Final = _patch_asyncio_sleep(monkeypatch)
-    router: Final = _single_deployment_router(num_retries)
+    router: Final = _single_deployment_router(num_retries, monkeypatch)
     error: Final = litellm.InternalServerError(message="boom", model="retry-test-model", llm_provider="openai")
     attempts_exhausted: Final = failed_attempts > num_retries
     attempt: Final = _script_attempts(
@@ -1008,7 +1018,7 @@ async def test_router_honours_retry_after_for_each_retry_but_not_after_the_last_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleep: Final = _patch_asyncio_sleep(monkeypatch)
-    router: Final = _single_deployment_router(num_retries=3)
+    router: Final = _single_deployment_router(num_retries=3, monkeypatch=monkeypatch)
     retry_afters: Final = (10, 20, 30, 40)
     _script_attempts(router, monkeypatch, [_rate_limited(seconds) for seconds in retry_afters])
 
