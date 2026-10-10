@@ -11,7 +11,7 @@ import unittest
 import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -48,6 +48,7 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.integrations.otel import logger as otel_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
 from litellm.proxy._types import SpanAttributes
@@ -406,26 +407,24 @@ def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
     ended_span.set_attribute.assert_not_called()
 
 
-@pytest.mark.parametrize("recording", [True, False])
-def test_seed_request_identity_checks_server_span_recording(recording: bool) -> None:  # test-quality-ok: the hosted proxy fixture covers end-to-end behavior; this isolates both lifecycle branches
-    logger = OpenTelemetryV2()
-    server_span = MagicMock()
-    server_span.is_recording.return_value = recording
-    with (
-        patch.object(otel_logger.RequestIdentity, "from_user_api_key_auth", return_value=MagicMock()),
-        patch.object(otel_logger, "promoted_baggage", return_value={"team.id": "qa-team"}),
-        patch.object(otel_logger, "request_root_span", return_value=server_span),
-        patch.object(otel_logger, "is_recordable_span", return_value=True),
-        patch.object(otel_logger, "set_request_root_span"),
-        patch.object(otel_logger, "set_request_baggage", return_value=MagicMock()),
-        patch.object(otel_logger, "attach"),
-    ):
-        logger.seed_request_identity({}, model="qa-model")
+def test_seed_request_identity_preserves_recording_span_and_ignores_ended_span() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = OpenTelemetryV2(tracer_provider=provider)
+    auth = SimpleNamespace(team_id="qa-team", api_key="qa-key")
 
-    if recording:
-        server_span.set_attribute.assert_called_once_with("team.id", "qa-team")
-    else:
-        server_span.set_attribute.assert_not_called()
+    with provider.get_tracer(__name__).start_as_current_span("server") as server_span:
+        set_request_root_span(server_span)
+        logger.seed_request_identity(auth, model="qa-model")
+        assert server_span.is_recording()
+        assert server_span.attributes["litellm.team.id"] == "qa-team"
+
+    (finished,) = exporter.get_finished_spans()
+    attributes_before = dict(finished.attributes)
+    assert not server_span.is_recording()
+    logger.seed_request_identity(auth, model="qa-model")
+    assert dict(finished.attributes) == attributes_before
 
 
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
