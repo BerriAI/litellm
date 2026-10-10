@@ -885,6 +885,7 @@ def _released(stage: _Stage, reader: Reader, model: str, token: str, *markers: s
     with ThreadPoolExecutor(max_workers=1) as pool:
         future: Final = pool.submit(reader, stage.gateway, model, _prompt(token, HOLD, *markers), received.add)
         try:
+            eventually(lambda: stage.upstream(token), lambda requests: len(requests) >= 1, seconds=30)
             early: Final = eventually(
                 lambda: received.text,
                 lambda text: _provider_text(token) in text,

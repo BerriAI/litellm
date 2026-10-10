@@ -598,10 +598,13 @@ def _prepared(rig: _PassRig, row: str) -> tuple[str, _Route]:
     return token, _route(row, f"synthetic prompt {token}", rig.models, rig.owned.gateway.key)
 
 
+def _vendor_log(rig: _PassRig, route: _Route) -> _Log:
+    return rig.tunneled if route.tunneled else rig.upstream
+
+
 def _assert_reached_the_vendor(rig: _PassRig, row: str, sent: tuple[str, _Route], status: int, body: bytes) -> None:
     token, route = sent
-    log: Final = rig.tunneled if route.tunneled else rig.upstream
-    targets: Final = tuple(request.target.split("?", 1)[0] for request in log.matching(token))
+    targets: Final = tuple(request.target.split("?", 1)[0] for request in _vendor_log(rig, route).matching(token))
     assert status == 200, (row, status, body, targets)
     assert targets == (route.upstream_target,), targets
 
@@ -614,6 +617,7 @@ def _send(rig: _PassRig, row: str) -> _Sent:
     with ThreadPoolExecutor(max_workers=1) as pool:
         future: Final = pool.submit(_stream, rig.owned.gateway, route, received)
         try:
+            eventually(lambda: _vendor_log(rig, route).matching(token), lambda requests: len(requests) >= 1, seconds=30)
             early: Final = eventually(
                 lambda: received.content,
                 lambda content: content.startswith(first_chunk),
