@@ -1952,6 +1952,35 @@ class TestRequestContainsImageContent:
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
 
+class TestInferContentTypeQueryString:
+    """A dot in the query string must not be mistaken for the file extension."""
+
+    def _infer(self, url: str, content: bytes):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            infer_content_type_from_url_and_content,
+        )
+
+        return infer_content_type_from_url_and_content(
+            url=url, content=content, current_content_type="binary/octet-stream"
+        )
+
+    @pytest.mark.parametrize(
+        "url, content, expected",
+        [
+            ("https://bucket.s3.amazonaws.com/report.pdf", b"%PDF-1.7", "application/pdf"),
+            ("https://bucket.s3.amazonaws.com/report.pdf?v=1", b"%PDF-1.7", "application/pdf"),
+            ("https://bucket.s3.amazonaws.com/report.pdf?v=1.0", b"%PDF-1.7", "application/pdf"),
+            ("https://bucket.s3.amazonaws.com/data.csv?X-Amz-Expires=3.6", b"a,b\n1,2", "text/csv"),
+            ("https://cdn.example.com/page.html?cb=1.2.3", b"<html>", "text/html"),
+        ],
+    )
+    def test_extension_is_read_from_the_path_not_the_query(self, url, content, expected):
+        assert self._infer(url, content) == expected
+
+    def test_a_url_with_no_usable_extension_still_raises(self):
+        with pytest.raises(ValueError, match="Unable to determine content type from URL"):
+            self._infer("https://cdn.example.com/download?id=1.2", b"not-an-image")
+
 
 class TestEncryptedReasoningReplay:
     """Regression for https://github.com/BerriAI/litellm/issues/40288."""
