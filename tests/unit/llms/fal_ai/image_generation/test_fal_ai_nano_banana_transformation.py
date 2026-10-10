@@ -91,6 +91,9 @@ def test_map_n_to_num_images():
         ("1024x1792", "9:16"),
         ("1024x768", "4:3"),
         ("768x1024", "3:4"),
+        pytest.param("not-a-size", "1:1", id="fallback-missing-dimensions"),
+        pytest.param("1024xinvalid", "1:1", id="fallback-invalid-height"),
+        pytest.param("1024x0", "1:1", id="fallback-zero-height"),
     ],
 )
 def test_map_size_to_aspect_ratio(size, expected_aspect_ratio):
