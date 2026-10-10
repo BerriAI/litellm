@@ -1142,7 +1142,7 @@ def test_muse_session_without_intent_still_delivers_the_transcript_and_the_verdi
         assert _muse_handshake(observed)["model"] == MUSE_MODEL, _muse_handshake(observed)
 
 
-def test_without_a_guardrail_the_proxy_sends_no_session_update_of_its_own(gateway: Gateway) -> None:
+def test_without_a_guardrail_the_proxy_sends_no_session_update_or_response_create_of_its_own(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         transcription: Final = _scripted(scenario, _transcription_scenario(BLOCKED_TRANSCRIPT))
         voice: Final = _scripted(scenario, _voice_scenario(BLOCKED_TRANSCRIPT))
@@ -1150,22 +1150,29 @@ def test_without_a_guardrail_the_proxy_sends_no_session_update_of_its_own(gatewa
         transcribe_model: Final = _openai_deployment(scenario, transcription.scenario_id)
         voice_model: Final = _openai_deployment(scenario, voice.scenario_id, model=VOICE_MODEL)
         transcribed: Final = _transcribe(_ws_base(_proxy_url()), f"model={transcribe_model}&{TRANSCRIPTION_QUERY}", key)
-        talked: Final = _talk(_ws_base(_proxy_url()), f"model={voice_model}", key, _voice_frames(VOICE_UPDATE))
+        talked: Final = _talk_without_a_reply(_ws_base(_proxy_url()), f"model={voice_model}", key)
         observed: Final = _observed_all(gateway.upstream_url)
         transcription_observed: Final = _belonging(observed, transcription.scenario_id)
-        voice_observed: Final = _belonging(observed, voice.scenario_id)
         _assert_transcription_left_alone(
             transcribed, transcription_observed, BLOCKED_TRANSCRIPT, update=GA_TRANSCRIPTION_UPDATE
         )
-        assert talked.types == ("session.created", "session.updated", TRANSCRIPT_COMPLETED, RESPONSE_DONE), talked
-        assert talked.errors == (), talked
-        assert _session_updates(voice_observed) == (VOICE_UPDATE,), _session_updates(voice_observed)
+        _assert_voice_session_ungated(talked, _belonging(observed, voice.scenario_id))
+
+
+def _talk_without_a_reply(ws_base: str, query: str, key: str) -> Session:
+    return _drive(
+        ws_base,
+        query,
+        key,
+        (_step(VOICE_UPDATE_FRAME, COMMIT, until=TRANSCRIPT_COMPLETED), _step(until=RESPONSE_DONE)),
+    )
 
 
 def _assert_voice_session_ungated(session: Session, observed: tuple[dict[str, JsonValue], ...]) -> None:
-    assert session.types == ("session.created", "session.updated", TRANSCRIPT_COMPLETED, RESPONSE_DONE), session
+    assert session.types == ("session.created", "session.updated", TRANSCRIPT_COMPLETED, "timeout"), session
     assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
     assert session.errors == (), session
+    assert _sent_types(observed) == ("session.update", "input_audio_buffer.commit"), _sent(observed)
     assert _session_updates(observed) == (VOICE_UPDATE,), _session_updates(observed)
 
 
@@ -1183,9 +1190,7 @@ def test_key_opted_out_of_the_transcript_guardrail_is_not_gated_by_the_prompt_gu
         handle: Final = _scripted(scenario, _voice_scenario(BLOCKED_TRANSCRIPT))
         key: Final = scenario.key(metadata={"opted_out_global_guardrails": [TRANSCRIPT_GUARDRAIL]})
         model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
-        session: Final = _talk(
-            _ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, _voice_frames(VOICE_UPDATE)
-        )
+        session: Final = _talk_without_a_reply(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key)
         _assert_voice_session_ungated(session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id))
 
 
@@ -1202,9 +1207,7 @@ def test_team_opted_out_of_the_transcript_guardrail_is_not_gated(guardrail_proxy
         team: Final = scenario.team(metadata={"opted_out_global_guardrails": [TRANSCRIPT_GUARDRAIL]})
         key: Final = scenario.key(team_id=team)
         model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
-        session: Final = _talk(
-            _ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, _voice_frames(VOICE_UPDATE)
-        )
+        session: Final = _talk_without_a_reply(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key)
         _assert_voice_session_ungated(session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id))
 
 
