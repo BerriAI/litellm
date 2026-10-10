@@ -36,10 +36,8 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
     JevClassifierClient,
     JevSystemOneResponse,
 )
-from litellm.types.management_endpoints.auto_router_endpoints import (
-    AutoRouterBenchmarksResponse,
-    AutoRouterRoutingTestRequest,
-)
+from litellm.router_strategy.complexity_router.request_models import AutoRouterRoutingTestRequest
+from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterBenchmarksResponse
 from litellm.types.router import Deployment
 from litellm.types.utils import Choices, Message, ModelResponse
 
