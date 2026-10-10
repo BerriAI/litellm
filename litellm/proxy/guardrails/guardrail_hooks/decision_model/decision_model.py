@@ -21,11 +21,12 @@ from litellm.integrations.custom_guardrail import (
 from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_target
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelCheck,
     DecisionModelGuardrailConfigModel,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -56,24 +57,22 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     return checks
 
 
+def _tool_call_text(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> str | None:
+    if isinstance(tool_call, dict):
+        function: Final = tool_call.get("function")
+        dict_arguments: Final = function.get("arguments") if function else None
+        if not isinstance(dict_arguments, str) or not dict_arguments.strip():
+            return None
+        dict_name: Final = function.get("name") if function else None
+        return f"{dict_name or ''}({dict_arguments})"
+    arguments: Final = tool_call.function.arguments
+    if not arguments or not arguments.strip():
+        return None
+    return f"{tool_call.function.name or ''}({arguments})"
+
+
 def _tool_call_texts(inputs: GenericGuardrailAPIInputs) -> tuple[str, ...]:
-    """Render each tool call's function as `name(arguments)` for screening.
-    A tool call with missing or blank arguments yields nothing to screen."""
-    texts: Final[list[str]] = []  # mutable-ok: builder accumulator returned as a tuple
-    for tool_call in inputs.get("tool_calls") or []:
-        name: str | None
-        arguments: str | None
-        if isinstance(tool_call, dict):
-            function = tool_call.get("function")
-            arguments = function.get("arguments") if function else None
-            name = function.get("name") if function else None
-        else:
-            arguments = tool_call.function.arguments
-            name = tool_call.function.name
-        if not isinstance(arguments, str) or not arguments.strip():
-            continue
-        texts.append(f"{name or ''}({arguments})")
-    return tuple(texts)
+    return tuple(text for text in map(_tool_call_text, inputs.get("tool_calls") or ()) if text is not None)
 
 
 def _chunk_text(text: str, max_chars: int) -> tuple[str, ...]:
