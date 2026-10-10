@@ -69,7 +69,7 @@ function MetadataRow({ label, value }: { label: string; value: React.ReactNode }
   return (
     <div className="flex items-start gap-2 py-1.5">
       <span className="w-36 shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className="text-xs break-all text-foreground">{value}</span>
+      <span className="min-w-0 flex-1 text-xs break-all text-foreground">{value}</span>
     </div>
   );
 }

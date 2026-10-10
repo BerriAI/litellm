@@ -28,7 +28,7 @@ describe("EntityReference", () => {
 
   it("caps the named trigger at the container width so long names truncate", () => {
     const { container } = render(<EntityReference id="team-123" name="Review Team" />);
-    expect(container.querySelector("span")).toHaveClass("max-w-[min(100%,16rem)]");
+    expect(container.querySelector("span")).toHaveClass("max-w-64");
   });
 
   it("falls back to the raw id in mono when there is no name", () => {

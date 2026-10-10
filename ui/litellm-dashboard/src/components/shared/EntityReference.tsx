@@ -15,7 +15,7 @@ interface EntityReferenceProps {
 export function EntityReference({ id, name, href }: EntityReferenceProps) {
   if (!name) {
     return (
-      <EntityLink href={href} className="max-w-[min(100%,16rem)] font-mono text-xs font-normal">
+      <EntityLink href={href} className="max-w-64 font-mono text-xs font-normal">
         {id}
       </EntityLink>
     );
@@ -28,7 +28,7 @@ export function EntityReference({ id, name, href }: EntityReferenceProps) {
           <span className="break-all font-mono text-xs">{id}</span>
         </span>
       }
-      className="min-w-0 max-w-[min(100%,16rem)]"
+      className="min-w-0 max-w-64"
     >
       <EntityLink href={href}>{name}</EntityLink>
     </SimpleTooltip>
