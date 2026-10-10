@@ -40,6 +40,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     configured_spend_logs_metadata_fields,
     get_logging_payload,
     get_spend_logs_id,
+    _stored_request_without_requester_ip_address,
+    requester_ip_address_logging_disabled,
     should_store_prompts_and_responses_in_spend_logs,
     spend_log_row_with_retained_metadata,
 )
@@ -6470,3 +6472,232 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch: pytest.MonkeyPatch
     )
     assert payload_disabled["messages"] == "{}"
     assert payload_disabled["response"] == "{}"
+
+
+@pytest.mark.parametrize(
+    ("configured", "disabled"),
+    [
+        (True, True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
+        (1, True),
+        (False, False),
+        (None, False),
+        ("false", False),
+        ("no", False),
+        (0, False),
+        ("", False),
+        ("maybe", False),
+        ([1], False),
+    ],
+)
+def test_requester_ip_address_logging_disabled_reads_the_setting_as_the_settings_api_validates_it(
+    configured: object, disabled: bool
+) -> None:
+    with patch(  # test-quality-ok: general_settings is proxy config, loaded from yaml, not an HTTP boundary
+        "litellm.proxy.proxy_server.general_settings", {"disable_requester_ip_address_logging": configured}
+    ):
+        assert requester_ip_address_logging_disabled() is disabled
+
+
+def _request_ip_metadata() -> dict[str, object]:
+    return {
+        "requester_ip_address": "203.0.113.9",
+        "user_agent": "requester-ip-test",
+        "headers": {"X-Forwarded-For": "203.0.113.9, 10.0.0.1", "x-real-ip": "203.0.113.9", "accept": "*/*"},
+        "requester_metadata": {"headers": {"x-forwarded-for": "203.0.113.9"}, "team": "blue"},
+        "error_information": {
+            "error_code": "403",
+            "error_message": "Access forbidden: IP address 203.0.113.9 not allowed.",
+            "traceback": "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+        },
+    }
+
+
+def _request_ip_kwargs(request_metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "litellm_params": {
+            "metadata": request_metadata,
+            "proxy_server_request": {
+                "body": {
+                    "model": "gpt-5-mini",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                    "metadata": request_metadata,
+                }
+            },
+        },
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "response": {"role": "assistant", "content": "Hi there!"},
+            "metadata": {"requester_ip_address": "203.0.113.9"},
+            "model_map_information": {"tpm": 1000, "rpm": 1000},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("disabled", "recorded_ip", "error_message", "traceback"),
+    [
+        (
+            False,
+            "203.0.113.9",
+            "Access forbidden: IP address 203.0.113.9 not allowed.",
+            "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+        ),
+        (
+            True,
+            None,
+            "Access forbidden: IP address REDACTED_BY_LITELM not allowed.",
+            "HTTPException: client REDACTED_BY_LITELM via REDACTED_BY_LITELM denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+        ),
+    ],
+    ids=["setting-off", "setting-on"],
+)
+def test_spend_logs_payload_keeps_no_requester_ip_address_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool, recorded_ip: str | None, error_message: str, traceback: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", disabled)
+    logged_at: Final = datetime.datetime(2026, 1, 15, 12, 0, 0)
+    request_metadata: Final = _request_ip_metadata()
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=_request_ip_kwargs(request_metadata),
+        response_obj=litellm.ModelResponse(id="chatcmpl-ip", model="gpt-5-mini"),
+        start_time=logged_at,
+        end_time=logged_at,
+    )
+
+    stored_metadata: Final = json.loads(payload["metadata"])
+    stored_request: Final = json.loads(payload["proxy_server_request"] or "{}")
+    stored_errors: Final = (stored_metadata["error_information"], stored_request["metadata"]["error_information"])
+    assert request_metadata == _request_ip_metadata()
+    assert stored_metadata["user_agent"] == "requester-ip-test"
+    assert stored_request["metadata"]["headers"]["accept"] == "*/*"
+    assert stored_request["metadata"]["requester_metadata"]["team"] == "blue"
+    assert payload["requester_ip_address"] == recorded_ip
+    assert stored_metadata["requester_ip_address"] == recorded_ip
+    assert stored_request["metadata"]["requester_ip_address"] == recorded_ip
+    assert [error["error_message"] for error in stored_errors] == [error_message, error_message]
+    assert [error["traceback"] for error in stored_errors] == [traceback, traceback]
+    assert [error["error_code"] for error in stored_errors] == ["403", "403"]
+    assert ("203.0.113.9" in json.dumps(payload, default=str)) is not disabled
+
+
+def test_stored_request_without_requester_ip_address_drops_only_ip_fields_from_request_metadata() -> None:
+    body: Final = {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "203.0.113.9"}],
+        "tools": [{"type": "function", "function": {"parameters": {"headers": {"x-real-ip": "keep"}}}}],
+        "error_information": {"error_message": "203.0.113.9"},
+        "litellm_metadata": {
+            "requester_ip_address": "203.0.113.9",
+            "headers": {
+                "Forwarded": "for=203.0.113.9",
+                "CF-Connecting-IP": "203.0.113.9",
+                "X-Envoy-External-Address": "203.0.113.9",
+                "CF-Connecting-IPv6": "2001:db8::9",
+                "CF-Pseudo-IPv4": "203.0.113.9",
+                "X-AppEngine-User-IP": "203.0.113.9",
+                "X-Vercel-Forwarded-For": "203.0.113.9",
+                "X-ARR-ClientIP": "203.0.113.9",
+                "user-agent": "ua",
+            },
+            "forwarded": "not a header",
+            "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9"}}],
+            "error_information": {"error_message": "denied 203.0.113.9"},
+        },
+    }
+
+    assert _stored_request_without_requester_ip_address(body) == {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "203.0.113.9"}],
+        "tools": [{"type": "function", "function": {"parameters": {"headers": {"x-real-ip": "keep"}}}}],
+        "error_information": {"error_message": "203.0.113.9"},
+        "litellm_metadata": {
+            "requester_ip_address": None,
+            "headers": {"user-agent": "ua"},
+            "forwarded": "not a header",
+            "spend_logs_metadata": [{"headers": {}}],
+            "error_information": {"error_message": "denied 203.0.113.9"},
+        },
+    }
+
+
+@pytest.mark.parametrize("error_field", ["error_message", "traceback"])
+def test_stored_request_masks_ip_addresses_in_error_text_before_long_text_is_truncated(
+    monkeypatch: pytest.MonkeyPatch, error_field: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    text: Final = "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8::9 " + "c" * 644
+    metadata: Final = {"error_information": {"error_code": "500", error_field: text}}
+
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata=metadata,
+            litellm_params={"proxy_server_request": {"body": {"model": "gpt-5-mini", "metadata": metadata}}},
+            drop_requester_ip_address=True,
+        )
+    )
+
+    stored_text: Final = stored["metadata"]["error_information"][error_field]
+    kept_head_and_tail: Final = stored_text[:350] + stored_text[-650:]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_text
+    assert kept_head_and_tail.startswith("a" * 345 + " REDA")
+    assert not any(char.isdigit() for char in kept_head_and_tail)
+    assert metadata["error_information"][error_field] == text
+
+
+def test_stored_request_with_ip_logging_disabled_matches_setting_off_for_bodies_without_ip_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    loop: Final[dict[str, object]] = {}
+    loop["self"] = (loop,)
+    body: Final[dict[object, object]] = {"model": "gpt-5-mini", 7: "non-string key", "metadata": {"tags": (loop,)}}
+
+    stored: Final = [
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": body}},
+            drop_requester_ip_address=drop_requester_ip_address,
+        )
+        for drop_requester_ip_address in (False, True)
+    ]
+
+    assert json.loads(stored[0])["model"] == "gpt-5-mini"
+    assert stored[1] == stored[0]
+
+
+@pytest.mark.parametrize("disabled", [False, True], ids=["setting-off", "setting-on"])
+def test_failure_error_information_masks_ip_addresses_before_long_text_is_truncated(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", disabled)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    text: Final = "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8::9 " + "c" * 644
+
+    sanitized: Final = sanitize_error_information_for_spend_logs(
+        {"error_code": "500", "error_message": text, "traceback": text}
+    )
+
+    assert sanitized is not None
+    for stored_text in (sanitized["error_message"], sanitized["traceback"]):
+        kept_head_and_tail = stored_text[:350] + stored_text[-650:]
+        assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_text
+        assert any(char.isdigit() for char in kept_head_and_tail) is not disabled
+    assert sanitized["error_code"] == "500"
