@@ -264,7 +264,7 @@ async def test_member_authorization_and_persistence_resolve_the_same_classifier(
         _strategy_router_write_violation,
         update_db_model,
     )
-    from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+    from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "member-router-test-salt")
     stored_config: Final = {

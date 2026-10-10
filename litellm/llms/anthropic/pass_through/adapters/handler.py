@@ -412,7 +412,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.main import responses_api_bridge_check
+        from litellm.responses.bridge_check import responses_api_bridge_check
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")

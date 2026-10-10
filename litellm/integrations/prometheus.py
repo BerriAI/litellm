@@ -49,11 +49,9 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.proxy._types import (
-    LiteLLM_DeletedVerificationToken,
-    LiteLLM_TeamTable,
-    LiteLLM_UserTable,
-)
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.user import LiteLLM_UserTable
+from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository

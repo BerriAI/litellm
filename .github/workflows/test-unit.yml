@@ -335,6 +335,7 @@ jobs:
               tests/unit/llms/snowflake
               tests/unit/llms/soniox
               tests/unit/llms/stability
+              tests/unit/llms/strands_decider
               tests/unit/llms/tavily
               tests/unit/llms/tencent
               tests/unit/llms/tinyfish
@@ -926,6 +927,7 @@ jobs:
         timeout-minutes: 3
         with:
           persist-credentials: false
+          fetch-depth: ${{ matrix.shard == 'db-and-spend' && '0' || '1' }}
 
       - name: Detect relevant changes
         id: changes
@@ -958,11 +960,13 @@ jobs:
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
-      - name: Install dependencies
+      - name: Install dependencies and check schema
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
+          UNIT_SHARD: ${{ matrix.shard }}
+          SCHEMA_BASE_REF: origin/${{ github.event.repository.default_branch }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
@@ -974,6 +978,9 @@ jobs:
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+          if [ "$UNIT_SHARD" = "db-and-spend" ]; then
+            uv run --no-sync python scripts/check_schema_compatibility.py --base-ref "$SCHEMA_BASE_REF"
+          fi
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'

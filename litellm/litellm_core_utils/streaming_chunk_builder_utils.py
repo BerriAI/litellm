@@ -3,12 +3,17 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict, Union, cast
 
+from pydantic import BaseModel
 from typing_extensions import ReadOnly, Required
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
+)
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -28,11 +33,13 @@ from litellm.types.utils import (
     Delta,
     Function,
     FunctionCall,
+    LlmProviders,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     ServerToolUse,
     StreamingChoices,
+    TextCompletionResponse,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
@@ -1194,3 +1201,421 @@ def concatenate_base64_list(base64_strings: list[str]) -> str:
 
     # Encode the concatenated bytes back to base64
     return base64.b64encode(combined_bytes).decode("utf-8")
+
+
+def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
+    id: Final = chunks[0]["id"]
+    object: Final = chunks[0]["object"]
+    created: Final = chunks[0]["created"]
+    model: Final = chunks[0]["model"]
+    system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
+    finish_reason: Final = chunks[-1]["choices"][0]["finish_reason"]
+    logprobs: Final = chunks[-1]["choices"][0]["logprobs"]
+
+    content_list: Final = []
+    for chunk in chunks:
+        choices = chunk["choices"]
+        for choice in choices:
+            if choice is not None and hasattr(choice, "text") and choice.get("text") is not None:
+                _choice = choice.get("text")
+                content_list.append(_choice)
+
+    # Combine the "content" strings into a single string || combine the 'function' strings into a single string
+    combined_content: Final = "".join(content_list)
+
+    try:
+        prompt_tokens = token_counter(model=model, messages=messages)
+    except Exception:  # don't allow this failing to block a complete streaming response from being returned
+        print_verbose("token_counter failed, assuming prompt tokens is 0")
+        prompt_tokens = 0
+    completion_tokens: Final = token_counter(
+        model=model,
+        text=combined_content,
+        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+    )
+
+    response: Final = {
+        "id": id,
+        "object": object,
+        "created": created,
+        "model": model,
+        "system_fingerprint": system_fingerprint,
+        "choices": [
+            {
+                "text": combined_content,
+                "index": 0,
+                "logprobs": logprobs,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    return TextCompletionResponse(**response)
+
+
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+
+
+def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+    if logging_obj is None:
+        return False
+    provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
+    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+
+
+def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
+    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
+    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
+        return float(usage_cost)
+    if logging_obj is not None:
+        return None
+    provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
+        "custom_llm_provider"
+    )
+    try:
+        return litellm.completion_cost(completion_response=response, custom_llm_provider=provider_hint)
+    except Exception:
+        return _stream_builder_model_map_cost(response)
+
+
+def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "list[object]":
+    if all(isinstance(citation, list) for citation in streamed_citations):
+        return list(streamed_citations)
+    return [list(streamed_citations)]
+
+
+def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
+    model_name: Final = response.model
+    usage: Final = getattr(response, "usage", None)
+    if not model_name or not isinstance(usage, Usage):
+        return None
+    try:
+        prompt_cost, completion_tokens_cost = litellm.cost_per_token(model=model_name, usage_object=usage)
+        return prompt_cost + completion_tokens_cost
+    except Exception:  # noqa: BLE001  # cost_per_token raises bare Exception for unpriceable models
+        return None
+
+
+def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    response_cost: Final = _stream_builder_response_cost(response, logging_obj)
+    if response_cost is None:
+        return
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params["response_cost"] = response_cost
+
+
+def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    if logging_obj is None:
+        return
+    if isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    computed_cost: Final = logging_obj.response_cost_calculator(result=response)
+    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
+        setattr(usage, "cost", computed_cost)
+
+
+_NON_TEXT_DELTA_FIELDS: Final = (
+    "tool_calls",
+    "function_call",
+    "reasoning_content",
+    "thinking_blocks",
+    "annotations",
+    "audio",
+    "images",
+    "provider_specific_fields",
+)
+
+
+def _stream_choice_delta(choice: object) -> Mapping[str, object]:
+    delta: Final = choice.get("delta", {}) if isinstance(choice, dict) else getattr(choice, "delta", {})
+    if isinstance(delta, Mapping):
+        return delta
+    if isinstance(delta, BaseModel):
+        return delta.model_dump()
+    return {}
+
+
+def _delta_carries_more_than_text(delta: Mapping[str, object]) -> bool:
+    return any(delta.get(field) is not None for field in _NON_TEXT_DELTA_FIELDS)
+
+
+def _simple_text_part(choices: Sequence[object]) -> str | None:
+    deltas: Final = tuple(_stream_choice_delta(choice) for choice in choices)
+    if any(_delta_carries_more_than_text(delta) for delta in deltas):
+        return None
+    content: Final = deltas[0].get("content")
+    return content if isinstance(content, str) else ""
+
+
+def stream_chunk_builder(
+    chunks: list,
+    messages: Sequence | None = None,
+    start_time=None,
+    end_time=None,
+    logging_obj: Optional["Logging"] = None,
+    count_prompt_tokens: Callable[[], int] | None = None,
+) -> ModelResponse | TextCompletionResponse | None:
+    try:
+        if chunks is None:
+            raise litellm.APIError(
+                status_code=500,
+                message="Error building chunks for logging/streaming usage calculation",
+                llm_provider="",
+                model="",
+            )
+        if not chunks:
+            return None
+
+        processor: Final = ChunkProcessor(chunks, messages)
+        chunks = processor.chunks
+
+        ### BASE-CASE ###
+        if len(chunks) == 0:
+            return None
+        ## Route to the text completion logic
+        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), None)
+        if first_chunk_with_choices is not None and isinstance(
+            first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
+        ):  # route to the text completion logic
+            return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
+
+        model: Final = chunks[0]["model"]
+        # Initialize the response dictionary
+        response: Final = processor.build_base_response(chunks)
+
+        # Fast path for the common text-only streaming case:
+        # avoid repeated multi-pass list scans over chunks.
+        simple_content_parts: Final[list[str]] = []
+        is_simple_text_stream = True
+        for chunk in chunks:
+            if not chunk.get("choices"):
+                continue
+
+            if (part := _simple_text_part(chunk["choices"])) is None:
+                is_simple_text_stream = False
+                break
+            if part:
+                simple_content_parts.append(part)
+
+        if is_simple_text_stream:
+            if simple_content_parts:
+                response["choices"][0]["message"]["content"] = "".join(simple_content_parts)
+            completion_output = get_content_from_model_response(response)
+            usage = processor.calculate_usage(
+                chunks=chunks,
+                model=model,
+                completion_output=completion_output,
+                messages=messages,
+                reasoning_tokens=0,
+                count_prompt_tokens=count_prompt_tokens,
+            )
+            setattr(response, "usage", usage)
+
+            # Propagate provider_specific_fields from chunk hidden params when present.
+            for chunk in reversed(chunks):
+                if isinstance(chunk, dict):
+                    hidden = chunk.get("_hidden_params")
+                else:
+                    hidden = getattr(chunk, HIDDEN_PARAMS_ATTR, None)
+                if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
+                    response.hidden_params.setdefault("provider_specific_fields", {}).update(
+                        hidden["provider_specific_fields"]
+                    )
+                    break
+
+            _stamp_streaming_usage_cost(usage, response, logging_obj)
+            _set_stream_builder_response_cost(response, logging_obj)
+
+            processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
+            return response
+
+        tool_call_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if any(
+                "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
+                for choice in chunk.get("choices") or ()
+            )
+        ]
+
+        if len(tool_call_chunks) > 0:
+            tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
+            _choice = response.choices[0]
+            _choice.message.content = None
+            _choice.message.tool_calls = tool_calls_list
+
+        function_call_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "function_call" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["function_call"] is not None
+        ]
+
+        if len(function_call_chunks) > 0:
+            _choice = response.choices[0]
+            _choice.message.content = None
+            _choice.message.function_call = processor.get_combined_function_call_content(function_call_chunks)
+
+        content_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "content" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["content"] is not None
+        ]
+
+        if len(content_chunks) > 0:
+            response["choices"][0]["message"]["content"] = processor.get_combined_content(content_chunks)
+
+        thinking_blocks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "thinking_blocks" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
+        ]
+
+        if len(thinking_blocks) > 0:
+            response["choices"][0]["message"]["thinking_blocks"] = processor.get_combined_thinking_content(
+                thinking_blocks
+            )
+
+        reasoning_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "reasoning_content" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["reasoning_content"] is not None
+        ]
+
+        if len(reasoning_chunks) > 0:
+            response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
+                reasoning_chunks
+            )
+
+        annotation_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "annotations" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["annotations"] is not None
+        ]
+
+        if len(annotation_chunks) > 0:
+            # Merge annotations from ALL chunks — providers may spread
+            # them across multiple streaming chunks or send them only in
+            # the final chunk.
+            all_annotations: Final[list] = []
+            for ac in annotation_chunks:
+                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
+            response["choices"][0]["message"]["annotations"] = all_annotations
+
+        audio_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "audio" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["audio"] is not None
+        ]
+
+        if len(audio_chunks) > 0:
+            _choice = response.choices[0]
+            _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
+
+        # Handle image chunks from models like gemini-2.5-flash-image
+        # See: https://github.com/BerriAI/litellm/issues/19478
+        image_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "images" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["images"] is not None
+        ]
+
+        if len(image_chunks) > 0:
+            # Images come complete in a single chunk, collect all images from all chunks
+            all_images: Final = []
+            for chunk in image_chunks:
+                all_images.extend(chunk["choices"][0]["delta"]["images"])
+            response["choices"][0]["message"]["images"] = all_images
+
+        # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
+        # See: https://github.com/BerriAI/litellm/issues/17737
+        provider_specific_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if chunk.get("choices")
+            and "provider_specific_fields" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
+        ]
+
+        if len(provider_specific_chunks) > 0:
+            provider_field_dicts: Final = tuple(
+                fields
+                for chunk in provider_specific_chunks
+                for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
+                if isinstance(fields, dict)
+            )
+            streamed_citations: Final = tuple(
+                fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
+            )
+            citation_fields: Final = (
+                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
+            )
+            combined_provider_fields: Final = {
+                key: value
+                for fields in (citation_fields, *provider_field_dicts)
+                for key, value in fields.items()
+                if key != "citation"
+            }
+
+            if combined_provider_fields:
+                _choice = response.choices[0]
+                _choice.message.provider_specific_fields = combined_provider_fields
+
+        completion_output = get_content_from_model_response(response)
+
+        reasoning_tokens: Final = processor.count_reasoning_tokens(response)
+
+        usage = processor.calculate_usage(
+            chunks=chunks,
+            model=model,
+            completion_output=completion_output,
+            messages=messages,
+            reasoning_tokens=reasoning_tokens,
+            count_prompt_tokens=count_prompt_tokens,
+        )
+
+        setattr(response, "usage", usage)
+
+        # Propagate provider_specific_fields from the last chunk (contains provider
+        # metadata like traffic_type set during streaming)
+        for chunk in reversed(chunks):
+            if isinstance(chunk, dict):
+                hidden = chunk.get("_hidden_params")
+            else:
+                hidden = getattr(chunk, HIDDEN_PARAMS_ATTR, None)
+            if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
+                response.hidden_params.setdefault("provider_specific_fields", {}).update(
+                    hidden["provider_specific_fields"]
+                )
+                break
+
+        _stamp_streaming_usage_cost(usage, response, logging_obj)
+        _set_stream_builder_response_cost(response, logging_obj)
+
+        processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
+        return response
+    except Exception as e:
+        verbose_logger.exception("litellm.main.py::stream_chunk_builder() - Exception occurred - %s", e)
+        raise litellm.APIError(
+            status_code=500,
+            message="Error building chunks for logging/streaming usage calculation",
+            llm_provider="",
+            model="",
+        )

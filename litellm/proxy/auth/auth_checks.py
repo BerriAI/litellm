@@ -162,7 +162,13 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template, request_fallback_model_names
+from .auth_utils import (
+    get_model_from_request,
+    get_request_route,
+    get_request_route_template,
+    request_dispatched_to_pass_through_endpoint,
+    request_fallback_model_names,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -393,6 +399,61 @@ def _typed_request_body(request_body: dict) -> Mapping[str, object]:
 
 
 typed_general_settings: Final = _typed_request_body
+
+
+_TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
+    trace_id: Final[object] = metadata.get("trace_id")
+    return isinstance(trace_id, str) and bool(trace_id)
+
+
+def _metadata_has_trace_id(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(metadata)
+    return _metadata_mapping_has_trace_id(metadata_dict)
+
+
+def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
+    if not isinstance(
+        team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # narrow the untyped field
+        dict,
+    ):
+        return False
+    return (
+        team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
+        is True
+    )
+
+
+def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
+    from litellm.proxy.litellm_pre_call_utils import (
+        _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
+        get_chain_id_from_headers,
+        metadata_variable_name_for_route,
+    )
+
+    if get_chain_id_from_headers(dict(request.headers)):
+        return True
+    if headers_only:
+        return False
+    litellm_trace_id: Final[object] = request_body.get("litellm_trace_id")
+    if isinstance(litellm_trace_id, str) and litellm_trace_id:
+        return True
+    if "litellm_trace_id" not in request_body:
+        traceparent: Final[str | None] = request.headers.get("traceparent")
+        if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
+            return True
+    metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
+    selected_metadata: Final[object] = request_body.get(metadata_variable_name)
+    if isinstance(selected_metadata, dict):
+        selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)
+        if "trace_id" in selected_metadata_dict:
+            return _metadata_mapping_has_trace_id(selected_metadata_dict)
+    other_metadata_variable_name: Final = "litellm_metadata" if metadata_variable_name == "metadata" else "metadata"
+    return _metadata_has_trace_id(request_body.get(other_metadata_variable_name))
 
 
 class _JsonLoadsObj(Protocol):
@@ -971,6 +1032,21 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
     }
 )
 
+MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools"})
+
+MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
+
+MCP_TOOL_CALL_ROUTES: Final = frozenset({"/mcp/tools/call", "/mcp-rest/tools/call"})
+
+
+def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> bool:
+    if route in MCP_DISCOVERY_ROUTES:
+        return True
+    if route in MCP_TOOL_CALL_ROUTES or not (route == "/mcp" or route.startswith("/mcp/")):
+        return False
+    method: Final = request_body.get("method")
+    return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
+
 
 def route_skips_budget_checks(route: str) -> bool:
     return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
@@ -1029,7 +1105,11 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
+    skip_all_budget_checks: Final = (
+        skip_budget_checks
+        or route_skips_budget_checks(route=route)
+        or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
+    )
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
@@ -1121,6 +1201,59 @@ async def common_checks(
                         param=None,
                         code=status.HTTP_400_BAD_REQUEST,
                     )
+
+    pass_through_route: Final = RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+    headers_only: Final = (
+        RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.mcp_inference_routes.value,
+        )
+        or RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.agent_inference_routes.value,
+        )
+        or pass_through_route
+    )
+    team_trace_id_gate_applies: Final = (
+        team_object is not None
+        and _team_metadata_requires_trace_id(team_object)
+        and request.method not in ("GET", "HEAD", "OPTIONS")
+        and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
+        and not RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,
+        )
+    )
+    team_metadata: Final[Mapping[str, object] | None] = (
+        _TRACE_ID_METADATA_ADAPTER.validate_python(
+            team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the narrowed untyped field
+        )
+        if team_trace_id_gate_applies and team_object is not None
+        else None
+    )
+    if (
+        team_trace_id_gate_applies
+        and team_object is not None
+        and team_metadata is not None
+        and not _request_has_trace_id(
+            request_body=_typed_request_body(request_body),
+            request=request,
+            headers_only=headers_only,
+        )
+    ):
+        raise ProxyException(
+            message=(
+                f"Team '{team_object.team_id}' requires a trace ID on every LLM, MCP and agent request. "
+                "Send an x-litellm-trace-id header. "
+                "LLM requests can also send a W3C traceparent header or set metadata.trace_id in the body."
+            ),
+            type=ProxyErrorTypes.bad_request_error,
+            param="trace_id",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
     managed_policy: Final = managed_agent_policy(valid_token)
     if _model and valid_token is not None and managed_policy is not None:
