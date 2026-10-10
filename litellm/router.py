@@ -1408,7 +1408,7 @@ class Router:
         # caps them at one per class: without this a discarded router (e.g. the
         # throwaway `user_config` Router built per request) leaks its selectors
         # into every callback list for the life of the process (issue #44575).
-        selectors = [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
+        selectors: Final = [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
         selectors.extend(getattr(self, "_override_selectors", {}).values())
         for group in getattr(self, "_group_selectors", {}).values():
             selectors.extend(group.values())
