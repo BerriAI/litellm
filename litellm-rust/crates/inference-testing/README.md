@@ -14,7 +14,7 @@ Completion checks text and usage. Streaming consumes SSE to completion and check
 
 Messages setup and assertions live in `inference-messages/tests/live/support.rs`. Provider modules under `tests/live/` select their payloads and tool policy. The shared helpers consume streams completely and reconstruct text, thinking signatures and tool arguments for the follow-up request
 
-The initial provider case is `vertex_ai`. A registered ignored case is available coverage, not evidence that it passed against that provider
+The initial provider cases are `vertex_ai` and `bedrock`. A registered ignored case is available coverage, not evidence that it passed against that provider
 
 Run one provider's cases explicitly
 
@@ -28,6 +28,18 @@ LITELLM_LIVE_MESSAGES_VERTEX_AI_MODEL=<claude-model-on-vertex> \
 For Vertex AI, set `LITELLM_LIVE_MESSAGES_VERTEX_AI_MODEL` to a Claude model published in the project's location. Credentials, project and location resolve through the production Rust GCP authentication, from `GOOGLE_APPLICATION_CREDENTIALS` or `VERTEXAI_CREDENTIALS`, with `VERTEXAI_PROJECT` and `VERTEXAI_LOCATION`
 
 Vertex AI cases live in `inference-messages/tests/live/vertex_ai.rs`. They cover plain and system messages, text streaming, and complete and streaming tool round trips
+
+For Bedrock, set `LITELLM_LIVE_MESSAGES_BEDROCK_MODEL` to a supported Claude Invoke model or inference profile. Configure AWS credentials through the existing credential chain, or `AWS_BEARER_TOKEN_BEDROCK`, and the required region.
+
+Bedrock cases live in `inference-messages/tests/live/bedrock.rs`. They cover completion with plain and system messages, unknown field filtering, plain and explicit Invoke model paths, text streaming, and complete and streaming tool round trips. Streaming checks the returned SSE content type, terminal event, usage and tool argument reconstruction
+
+Export `AWS_BEARER_TOKEN_BEDROCK`, `AWS_REGION_NAME` and the model before running the Bedrock cases. An optional endpoint override uses `AWS_BEDROCK_RUNTIME_ENDPOINT`, not `AWS_BEDROCK_ENDPOINT`
+
+```bash
+cargo test --manifest-path litellm-rust/Cargo.toml \
+  -p litellm-inference-messages --test live bedrock \
+  -- --ignored --nocapture --test-threads=1
+```
 
 Tool cases require a model that supports forced `tool_choice`, except where a provider's section says otherwise. A provider rejection fails the selected case instead of skipping it
 
