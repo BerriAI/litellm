@@ -77,7 +77,8 @@ def test_missing_model_parameter_returns_bad_request(
     assert response.status_code == 400, response.text
     error = object_value(response.json())["error"]
     assert isinstance(error, dict)
-    assert isinstance(error.get("message"), str) and error["message"]
+    assert error["code"] == "400"
+    assert "Invalid model name passed in model=None" in str(error["message"])
 
 
 def test_chat_completion_bad_model_with_spend_logs(gateway: Gateway) -> None:
