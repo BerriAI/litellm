@@ -21,6 +21,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
+    OpenAIMessageContentListBlock,
 )
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
@@ -149,6 +150,12 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             return ChatCompletionVideoObject(type="video_url", video_url=ChatCompletionVideoUrlObject(url=file_data))
         raise ValueError("file_id or file_data is required")
 
+    def _video_file_as_video_url(self, content_item: OpenAIMessageContentListBlock) -> OpenAIMessageContentListBlock:
+        if content_item.get("type") != "file":
+            return content_item
+        file_item: Final = cast(ChatCompletionFileObject, content_item)
+        return self._convert_file_to_video_url(file_item) if self._is_video_file(file_item) else content_item
+
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -231,14 +238,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
-                    replaced_content_items: list[tuple[int, ChatCompletionFileObject]] = []
-                    for idx, content_item in enumerate(message_content):
-                        if content_item.get("type") == "file":
-                            content_item = cast(ChatCompletionFileObject, content_item)
-                            if self._is_video_file(content_item):
-                                replaced_content_items.append((idx, content_item))
-                    for idx, content_item in replaced_content_items:
-                        message_content[idx] = self._convert_file_to_video_url(content_item)
+                    message["content"] = [self._video_file_as_video_url(item) for item in message_content]
 
         if is_async:
             return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
