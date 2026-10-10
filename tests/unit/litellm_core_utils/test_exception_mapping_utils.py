@@ -30,9 +30,13 @@ from litellm.types.utils import LlmProviders
 @pytest.mark.parametrize("code", ["cyber_policy", "invalid_prompt"])
 def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: str) -> None:
     body: Final = {"code": code, "message": "Request mentions cyber_policy", "type": "invalid_request_error"}
+    request: Final = httpx.Request("POST", "https://provider.example/v1/responses")
+    response: Final = httpx.Response(400, request=request, headers={"x-request-id": "cyber-policy-request"})
     original: Final = OpenAIError(
         status_code=400,
         message=json.dumps({"error": body}),
+        request=request,
+        response=response,
         body=body if shape == "sdk" else None,
     )
     with pytest.raises(litellm.BadRequestError) as caught:
@@ -48,6 +52,9 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.code == code
         assert caught.value.body == body
         assert caught.value.status_code == 400
+        assert caught.value.response is response
+        assert caught.value.request is request
+        assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
 # Test cases for is_error_str_context_window_exceeded
