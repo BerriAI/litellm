@@ -442,6 +442,14 @@ it("clicking a plain key cell opens the key details", async () => {
   expect(screen.getByText("Back to Keys")).toBeInTheDocument();
 });
 
+it("falls back to the token in the accessible row name when the alias is empty", () => {
+  mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, key_alias: "", key_name: "" }]));
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(screen.getByRole("row", { name: `Open key ${mockKey.token}` })).toBeInTheDocument();
+});
+
 it("opens a focused key row with Enter", async () => {
   const user = userEvent.setup();
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();

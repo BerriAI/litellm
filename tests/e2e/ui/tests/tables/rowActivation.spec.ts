@@ -20,6 +20,10 @@ interface CreatedTeam {
   team_id: string;
 }
 
+interface AuditLogListResponse {
+  audit_logs: Array<{ object_id: string }>;
+}
+
 interface SpendLog {
   request_id: string;
 }
@@ -69,6 +73,23 @@ async function cellForHeader(page: PlaywrightPage, row: Locator, title: string):
 
 async function createAuditTeam(request: APIRequestContext): Promise<CreatedTeam> {
   return postOk<CreatedTeam>(request, "/team/new", { team_alias: `e2e-row-audit-${uniqueSuffix()}` });
+}
+
+async function waitForAuditLog(request: APIRequestContext, teamId: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(
+          `/audit?page=1&page_size=50&object_id=${encodeURIComponent(teamId)}`,
+          { headers: adminHeaders() },
+        );
+        expect(response.ok(), `GET /audit for ${teamId} failed (${response.status()})`).toBe(true);
+        const body = (await response.json()) as AuditLogListResponse;
+        return body.audit_logs.some((entry) => entry.object_id === teamId);
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
 }
 
 async function locateAuditRow(page: PlaywrightPage, teamId: string): Promise<Locator> {
@@ -225,6 +246,7 @@ test.describe("Audit Logs row activation", () => {
     test.skip(!proxyIsPremium(), "Audit Logs require a premium proxy license");
     const team = await createAuditTeam(request);
     try {
+      await waitForAuditLog(request, team.team_id);
       const row = await locateAuditRow(page, team.team_id);
       await (await cellForHeader(page, row, "Timestamp")).click();
 
@@ -238,6 +260,7 @@ test.describe("Audit Logs row activation", () => {
     test.skip(!proxyIsPremium(), "Audit Logs require a premium proxy license");
     const team = await createAuditTeam(request);
     try {
+      await waitForAuditLog(request, team.team_id);
       const row = await locateAuditRow(page, team.team_id);
       const action = (await row.getByRole("cell").nth(1).innerText()).trim();
       const drawer = page.getByRole("dialog").filter({ hasText: team.team_id });

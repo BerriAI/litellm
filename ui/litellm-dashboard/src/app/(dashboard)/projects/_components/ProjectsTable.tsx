@@ -84,7 +84,7 @@ export function ProjectsTable({
       noDataMessage={<EmptyState isFiltered={isFiltered} />}
       size="compact"
       onRowClick={(project) => onProjectClick(project.project_id)}
-      getRowLabel={(project) => `Open project ${project.project_alias ?? project.project_id}`}
+      getRowLabel={(project) => `Open project ${project.project_alias || project.project_id}`}
     />
   );
 }

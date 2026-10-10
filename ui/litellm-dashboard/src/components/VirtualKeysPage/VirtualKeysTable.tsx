@@ -255,7 +255,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         onRowClick={(key) => {
           void setSelectedKeyId(key.token);
         }}
-        getRowLabel={(key) => `Open key ${key.key_alias ?? key.key_name ?? key.token}`}
+        getRowLabel={(key) => `Open key ${key.key_alias || key.key_name || key.token}`}
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={onColumnVisibilityChange}
         sortingMode="server"

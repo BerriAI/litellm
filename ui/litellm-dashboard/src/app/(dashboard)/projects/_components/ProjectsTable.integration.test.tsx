@@ -169,10 +169,10 @@ describe("ProjectsTable pagination URL state", () => {
 });
 
 describe("ProjectsTable row activation", () => {
-  const renderProject = (onProjectClick: (projectId: string) => void) =>
+  const renderProject = (onProjectClick: (projectId: string) => void, project = makeProject(1)) =>
     renderWithProviders(
       <ProjectsTable
-        projects={[makeProject(1)]}
+        projects={[project]}
         isLoading={false}
         isFiltered={false}
         onProjectClick={onProjectClick}
@@ -190,6 +190,12 @@ describe("ProjectsTable row activation", () => {
     await user.click(within(row).getByText("proj-01"));
 
     expect(onProjectClick).toHaveBeenCalledWith("proj-01");
+  });
+
+  it("falls back to the project ID in the accessible row name when the alias is empty", () => {
+    renderProject(vi.fn(), { ...makeProject(1), project_alias: "" });
+
+    expect(screen.getByRole("row", { name: "Open project proj-01" })).toBeInTheDocument();
   });
 
   it("opens project details when Enter is pressed on the focused row", async () => {

@@ -115,6 +115,17 @@ describe("ProjectKeysTable", () => {
     expect(within(row).queryByRole("link", { name: "My API Key" })).not.toBeInTheDocument();
   });
 
+  it("falls back to the token ID in the accessible row name when the alias is empty", () => {
+    renderWithProviders(
+      <ProjectKeysTable
+        {...defaultProps}
+        keys={[makeKey({ token: "tok-empty-alias", token_id: "tid-empty-alias", key_alias: "" })]}
+      />,
+    );
+
+    expect(screen.getByRole("row", { name: "Open key tid-empty-alias" })).toBeInTheDocument();
+  });
+
   it("navigates to key details when plain row content is clicked", async () => {
     const user = userEvent.setup();
     push.mockClear();
