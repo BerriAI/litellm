@@ -2232,6 +2232,7 @@ def mock_chat_streaming_response_chunks() -> List[str]:
         "databricks-meta-llama-3-3-70b-instruct",
         "databricks-qwen35-122b-a10b",
         "databricks-gpt-oss-120b",
+        "system.ai.deepseek-v4-1-flash",
     ),
 )
 def test_databricks_non_claude_json_schema_preserves_refs(model: str) -> None:

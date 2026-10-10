@@ -231,7 +231,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
 
 
 @pytest.mark.parametrize(
-    "case,endpoint,provider_model,request_body,expected_messages,responses_mode",
+    "case,endpoint,provider_model,request_body,expected_messages,responses_mode,upstream_path",
     [
         pytest.param(
             "chat_nonstream",
@@ -243,6 +243,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             },
             [{"role": "user", "content": "Reply in JSON"}],
             False,
+            "/chat/completions",
             id="A1-chat-nonstream",
         ),
         pytest.param(
@@ -256,6 +257,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             },
             [{"role": "user", "content": "Reply in JSON"}],
             False,
+            "/chat/completions",
             id="A2-chat-stream",
         ),
         pytest.param(
@@ -268,7 +270,21 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             },
             [{"role": "user", "content": "Reply in JSON"}],
             True,
+            "/chat/completions",
             id="A3-responses-mode",
+        ),
+        pytest.param(
+            "responses-mode-bridge-unity-catalog",
+            "/v1/chat/completions",
+            "system.ai.deepseek-v4-1-flash",
+            {
+                "messages": [{"role": "user", "content": "Reply in JSON with key a. hi"}],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Reply in JSON with key a. hi"}],
+            True,
+            "/ai-gateway/mlflow/v1/chat/completions",
+            id="A3b-responses-mode-unity-catalog-model",
         ),
         pytest.param(
             "messages-endpoint",
@@ -280,6 +296,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             },
             [{"role": "user", "content": "Reply in JSON"}],
             False,
+            "/chat/completions",
             id="A4-messages",
         ),
         pytest.param(
@@ -289,6 +306,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Reply in JSON"}]}]},
             [{"role": "user", "content": "Reply in JSON"}],
             False,
+            "/chat/completions",
             id="A5-responses-list-input",
         ),
     ],
@@ -301,6 +319,7 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
     request_body: dict[str, JsonValue],
     expected_messages: list[JsonValue],
     responses_mode: bool,
+    upstream_path: str,
 ) -> None:
     identity: Final = f"databricks-single-text-{case}-{uuid.uuid4().hex}"
     streaming: Final = request_body.get("stream") is True
@@ -332,7 +351,7 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
             response: Final = gateway.request("POST", endpoint, body, headers=headers)
             assert response.status_code == 200, response.text
             assert _JSON_OBJECT.validate_json(response.content)["id"]
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", upstream_path)]
 
 
 @pytest.mark.parametrize(
