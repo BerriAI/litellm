@@ -13,6 +13,7 @@ _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapte
 
 
 class CloudflareDecisionsConfig(BaseDecisionsConfig):
+    supports_image_input = True
     api_key_env = ("CLOUDFLARE_API_KEY",)
     api_base_env = ("CLOUDFLARE_API_BASE",)
 

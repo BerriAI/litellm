@@ -54,9 +54,20 @@ DecisionQuestionMap: TypeAlias = Annotated[
 ]
 
 
+class SystemOneBase64Image(LiteLLMPydanticObjectBase):
+    content_type: str
+    base64: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+SystemOneImage: TypeAlias = str | SystemOneBase64Image
+
+
 class DecisionsRequestBody(LiteLLMPydanticObjectBase):
     state: DecisionsJSON
     questions: DecisionQuestionMap
+    images: tuple[SystemOneImage, ...] = ()
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -70,6 +81,7 @@ class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
+    images: ReadOnly[Sequence[SystemOneImage]]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
@@ -329,6 +341,7 @@ _NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
 @dataclass(frozen=True, slots=True)
 class DecisionsIRState:
     state: DecisionsJSON
+    images: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -164,6 +164,48 @@ def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_t
     }
 
 
+def test_a_systemone_request_with_images_becomes_an_openai_image_message() -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": "Screen cracked",
+            "images": [
+                "data:image/png;base64,AA==",
+                {"content_type": "image/jpeg", "base64": "BB=="},
+            ],
+            "questions": {"damaged": {"type": "noul", "instructions": "Is the item damaged?"}},
+        }
+    )
+
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == {
+        "model": "gpt-6-luna",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                    {"type": "input_image", "image_url": "data:image/jpeg;base64,BB=="},
+                    {"type": "input_text", "text": "Screen cracked"},
+                ],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"}],
+    }
+
+
+def test_a_systemone_request_without_images_stays_a_string_input() -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": "Screen cracked",
+            "questions": {"damaged": {"type": "noul", "instructions": "Is the item damaged?"}},
+        }
+    )
+
+    body: Final = ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request))
+
+    assert body["input"] == "Screen cracked"
+
+
 def test_systemone_questions_without_instructions_become_valid_openai_questions() -> None:
     request: Final = _SYSTEMONE_BODY.validate_python(
         {
