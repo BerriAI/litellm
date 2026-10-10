@@ -8527,6 +8527,41 @@ class ProxyConfig:
         db_values: Final = self._prepared_db_settings_values("litellm_settings", raw_settings)
         self._apply_litellm_settings_db_values(db_values)
 
+    def _semantic_filter_settings_unchanged(self, mcp_semantic_filter_config: object, hook_type: type) -> bool:
+        """True when the stored settings match the in-memory ones and a live hook already covers them."""
+        import litellm
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        if not hasattr(self, "_last_semantic_filter_config"):
+            return False
+        if self._last_semantic_filter_config != mcp_semantic_filter_config:
+            return False
+        for active_hook in litellm.logging_callback_manager.get_custom_loggers_for_type(hook_type):
+            if not isinstance(active_hook, SemanticToolFilterHook):
+                continue
+            if active_hook.index_build_task is not None:
+                verbose_proxy_logger.debug(
+                    "Semantic filter settings unchanged, index build already started; skipping reinitialization"
+                )
+                return True
+            if active_hook.filter is not None and active_hook.filter.tool_router is not None:
+                verbose_proxy_logger.debug("Semantic filter settings unchanged, skipping reinitialization")
+                return True
+        verbose_proxy_logger.info(
+            "Semantic filter settings unchanged, but hook is missing or uninitialized. Reinitializing."
+        )
+        return False
+
+    @staticmethod
+    def _cancel_orphaned_semantic_filter_index_builds() -> None:
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        for active_hook in litellm.logging_callback_manager.get_custom_loggers_for_type(SemanticToolFilterHook):
+            if not isinstance(active_hook, SemanticToolFilterHook):
+                continue
+            if (build_task := active_hook.index_build_task) is not None and not build_task.done():
+                build_task.cancel()
+
     async def init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient) -> None:
         """
         Initialize MCP semantic filter settings from database.
@@ -8553,26 +8588,10 @@ class ProxyConfig:
                 return
 
             # Check if settings have changed (compare with in-memory state)
-            if hasattr(self, "_last_semantic_filter_config"):
-                if self._last_semantic_filter_config == mcp_semantic_filter_config:
-                    # If hook is missing or router isn't built yet, reinitialize anyway
-                    active_hooks = litellm.logging_callback_manager.get_custom_loggers_for_type(SemanticToolFilterHook)
-                    if active_hooks:
-                        for active_hook in active_hooks:
-                            if isinstance(active_hook, SemanticToolFilterHook):
-                                if active_hook.index_build_task is not None:
-                                    verbose_proxy_logger.debug(
-                                        "Semantic filter settings unchanged, index build already started; skipping reinitialization"
-                                    )
-                                    return
-                                if active_hook.filter is not None and active_hook.filter.tool_router is not None:
-                                    verbose_proxy_logger.debug(
-                                        "Semantic filter settings unchanged, skipping reinitialization"
-                                    )
-                                    return
-                    verbose_proxy_logger.info(
-                        "Semantic filter settings unchanged, but hook is missing or uninitialized. Reinitializing."
-                    )
+            if self._semantic_filter_settings_unchanged(mcp_semantic_filter_config, SemanticToolFilterHook):
+                return
+
+            self._cancel_orphaned_semantic_filter_index_builds()
 
             # Remove old hooks using logging callback manager
             litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, SemanticToolFilterHook)

@@ -5640,3 +5640,40 @@ async def test_proxy_config_semantic_filter_db_sync_skips_reinit_while_index_bui
     finally:
         gate.set()
         await build_task
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_semantic_filter_db_sync_cancels_orphaned_index_build(monkeypatch):
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    settings: Final = {
+        "enabled": True,
+        "embedding_model": "embed",
+        "top_k": 3,
+        "similarity_threshold": 0.5,
+    }
+    changed_settings: Final = {**settings, "top_k": 5}
+    gate: Final = asyncio.Event()
+    build_task: Final = asyncio.create_task(gate.wait())
+    hook: Final = MagicMock(spec=SemanticToolFilterHook)
+    hook.index_build_task = build_task
+    hook.filter = SimpleNamespace(tool_router=None)
+    removed: Final = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"mcp_semantic_tool_filter": changed_settings})),
+    )
+    monkeypatch.setattr(litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda _: [hook])
+    monkeypatch.setattr(litellm.logging_callback_manager, "remove_callbacks_by_type", removed)
+    pc: Final = ProxyConfig()
+    pc._last_semantic_filter_config = settings
+    try:
+        await pc._init_semantic_filter_settings_in_db(prisma_client=MagicMock())
+
+        await asyncio.sleep(0)
+        assert build_task.cancelled()
+        removed.assert_called_once()
+    finally:
+        gate.set()
+        if not build_task.done():
+            build_task.cancel()

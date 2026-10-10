@@ -79,10 +79,7 @@ class RedisToolVectorStore:
             verbose_logger.warning("MCP semantic tool index store put_many failed; vectors stay local: %s", e)
 
     async def try_acquire_build_lock(self) -> bool:
-        # PodLockManager returns False both when another pod holds the lock and
-        # when Redis errors internally, so a degraded store cannot tell them
-        # apart; err toward embedding locally rather than waiting on writes
-        # that a dead Redis can never deliver.
+        # PodLockManager returns False on Redis errors too; once degraded, embed locally instead of waiting.
         try:
             acquired: Final = await self._lock_manager.acquire_lock(
                 _BUILD_LOCK_ID, ttl=_BUILD_LOCK_TTL_S, allow_reentrant=True

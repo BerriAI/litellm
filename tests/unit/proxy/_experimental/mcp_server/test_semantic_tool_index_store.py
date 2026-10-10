@@ -6,8 +6,9 @@ cross-pod build lock, and the CachingToolEncoder serving document
 embeddings from the store instead of re-embedding.
 """
 
+import asyncio
 import sys
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -57,6 +58,9 @@ class _InMemoryToolVectorStore:
         self.release_calls = 0
         self.lock_result = True
         self._fill_on_call = None
+        self.block_put_many = False
+        self.put_started = asyncio.Event()
+        self.put_block = asyncio.Event()
 
     def fill_on_get_many_call(self, call_number):
         self._fill_on_call = call_number
@@ -71,6 +75,9 @@ class _InMemoryToolVectorStore:
         self._pending_fill = dict(keys_vectors)
 
     async def put_many(self, vectors):
+        if self.block_put_many:
+            self.put_started.set()
+            await self.put_block.wait()
         self.vectors.update({k: tuple(v) for k, v in vectors.items()})
 
     async def try_acquire_build_lock(self):
@@ -287,3 +294,46 @@ async def test_lock_held_by_other_pod_waits_for_shared_vectors():
     assert store.acquire_calls >= 1
     assert store.get_many_calls >= 3
     assert recorded == [["test"]]
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_full_build_reads_the_store_a_constant_number_of_times():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    tools = [_tool(f"srv-a_get_tool_{i}", f"do thing {i}") for i in range(20)]
+    store = _InMemoryToolVectorStore()
+    filter_instance = _make_filter([], store=store)
+
+    with (
+        patch.object(global_mcp_server_manager, "get_registry", return_value={"srv-a": object()}),
+        patch.object(
+            global_mcp_server_manager, "get_tools_for_server", new=AsyncMock(return_value=tools)
+        ),
+    ):
+        await filter_instance.build_router_from_mcp_registry()
+
+    assert filter_instance.tool_router is not None
+    assert store.get_many_calls <= 3, (
+        f"{store.get_many_calls} get_many calls for {len(tools)} tools; reads must not scale with the tool count"
+    )
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_cancelling_a_build_while_holding_the_lock_releases_it():
+    tools = [_tool("srv-a_get_ticket", "get a ticket"), _tool("srv-b_get_weather", "weather forecast")]
+    store = _InMemoryToolVectorStore()
+    store.block_put_many = True
+    filter_instance = _make_filter([], store=store)
+
+    build_task = asyncio.create_task(filter_instance._abuild_router(tools))
+    await asyncio.wait_for(store.put_started.wait(), timeout=5)
+    assert store.acquire_calls == 1
+
+    build_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(build_task, timeout=5)
+    assert store.release_calls == 1

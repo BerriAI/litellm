@@ -138,13 +138,12 @@ class SemanticMCPToolFilter:
         )
 
     @catalog_operation(global_manager)
-    async def build_router_from_mcp_registry(self, *, async_index: bool = False) -> None:
+    async def build_router_from_mcp_registry(self) -> None:
         """Build semantic router from all MCP tools in the registry (no auth checks).
 
         With a vector store the shared Redis path runs: acquire the build lock
         or wait for the holding pod's vectors, then embed only the misses.
-        Without one, the sync build blocks startup exactly as before; the
-        keyword arg lets a background task run the async (aadd) path instead.
+        Without one, the sync build blocks startup exactly as before.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -174,7 +173,7 @@ class SemanticMCPToolFilter:
                 return
 
             verbose_logger.info("Fetched %s tools from %s MCP servers", len(all_tools), len(registry))
-            if self._vector_store is not None or async_index:
+            if self._vector_store is not None:
                 await self._abuild_router(all_tools)
             else:
                 self._build_router(all_tools)
@@ -308,9 +307,9 @@ class SemanticMCPToolFilter:
             return False
 
         descriptions: Final = tuple(self.extract_tool_info(tool)[1] for tool in tools)
-        keys: Final = tuple(tool_vector_key(self.embedding_identity, text) for text in set(descriptions))
+        keys_set: Final = frozenset(tool_vector_key(self.embedding_identity, text) for text in set(descriptions))
 
-        while {key for key in keys if key not in await store.get_many(keys)}:
+        while keys_set - (await store.get_many(tuple(keys_set))).keys():
             if await store.try_acquire_build_lock():
                 return True
             await asyncio.sleep(self._lock_poll_interval_s)
