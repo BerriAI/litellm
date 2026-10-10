@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { ArrowRight, Sparkles, X } from "lucide-react";
 
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE } from "@/lib/decisionModels";
+import { DECISIONS_DOCS_URL, DECISIONS_PLAYGROUND_ROUTE } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
 
 import { Button } from "@/components/ui/button";
@@ -37,7 +37,7 @@ const DecisionModelsBanner: React.FC<DecisionModelsBannerProps> = ({ onAddModel 
               Search <code>decision</code> in Add Model to find them.{" "}
             </>
           )}
-          Call them at <code>/v1/decisions</code> or <code>/v1/systemone</code>, or try them in the System One
+          Call them at <code>/v1/decisions</code> or <code>/v1/systemone</code>, or try them in the Decisions
           playground.{" "}
           <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
             How to call them
@@ -53,7 +53,7 @@ const DecisionModelsBanner: React.FC<DecisionModelsBannerProps> = ({ onAddModel 
         className="shrink-0"
         nativeButton={false}
         role="link"
-        render={<a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} />}
+        render={<a href={uiHref(DECISIONS_PLAYGROUND_ROUTE)} />}
       >
         Try decision models
         <ArrowRight />

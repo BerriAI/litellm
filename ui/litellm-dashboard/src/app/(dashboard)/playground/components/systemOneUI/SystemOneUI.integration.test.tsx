@@ -11,7 +11,7 @@ import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
-import type { SystemOneResponse } from "./lib/schemas";
+import type { OpenAIDecisionsResponse, SystemOneResponse } from "./lib/schemas";
 
 interface ModelGroupInfo {
   model_group: string;
@@ -36,6 +36,34 @@ const responseBody: SystemOneResponse = {
   },
 };
 
+const openAIResponseBody: OpenAIDecisionsResponse = {
+  model: "jev-1.13.0",
+  answers: [
+    {
+      type: "choice",
+      name: "area",
+      choice: "backend",
+      confidence: 0.9,
+      probabilities: [
+        { value: "backend", probability: 0.9 },
+        { value: "sdk", probability: 0.1 },
+      ],
+    },
+    { type: "predicate", name: null, probability: 0.25 },
+    {
+      type: "score",
+      name: "severity",
+      score: 2.6,
+      confidence: 0.5,
+      probabilities: [
+        { value: 0, label: "Cosmetic", probability: 0.1 },
+        { value: 3, label: "Broken", probability: 0.9 },
+      ],
+    },
+  ],
+  usage: { input_tokens: 10, output_tokens: 2 },
+};
+
 const render = (ui: ReactElement) =>
   rtlRender(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
@@ -58,7 +86,7 @@ const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/mod
 const lookupAuthHeaders = (calls: Parameters<typeof fetch>[]) =>
   calls.map(([, init]) => Object.values((init?.headers ?? {}) as Record<string, string>));
 
-const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =>
+const createResponse = (body: SystemOneResponse | OpenAIDecisionsResponse, status = 200, errorText = "") =>
   ({
     ok: status >= 200 && status < 300,
     status,
@@ -89,7 +117,7 @@ describe("SystemOneUI integration", () => {
   it("restores the example after the request is edited", async () => {
     const user = userEvent.setup();
     render(<SystemOneUI accessToken="session-key" />);
-    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" });
     const example = (editor as HTMLTextAreaElement).value;
     const resetButton = screen.getByRole("button", { name: "Reset example" });
     expect(resetButton).toBeDisabled();
@@ -123,13 +151,44 @@ describe("SystemOneUI integration", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("opens on /v1/systemone with the first decision model the key can call", async () => {
+  it("opens on /v1/decisions with the first decision model and renders OpenAI-shaped answers", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockFetch.mockResolvedValue(createResponse(openAIResponseBody));
     render(<SystemOneUI accessToken="session-key" />);
 
     expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
     expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer session-key"])]);
+    expect(screen.getByRole("heading", { name: "Input" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "has_repro_steps" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/decisions$/);
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      model: "jev-latest",
+      input: expect.any(String),
+      questions: [{ type: "choice", name: "area" }, { type: "predicate" }, { type: "score", name: "severity" }],
+    });
+    expect(screen.getByText("q1")).toBeInTheDocument();
+    expect(screen.getByText("25% yes")).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "3: Broken probability" })).toHaveAttribute(
+      "aria-valuetext",
+      "90%, selected",
+    );
+    expect(screen.getByText("10 input / 2 output tokens")).toBeInTheDocument();
+  });
+
+  it("switches to the System One shape on /v1/systemone", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+    await screen.findByRole("combobox", { name: "Decision model" });
+    screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+
+    expect(screen.getByRole("heading", { name: "State" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
@@ -153,11 +212,12 @@ describe("SystemOneUI integration", () => {
     expect(screen.queryByRole("option", { name: "gpt-5.5" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: "pplx-decider" }));
 
-    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" });
     expect(JSON.parse((editor as HTMLTextAreaElement).value)).toMatchObject({
       model: "pplx-decider",
-      questions: { has_repro_steps: { type: "noul" } },
+      questions: [{ type: "choice" }, { type: "predicate" }, { type: "score" }],
     });
+    mockFetch.mockResolvedValue(createResponse(openAIResponseBody));
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
     expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
@@ -210,7 +270,7 @@ describe("SystemOneUI integration", () => {
     const models = Promise.withResolvers<Response>();
     mockModelLookup.mockReturnValue(models.promise);
     render(<SystemOneUI accessToken="session-key" />);
-    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" });
     const draft = JSON.stringify({ state: "edited", questions: { q: { type: "noul", instructions: "Yes?" } } });
     fireEvent.change(editor, { target: { value: draft } });
 
@@ -226,7 +286,7 @@ describe("SystemOneUI integration", () => {
   it("shows invalid JSON and disables Send", async () => {
     render(<SystemOneUI accessToken="session-key" />);
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), {
       target: { value: "{" },
     });
 
@@ -273,7 +333,7 @@ describe("SystemOneUI integration", () => {
   it("keeps legacy validation when question values have invalid types", async () => {
     render(<SystemOneUI accessToken="session-key" />);
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), {
       target: {
         value: JSON.stringify({
           state: "A new support request",
@@ -290,7 +350,7 @@ describe("SystemOneUI integration", () => {
 
     expect(screen.getByText("Instructions must be a string.")).toBeInTheDocument();
     expect(screen.getByText("Choice descriptions must be strings.")).toBeInTheDocument();
-    expect(screen.getByText("Enter a valid request to preview its state and questions.")).toBeInTheDocument();
+    expect(screen.getByText("Enter a valid request to preview its input and questions.")).toBeInTheDocument();
   });
 
   it("preserves each endpoint draft and sends legacy requests to TypeSafe", async () => {
@@ -299,7 +359,7 @@ describe("SystemOneUI integration", () => {
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
     await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
-    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" });
     const draft = JSON.stringify({
       model: "my-decider",
       state: {},
@@ -337,7 +397,7 @@ describe("SystemOneUI integration", () => {
     await user.keyboard("{ArrowDown}");
     await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
     const payload = { state: "An outage", questions: { urgent: { type: "noul", instructions: "Is this urgent?" } } };
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), {
       target: { value: JSON.stringify(payload) },
     });
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
@@ -431,7 +491,7 @@ describe("SystemOneUI integration", () => {
 
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("System One response has an invalid shape.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Decisions response has an invalid shape.");
     expect(screen.queryByText("jev-1.13.0")).not.toBeInTheDocument();
   });
 
@@ -442,7 +502,7 @@ describe("SystemOneUI integration", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), {
       target: {
         value: JSON.stringify({
           state: "A different support request",

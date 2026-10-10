@@ -4,14 +4,15 @@ import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
 import { isDecisionMode } from "@/lib/decisionModels";
 import {
+  openAIDecisionsResponseSchema,
   systemOneResponseSchema,
   type DecisionEndpoint,
   type PlaygroundRequest,
-  type SystemOneResponse,
+  type PlaygroundResponse,
 } from "../components/systemOneUI/lib/schemas";
 
 export interface SystemOneResult {
-  response: SystemOneResponse;
+  response: PlaygroundResponse;
   latencyMs: number;
 }
 
@@ -63,9 +64,10 @@ export async function makeSystemOneRequest(
     headers: authHeaders(accessToken),
     signal,
   });
-  const parsed = systemOneResponseSchema.safeParse(body);
+  const schema = endpoint === "/v1/decisions" ? openAIDecisionsResponseSchema : systemOneResponseSchema;
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    throw new Error("System One response has an invalid shape.");
+    throw new Error("Decisions response has an invalid shape.");
   }
   return { response: parsed.data, latencyMs: performance.now() - startedAt };
 }

@@ -266,7 +266,7 @@ describe("ModelHubTable", () => {
       );
       expect(screen.getByRole("link", { name: "Try it in the Playground" })).toHaveAttribute(
         "href",
-        "/ui/playground?tab=system-one",
+        "/ui/playground?tab=decisions",
       );
     });
 

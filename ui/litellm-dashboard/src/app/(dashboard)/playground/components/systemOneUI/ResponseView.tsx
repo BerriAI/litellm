@@ -5,10 +5,11 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
-import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
+import type { PlaygroundResponse } from "./lib/schemas";
+import { answerViews, type AnswerView } from "./lib/views";
 
 interface ResponseViewProps {
-  response?: SystemOneResponse;
+  response?: PlaygroundResponse;
   fallbackModel?: string;
   latencyMs?: number;
   error?: string;
@@ -49,63 +50,39 @@ function ProbabilityMeter({
   );
 }
 
-function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
-  if (answer.type === "noul") {
-    const percentage = Math.round(answer.noul * 100);
+function AnswerDetails({ answer }: { answer: AnswerView }) {
+  if (answer.type === "noul" || answer.type === "predicate") {
+    const percentage = Math.round(answer.probability * 100);
     return (
       <div className="grid gap-3">
         <p className="text-sm font-medium">{percentage}% yes</p>
-        <ProbabilityMeter label="Yes" probability={answer.noul} />
+        <ProbabilityMeter label="Yes" probability={answer.probability} />
       </div>
     );
   }
 
-  if (answer.type === "choice") {
-    const options = Object.entries(answer.probabilities).sort(([, first], [, second]) => second - first);
-    return (
-      <div className="grid gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Selected choice</span>
-          <Badge>{answer.choice}</Badge>
-          {answer.confidence !== undefined && (
-            <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
-          )}
-        </div>
-        <div className="grid gap-3">
-          {options.map(([label, probability]) => (
-            <ProbabilityMeter key={label} label={label} probability={probability} selected={label === answer.choice} />
-          ))}
-        </div>
-      </div>
-    );
+  if (answer.type === "refusal") {
+    return <p className="text-sm text-muted-foreground">The model refused to answer this question.</p>;
   }
 
-  const levels = Object.entries(answer.probabilities).sort(([first], [second]) => Number(first) - Number(second));
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Score</span>
-        <Badge>{answer.score}</Badge>
+        <span className="text-xs text-muted-foreground">{answer.type === "choice" ? "Selected choice" : "Score"}</span>
+        <Badge>{answer.type === "choice" ? answer.choice : answer.score}</Badge>
         {answer.confidence !== undefined && (
           <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
         )}
       </div>
       <div className="grid gap-3">
-        {levels.map(([level, probability]) => {
-          const description = answer.legend?.[level];
-          const label =
-            description === undefined
-              ? level
-              : `${level}: ${typeof description === "string" ? description : JSON.stringify(description)}`;
-          return (
-            <ProbabilityMeter
-              key={level}
-              label={label}
-              probability={probability}
-              selected={Number(level) === Math.round(answer.score)}
-            />
-          );
-        })}
+        {answer.probabilities.map((option) => (
+          <ProbabilityMeter
+            key={option.label}
+            label={option.label}
+            probability={option.probability}
+            selected={option.selected}
+          />
+        ))}
       </div>
     </div>
   );
@@ -139,7 +116,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
       <Card>
         <CardHeader>
           <CardTitle>Calibrated probabilities</CardTitle>
-          <CardDescription>Send a request to see System One answers and probabilities.</CardDescription>
+          <CardDescription>Send a request to see the answers and their probabilities.</CardDescription>
         </CardHeader>
       </Card>
     );
@@ -166,10 +143,10 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
         </div>
       </CardHeader>
       <CardContent className="grid gap-3">
-        {Object.entries(response.answers).map(([id, answer]) => (
-          <Card key={id} size="sm">
+        {answerViews(response).map((answer) => (
+          <Card key={answer.id} size="sm">
             <CardHeader>
-              <CardTitle className="font-mono">{id}</CardTitle>
+              <CardTitle className="font-mono">{answer.id}</CardTitle>
               <CardAction>
                 <Badge variant="secondary">{answer.type}</Badge>
               </CardAction>

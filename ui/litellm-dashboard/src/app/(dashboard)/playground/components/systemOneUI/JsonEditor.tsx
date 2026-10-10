@@ -140,7 +140,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           </SyntaxHighlighter>
         </div>
         <textarea
-          aria-label="System One JSON payload"
+          aria-label="Decisions JSON payload"
           aria-invalid={hasErrors}
           aria-describedby={issuesId}
           value={value}
@@ -153,7 +153,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
-          placeholder="Paste or write a System One request"
+          placeholder="Paste or write a Decisions request"
           className={cn(
             EDITOR_TEXT,
             CONTENT_INSET,

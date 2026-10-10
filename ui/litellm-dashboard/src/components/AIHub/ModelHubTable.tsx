@@ -44,7 +44,7 @@ import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, isDecisionMode } from "@/lib/decisionModels";
+import { DECISIONS_DOCS_URL, DECISIONS_PLAYGROUND_ROUTE, isDecisionMode } from "@/lib/decisionModels";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -786,7 +786,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     {canOpenPlayground && (
                       <>
                         {" · "}
-                        <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
+                        <a href={uiHref(DECISIONS_PLAYGROUND_ROUTE)} className="underline">
                           Try it in the Playground
                         </a>
                       </>

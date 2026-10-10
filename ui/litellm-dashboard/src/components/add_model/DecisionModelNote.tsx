@@ -3,7 +3,7 @@ import { useFormContext, useWatch } from "react-hook-form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import {
   DECISIONS_DOCS_URL,
-  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  DECISIONS_PLAYGROUND_ROUTE,
   isDecisionSelection,
   type DecisionCatalog,
 } from "@/lib/decisionModels";
@@ -44,8 +44,8 @@ export default function DecisionModelNote({ catalog, litellmProvider }: Decision
         </p>
         <p>
           After you add it,{" "}
-          <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
-            test it in the System One playground
+          <a href={uiHref(DECISIONS_PLAYGROUND_ROUTE)} className="underline">
+            test it in the Decisions playground
           </a>
         </p>
       </AlertDescription>

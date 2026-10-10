@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const DECISIONS_DOCS_URL = "https://docs.litellm.ai/docs/decisions";
-export const SYSTEM_ONE_PLAYGROUND_ROUTE = "playground?tab=system-one";
+export const DECISIONS_PLAYGROUND_ROUTE = "playground?tab=decisions";
 
 const DECISION_ENDPOINTS: ReadonlySet<string> = new Set(["/v1/decisions", "/v1/systemone"]);
 

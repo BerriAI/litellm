@@ -16,7 +16,7 @@ describe("JsonEditor", () => {
     expect(screen.getByText("Valid payload")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Ready to send");
     expect(screen.getByText(`${validPayload.split("\n").length} lines`)).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "System One JSON payload" })).toHaveAttribute("aria-invalid", "false");
+    expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toHaveAttribute("aria-invalid", "false");
   });
 
   it("lists each issue with its path and counts only errors in the status badge", () => {
@@ -33,7 +33,7 @@ describe("JsonEditor", () => {
     const issues = screen.getByRole("list", { name: "Payload validation issues" });
     expect(issues).toHaveTextContent("questions.category.instructionsInstructions must be a string.");
     expect(issues).toHaveTextContent("questions.urgency.criteriaScore criteria must contain at least 2 levels.");
-    expect(screen.getByRole("textbox", { name: "System One JSON payload" })).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toHaveAttribute("aria-invalid", "true");
   });
 
   it("shows warnings without counting them as issues", () => {
@@ -63,7 +63,7 @@ describe("JsonEditor", () => {
     const onChange = vi.fn();
     render(<JsonEditor value={validPayload} onChange={onChange} validation={validateSystemOnePayload(validPayload)} />);
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), { target: { value: "{}" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), { target: { value: "{}" } });
 
     expect(onChange).toHaveBeenCalledWith("{}");
   });

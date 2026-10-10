@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type DecisionEndpoint = "/v1/systemone" | "/typesafe/v1/systemone";
+export type DecisionEndpoint = "/v1/decisions" | "/v1/systemone" | "/typesafe/v1/systemone";
 
 const decisionsJson = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 const decisionInstructions = decisionsJson.nullish();
@@ -42,8 +42,72 @@ export const decisionsRequestSchema = z.looseObject({
 });
 
 export type DecisionRequest = z.infer<typeof decisionsRequestSchema>;
-export type PlaygroundRequest = SystemOneRequest | DecisionRequest;
+
+const openAIName = z.string().nullish();
+const openAIInstructions = z.string({
+  error: (iss) =>
+    iss.input === undefined ? "Required property 'instructions' is missing." : "Instructions must be a string.",
+});
+const openAIChoiceValue = z.union([z.string(), z.boolean()]);
+const openAIChoiceOptionSchema = z.looseObject({ value: openAIChoiceValue, description: z.string().nullish() });
+const openAIScoreLevelSchema = z.looseObject({ label: z.string(), description: z.string().nullish() });
+const openAIQuestionSchema = z.discriminatedUnion("type", [
+  z.looseObject({ type: z.literal("predicate"), name: openAIName, instructions: openAIInstructions }),
+  z.looseObject({
+    type: z.literal("choice"),
+    name: openAIName,
+    instructions: openAIInstructions,
+    choices: z
+      .array(openAIChoiceOptionSchema, { error: "Choices must be an array of { value, description } options." })
+      .min(2, "Choice questions need between 2 and 255 choices.")
+      .max(255, "Choice questions need between 2 and 255 choices."),
+  }),
+  z.looseObject({
+    type: z.literal("score"),
+    name: openAIName,
+    instructions: openAIInstructions,
+    levels: z
+      .array(openAIScoreLevelSchema, { error: "Levels must be an array of { label, description } levels." })
+      .min(2, "Score questions need between 2 and 10 levels.")
+      .max(10, "Score questions need between 2 and 10 levels."),
+  }),
+]);
+const openAIInputPartSchema = z.discriminatedUnion("type", [
+  z.looseObject({ type: z.literal("input_text"), text: z.string() }),
+  z.looseObject({ type: z.literal("input_image"), image_url: z.string(), detail: z.string().nullish() }),
+]);
+const openAIInputMessageSchema = z.looseObject({
+  role: z.literal("user").optional(),
+  type: z.literal("message").optional(),
+  content: z.union([z.string(), z.array(openAIInputPartSchema).min(1)]),
+});
+
+export const openAIDecisionsRequestSchema = z.looseObject({
+  model: z
+    .string()
+    .refine((value) => value.trim().length > 0, "Model must be a non-empty string.")
+    .optional(),
+  input: z.union([z.string(), z.array(openAIInputMessageSchema).min(1)], {
+    error: (iss) =>
+      iss.input === undefined ? "Required property 'input' is missing." : "Input must be a string or a message list.",
+  }),
+  questions: z
+    .array(openAIQuestionSchema, {
+      error: (iss) =>
+        iss.input === undefined ? "Required property 'questions' is missing." : "Questions must be an array.",
+    })
+    .min(1, "At least one question is required.")
+    .max(128, "Questions must contain between 1 and 128 entries."),
+  safety_identifier: z.string().nullish(),
+});
+
+export type OpenAIDecisionsRequest = z.infer<typeof openAIDecisionsRequestSchema>;
+export type OpenAIDecisionQuestion = z.infer<typeof openAIQuestionSchema>;
+export type PlaygroundRequest = SystemOneRequest | DecisionRequest | OpenAIDecisionsRequest;
 export type PlaygroundQuestion = SystemOneQuestion | z.infer<typeof decisionQuestionSchema>;
+
+export const isOpenAIDecisionsRequest = (payload: PlaygroundRequest): payload is OpenAIDecisionsRequest =>
+  Array.isArray(payload.questions);
 
 const MAX_CHOICE_OPTIONS = 255;
 
@@ -149,6 +213,38 @@ export const systemOneResponseSchema = z.looseObject({
   ),
   usage: z.looseObject({ input_tokens: tokenCount, output_tokens: tokenCount }).nullish(),
 });
+
+const openAIAnswerSchema = z.discriminatedUnion("type", [
+  z.looseObject({ type: z.literal("predicate"), name: openAIName, probability }),
+  z.looseObject({
+    type: z.literal("choice"),
+    name: openAIName,
+    choice: openAIChoiceValue,
+    confidence: probability.optional(),
+    probabilities: z.array(z.looseObject({ value: openAIChoiceValue, probability })),
+  }),
+  z.looseObject({
+    type: z.literal("score"),
+    name: openAIName,
+    score: z.number().finite(),
+    confidence: probability.optional(),
+    probabilities: z.array(z.looseObject({ value: z.number().finite(), label: z.string(), probability })),
+  }),
+  z.looseObject({ type: z.literal("refusal"), name: openAIName }),
+]);
+
+export const openAIDecisionsResponseSchema = z.looseObject({
+  model: nonEmptyString("Model must be a non-empty string.").nullish(),
+  answers: z.array(openAIAnswerSchema),
+  usage: z.looseObject({ input_tokens: tokenCount, output_tokens: tokenCount }).nullish(),
+});
+
+export type OpenAIDecisionsResponse = z.infer<typeof openAIDecisionsResponseSchema>;
+export type OpenAIDecisionAnswer = OpenAIDecisionsResponse["answers"][number];
+export type PlaygroundResponse = SystemOneResponse | OpenAIDecisionsResponse;
+
+export const isOpenAIDecisionsResponse = (response: PlaygroundResponse): response is OpenAIDecisionsResponse =>
+  Array.isArray(response.answers);
 
 export type SystemOneRequest = z.infer<typeof systemOneRequestSchema>;
 export type SystemOneQuestion = z.infer<typeof questionSchema>;

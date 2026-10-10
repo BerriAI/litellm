@@ -87,10 +87,10 @@ describe("PlaygroundPage ?tab= deep link", () => {
     expect(screen.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("activates System One from ?tab=system-one", () => {
-    renderWithProviders(<PlaygroundPage />, { searchParams: { tab: "system-one" } });
+  it("activates System One from ?tab=decisions", () => {
+    renderWithProviders(<PlaygroundPage />, { searchParams: { tab: "decisions" } });
 
-    const tab = screen.getByRole("tab", { name: /^System One/ });
+    const tab = screen.getByRole("tab", { name: /^Decisions/ });
     expect(tab).toHaveAttribute("aria-selected", "true");
     expect(tab).toHaveTextContent("Beta");
     expect(screen.getByTestId("system-one-ui")).toBeInTheDocument();

@@ -1,5 +1,7 @@
 import {
   decisionsRequestSchema,
+  isOpenAIDecisionsRequest,
+  openAIDecisionsRequestSchema,
   systemOneRequestSchema,
   type DecisionEndpoint,
   type PlaygroundRequest,
@@ -19,6 +21,12 @@ export interface SystemOnePayloadValidation {
   issues: SystemOnePayloadIssue[];
 }
 
+const REQUEST_SCHEMAS = {
+  "/v1/decisions": openAIDecisionsRequestSchema,
+  "/v1/systemone": decisionsRequestSchema,
+  "/typesafe/v1/systemone": systemOneRequestSchema,
+} as const satisfies Record<DecisionEndpoint, unknown>;
+
 const invalid = (path: string, message: string): SystemOnePayloadValidation => ({
   isValid: false,
   issues: [{ path, message, severity: "error" }],
@@ -33,7 +41,7 @@ export function parseJson(raw: string): { ok: true; value: unknown } | { ok: fal
 }
 
 const scoreLevelWarnings = (payload: PlaygroundRequest): SystemOnePayloadIssue[] =>
-  Object.entries(payload.questions)
+  (isOpenAIDecisionsRequest(payload) ? [] : Object.entries(payload.questions))
     .filter(([, question]) => question.type === "score" && question.criteria.length > RECOMMENDED_MAX_SCORE_LEVELS)
     .map(([id]) => ({
       path: `questions.${id}.criteria`,
@@ -54,7 +62,7 @@ export function validateSystemOnePayload(
     return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
   }
 
-  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
+  const schema = REQUEST_SCHEMAS[endpoint];
   const result = schema.safeParse(json.value);
   if (!result.success) {
     return {

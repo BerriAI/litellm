@@ -102,7 +102,7 @@ describe("makeSystemOneRequest", () => {
     } as Response);
 
     await expect(makeSystemOneRequest(payload, "session-key")).rejects.toThrow(
-      "System One response has an invalid shape.",
+      "Decisions response has an invalid shape.",
     );
   });
 });
