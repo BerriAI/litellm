@@ -211,6 +211,50 @@ class TestMinimaxVideoCreateRequest:
         assert base64.b64decode(encoded) == PNG_BYTES
         assert "ratio" not in data
 
+    @pytest.mark.parametrize(
+        ("file_tuple", "expected_type"),
+        [
+            (("frame.png", PNG_BYTES), "image/png"),
+            (("frame.png", io.BytesIO(PNG_BYTES), "image/png"), "image/png"),
+            (("frame.webp", PNG_BYTES, "image/webp", {}), "image/webp"),
+        ],
+    )
+    def test_file_tuple_reference_sends_the_file_bytes(self, file_tuple, expected_type):
+        data, _, _ = MinimaxVideoConfig().transform_video_create_request(
+            model="MiniMax-H3",
+            prompt="Pull focus to the people in the background",
+            api_base=API_BASE,
+            video_create_optional_request_params={"input_reference": file_tuple},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        url = data["content"][1]["image_url"]["url"]
+        assert url.startswith(f"data:{expected_type};base64,")
+        assert base64.b64decode(url.split(",", 1)[1]) == PNG_BYTES
+
+    def test_first_frame_reference_is_kept_alongside_explicit_media(self):
+        media = [
+            {"type": "audio_url", "audio_url": {"url": "https://cdn.example.com/ref.mp3"}, "role": "reference_audio"},
+        ]
+        data, _, _ = MinimaxVideoConfig().transform_video_create_request(
+            model="MiniMax-H3",
+            prompt="Character speaking",
+            api_base=API_BASE,
+            video_create_optional_request_params={
+                "content": media,
+                "input_reference": "https://cdn.example.com/frame.png",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["content"] == [
+            {"type": "text", "text": "Character speaking"},
+            *media,
+            {"type": "image_url", "image_url": {"url": "https://cdn.example.com/frame.png"}, "role": "first_frame"},
+        ]
+
     def test_image_reference_url_passthrough(self):
         data, _, _ = MinimaxVideoConfig().transform_video_create_request(
             model="MiniMax-H3",

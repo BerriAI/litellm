@@ -135,6 +135,7 @@ _LIST_RESPONSE_ADAPTER: Final = TypeAdapter(_ListResponse)
 _DELETE_RESPONSE_ADAPTER: Final = TypeAdapter(_DeleteResponse)
 _CONTENT_ITEMS_ADAPTER: Final = TypeAdapter(list[_ContentItem])
 _CALLER_MEDIA_ADAPTER: Final = TypeAdapter(list[_CallerMediaItem])
+_FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 _STATUS_MAP: Final = MappingProxyType(
     {
@@ -271,14 +272,27 @@ def _read_all_bytes(file_obj: object) -> bytes:
         data: Final = read()
         if isinstance(data, bytes):
             return data
-    raise ValueError("input_reference must be a URL string, bytes, or a file object")
+    raise ValueError("input_reference must be a URL string, bytes, a file object, or a (filename, file) tuple")
+
+
+def _file_tuple_parts(file_tuple: tuple[object, ...]) -> tuple[object, str | None]:
+    match file_tuple:
+        case (_, file_content, str() as declared_type, *_) if declared_type:
+            return file_content, declared_type
+        case (_, file_content, *_):
+            return file_content, None
+        case _:
+            raise ValueError("input_reference tuples must be (filename, file) or (filename, file, content_type)")
 
 
 def _image_url(image: object) -> str:
     if isinstance(image, str):
         return image
-    content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-    encoded: Final = base64.b64encode(_read_all_bytes(image)).decode("utf-8")
+    file_content, declared_type = (
+        _file_tuple_parts(_FILE_TUPLE_ADAPTER.validate_python(image)) if isinstance(image, tuple) else (image, None)
+    )
+    content_type: Final = declared_type or ImageEditRequestUtils.get_image_content_type(file_content)
+    encoded: Final = base64.b64encode(_read_all_bytes(file_content)).decode("utf-8")
     return f"data:{content_type};base64,{encoded}"
 
 
@@ -507,30 +521,26 @@ class MinimaxVideoConfig(BaseVideoConfig):
         ``prompt`` is what guardrails scanned, so it is always the one text item MiniMax takes; a caller's
         ``content`` array only contributes media, never text that would bypass that check.
         """
-        explicit_content: Final = video_create_optional_request_params.get("content")
-        if explicit_content is not None:
-            try:
-                media: Final = _CALLER_MEDIA_ADAPTER.validate_python(explicit_content)
-            except ValidationError as e:
-                raise UnsupportedParamsError(
-                    message=(
-                        "content must be a list of MiniMax image_url, video_url or audio_url items; pass the text of "
-                        f"the request as prompt. {e.error_count()} invalid item field(s)."
-                    ),
-                    llm_provider="minimax",
-                ) from e
-            return [
-                {"type": "text", "text": prompt},
-                *(item.model_dump(exclude_none=True) for item in media),
-            ]
-
-        content_items: Final[list[dict[str, object]]] = [  # mutable-ok: JSON request-body content items
-            {"type": "text", "text": prompt}
-        ]
         input_reference: Final = video_create_optional_request_params.get("input_reference")
-        if input_reference is not None:
-            content_items.append(_first_frame_content_item(input_reference))
-        return content_items
+        first_frame_items: Final = () if input_reference is None else (_first_frame_content_item(input_reference),)
+        explicit_content: Final = video_create_optional_request_params.get("content")
+        if explicit_content is None:
+            return [{"type": "text", "text": prompt}, *first_frame_items]
+        try:
+            media: Final = _CALLER_MEDIA_ADAPTER.validate_python(explicit_content)
+        except ValidationError as e:
+            raise UnsupportedParamsError(
+                message=(
+                    "content must be a list of MiniMax image_url, video_url or audio_url items; pass the text of "
+                    f"the request as prompt. {e.error_count()} invalid item field(s)."
+                ),
+                llm_provider="minimax",
+            ) from e
+        return [
+            {"type": "text", "text": prompt},
+            *(item.model_dump(exclude_none=True) for item in media),
+            *first_frame_items,
+        ]
 
     def transform_video_create_response(
         self,
