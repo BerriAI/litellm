@@ -949,9 +949,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
                 response: Final = standard_logging_object_copy["response"]
                 if isinstance(response, dict) and "output" in response:
-                    standard_logging_object_copy["response"] = redacted_standard_logging_payload(
-                        {"response": response}
-                    )["response"]
+                    redaction_payload: Final[dict[str, object]] = {}  # mutable-ok: populate the typed wrapper once
+                    redaction_payload["response"] = response
+                    standard_logging_object_copy["response"] = redacted_standard_logging_payload(redaction_payload)[
+                        "response"
+                    ]
                 else:
                     # Standard ModelResponse format
                     model_response: Final = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
