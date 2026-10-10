@@ -40,6 +40,35 @@ CHAT_RESPONSE: Final = {
 }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_call_type", [None, "aimage_edit", "image_edit"])
+async def test_router_image_edit_accepts_call_type_metadata_without_duplicate_dispatch(
+    respx_mock: respx.MockRouter, request_call_type: str | None
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "image-edit", "litellm_params": {"model": "openai/gpt-image-2", "api_key": "sk-fake"}}
+        ],
+        num_retries=0,
+    )
+    image: Final = b"image-edit-reference"
+    encoded: Final = "aW1hZ2UtZWRpdC1yZXN1bHQ="
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").respond(
+        200, json={"created": 1, "data": [{"b64_json": encoded}]}
+    )
+    metadata: Final = {} if request_call_type is None else {"call_type": request_call_type}
+
+    response: Final = await router.aimage_edit(
+        model="image-edit", image=io.BytesIO(image), prompt="make it blue", **metadata
+    )
+
+    assert route.call_count == 1
+    assert image in route.calls[0].request.content
+    assert b"make it blue" in route.calls[0].request.content
+    assert response.data is not None
+    assert response.data[0].b64_json == encoded
+
+
 @pytest.fixture(autouse=True)
 def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

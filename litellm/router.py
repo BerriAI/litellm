@@ -7253,9 +7253,11 @@ class Router:
                 "adelete_skill",
             ):
                 return await self._dispatch_generic_call_type(
-                    call_type=call_type,
-                    original_function=original_function,
-                    **kwargs,
+                    **{
+                        **kwargs,
+                        "call_type": call_type,
+                        "original_function": original_function,
+                    }
                 )
             elif call_type in (
                 "acreate_container",
