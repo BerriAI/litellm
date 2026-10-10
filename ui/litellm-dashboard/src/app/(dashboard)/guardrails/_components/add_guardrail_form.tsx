@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useForm, useWatch, type UseFormReturn } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import {
   createGuardrailCall,
@@ -10,19 +10,28 @@ import {
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentConfiguration";
 import {
+  choiceToLoggingOnlyScope,
   choiceToSkipSystemForCreate,
   choiceToSkipToolForCreate,
   getGuardrailLogo,
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
+  effectiveLoggingOnlyContinue,
+  modeIncludesLoggingOnly,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
+  streamScopePayload,
   toModeArray,
+  type GuardrailStreamScope,
+  supportsDirectionalLoggingOnlyScope,
+  type LoggingOnlyScope,
+  type LoggingOnlyScopeChoice,
 } from "./guardrail_info_helpers";
+import { StreamScopeFormField } from "./StreamScopeFields";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
@@ -49,6 +58,7 @@ import {
   requiredRule,
   type GuardrailCriterion,
   type GuardrailFormValues,
+  LoggingOnlyScopeField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
 import GuardrailOptionalParams from "./guardrail_optional_params";
@@ -73,7 +83,9 @@ interface GuardrailPreset {
   provider: string;
   categoryName?: string;
   guardrailNameSuggestion: string;
-  mode: string;
+  // A guardrail that both rewrites the request and repairs the response needs two
+  // modes seeded, not one; the form already normalises either shape.
+  mode: string | string[];
   defaultOn: boolean;
 }
 
@@ -90,6 +102,7 @@ interface GuardrailSettings {
   supported_actions: string[];
   supported_modes: string[];
   supported_modes_by_provider?: Record<string, string[]>;
+  providers_without_directional_logging_only_scope?: string[];
   pii_entity_categories: Array<{
     category: string;
     entities: string[];
@@ -160,8 +173,11 @@ type SkipMessageChoice = "inherit" | "yes" | "no";
 const INITIAL_VALUES: GuardrailFormValues = {
   mode: "pre_call",
   default_on: false,
+  logging_only_scope_choice: "default",
+  logging_only_continue_on_input_failure: false,
   skip_system_message_choice: "inherit",
   skip_tool_message_choice: "inherit",
+  stream_scope_by_mode: {},
 };
 
 const ALWAYS_ON_ITEMS = [
@@ -199,6 +215,7 @@ interface ProviderParamsResponse {
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
   const form = useForm<GuardrailFormValues>({ defaultValues: INITIAL_VALUES });
+  const watchedMode = useWatch({ control: form.control, name: "mode" });
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [guardrailSettings, setGuardrailSettings] = useState<GuardrailSettings | null>(null);
@@ -234,6 +251,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const providerValue = guardrail_provider_map[selectedProvider];
     return (providerValue || "").toLowerCase() === "tool_permission";
   }, [selectedProvider]);
+  const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, selectedProvider);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
@@ -277,6 +295,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
       default_on: preset.defaultOn,
+      logging_only_scope_choice: "default",
+      logging_only_continue_on_input_failure: false,
       skip_system_message_choice: "inherit",
       skip_tool_message_choice: "inherit",
     };
@@ -439,6 +459,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrail_name: string;
         litellm_params: {
           guardrail: string;
+          logging_only_scope?: LoggingOnlyScope | null;
           [key: string]: unknown; // Allow dynamic properties
         };
         guardrail_info: Record<string, unknown>;
@@ -452,6 +473,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrail_info: {},
       };
 
+      const streamScope = streamScopePayload(
+        toModeArray(values.mode),
+        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
+      );
+      if (streamScope !== undefined) {
+        guardrailData.litellm_params.stream_scope = streamScope;
+      }
+
       const skipForCreate = choiceToSkipSystemForCreate(asSkipChoice(values.skip_system_message_choice));
       if (skipForCreate !== undefined) {
         guardrailData.litellm_params.skip_system_message_in_guardrail = skipForCreate;
@@ -460,6 +489,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       const skipToolForCreate = choiceToSkipToolForCreate(asSkipChoice(values.skip_tool_message_choice));
       if (skipToolForCreate !== undefined) {
         guardrailData.litellm_params.skip_tool_message_in_guardrail = skipToolForCreate;
+      }
+
+      const loggingOnlyScope = choiceToLoggingOnlyScope(
+        values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
+      );
+      if (modeIncludesLoggingOnly(values.mode) && loggingOnlyScope !== null) {
+        guardrailData.litellm_params.logging_only_scope = loggingOnlyScope;
+      }
+      if (
+        modeIncludesLoggingOnly(values.mode) &&
+        effectiveLoggingOnlyContinue(
+          values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
+          values.logging_only_continue_on_input_failure,
+        )
+      ) {
+        guardrailData.litellm_params.logging_only_continue_on_input_failure = true;
       }
 
       // For Presidio PII, add the entity and action configurations
@@ -752,6 +797,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           )}
         </GuardrailField>
 
+        <StreamScopeFormField control={form.control} modes={toModeArray(form.watch("mode"))} />
+
         <GuardrailField
           control={form.control}
           name="default_on"
@@ -795,6 +842,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         >
           {(fieldControl) => <SkipMessageSelect control={fieldControl} />}
         </GuardrailField>
+
+        <LoggingOnlyScopeField
+          control={form.control}
+          mode={watchedMode}
+          directionalScopeSupported={directionalScopeSupported}
+        />
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
         {showProviderFields && (

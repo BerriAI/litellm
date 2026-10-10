@@ -141,7 +141,11 @@ export const getUsersTableColumns = ({
       header: ({ column }) => <DataTableSortHeader column={column} title="Global Proxy Role" variant="header-cycle" />,
       size: 160,
       enableSorting: true,
-      cell: ({ row }) => <span className="text-sm">{possibleUIRoles?.[row.original.user_role]?.ui_label || "-"}</span>,
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {(row.original.user_role && possibleUIRoles?.[row.original.user_role]?.ui_label) || "-"}
+        </span>
+      ),
     },
     {
       id: "user_alias",

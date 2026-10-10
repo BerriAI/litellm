@@ -16,6 +16,7 @@ use wiremock::{
 #[rstest]
 #[case::anthropic("anthropic/test-model", "/v1/messages", true)]
 #[case::azure("azure_ai/test-model", "/anthropic/v1/messages", false)]
+#[case::deepseek("deepseek/test-model", "/anthropic/v1/messages", false)]
 #[tokio::test]
 async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     #[case] model: &str,

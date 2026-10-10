@@ -30,6 +30,31 @@ fn context(messages: Option<Value>, input: Option<Value>) -> SemanticCacheContex
     ]}]),
     "What is this?",
 )]
+#[case::tool_result_string(
+    json!([
+        {"role": "user", "content": "list the files"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"},
+        ]},
+    ]),
+    "list the filescalc.py test_calc.py",
+)]
+#[case::tool_result_blocks(
+    json!([{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            {"type": "text", "text": "x = 1"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+        ]},
+    ]}]),
+    "x = 1",
+)]
+#[case::tool_result_without_content(
+    json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]}]),
+    "",
+)]
 #[case::missing_null_and_empty_content(
     json!([{"role": "assistant"}, {"role": "assistant", "content": null}, {"role": "user", "content": ""}]),
     "",
@@ -165,6 +190,15 @@ fn prompt_from_messages_reads_messages_only(
         {"content": [{"type": "input_image", "image_url": "https://example.com"}]},
     ])),
     Some("model dump prompt\ndict prompt\ninline prompt"),
+)]
+#[case::function_call_output_blocks(
+    None,
+    Some(json!([
+        {"role": "user", "content": "update the config"},
+        {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{\"path\": \"a\"}"},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "wrote a"}]},
+    ])),
+    Some("update the config\nwrote a"),
 )]
 #[case::object_content(
     None,

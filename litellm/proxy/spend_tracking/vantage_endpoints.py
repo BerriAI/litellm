@@ -18,7 +18,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.vantage_endpoints import (
@@ -160,7 +163,7 @@ async def get_vantage_settings(
     Only admin users (Proxy Admin or Admin Viewer) can view Vantage settings.
     """
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -410,14 +413,14 @@ async def vantage_dry_run_export(
 
         # Use the same pre-transform column names as
         # FocusExportEngine.dry_run_export_usage_data for consistency.
-        total_spend: Final = FocusExportEngine._sum_column(data, "spend")
-        total_tokens: Final = FocusExportEngine._sum_column(data, "total_tokens")
+        total_spend: Final = FocusExportEngine.sum_column(data, "spend")
+        total_tokens: Final = FocusExportEngine.sum_column(data, "total_tokens")
         summary: Final = {
             "total_records": len(normalized),
             "total_spend": float(total_spend) if total_spend is not None else 0,
             "total_tokens": float(total_tokens) if total_tokens is not None else 0,
-            "unique_teams": FocusExportEngine._count_unique(data, "team_id"),
-            "unique_models": FocusExportEngine._count_unique(data, "model"),
+            "unique_teams": FocusExportEngine.count_unique(data, "team_id"),
+            "unique_models": FocusExportEngine.count_unique(data, "model"),
         }
 
         dry_run_result: Final = {

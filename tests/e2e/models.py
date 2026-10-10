@@ -42,10 +42,10 @@ class BudgetWindowState(BudgetWindow):
 
 
 class KeyLoggingCallbackVars(BaseModel):
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
-    langfuse_host: str | None = None
-    wandb_api_key: str | None = None
+    langfuse_public_key: str | None = Field(default=None, repr=False)
+    langfuse_secret_key: str | None = Field(default=None, repr=False)
+    langfuse_host: str | None = Field(default=None, repr=False)
+    wandb_api_key: str | None = Field(default=None, repr=False)
     weave_project_id: str | None = None
 
 
@@ -294,12 +294,21 @@ class ToolCall(BaseModel):
     id: str | None = None
     type: str | None = None
     function: ToolCallFunction = ToolCallFunction()
+    cache_control: CacheControl | None = None
+
+
+class ThinkingBlock(BaseModel):
+    type: str
+    thinking: str | None = None
+    signature: str | None = None
+    data: str | None = None
 
 
 class ChatAssistantTurn(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | None = None
     reasoning_content: str | None = None
+    thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
 
 
@@ -422,6 +431,7 @@ class OutMessage(BaseModel):
     role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
+    thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
     provider_specific_fields: McpResponseMetadata | None = None
 
@@ -668,10 +678,11 @@ class McpServerCreateBody(BaseModel):
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     per_server_oauth_discovery: bool | None = None
+    issuer: str | None = None
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
-    credentials: McpOauthCredentials | None = None
+    credentials: McpOauthCredentials | None = Field(default=None, repr=False)
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -837,10 +848,15 @@ class OcrPage(BaseModel):
     markdown: str
 
 
+class OcrUsageInfo(BaseModel):
+    pages_processed: int | None = None
+
+
 class OcrResponse(BaseModel):
     object: str | None = None
     model: str | None = None
     pages: list[OcrPage] = []
+    usage_info: OcrUsageInfo | None = None
 
 
 # ---------- completions ----------
@@ -999,7 +1015,7 @@ class SpendLogMetadata(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     model: str | None = None
     spend: float | None = None
     status: str | None = None
@@ -1027,7 +1043,7 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def require_filter(self) -> SpendLogsParams:
@@ -1048,7 +1064,7 @@ class SpendLogsPageParams(BaseModel):
     end_date: str
     page: int
     page_size: int
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class SessionSpendLogsParams(BaseModel):
@@ -1239,6 +1255,12 @@ class FineTuningJobsResponse(BaseModel):
 # ---------- model management ----------
 
 
+class CacheControlInjectionPoint(BaseModel):
+    location: Literal["message"]
+    role: str | None = None
+    index: int | None = None
+
+
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
@@ -1249,25 +1271,26 @@ class LiteLLMParamsBody(BaseModel):
     backend's canonical rate."""
 
     model: str
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     litellm_credential_name: str | None = None
-    api_base: str | None = None
+    api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
+    drop_params: bool | None = None
+    aws_access_key_id: str | None = Field(default=None, repr=False)
+    aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
-    aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = Field(default=None, repr=False)
     vertex_project: str | None = None
     vertex_location: str | None = None
-    vertex_credentials: str | None = None
+    vertex_credentials: str | None = Field(default=None, repr=False)
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
-    s3_access_key_id: str | None = None
-    s3_secret_access_key: str | None = None
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
@@ -1285,7 +1308,7 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     cache_read_input_token_cost_flex: float | None = None
-    extra_headers: dict[str, str] | None = None
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     auto_router_config: str | None = None
@@ -1297,6 +1320,7 @@ class LiteLLMParamsBody(BaseModel):
     max_retries: int | None = None
     cooldown_time: float | None = None
     extra_body: DeploymentExtraBody | None = None
+    cache_control_injection_points: list[CacheControlInjectionPoint] | None = None
     tpm: int | None = None
     weight: int | None = None
     order: int | None = None
@@ -1388,7 +1412,7 @@ class ConnectionTestResponse(BaseModel):
 
 class CredentialCreateBody(BaseModel):
     credential_name: str
-    credential_values: dict[str, str]
+    credential_values: dict[str, str] = Field(repr=False)
     credential_info: dict[str, str] = {}
 
 
@@ -1419,7 +1443,7 @@ class KeyUpdateBody(BaseModel):
     keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
-    key: str
+    key: str = Field(repr=False)
     project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
@@ -1543,6 +1567,7 @@ class UserNewBody(BaseModel):
 
 class UserNewResponse(BaseModel):
     user_id: str
+    key: str | None = None
 
 
 class UserUpdateBody(BaseModel):
@@ -1584,6 +1609,40 @@ class UserListRow(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserListRow]
     total: int
+
+
+class UserKeyRow(BaseModel):
+    token: str
+    key_alias: str | None = None
+
+
+class UserInfoWithKeysResponse(BaseModel):
+    user_id: str | None = None
+    keys: list[UserKeyRow] = []
+
+
+class JwtKeyMappingRow(BaseModel):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    created_by: str | None = None
+
+
+class JwtKeyMappingListParams(BaseModel):
+    size: int = 100
+
+
+class JwtKeyMappingListResponse(BaseModel):
+    mappings: list[JwtKeyMappingRow]
+    total_count: int
+
+
+class JwtKeyMappingDeleteBody(BaseModel):
+    id: str
+
+
+class JwtKeyMappingDeleteResponse(BaseModel):
+    status: str
 
 
 class OrgNewBody(BaseModel):

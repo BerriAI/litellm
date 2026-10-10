@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -45,6 +45,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         streaming_sampling_rate=streaming_params.streaming_sampling_rate,
         streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,
         streaming_buffer_release_on_scan=streaming_params.streaming_buffer_release_on_scan,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
     return _bedrock_callback
@@ -60,6 +61,7 @@ def initialize_lakera(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         category_thresholds=litellm_params.category_thresholds,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_callback)
     return _lakera_callback
@@ -83,6 +85,7 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         skip_system_message_in_guardrail=litellm_params.skip_system_message_in_guardrail,
         skip_tool_message_in_guardrail=litellm_params.skip_tool_message_in_guardrail,
         advisory_system_message=litellm_params.advisory_system_message,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_v2_callback)
     return _lakera_v2_callback
@@ -97,7 +100,7 @@ _MCP_EVENT_HOOKS: Final = frozenset(
 )
 
 
-def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
+def configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
     if isinstance(mode, str):
         return (mode,)
     if isinstance(mode, list):
@@ -111,7 +114,7 @@ def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
 
 
 def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
-    hooks: Final = _configured_event_hooks(mode)
+    hooks: Final = configured_event_hooks(mode)
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
@@ -131,7 +134,7 @@ def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) ->
 
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     explicit_filter_scope: Final = litellm_params.presidio_filter_scope
@@ -154,12 +157,13 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             presidio_language=litellm_params.presidio_language,
             presidio_entities_deny_list=litellm_params.presidio_entities_deny_list,
             apply_to_output=False,
+            timeout=litellm_params.timeout,
             _callback_role="scan",
         )
         params.update(overrides)
         # Passed outside the heterogeneous params dict so the argument keeps
         # its precise int | None type.
-        callback: Final = _OPTIONAL_PresidioPIIMasking(
+        callback: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
             **params,
         )
@@ -214,7 +218,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
-    rules: list[dict[str, Any]] | None = None
+    rules: list[dict[str, object]] | None = None
     if litellm_params.rules:
         rules = []
         for rule in litellm_params.rules:
@@ -251,6 +255,7 @@ def initialize_lasso(
         mask=litellm_params.mask,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lasso_callback)
 

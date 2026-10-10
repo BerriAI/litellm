@@ -25,6 +25,7 @@ impl Router {
                             .map(|value| value.expose().to_string()),
                         api_base: model.litellm_params.api_base.clone(),
                         custom_llm_provider: model.litellm_params.custom_llm_provider.clone(),
+                        litellm_params: model.litellm_params.clone(),
                         ..Deployment::default()
                     },
                 )

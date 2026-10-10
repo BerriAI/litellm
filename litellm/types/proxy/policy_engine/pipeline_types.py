@@ -8,13 +8,16 @@ with configurable actions on pass/fail, rather than independently.
 
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 VALID_PIPELINE_ACTIONS: Final = {"allow", "block", "next", "modify_response"}
+DETECT_ONLY_PIPELINE_ACTIONS: Final = frozenset({"allow", "next"})
 VALID_PIPELINE_MODES: Final = {"pre_call", "post_call"}
 
 
-class PipelineStep(BaseModel):
+class PipelineStep(LiteLLMBaseModel):
     """
     A single step in a guardrail pipeline.
 
@@ -57,7 +60,7 @@ class PipelineStep(BaseModel):
         return v
 
 
-class GuardrailPipeline(BaseModel):
+class GuardrailPipeline(LiteLLMBaseModel):
     """
     Defines ordered execution of guardrails with conditional actions.
 
@@ -81,18 +84,18 @@ class GuardrailPipeline(BaseModel):
         return v
 
 
-class PipelineStepResult(BaseModel):
+class PipelineStepResult(LiteLLMBaseModel):
     """Result of executing a single pipeline step."""
 
     guardrail_name: str
-    outcome: Literal["pass", "fail", "error"]
+    outcome: Literal["pass", "fail", "error", "skip"]
     action_taken: str
     modified_data: dict[str, Any] | None = None
     error_detail: str | None = None
     duration_seconds: float | None = None
 
 
-class PipelineExecutionResult(BaseModel):
+class PipelineExecutionResult(LiteLLMBaseModel):
     """Result of executing an entire pipeline."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -12,12 +12,11 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import KeyManagementSystem
-from litellm.rust_bridge.secret_manager import resolve_native_provider_reader, resolve_native_provider_writer
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool
@@ -96,7 +95,7 @@ class CyberArkSecretManager(BaseSecretManager):
                 resp = http_client.post(auth_url, content=self.conjur_api_key)
             else:
                 # API key authentication
-                http_handler: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+                http_handler: Final = get_httpx_client(params={"ssl_verify": self.ssl_verify})
                 resp = http_handler.client.post(auth_url, content=self.conjur_api_key)
 
             resp.raise_for_status()
@@ -199,10 +198,6 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
-        native: Final = resolve_native_provider_reader(self, "cyberark")
-        if native is not None:
-            return await native.async_read_secret(secret_name, optional_params, timeout)
-
         # Check cache first
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
@@ -249,15 +244,11 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
-        native: Final = resolve_native_provider_reader(self, "cyberark")
-        if native is not None:
-            return native.sync_read_secret(secret_name, optional_params, timeout)
-
         # Check cache first
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
 
-        sync_client: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+        sync_client: Final = get_httpx_client(params={"ssl_verify": self.ssl_verify})
 
         try:
             url: Final = self.get_url(secret_name)
@@ -302,12 +293,6 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
-        native: Final = resolve_native_provider_writer(self, "cyberark")
-        if native is not None:
-            return await native.async_write_secret(
-                secret_name, secret_value, description, optional_params, timeout, tags
-            )
-
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"ssl_verify": self.ssl_verify},
@@ -353,10 +338,6 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             dict: Response indicating operation not supported
         """
-        native: Final = resolve_native_provider_writer(self, "cyberark")
-        if native is not None:
-            return await native.async_delete_secret(secret_name, recovery_window_in_days, optional_params, timeout)
-
         verbose_logger.warning(
             "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         )
@@ -377,15 +358,6 @@ class CyberArkSecretManager(BaseSecretManager):
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> dict:
-        native: Final = resolve_native_provider_writer(self, "cyberark")
-        if native is not None:
-            return await native.async_rotate_secret(
-                current_secret_name,
-                new_secret_name,
-                new_secret_value,
-                optional_params,
-                timeout,
-            )
         return await super().async_rotate_secret(
             current_secret_name,
             new_secret_name,

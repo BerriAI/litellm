@@ -34,9 +34,7 @@ def is_collection_route(url_route: str, collection_suffix: str) -> bool:
 
 def request_tags_from_metadata(request_metadata: Mapping[str, object]) -> tuple[str, ...] | None:
     """Tags for the batch-cost spend row: the request's own tags when it sent any,
-    otherwise the key's tags, which auth exposes as user_api_key_auth_metadata (a
-    tagged key does not put its tags in the top-level metadata "tags" on the
-    passthrough path)
+    otherwise the key's tags, which auth exposes as user_api_key_auth_metadata
     """
     tags: Final = _sanitized_str_tuple(request_metadata.get("tags"))
     if tags:

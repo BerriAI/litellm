@@ -10,6 +10,7 @@ import pytest
 
 from budget_client import BudgetClient, model_budget
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import AnthropicMessagesResponse
 
@@ -20,6 +21,15 @@ FALLBACK_MODEL = "gpt-5.5"
 
 
 @pytest.mark.covers("quota_management.budget.fallback.routes_to_fallback")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC, Provider.OPENAI),
+        models=(PRIMARY_MODEL, FALLBACK_MODEL),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_budget_fallback_reroutes_anthropic_messages_to_openai(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

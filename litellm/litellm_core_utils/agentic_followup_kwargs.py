@@ -15,7 +15,7 @@ def build_agentic_followup_kwargs(
     fingerprint: str,
 ) -> Mapping[str, object]:
     """Kwargs for an agentic follow-up call: the request's kwargs overlaid by the plan's, never repeating a key already sent as a request param"""
-    seen: Final = [*fingerprints, fingerprint]  # mutable-ok: the chat loop's settings reader only accepts a list
+    seen: Final = [*fingerprints, fingerprint]
     return MappingProxyType(
         {
             key: value

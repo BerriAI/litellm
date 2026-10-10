@@ -60,7 +60,7 @@ def _make_managed_files_instance_with_batches(
     file_created_by: str = "user-A",
 ):
     """
-    Create a _PROXY_LiteLLMManagedFiles instance with mocked DB and batches.
+    Create a PROXY_LiteLLMManagedFiles instance with mocked DB and batches.
     
     Args:
         file_id: The unified file ID
@@ -68,7 +68,7 @@ def _make_managed_files_instance_with_batches(
         file_created_by: The user who created the file
     """
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     # Mock file record
@@ -102,7 +102,7 @@ def _make_managed_files_instance_with_batches(
     })
     mock_cache.async_set_cache = AsyncMock()
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
         prisma_client=mock_prisma,
     )
@@ -115,10 +115,10 @@ def _make_managed_files_instance_with_batches(
 def test_is_batch_polling_enabled_when_job_registered():
     """Test that batch polling is detected as enabled when scheduler job is registered."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
     
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
@@ -135,10 +135,10 @@ def test_is_batch_polling_enabled_when_job_registered():
 def test_is_batch_polling_disabled_when_job_not_registered():
     """Test that batch polling is detected as disabled when scheduler job is not registered."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
     
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
@@ -154,10 +154,10 @@ def test_is_batch_polling_disabled_when_job_not_registered():
 def test_is_batch_polling_disabled_when_no_scheduler():
     """Test that batch polling is detected as disabled when scheduler is not available."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
     
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )

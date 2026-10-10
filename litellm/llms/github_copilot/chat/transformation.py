@@ -1,6 +1,7 @@
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # spread dict loses the role literal without a cast
 
 import httpx
 
@@ -16,9 +17,11 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -57,6 +60,15 @@ class GithubCopilotConfig(OpenAIConfig):
             )
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
 
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+
     def _transform_messages(
         self,
         messages,
@@ -75,13 +87,21 @@ class GithubCopilotConfig(OpenAIConfig):
         for message in messages:
             if message.get("role") == "system":
                 # Convert system message to assistant message
-                transformed_message = message.copy()
-                transformed_message["role"] = "assistant"
-                transformed_messages.append(transformed_message)
+                transformed_messages.append(
+                    cast(AllMessageValues, {**message, "role": "assistant"})  # cast-ok: dict matches the union
+                )
             else:
                 transformed_messages.append(message)
 
         return transformed_messages
+
+    def _copilot_headers(self, session_token: str | None) -> Mapping[str, str]:
+        if session_token is not None:
+            return get_copilot_default_headers(session_token)
+        try:
+            return get_copilot_default_headers(self.authenticator.get_api_key())
+        except GetAPIKeyError:
+            return {}
 
     def validate_environment(
         self,
@@ -93,18 +113,19 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        # Get base headers from parent
-        validated_headers = super().validate_environment(
-            headers, model, messages, optional_params, litellm_params, api_key, api_base
+        parent_headers: Final = cast(  # cast-ok: the parent validate_environment returns a plain dict at runtime
+            "dict[str, str]",
+            super().validate_environment(headers, model, messages, optional_params, litellm_params, api_key, api_base),
         )
-
-        # Add Copilot-specific headers (editor-version, user-agent, etc.)
-        try:
-            copilot_api_key: Final = self.authenticator.get_api_key()
-            copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
-            validated_headers = {**copilot_headers, **validated_headers}
-        except GetAPIKeyError:
-            pass  # Will be handled later in the request flow
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        session_token: Final = user_session.token if user_session is not None else None
+        validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
+        if session_token is not None:
+            # the caller's stored session token wins unconditionally, even over a
+            # caller-supplied api_key or the parent's placeholder Authorization
+            validated_headers["Authorization"] = f"Bearer {session_token}"
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)
@@ -177,8 +198,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
     @staticmethod
     def _parse_anthropic_native_content(
-        content_blocks: list[Any],
-    ) -> tuple[str, list[ChatCompletionToolCallChunk], list[Any] | None]:
+        content_blocks: list[object],
+    ) -> tuple[str, list[ChatCompletionToolCallChunk], Sequence[object] | None]:
         """
         Parse Anthropic-native content blocks into OpenAI-compatible fields.
 
@@ -225,7 +246,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         content = ""
         tool_calls: list[ChatCompletionToolCallChunk] = []
-        thinking_blocks: list[Any] | None = None
+        thinking_blocks: Sequence[object] | None = None
         raw_content: Final = response_json.get("content")
         if isinstance(raw_content, list):
             content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)
@@ -283,7 +304,7 @@ class GithubCopilotConfig(OpenAIConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: object,
+        encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

@@ -7,16 +7,21 @@ so `response_id` is always the raw provider response id (cache-hit suffix stripp
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from math import isfinite
 from types import MappingProxyType
 from typing import Any, Final
+
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
-from litellm.tracing.types import SpendLogRecord
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.tracing.types import SpendLogPayload, SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
 
 # litellm_logging.py rewrites cache-hit ids as f"{id}_cache_hit{time.time()}"
@@ -27,6 +32,24 @@ _TRACEPARENT: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-[0
 _INVALID_TRACE_ID: Final = "0" * 32
 _INVALID_SPAN_ID: Final = "0" * 16
 TRACE_INGEST_ROUTE: Final = "/v1/traces"
+_METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_METADATA_VALUE: Final = TypeAdapter(JsonValue)
+_INTERNAL_METADATA_KEYS: Final = frozenset(
+    ("user_api_key", "user_api_key_auth", "user_api_key_budget_reservation", "proxy_server_request")
+)
+
+
+def _request_metadata_fields(value: object) -> Iterator[tuple[str, JsonValue]]:
+    if value is None:
+        return
+    fields: Final = _METADATA_MAPPING.validate_python(value)
+    for key, field in fields.items():
+        if key in _INTERNAL_METADATA_KEYS:
+            continue
+        try:
+            yield key, _METADATA_VALUE.validate_python(field)
+        except ValidationError:
+            continue
 
 
 def strip_cache_hit_suffix(request_id: str) -> str:
@@ -58,7 +81,7 @@ def _json(value: object) -> str:
 
 
 def _json_mapping(value: Mapping[str, Any]) -> str:
-    return _json(dict(value))  # mutable-ok: [LIT002] JSON serialization requires a dict
+    return _json(dict(value))
 
 
 def _find_traceparent(metadata: Mapping[str, Any], kwargs: Mapping[str, Any]) -> tuple[str, str]:
@@ -88,11 +111,11 @@ def _cache_tokens(usage: Mapping[str, Any]) -> tuple[int, int]:
 
 def _request_tags(value: object) -> list[str]:
     if not isinstance(value, list):
-        return []  # mutable-ok: [LIT002] empty spend-log tag payload
-    return [str(tag) for tag in value]  # mutable-ok: [LIT002] SpendLogRecord schema
+        return []
+    return [str(tag) for tag in value]
 
 
-def _session_id(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> str:
+def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
     request_metadata = (kwargs.get("litellm_params") or MappingProxyType({})).get("metadata") or MappingProxyType({})
     return str(payload.get("session_id") or request_metadata.get("session_id") or payload.get("trace_id") or "")
@@ -103,7 +126,9 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
     return str(payload.get("call_type") or "").startswith(TRACE_INGEST_ROUTE)
 
 
-def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
+def spend_log_row_from_payload(
+    payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]
+) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
     hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
     usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
@@ -112,9 +137,33 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     request_id = str(payload.get("id") or "")
     redact = litellm.turn_off_message_logging is True
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
+    response_cost: Final = payload.get("response_cost")
+    unknown_success_cost: Final[bool] = payload.get("status") == "success" and kwargs.get("response_cost") is None
+    spend: Final = (
+        None if unknown_success_cost or response_cost is None or not isfinite(response_cost) else response_cost
+    )
+    litellm_params: Final = _METADATA_MAPPING.validate_python(kwargs.get("litellm_params") or {})
+    request_metadata: Final = (
+        MappingProxyType({})
+        if redact
+        else redact_credentials_in_payload(
+            MappingProxyType(
+                {
+                    **dict(_request_metadata_fields(litellm_params.get("litellm_metadata"))),
+                    **dict(_request_metadata_fields(litellm_params.get("metadata"))),
+                }
+            )
+        )
+    )
     return SpendLogRecord(
         request_id=request_id,
         response_id=strip_cache_hit_suffix(request_id),
+        provider_request_id=(
+            get_provider_request_id(kwargs.get("response_headers"))
+            or get_provider_request_id(hidden_params.get("additional_headers"))
+            or ""
+        ),
+        litellm_call_id=payload.get("litellm_call_id") or "",
         call_type=payload.get("call_type") or "",
         api_key=metadata.get("user_api_key_hash") or "",
         key_alias=metadata.get("user_api_key_alias") or "",
@@ -128,7 +177,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         model_id=payload.get("model_id") or "",
         custom_llm_provider=payload.get("custom_llm_provider") or "",
         api_base=payload.get("api_base") or "",
-        spend=float(payload.get("response_cost") or 0.0),
+        spend=spend,
         prompt_tokens=_int(payload.get("prompt_tokens")),
         completion_tokens=_int(payload.get("completion_tokens")),
         total_tokens=_int(payload.get("total_tokens")),
@@ -144,7 +193,9 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         trace_id=trace_id,
         span_id=span_id,
         request_tags=_request_tags(payload.get("request_tags")),
-        metadata=_json_mapping(MappingProxyType({**metadata, "litellm_lens_internal": is_lens_analysis()})),
+        metadata=_json_mapping(
+            MappingProxyType({**request_metadata, **metadata, "litellm_lens_internal": is_lens_analysis()})
+        ),
         messages="" if redact else _json(payload.get("messages")),
         response="" if redact else _json(payload.get("response")),
     )
@@ -165,6 +216,6 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
             if payload is None or _is_trace_ingest(payload):
                 return
             row: Final = spend_log_row_from_payload(payload, kwargs)
-            self.enqueue([dict(row)])  # mutable-ok: [LIT002] batch logger API
+            self.enqueue([dict(row)])
         except Exception as e:
             verbose_logger.exception("ClickHouseSpendLogger: failed to log request: %s", e)
