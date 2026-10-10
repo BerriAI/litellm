@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
@@ -37,8 +38,18 @@ async def test_db_router_rebuild_serves_same_caller_from_cache_and_isolates_call
             },
         }
     ]
-    monkeypatch.setattr(litellm, "cache", litellm.Cache())
-    provider_calls = 0
+    cache = litellm.Cache()
+    monkeypatch.setattr(litellm, "cache", cache)
+    cache_write_complete = asyncio.Event()
+    original_async_add_cache = cache.async_add_cache
+
+    async def tracked_async_add_cache(*args: Any, **kwargs: Any) -> Any:
+        result = await original_async_add_cache(*args, **kwargs)
+        cache_write_complete.set()
+        return result
+
+    monkeypatch.setattr(cache, "async_add_cache", tracked_async_add_cache)
+    provider_calls: int = 0
     litellm_main = importlib.import_module("litellm.main")
     original_mock_completion = litellm_main.mock_completion
 
@@ -61,11 +72,15 @@ async def test_db_router_rebuild_serves_same_caller_from_cache_and_isolates_call
     )
     router = __import__("litellm.proxy.proxy_server", fromlist=["llm_router"]).llm_router
 
+    # Keep the request body identical: isolation must follow the authenticated
+    # caller identity, rather than request-content differences.
     request = [{"role": "user", "content": "cache canary"}]
-    first = await router.acompletion(model="fake-model", messages=request, user="caller-a")
-    await asyncio.sleep(1)
-    same_caller = await router.acompletion(model="fake-model", messages=request, user="caller-a")
-    other_caller = await router.acompletion(model="fake-model", messages=request, user="caller-b")
+    same_caller_id = "caller-a"
+    other_caller_id = "caller-b"
+    first = await router.acompletion(model="fake-model", messages=request, user=same_caller_id)
+    await asyncio.wait_for(cache_write_complete.wait(), timeout=5)
+    same_caller = await router.acompletion(model="fake-model", messages=request, user=same_caller_id)
+    other_caller = await router.acompletion(model="fake-model", messages=request, user=other_caller_id)
 
     assert first.id == same_caller.id
     assert first.id != other_caller.id
