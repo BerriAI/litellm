@@ -2610,6 +2610,14 @@ app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
+# Optional fastapi-guard security middleware (off unless LITELLM_GUARD_ENABLED
+# is set). Added inside SecurityHeaders so screened responses are still
+# headered, and outside the auth dependencies so screened-and-blocked
+# requests never reach key validation. See middleware/guard_middleware.py.
+from litellm.proxy.middleware.guard_middleware import GuardMiddleware  # noqa: E402
+
+app.add_middleware(GuardMiddleware)
+
 
 def mount_swagger_ui():
     swagger_directory: Final = os.path.join(current_dir, "swagger")
