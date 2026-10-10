@@ -1,11 +1,11 @@
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, TypeAlias
 
-from openai.types.responses import ResponseToolSearchCall
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.responses.main import ResponseToolSearchCall
 
 from .custom_tools import openai_shaped_tool_call_item_id
 

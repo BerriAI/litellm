@@ -25,7 +25,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseToolSearchCall
+from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
@@ -91,6 +91,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
+    ResponseToolSearchCall,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,

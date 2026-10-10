@@ -3,7 +3,6 @@ from copy import deepcopy
 from typing import Final, Literal
 
 import pytest
-from openai.types.responses import ResponseToolSearchCall
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -20,7 +19,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.base import HiddenParams
-from litellm.types.responses.main import build_web_search_call
+from litellm.types.responses.main import ResponseToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
