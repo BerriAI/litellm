@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import argparse
 import re
 
-import litellm
+import litellm.proxy._types
 
 
 @dataclass
