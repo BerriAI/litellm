@@ -193,7 +193,7 @@ jobs:
 
       - name: Check layer imports
         if: steps.changes.outputs.decision != 'skip'
-        run: uv run --no-sync python scripts/check_layer_imports.py
+        run: uv run --no-sync python scripts/check_layer_imports.py --base "$GATE_BASE_SHA"
 
       - name: Check import safety
         if: steps.changes.outputs.decision != 'skip'

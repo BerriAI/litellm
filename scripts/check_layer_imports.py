@@ -1,6 +1,8 @@
+import argparse
 import ast
+import subprocess
 import sys
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import chain, product
 from pathlib import Path
@@ -140,12 +142,14 @@ def violations(paths: tuple[Path, ...]) -> tuple[Violation, ...]:
     )
 
 
-def read_allowlist(path: Path) -> frozenset[str]:
-    lines: Final = (" ".join(line.split()) for line in path.read_text(encoding="utf-8").splitlines())
+def parse_allowlist(text: str) -> frozenset[str]:
+    lines: Final = (" ".join(line.split()) for line in text.splitlines())
     return frozenset(line for line in lines if line and not line.startswith("#"))
 
 
-def report(found: tuple[Violation, ...], allowed: frozenset[str]) -> tuple[str, ...]:
+def report(
+    found: tuple[Violation, ...], allowed: frozenset[str], base_allowed: frozenset[str] | None
+) -> tuple[str, ...]:
     first_seen: Final = MappingProxyType({violation.key: violation for violation in reversed(found)})
     new: Final = tuple(
         f"{violation.edge.path}:{violation.edge.line}: {violation.rule} forbids "
@@ -157,12 +161,41 @@ def report(found: tuple[Violation, ...], allowed: frozenset[str]) -> tuple[str, 
         f"{ALLOWLIST}: stale entry '{key}' no longer matches an import, delete it"
         for key in sorted(allowed - first_seen.keys())
     )
-    return new + stale
+    added: Final = (
+        tuple(
+            f"{ALLOWLIST}: entry '{key}' is not in the base allowlist, fix the import instead of allowlisting it"
+            for key in sorted(allowed - base_allowed)
+        )
+        if base_allowed is not None
+        else ()
+    )
+    return new + stale + added
 
 
-def main() -> int:
+def git_base_allowlist(ref: str) -> frozenset[str] | None:
+    merge_base: Final = subprocess.run(
+        ["git", "merge-base", ref, "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    shown: Final = subprocess.run(
+        ["git", "show", f"{merge_base}:{ALLOWLIST.as_posix()}"], capture_output=True, text=True, check=False
+    )
+    return parse_allowlist(shown.stdout) if shown.returncode == 0 else None
+
+
+class Arguments(argparse.Namespace):
+    base: str | None = None
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    base_allowlist: Callable[[str], frozenset[str] | None] = git_base_allowlist,
+) -> int:
+    parser: Final = argparse.ArgumentParser(description="Check SDK/proxy layer import rules")
+    parser.add_argument("--base", help="Also reject allowlist entries missing at the merge base with this ref")
+    args: Final = parser.parse_args(argv, namespace=Arguments())
     paths: Final = tuple(sorted(PACKAGE_ROOT.rglob("*.py")))
-    problems: Final = report(violations(paths), read_allowlist(ALLOWLIST))
+    base_allowed: Final = base_allowlist(args.base) if args.base else None
+    problems: Final = report(violations(paths), parse_allowlist(ALLOWLIST.read_text(encoding="utf-8")), base_allowed)
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 1

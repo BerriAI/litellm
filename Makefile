@@ -230,7 +230,7 @@ lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
 check-layer-imports: $(LINT_DEP_INSTALL)
-	$(UV_RUN) python scripts/check_layer_imports.py
+	$(UV_RUN) python scripts/check_layer_imports.py --base "$$($(RESOLVE_BASE))"
 
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)

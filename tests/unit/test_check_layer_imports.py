@@ -1,12 +1,8 @@
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.check_layer_imports import main
-
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts/check_layer_imports.py"
 
 
 def build_tree(root: Path, files: dict[str, str], allowlist: str = "") -> None:
@@ -23,9 +19,14 @@ def build_tree(root: Path, files: dict[str, str], allowlist: str = "") -> None:
     (root / "scripts/layer_imports_allowlist.txt").write_text(allowlist)
 
 
-def run_check(root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+def run_check(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    base_allowed: frozenset[str] | None = None,
+) -> tuple[int, str]:
     monkeypatch.chdir(root)
-    code = main()
+    code = main(["--base", "origin/main"], lambda _ref: base_allowed)
     return code, capsys.readouterr().err
 
 
@@ -162,17 +163,34 @@ def test_allowlisted_violation_passes_and_stale_entry_fails(
     ]
 
 
-def test_command_exit_code(tmp_path: Path) -> None:
-    build_tree(tmp_path, {"litellm/types/foo.py": "from litellm.router import Router\n"})
-    rejected = subprocess.run(
-        [sys.executable, "-I", str(SCRIPT)], cwd=tmp_path, capture_output=True, text=True, check=False
+def test_allowlist_entry_added_since_base_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    build_tree(
+        tmp_path,
+        {
+            "litellm/types/foo.py": "from litellm.router import Router\n",
+            "litellm/types/bar.py": "import litellm.main\n",
+        },
+        "L3 module litellm/types/foo.py litellm.router\nL3 module litellm/types/bar.py litellm.main\n",
     )
-    assert rejected.returncode == 1
-    assert "litellm/types/foo.py:1: L3 forbids" in rejected.stderr
+    base = frozenset({"L3 module litellm/types/foo.py litellm.router"})
 
-    (tmp_path / "scripts/layer_imports_allowlist.txt").write_text("L3 module litellm/types/foo.py litellm.router\n")
-    accepted = subprocess.run(
-        [sys.executable, "-I", str(SCRIPT)], cwd=tmp_path, capture_output=True, text=True, check=False
+    assert run_check(tmp_path, monkeypatch, capsys, base) == (
+        1,
+        "scripts/layer_imports_allowlist.txt: entry 'L3 module litellm/types/bar.py litellm.main' is not in the "
+        "base allowlist, fix the import instead of allowlisting it\n",
     )
-    assert accepted.returncode == 0
-    assert accepted.stdout == "Layer imports: passed\n"
+    assert run_check(tmp_path, monkeypatch, capsys, base | {"L3 module litellm/types/bar.py litellm.main"}) == (0, "")
+
+
+def test_missing_base_allowlist_skips_growth_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    build_tree(
+        tmp_path,
+        {"litellm/types/foo.py": "from litellm.router import Router\n"},
+        "L3 module litellm/types/foo.py litellm.router\n",
+    )
+
+    assert run_check(tmp_path, monkeypatch, capsys, None) == (0, "")
