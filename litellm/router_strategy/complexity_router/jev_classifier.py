@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG, is_ai_decide_model
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
     TypeSafePassthroughLoggingHandler,
@@ -30,6 +30,7 @@ from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks"]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
+_WITHOUT_MODEL: Final = MappingProxyType({"model": True})
 
 
 class JevChoiceQuestion(LiteLLMBaseModel):
@@ -106,7 +107,7 @@ class HttpJevClassifierClient:
         )
         response: Final = await self._http_client.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler has a dynamic post signature
             self._request_url(request.model),
-            json=request.model_dump(mode="json"),
+            json=request.model_dump(mode="json", exclude=self._excluded_fields(request.model)),
             headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
@@ -118,6 +119,9 @@ class HttpJevClassifierClient:
         except Exception as exc:  # noqa: BLE001  # logging integrations must not discard a provider verdict
             verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
         return TypeAdapter(JevSystemOneResponse).validate_python(normalized_body)
+
+    def _excluded_fields(self, model: str) -> Mapping[str, bool] | None:
+        return _WITHOUT_MODEL if self._provider == "databricks" and is_ai_decide_model(model) else None
 
     def _request_url(self, model: str) -> str:
         if self._provider == "databricks":

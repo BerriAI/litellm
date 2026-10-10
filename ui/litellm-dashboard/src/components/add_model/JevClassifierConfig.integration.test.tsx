@@ -125,7 +125,7 @@ describe("JEV classifier editor", () => {
       expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
       fireEvent.click(screen.getByRole("radio", { name: label }));
       if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
-      if (provider === "databricks") expect(screen.getByLabelText("Classifier Model")).toHaveValue("");
+      if (provider === "databricks") expect(screen.getByLabelText("Classifier Model")).toHaveValue("ai_decide");
       if (typesTheModel) {
         fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
       } else {

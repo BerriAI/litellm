@@ -1,27 +1,33 @@
 import asyncio
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS
+
+_MODEL: Final = "ai_decide"
+_ROUTE: Final = "/api/2.0/ai-functions/ai-decide"
 _ENDPOINT: Final = "databricks-openjev-qwen35-4b"
-_SECOND_ENDPOINT: Final = "databricks-openjev-qwen35-4b-canary"
+_SECOND_WORKSPACE: Final = "/second-workspace"
 _API_KEY: Final = "synthetic-databricks-key"
-_BARE_NAME_RULE: Final = (
-    "must be the bare endpoint name (letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a "
-    "leading '.'), e.g. databricks-openjev-qwen35-4b"
+_MODEL_RULE: Final = (
+    "Databricks decisions model must be 'ai_decide' (the ai_decide AI Function) or a bare serving endpoint name "
+    "(letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. "
+    "databricks-openjev-qwen35-4b"
 )
 _REJECTED_AT_LOAD: Final = "The router would drop this deployment at load time, so the write is rejected instead."
 _MODEL_REQUIRED: Final = (
-    "opensource_classifier_config.model is required for provider 'databricks': the serving endpoint name, "
-    "e.g. databricks-openjev-qwen35-4b"
+    "opensource_classifier_config.model is required for provider 'databricks': 'ai_decide' or a serving endpoint "
+    "name, e.g. databricks-openjev-qwen35-4b"
 )
 _BASE_NEEDS_KEY: Final = (
     "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: DATABRICKS_API_KEY or "
@@ -30,16 +36,25 @@ _BASE_NEEDS_KEY: Final = (
 _BLANK_KEY: Final = (
     "opensource_classifier_config.api_key must be non-empty; omit it to use the provider environment key"
 )
-_CLASSIFIER_ANSWER: Final[dict[str, JsonValue]] = {
-    "answers": {
-        "tier": {
-            "type": "choice",
-            "choice": "COMPLEX",
-            "confidence": 0.91,
-            "probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
-        }
-    },
+_ANSWERS: Final[dict[str, JsonValue]] = {
+    "tier": {
+        "type": "choice",
+        "choice": "COMPLEX",
+        "confidence": 0.91,
+        "probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
+    }
+}
+_AI_DECIDE_ANSWER: Final[dict[str, JsonValue]] = {"response": {"answers": _ANSWERS}, "metadata": {"version": "1.0"}}
+_ENDPOINT_ANSWER: Final[dict[str, JsonValue]] = {
+    "model": "/mosaicml/local_model",
+    "answers": _ANSWERS,
     "usage": {"input_tokens": 12, "output_tokens": 1},
+}
+_TIER_CRITERIA: Final[dict[str, JsonValue]] = {
+    "SIMPLE": "Greetings, chitchat, or short factual lookups with known answers",
+    "MEDIUM": "Everyday requests needing explanation, light reasoning, or minor technical work",
+    "COMPLEX": "Non-trivial code, architecture, multi-step work, or specialized domain depth",
+    "REASONING": "Open-ended analysis, proofs, tradeoffs, or tasks requiring careful thought",
 }
 _ROWS_QUERY: Final = (
     "SELECT request_id, status, metadata->>'internal_call_origin' AS origin "
@@ -48,7 +63,8 @@ _ROWS_QUERY: Final = (
 
 
 def _classifier(request: Request) -> Reply:
-    return Reply(body=json.dumps(_CLASSIFIER_ANSWER).encode())
+    answer: Final = _ENDPOINT_ANSWER if request.target.endswith("/invocations") else _AI_DECIDE_ANSWER
+    return Reply(body=json.dumps(answer).encode())
 
 
 def _tier(text: str) -> Callable[[Request], Reply]:
@@ -62,7 +78,7 @@ def _tier(text: str) -> Callable[[Request], Reply]:
 def _classifier_config(api_base: str, **overrides: JsonValue) -> dict[str, JsonValue]:
     return {
         "provider": "databricks",
-        "model": _ENDPOINT,
+        "model": _MODEL,
         "api_base": api_base,
         "api_key": _API_KEY,
         "timeout_ms": 20000,
@@ -131,21 +147,39 @@ async def _burst(base_url: str, key: str, model: str, count: int) -> tuple[httpx
         )
 
 
-def _rows(router: str, *, want: int) -> tuple[dict[str, JsonValue], ...]:
-    return tuple(eventually(lambda: read_rows(_ROWS_QUERY, (router,)), lambda found: len(found) >= want, seconds=70))
+def _request_rows(rows: Sequence[dict[str, JsonValue]]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(row for row in rows if row["origin"] != "autorouter_classifier")
+
+
+def _rows(router: str, *, requests: int) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        eventually(
+            lambda: read_rows(_ROWS_QUERY, (router,)),
+            lambda found: len(_request_rows(found)) >= requests,
+            seconds=70,
+        )
+    )
+
+
+def test_validate_accepts_a_databricks_ai_decide_classifier_with_or_without_the_serving_endpoints_suffix(
+    gateway: Gateway,
+) -> None:
+    for api_base in (
+        "https://dbc-example.cloud.databricks.com",
+        "https://dbc-example.cloud.databricks.com/serving-endpoints",
+    ):
+        config: Final = _router_config(_classifier_config(api_base), "simple", "complex")
+        assert _validate(gateway, config) == {"valid": True, "error": None}, api_base
 
 
 def test_validate_accepts_a_databricks_classifier_with_a_bare_endpoint_name_of_any_length(gateway: Gateway) -> None:
-    config: Final = _router_config(
-        _classifier_config("https://dbc-example.cloud.databricks.com/serving-endpoints"), "simple", "complex"
-    )
-    assert _validate(gateway, config) == {"valid": True, "error": None}
-    long_name: Final = _router_config(
-        _classifier_config("https://dbc-example.cloud.databricks.com/serving-endpoints", model="e" * 5000),
-        "simple",
-        "complex",
-    )
-    assert _validate(gateway, long_name) == {"valid": True, "error": None}
+    for model in (_ENDPOINT, "e" * 5000):
+        config: Final = _router_config(
+            _classifier_config("https://dbc-example.cloud.databricks.com/serving-endpoints", model=model),
+            "simple",
+            "complex",
+        )
+        assert _validate(gateway, config) == {"valid": True, "error": None}, model[:40]
 
 
 def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gateway) -> None:
@@ -157,10 +191,10 @@ def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gat
             _without(base, "api_key"),
             f"at opensource_classifier_config: Value error, {_BASE_NEEDS_KEY}",
         ),
-        ("slash in the name", {**base, "model": "a/b"}, f"Databricks serving endpoint name 'a/b' {_BARE_NAME_RULE}"),
-        ("space in the name", {**base, "model": "a b"}, f"Databricks serving endpoint name 'a b' {_BARE_NAME_RULE}"),
-        ("leading dot", {**base, "model": ".hidden"}, f"Databricks serving endpoint name '.hidden' {_BARE_NAME_RULE}"),
-        ("empty name", {**base, "model": ""}, f"Databricks serving endpoint name '' {_BARE_NAME_RULE}"),
+        ("slash in the name", {**base, "model": "a/b"}, _MODEL_RULE),
+        ("space in the name", {**base, "model": "a b"}, _MODEL_RULE),
+        ("leading dot", {**base, "model": ".hidden"}, _MODEL_RULE),
+        ("empty name", {**base, "model": ""}, _MODEL_RULE),
         (
             "blank api_key",
             {**base, "api_key": ""},
@@ -183,8 +217,13 @@ def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gat
         assert error.endswith(_REJECTED_AT_LOAD), (label, error)
 
 
-def test_test_routing_classifies_through_the_databricks_endpoint_without_calling_the_tier_it_picked(
-    gateway: Gateway,
+@pytest.mark.parametrize(
+    ("model", "target", "cost"),
+    [(_MODEL, _ROUTE, {}), (_ENDPOINT, f"/{_ENDPOINT}/invocations", {"classifier_cost": 0.0})],
+    ids=["ai_decide", "serving_endpoint"],
+)
+def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_picked(
+    gateway: Gateway, model: str, target: str, cost: dict[str, JsonValue]
 ) -> None:
     prompt: Final = f"design a distributed cache {uuid.uuid4().hex}"
     with (
@@ -195,7 +234,7 @@ def test_test_routing_classifies_through_the_databricks_endpoint_without_calling
     ):
         simple_model: Final = scenario.model(model="openai/simple-tier", api_base=simple.url)
         complex_model: Final = scenario.model(model="openai/complex-tier", api_base=complex_tier.url)
-        config: Final = _router_config(_classifier_config(judge.url), simple_model, complex_model)
+        config: Final = _router_config(_classifier_config(judge.url, model=model), simple_model, complex_model)
         response: Final = gateway.request(
             "POST", "/auto_router/test_routing", {"prompt": prompt, "complexity_router_config": config}
         )
@@ -216,23 +255,27 @@ def test_test_routing_classifies_through_the_databricks_endpoint_without_calling
                     "tier-probability:MEDIUM=0.060000",
                     "tier-probability:COMPLEX=0.910000",
                 ],
-                "classifier_model": f"databricks/{_ENDPOINT}",
-                "classifier_cost": 0.0,
+                "classifier_model": f"databricks/{model}",
+                **cost,
                 "classifier_probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
                 "classifier_confidence": 0.91,
                 "conversation_continuing": False,
             },
         }, response.text
         (call,) = [request for request in judge.drain() if request.method == "POST"]
-        assert call.target == f"/{_ENDPOINT}/invocations", call.target
+        assert call.target == target, call.target
         assert call.headers.get("authorization") == f"Bearer {_API_KEY}", call.headers
-        body: Final = json.loads(call.body)
-        assert body["model"] == _ENDPOINT, body
-        assert body["state"] == f"\nClassify this message:\n{prompt}", body
+        assert json.loads(call.body) == {
+            "state": f"\nClassify this message:\n{prompt}",
+            **({} if model == _MODEL else {"model": model}),
+            "questions": {
+                "tier": {"type": "choice", "instructions": DEFAULT_JEV_INSTRUCTIONS, "criteria": _TIER_CRITERIA}
+            },
+        }, call.body
         assert _judge_targets(simple) == () and _judge_targets(complex_tier) == ()
 
 
-def test_model_new_refuses_a_databricks_classifier_without_an_endpoint_name_and_stores_nothing(
+def test_model_new_refuses_a_databricks_classifier_without_a_model_and_stores_nothing(
     gateway: Gateway,
 ) -> None:
     name: Final = f"router-{uuid.uuid4().hex[:10]}"
@@ -259,7 +302,7 @@ def test_model_new_refuses_a_databricks_classifier_without_an_endpoint_name_and_
     assert [entry for entry in map(object_value, listed) if entry["model_name"] == name] == []
 
 
-def test_model_update_refuses_dropping_the_endpoint_name_and_keeps_the_stored_classifier_serving(
+def test_model_update_refuses_dropping_the_model_and_keeps_the_stored_classifier_serving(
     gateway: Gateway,
 ) -> None:
     with (
@@ -282,15 +325,15 @@ def test_model_update_refuses_dropping_the_endpoint_name_and_keeps_the_stored_cl
         assert _MODEL_REQUIRED in string_value(object_value(object_value(response.json())["error"])["message"]), (
             response.text
         )
-        assert _stored_classifier(gateway, identity)["model"] == _ENDPOINT
+        assert _stored_classifier(gateway, identity)["model"] == _MODEL
         chat: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(name))
         assert chat.status_code == 200, chat.text
         assert chat.json()["choices"][0]["message"]["content"] == "complex answer", chat.text
         assert chat.headers["x-litellm-complexity-router-cause"] == "jev_classifier", dict(chat.headers)
-        assert _judge_targets(judge) == (f"/{_ENDPOINT}/invocations",)
+        assert _judge_targets(judge) == (_ROUTE,)
 
 
-async def test_renaming_the_endpoint_under_a_burst_moves_the_classifier_and_logs_every_request_once(
+async def test_moving_the_workspace_under_a_burst_moves_the_classifier_and_logs_every_request_once(
     gateway: Gateway,
 ) -> None:
     base_url: Final = str(gateway.client.base_url)
@@ -305,30 +348,35 @@ async def test_renaming_the_endpoint_under_a_burst_moves_the_classifier_and_logs
         classifier: Final = _classifier_config(judge.url)
         name, identity = _create_router(scenario, _router_config(classifier, simple_model, complex_model))
         burst: Final = asyncio.create_task(_burst(base_url, gateway.key, name, 24))
-        renamed: Final = _router_config({**classifier, "model": _SECOND_ENDPOINT}, simple_model, complex_model)
+        moved: Final = _router_config(
+            {**classifier, "api_base": f"{judge.url}{_SECOND_WORKSPACE}"}, simple_model, complex_model
+        )
         patched: Final = gateway.request(
             "PATCH",
             f"/model/{identity}/update",
-            {"litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": renamed}},
+            {"litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": moved}},
         )
         assert patched.status_code == 200, patched.text
         during: Final = await burst
         assert [response.status_code for response in during] == [200] * 24, [response.text for response in during]
-        assert set(_judge_targets(judge)) <= {f"/{_ENDPOINT}/invocations", f"/{_SECOND_ENDPOINT}/invocations"}
-        assert _stored_classifier(gateway, identity)["model"] == _SECOND_ENDPOINT
+        assert set(_judge_targets(judge)) <= {_ROUTE, f"{_SECOND_WORKSPACE}{_ROUTE}"}
+        assert _stored_classifier(gateway, identity)["api_base"] == f"{judge.url}{_SECOND_WORKSPACE}"
+
+        polled: Final[list[str]] = []
 
         def classifier_target() -> tuple[str, ...]:
             chat: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(name))
             assert chat.status_code == 200, chat.text
+            polled.append(string_value(chat.json()["id"]))
             return _judge_targets(judge)
 
-        eventually(classifier_target, lambda targets: targets == (f"/{_SECOND_ENDPOINT}/invocations",), seconds=30)
+        eventually(classifier_target, lambda targets: targets == (f"{_SECOND_WORKSPACE}{_ROUTE}",), seconds=30)
         after: Final = await _burst(base_url, gateway.key, name, 6)
         assert [response.status_code for response in after] == [200] * 6, [response.text for response in after]
-        assert set(_judge_targets(judge)) == {f"/{_SECOND_ENDPOINT}/invocations"}
-        identities: Final = tuple(string_value(response.json()["id"]) for response in (*during, *after))
+        assert set(_judge_targets(judge)) == {f"{_SECOND_WORKSPACE}{_ROUTE}"}
+        identities: Final = (*(string_value(response.json()["id"]) for response in (*during, *after)), *polled)
         assert len(set(identities)) == len(identities), identities
-        rows: Final = _rows(name, want=len(identities))
-        request_rows: Final = [row for row in rows if row["origin"] != "autorouter_classifier"]
+        rows: Final = _rows(name, requests=len(identities))
+        request_rows: Final = _request_rows(rows)
         assert sorted(string_value(row["request_id"]) for row in request_rows) == sorted(identities), request_rows
         assert all(row["status"] == "success" for row in rows), rows

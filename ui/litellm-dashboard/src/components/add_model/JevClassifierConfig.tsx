@@ -15,7 +15,7 @@ const providerDescriptions = {
   bespoke:
     "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
   databricks:
-    "Uses a Databricks ai_decide serving endpoint with your configured tiers. Set DATABRICKS_API_BASE and DATABRICKS_API_KEY on the gateway, and enter the serving endpoint name as the classifier model.",
+    "Uses the Databricks ai_decide AI Function, or a decision serving endpoint you name, with your configured tiers. Set DATABRICKS_API_BASE to https://<workspace-host>/serving-endpoints and DATABRICKS_API_KEY on the gateway.",
 };
 
 export default function JevClassifierConfig({
@@ -54,7 +54,9 @@ export default function JevClassifierConfig({
             id={`${id}-model`}
             value={config.model}
             placeholder={
-              config.provider === "databricks" ? "Serving endpoint name, e.g. databricks-openjev-qwen35-4b" : undefined
+              config.provider === "databricks"
+                ? "ai_decide, or a serving endpoint name such as databricks-openjev-qwen35-4b"
+                : undefined
             }
             onChange={(event) => update({ model: event.target.value })}
           />

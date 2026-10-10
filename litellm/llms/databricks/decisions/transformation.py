@@ -4,18 +4,63 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
+DATABRICKS_AI_DECIDE_MODEL: Final = "ai_decide"
+_AI_DECIDE_PATH: Final = "/api/2.0/ai-functions/ai-decide"
 _SERVING_ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
+_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
-def validate_serving_endpoint_name(name: str) -> str:
-    if _SERVING_ENDPOINT_NAME.fullmatch(name) is None:
-        raise ValueError(
-            f"Databricks serving endpoint name {name!r} must be the bare endpoint name (letters, digits, '-', '_' "
-            "and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. databricks-openjev-qwen35-4b"
-        )
-    return name
+def is_ai_decide_model(model: str) -> bool:
+    return model == DATABRICKS_AI_DECIDE_MODEL
+
+
+def validate_databricks_decisions_model(model: str) -> str:
+    if is_ai_decide_model(model) or _SERVING_ENDPOINT_NAME.fullmatch(model) is not None:
+        return model
+    raise ValueError(
+        f"Databricks decisions model must be {DATABRICKS_AI_DECIDE_MODEL!r} (the ai_decide AI Function) or a bare "
+        "serving endpoint name (letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), "
+        "e.g. databricks-openjev-qwen35-4b"
+    )
+
+
+def databricks_workspace_host(api_base: str) -> str:
+    return api_base.rstrip("/").removesuffix("/serving-endpoints")
+
+
+def _mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _systemone_answer(answer: object) -> object:
+    fields: Final = _mapping(answer)
+    if fields is None or fields.get("type") != "noul" or "probability" not in fields:
+        return answer
+    return MappingProxyType(
+        {**{key: value for key, value in fields.items() if key != "probability"}, "noul": fields["probability"]}
+    )
+
+
+def ai_decide_response(payload: Mapping[str, object]) -> Mapping[str, object]:
+    response: Final = _mapping(payload.get("response"))
+    answers: Final = None if response is None else _mapping(response.get("answers"))
+    if response is None or answers is None:
+        return payload
+    return MappingProxyType(
+        {
+            **{key: value for key, value in payload.items() if key != "response"},
+            **response,
+            "answers": MappingProxyType({key: _systemone_answer(answer) for key, answer in answers.items()}),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,13 +80,30 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
         )
 
     def canonical_model(self, model: str) -> str:
-        return validate_serving_endpoint_name(model)
+        return validate_databricks_decisions_model(model)
 
     def get_complete_url(self, api_base: str, model: str) -> str:
-        return f"{api_base.rstrip('/')}/{validate_serving_endpoint_name(model)}/invocations"
+        if is_ai_decide_model(model):
+            return f"{databricks_workspace_host(api_base)}{_AI_DECIDE_PATH}"
+        return f"{api_base.rstrip('/')}/{validate_databricks_decisions_model(model)}/invocations"
+
+    def transform_decisions_request(
+        self,
+        model: str,
+        request: DecisionsIRRequest,
+        custom_llm_provider: str,
+    ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        body: Final = super().transform_decisions_request(model, request, custom_llm_provider)
+        if isinstance(body, UnsupportedDecisionsRequest) or not is_ai_decide_model(model):
+            return body
+        return MappingProxyType({key: value for key, value in body.items() if key != "model"})
+
+    def unwrap_response(self, payload: object) -> object:
+        fields: Final = _mapping(payload)
+        return payload if fields is None else ai_decide_response(fields)
 
     def classifier_response(self, body: Mapping[str, object], requested_model: str) -> Mapping[str, object]:
-        return MappingProxyType({**body, "model": requested_model})
+        return MappingProxyType({**ai_decide_response(body), "model": requested_model})
 
     def connection(self, api_base: str | None, api_key: str | None) -> DatabricksDecisionsConnection:
         base: Final = self.resolve_api_base(api_base)

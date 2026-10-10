@@ -163,6 +163,7 @@ describe("buildComplexityRouterConfig", () => {
     ["bespoke", "nimble"],
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
     ["databricks", "databricks-openjev-qwen35-4b"],
+    ["databricks", "ai_decide"],
     ["jev", "custom-jev-model"],
     [undefined, "custom-jev-model"],
   ] as const)("accepts %s model %s before saving or testing", (provider, model) => {
