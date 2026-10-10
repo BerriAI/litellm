@@ -25,6 +25,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
     CompresrGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
+    DecisionModelCheck,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -149,6 +152,7 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    DECISION_MODEL = "decision_model"
 
 
 class Role(Enum):
@@ -1156,8 +1160,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. "
+            "Also implemented by guardrail='decision_model'."
         ),
+    )
+
+    max_input_chars: int | None = Field(
+        default=None,
+        gt=0,
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+    )
+
+    max_concurrent_decision_calls: int | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
     extra_headers: list[str] | None = Field(
@@ -1330,6 +1347,17 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     Agent365GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
+    decision_model: str | None = Field(
+        default=None,
+        description="For guardrail='decision_model': the Decisions-API model that scores each check",
+    )
+    checks: BedrockChecksConfigModel | tuple[DecisionModelCheck, ...] | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # widened to also accept decision-model checks
+        default=None,
+        description=(
+            "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate "
+            "checks a decision_model guardrail scores for guardrail='decision_model'"
+        ),
+    )
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
@@ -1353,6 +1381,14 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
         ):
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_checks_list_for_guardrail(self) -> "LitellmParams":
+        if isinstance(self.checks, tuple) and self.guardrail != SupportedGuardrailIntegrations.DECISION_MODEL.value:
+            raise ValueError(
+                f"checks as a list is only supported by guardrail='decision_model', got guardrail={self.guardrail!r}"
+            )
         return self
 
     def __init__(self, **kwargs) -> None:
@@ -1425,6 +1461,7 @@ class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
+    decision_model_providers: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class PresidioPerRequestConfig(LiteLLMBaseModel):
