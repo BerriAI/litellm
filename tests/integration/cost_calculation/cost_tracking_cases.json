@@ -642,20 +642,20 @@
     "gpt-realtime-mini-2025-12-15": {
       "litellm_provider": "openai",
       "mode": "realtime",
-      "input_cost_per_token": 6.0e-07,
+      "input_cost_per_token": 6e-07,
       "output_cost_per_token": 2.4e-06,
-      "input_cost_per_audio_token": 1.0e-05,
-      "cache_read_input_token_cost": 6.0e-08,
-      "cache_read_input_audio_token_cost": 3.0e-07,
-      "output_cost_per_audio_token": 2.0e-05
+      "input_cost_per_audio_token": 1e-05,
+      "cache_read_input_token_cost": 6e-08,
+      "cache_read_input_audio_token_cost": 3e-07,
+      "output_cost_per_audio_token": 2e-05
     },
     "gpt-realtime-2.1": {
       "litellm_provider": "openai",
       "mode": "realtime",
-      "input_cost_per_token": 4.0e-06,
+      "input_cost_per_token": 4e-06,
       "input_cost_per_audio_token": 3.2e-05,
-      "cache_read_input_token_cost": 4.0e-07,
-      "cache_read_input_audio_token_cost": 4.0e-07,
+      "cache_read_input_token_cost": 4e-07,
+      "cache_read_input_audio_token_cost": 4e-07,
       "output_cost_per_token": 2.4e-05,
       "output_cost_per_audio_token": 6.4e-05
     },
@@ -769,6 +769,41 @@
         "search_context_size_medium": 0.014
       },
       "web_search_billing_unit": "per_query"
+    },
+    "xai/grok-4.7": {
+      "litellm_provider": "xai",
+      "mode": "chat",
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06,
+      "cache_read_input_token_cost": 5e-07,
+      "max_tokens": 500000,
+      "max_input_tokens": 500000,
+      "max_output_tokens": 500000,
+      "supports_function_calling": true
+    },
+    "us.anthropic.claude-opus-5-5": {
+      "litellm_provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_token": 4.4e-06,
+      "output_cost_per_token": 2.2e-05,
+      "cache_read_input_token_cost": 2.2e-07,
+      "cache_creation_input_token_cost": 5.5e-06,
+      "max_tokens": 128000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "claude-opus-5-5": {
+      "litellm_provider": "anthropic",
+      "mode": "chat",
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05,
+      "cache_read_input_token_cost": 2e-07,
+      "cache_creation_input_token_cost": 5e-06,
+      "max_tokens": 128000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "supports_function_calling": true
     }
   },
   "cases": [
@@ -29687,7 +29722,13 @@
           }
         }
       },
-      "expected": {"spend": 0.0025118, "input_cost": 0.0020792, "output_cost": 0.0004326, "prompt_tokens": 1840, "completion_tokens": 412}
+      "expected": {
+        "spend": 0.0025118,
+        "input_cost": 0.0020792,
+        "output_cost": 0.0004326,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
     },
     {
       "name": "deepseek-deepseek-v4-chat-prompt_cache_hit",
@@ -32102,6 +32143,143 @@
         "prompt_tokens": 100,
         "completion_tokens": 100
       }
+    },
+    {
+      "name": "xai-grok-4.7-input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-4.7",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello."
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "grok-4.7",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "Hello."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.006152,
+        "input_cost": 0.00368,
+        "output_cost": 0.002472,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "us.anthropic.claude-opus-5-5-input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "us.anthropic.claude-opus-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello."
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "Hello."
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01716,
+        "input_cost": 0.008096,
+        "output_cost": 0.009064,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-opus-5-5-input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-opus-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello."
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-opus-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "Hello."
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0156,
+        "input_cost": 0.00736,
+        "output_cost": 0.00824,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
     }
   ],
   "batch_cases": [
@@ -32149,8 +32327,8 @@
       ],
       "expected": {
         "spend": 0.000126,
-        "input_cost": 0.000056,
-        "output_cost": 0.00007,
+        "input_cost": 5.6e-05,
+        "output_cost": 7e-05,
         "prompt_tokens": 100,
         "completion_tokens": 10,
         "cost_header": false
