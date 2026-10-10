@@ -43,7 +43,13 @@ class AggregatingSink:
     def _row_count(self) -> int:
         return len(self._requests) + len(self._attempts) + len(self._ui_events)
 
-    def _row(self, rows: dict[_Key, _Row], key: _Key, empty: Callable[[], _Row], weight: int) -> _Row | None:
+    def _row(
+        self,
+        rows: dict[_Key, _Row],  # mutable-ok: one of this sink's bounded row folds, shared cap check
+        key: _Key,
+        empty: Callable[[], _Row],
+        weight: int,
+    ) -> _Row | None:
         existing: Final = rows.get(key)
         if existing is not None:
             return existing
@@ -51,7 +57,7 @@ class AggregatingSink:
             self._dropped += weight
             return None
         row: Final = empty()
-        rows[key] = row
+        rows[key] = row  # rebind-ok: inserts the new row into this sink's own bounded fold
         return row
 
     def _add_ui_events(self, event: UIEvent, count: int) -> None:
