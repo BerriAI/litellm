@@ -2,13 +2,16 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Final, TypedDict, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+import yaml
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm._uuid import uuid
 from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
 
 FIXTURE_PATH: Final = Path(__file__).resolve().parents[3] / "litellm-rust/crates/secrets-cyberark/tests/fixtures/parity.json"
@@ -199,3 +202,281 @@ def test_missing_credentials_raise_value_error(monkeypatch: pytest.MonkeyPatch) 
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ValueError, match="Missing CyberArk credentials"):
         CyberArkSecretManager()
+
+
+@pytest.fixture
+def cyberark_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CYBERARK_API_KEY", "test-cyberark-api-key-909")
+    monkeypatch.setenv("CYBERARK_API_BASE", "http://0.0.0.0:8080")
+    monkeypatch.setenv("CYBERARK_ACCOUNT", "default")
+    monkeypatch.setenv("CYBERARK_USERNAME", "admin")
+
+
+def create_mock_response(status_code: int, text: str = ""):
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.text = text
+    mock_response.raise_for_status = MagicMock()
+
+    if status_code >= 400:
+        error = httpx.HTTPStatusError(message=f"HTTP {status_code}", request=MagicMock(), response=mock_response)
+        mock_response.raise_for_status.side_effect = error
+
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_cyberark_write_secret_rejects_yaml_injection(cyberark_env):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        malicious_secret_name = "foo\n- !grant\n  role: !!admin\n  member: attacker"
+
+        mock_sync_client = MagicMock()
+        mock_async_client = AsyncMock()
+
+        with (
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+                return_value=mock_sync_client,
+            ),
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            cyberark_manager = CyberArkSecretManager()
+
+            response = await cyberark_manager.async_write_secret(
+                secret_name=malicious_secret_name,
+                secret_value="sk-9876",
+            )
+
+            assert response["status"] == "error"
+            assert "Invalid secret_name" in response["message"]
+            mock_sync_client.client.post.assert_not_called()
+            mock_async_client.post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "secret_name",
+    [
+        "foo: bar",
+        "foo # bar",
+        "plain-alias",
+        "team/user@example.com",
+    ],
+)
+@pytest.mark.asyncio
+async def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(cyberark_env, secret_name):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        captured = {}
+
+        async def _capture_post(url, headers=None, content=None):
+            captured["content"] = content
+            return create_mock_response(status_code=201, text="")
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
+        mock_async_client = MagicMock()
+        mock_async_client.client.post.side_effect = _capture_post
+
+        with patch(
+            "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+            return_value=mock_sync_client,
+        ):
+            cyberark_manager = CyberArkSecretManager()
+            await cyberark_manager._ensure_variable_exists(secret_name, mock_async_client)
+
+        policy_yaml = captured["content"]
+        parsed = yaml.compose(policy_yaml)
+        assert len(parsed.value) == 1
+        node = parsed.value[0]
+        assert node.tag == "!variable"
+        assert node.value == secret_name
+
+
+@pytest.mark.asyncio
+async def test_cyberark_write_and_read_secret(cyberark_env):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        secret_name = f"test-secret-{uuid.uuid4()}"
+        secret_value = f"test-value-{uuid.uuid4()}"
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
+        mock_sync_client.client.get.return_value = create_mock_response(status_code=200, text=secret_value)
+
+        mock_async_client = AsyncMock()
+        mock_async_client.post.return_value = create_mock_response(status_code=201, text="")
+
+        with (
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+                return_value=mock_sync_client,
+            ),
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            cyberark_manager = CyberArkSecretManager()
+
+            write_response = await cyberark_manager.async_write_secret(
+                secret_name=secret_name,
+                secret_value=secret_value,
+            )
+
+            assert write_response["status"] == "success"
+
+            read_value = cyberark_manager.sync_read_secret(secret_name=secret_name)
+
+            assert read_value is not None
+            assert read_value == secret_value
+
+
+@pytest.mark.asyncio
+async def test_cyberark_rotate_secret(cyberark_env):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        secret_alias = f"test-rotation-key-{uuid.uuid4()}"
+        initial_key_value = f"sk-initial-{uuid.uuid4()}"
+        rotated_key_value = f"sk-rotated-{uuid.uuid4()}"
+
+        current_value = {"value": initial_key_value}
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
+
+        def get_mock_sync_read_response(*args, **kwargs):
+            return create_mock_response(status_code=200, text=current_value["value"])
+
+        mock_sync_client.client.get.side_effect = get_mock_sync_read_response
+
+        mock_async_client = AsyncMock()
+
+        async def mock_async_post(*args, **kwargs):
+            content = kwargs.get("content", "")
+            if content:
+                current_value["value"] = content
+            return create_mock_response(status_code=201, text="")
+
+        mock_async_client.post.side_effect = mock_async_post
+
+        async def get_mock_async_read_response(*args, **kwargs):
+            return create_mock_response(status_code=200, text=current_value["value"])
+
+        mock_async_client.get.side_effect = get_mock_async_read_response
+
+        with (
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+                return_value=mock_sync_client,
+            ),
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            cyberark_manager = CyberArkSecretManager()
+
+            write_response = await cyberark_manager.async_write_secret(
+                secret_name=secret_alias,
+                secret_value=initial_key_value,
+            )
+            assert write_response["status"] == "success"
+
+            initial_read = cyberark_manager.sync_read_secret(secret_name=secret_alias)
+            assert initial_read == initial_key_value
+
+            rotation_response = await cyberark_manager.async_rotate_secret(
+                current_secret_name=secret_alias,
+                new_secret_name=secret_alias,
+                new_secret_value=rotated_key_value,
+            )
+            assert rotation_response["status"] == "success"
+
+            cyberark_manager.cache.flush_cache()
+
+            rotated_read = cyberark_manager.sync_read_secret(secret_name=secret_alias)
+
+            assert rotated_read is not None
+            assert rotated_read == rotated_key_value
+            assert rotated_read != initial_key_value
+
+
+@pytest.mark.asyncio
+async def test_cyberark_rotate_secret_with_new_alias(cyberark_env):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        base_alias = f"test-alias-change-{uuid.uuid4()}"
+        old_alias = f"{base_alias}-v1"
+        new_alias = f"{base_alias}-v2"
+        old_value = f"sk-old-{uuid.uuid4()}"
+        new_value = f"sk-new-{uuid.uuid4()}"
+
+        secrets_store = {}
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
+
+        def get_mock_sync_read(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url", "")
+            for secret_name, secret_val in secrets_store.items():
+                if secret_name in url:
+                    return create_mock_response(status_code=200, text=secret_val)
+            return create_mock_response(status_code=404, text="Not found")
+
+        mock_sync_client.client.get.side_effect = get_mock_sync_read
+
+        mock_async_client = AsyncMock()
+
+        async def mock_async_post(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url", "")
+            content = kwargs.get("content", "")
+
+            if old_alias in url:
+                secrets_store[old_alias] = content
+            elif new_alias in url:
+                secrets_store[new_alias] = content
+
+            return create_mock_response(status_code=201, text="")
+
+        mock_async_client.post.side_effect = mock_async_post
+
+        async def get_mock_async_read(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url", "")
+            for secret_name, secret_val in secrets_store.items():
+                if secret_name in url:
+                    return create_mock_response(status_code=200, text=secret_val)
+            return create_mock_response(status_code=404, text="Not found")
+
+        mock_async_client.get.side_effect = get_mock_async_read
+
+        with (
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+                return_value=mock_sync_client,
+            ),
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            cyberark_manager = CyberArkSecretManager()
+
+            write_response = await cyberark_manager.async_write_secret(
+                secret_name=old_alias,
+                secret_value=old_value,
+            )
+            assert write_response["status"] == "success"
+
+            rotation_response = await cyberark_manager.async_rotate_secret(
+                current_secret_name=old_alias,
+                new_secret_name=new_alias,
+                new_secret_value=new_value,
+            )
+            assert rotation_response["status"] == "success"
+
+            cyberark_manager.cache.flush_cache()
+
+            new_read = cyberark_manager.sync_read_secret(secret_name=new_alias)
+            assert new_read == new_value
+
+            old_read = cyberark_manager.sync_read_secret(secret_name=old_alias)
+            assert old_read == old_value

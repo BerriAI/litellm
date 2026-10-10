@@ -3,27 +3,52 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from importlib.metadata import version
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 from redis import Redis
 
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.ordering import CaseTiming, case_shards, collected_case, fixture_groups, parse_timings
+from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
+INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
+WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
+TIMING_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
+INTEGER_OPTION: Final = TypeAdapter(int)
+
+
+@runtime_checkable
+class WorkerConfig(Protocol):
+    @property
+    def workeroutput(self) -> dict[str, object]: ...
+
+
+class WorkerNode(Protocol):
+    @property
+    def workeroutput(self) -> Mapping[str, object]: ...
+
+
+def _worker_output(config: object) -> dict[str, object] | None:
+    return config.workeroutput if isinstance(config, WorkerConfig) else None
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--integration-order-seed", type=int, default=0)
+    parser.addoption("--integration-shard-count", type=int, default=1)
+    parser.addoption("--integration-shard-index", type=int, default=0)
+    parser.addoption("--integration-timings", type=Path)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -46,6 +71,21 @@ class IntegrationReportPlugin:
     def pytest_xdist_node_collection_finished(self, node: object, ids: Sequence[str]) -> None:
         self.config.stash[COLLECTED] = tuple(nodeid for nodeid in ids if _owned(nodeid))
 
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_testnodedown(self, node: WorkerNode, error: object) -> None:
+        if error is not None:
+            return
+        inventory: Final = WORKER_INVENTORY.validate_python(node.workeroutput.get("integration_inventory"))
+        previous: Final = self.config.stash.get(INVENTORY, inventory)
+        if inventory != previous:
+            raise pytest.UsageError("Integration worker collection inventories disagree")
+        self.config.stash[INVENTORY] = inventory
+
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        output: Final = _worker_output(self.config)
+        if output is not None:
+            output["integration_inventory"] = self.config.stash.get(INVENTORY, ())
+
 
 def _owned(nodeid: str) -> bool:
     parts: Final = Path(nodeid.split("::", 1)[0]).parts
@@ -56,14 +96,26 @@ def _digest(seed: int, identity: str) -> bytes:
     return hashlib.sha256(f"{seed}:{identity}".encode()).digest()
 
 
-def _order_key(seed: int, nodeid: str) -> tuple[bytes, bytes]:
-    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, nodeid)
+def _order_key(seed: int, nodeid: str, group: str = "") -> tuple[bytes, bytes, bytes]:
+    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, group or nodeid), _digest(seed, nodeid)
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    order_seed: Final = config.getoption("integration_order_seed")
+def _timing_content(path: Path | None) -> str:
+    if path is None:
+        return "[]"
+    try:
+        return path.read_text()
+    except (OSError, UnicodeError):
+        return "[]"
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Iterator[None]:
+    yield
+    order_seed: Final = INTEGER_OPTION.validate_python(config.getoption("integration_order_seed"))
     if order_seed:
-        items.sort(key=lambda item: _order_key(order_seed, item.nodeid))
+        groups: Final = fixture_groups(tuple(collected_case(item) for item in items))
+        items.sort(key=lambda item: _order_key(order_seed, item.nodeid, groups[item.nodeid]))
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
@@ -77,7 +129,21 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
-    config.stash[COLLECTED] = tuple(item.nodeid for item in owned)
+    config.stash[INVENTORY] = tuple(item.nodeid for item in owned)
+    count: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_count"))
+    index: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_index"))
+    if count < 1 or not 0 <= index < count:
+        raise pytest.UsageError("Integration shard index must be within the positive shard count")
+    if count > 1:
+        timing_path: Final = TIMING_PATH.validate_python(config.getoption("integration_timings"))
+        shards: Final = case_shards(
+            tuple(collected_case(item) for item in owned), count, parse_timings(_timing_content(timing_path))
+        )
+        selected: Final = tuple(item for item in items if item not in owned or item.nodeid in shards[index])
+        deselected: Final = tuple(item for item in owned if item.nodeid not in shards[index])
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    config.stash[COLLECTED] = tuple(item.nodeid for item in items if item in owned)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -88,6 +154,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     collected: Final = session.config.stash.get(COLLECTED, ())
     reports: Final = tuple(report for report in session.config.stash[REPORTS] if report.nodeid in collected)
+    timings: Final = tuple(
+        CaseTiming(nodeid=nodeid, seconds=sum(report.duration for report in reports if report.nodeid == nodeid))
+        for nodeid in collected
+    )
     passed: Final = tuple(report.nodeid for report in reports if report.when == "call" and report.passed)
     skipped: Final = tuple(report.nodeid for report in reports if report.skipped)
     complete: Final = (
@@ -102,8 +172,12 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         json.dumps(
             {
                 "collected": collected,
+                "inventory": session.config.stash.get(INVENTORY, collected),
+                "shard_count": session.config.getoption("integration_shard_count"),
+                "shard_index": session.config.getoption("integration_shard_index"),
                 "passed": passed,
                 "skipped": skipped,
+                "timings": tuple({"nodeid": timing.nodeid, "seconds": timing.seconds} for timing in timings),
                 "complete": complete,
                 "exitstatus": exitstatus,
                 "hypothesis_version": version("hypothesis"),
@@ -128,6 +202,35 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
         yield value
+
+
+@pytest.fixture(scope="session")
+def shared_provider_server() -> Iterator[SharedProvider]:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
+    with shared_provider() as server:
+        yield server
+        late: Final = server.received()
+        assert late == (), (
+            f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+        )
+
+
+@pytest.fixture
+def provider(shared_provider_server: SharedProvider, request: pytest.FixtureRequest) -> Iterator[SharedProvider]:
+    stray: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert stray == (), (
+        f"the shared fake provider got {[item.target for item in stray]} "
+        f"after {shared_provider_server.last_test} finished"
+    )
+    yield shared_provider_server
+    shared_provider_server.last_test = request.node.nodeid
+    unused: Final = len(shared_provider_server.replies)
+    unread: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert unused == 0, f"{unused} queued provider replies were never requested"
+    assert unread == (), f"the test never read the provider requests {[item.target for item in unread]}"
 
 
 @pytest.fixture

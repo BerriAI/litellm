@@ -1,4 +1,11 @@
-import { systemOneRequestSchema, type SystemOneRequest } from "./schemas";
+import { z } from "zod";
+import { openAIDecisionsRequestSchema, type OpenAIDecisionsRequest } from "./openAIDecisions";
+import {
+  decisionsRequestSchema,
+  systemOneRequestSchema,
+  type DecisionEndpoint,
+  type PlaygroundRequest,
+} from "./schemas";
 
 const RECOMMENDED_MAX_SCORE_LEVELS = 10;
 
@@ -8,18 +15,20 @@ export interface SystemOnePayloadIssue {
   severity: "error" | "warning";
 }
 
-export interface SystemOnePayloadValidation {
+export interface PayloadValidation<T> {
   isValid: boolean;
-  payload?: SystemOneRequest;
+  payload?: T;
   issues: SystemOnePayloadIssue[];
 }
 
-const invalid = (path: string, message: string): SystemOnePayloadValidation => ({
+export type SystemOnePayloadValidation = PayloadValidation<PlaygroundRequest>;
+
+const invalid = (path: string, message: string) => ({
   isValid: false,
-  issues: [{ path, message, severity: "error" }],
+  issues: [{ path, message, severity: "error" as const }],
 });
 
-function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
+export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
   try {
     return { ok: true, value: JSON.parse(raw) };
   } catch (error: unknown) {
@@ -27,7 +36,7 @@ function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; mes
   }
 }
 
-const scoreLevelWarnings = (payload: SystemOneRequest): SystemOnePayloadIssue[] =>
+const scoreLevelWarnings = (payload: PlaygroundRequest): SystemOnePayloadIssue[] =>
   Object.entries(payload.questions)
     .filter(([, question]) => question.type === "score" && question.criteria.length > RECOMMENDED_MAX_SCORE_LEVELS)
     .map(([id]) => ({
@@ -36,7 +45,7 @@ const scoreLevelWarnings = (payload: SystemOneRequest): SystemOnePayloadIssue[] 
       severity: "warning",
     }));
 
-export function validateSystemOnePayload(raw: string): SystemOnePayloadValidation {
+function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidation<T> {
   if (!raw.trim()) {
     return invalid("root", "Payload cannot be empty.");
   }
@@ -46,7 +55,7 @@ export function validateSystemOnePayload(raw: string): SystemOnePayloadValidatio
     return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
   }
 
-  const result = systemOneRequestSchema.safeParse(json.value);
+  const result = schema.safeParse(json.value);
   if (!result.success) {
     return {
       isValid: false,
@@ -58,5 +67,18 @@ export function validateSystemOnePayload(raw: string): SystemOnePayloadValidatio
     };
   }
 
-  return { isValid: true, payload: result.data, issues: scoreLevelWarnings(result.data) };
+  return { isValid: true, payload: result.data, issues: [] };
+}
+
+export function validateSystemOnePayload(
+  raw: string,
+  endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
+): SystemOnePayloadValidation {
+  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
+  const result = validatePayload<PlaygroundRequest>(raw, schema);
+  return result.payload ? { ...result, issues: scoreLevelWarnings(result.payload) } : result;
+}
+
+export function validateOpenAIDecisionsPayload(raw: string): PayloadValidation<OpenAIDecisionsRequest> {
+  return validatePayload(raw, openAIDecisionsRequestSchema);
 }

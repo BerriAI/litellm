@@ -16,6 +16,7 @@ from httpx import Response
 import litellm
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponsesAPIResponse
+from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -136,7 +137,7 @@ async def test_responses_api_background_polling_rejects_missing_input():
     async def return_exception(*, e: Exception, **kwargs: object) -> Exception:
         return e
 
-    processor._handle_llm_api_exception = AsyncMock(side_effect=return_exception)
+    processor.handle_llm_api_exception = AsyncMock(side_effect=return_exception)
     processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o"}, MagicMock()))
 
     async def receive():
@@ -290,7 +291,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         response = client.post(
             "/openai/v1/responses",
             json=test_data,
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
         )
 
         assert response.status_code in [200, 401, 500]
@@ -342,7 +343,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         response = client.post(
             "/cursor/chat/completions",
             json=test_data,
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
         )
 
         # Should return 200 (or 401/500 if auth fails)
@@ -727,11 +728,17 @@ class TestResponsesWSFirstFrameModelAuth:
         async def fake_llm_call():
             return None
 
+        authenticated_models: Final[list[str]] = []
+
+        async def record_model_auth(*, model: str, **_kwargs: object) -> None:
+            authenticated_models.append(model)
+
         with (
             patch(
                 "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
                 new_callable=AsyncMock,
-            ) as mock_model_auth,
+                side_effect=record_model_auth,
+            ),
             patch(
                 "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
                 return_value=processor,
@@ -748,7 +755,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 user_api_key_dict=MagicMock(),
             )
 
-        mock_model_auth.assert_awaited_once()
+        assert authenticated_models == ["gpt-4o-mini"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
@@ -956,14 +963,15 @@ class TestResponsesWSFirstFrameModelAuth:
         request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
+        empty_settings: Final[dict[str, object]] = {}
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                "litellm.proxy.auth.user_api_key_auth.enforce_key_and_fallback_model_access",
                 new_callable=AsyncMock,
             ) as mock_key_check,
             patch(
-                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
                 new_callable=AsyncMock,
             ) as mock_common_checks,
             patch(
@@ -972,7 +980,7 @@ class TestResponsesWSFirstFrameModelAuth:
             ),
             patch("litellm.proxy.proxy_server.master_key", "sk-test"),
             patch("litellm.proxy.proxy_server.user_custom_auth", None),
-            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.general_settings", empty_settings),
         ):
             await _enforce_responses_ws_first_frame_model_auth(
                 request=request,
@@ -999,7 +1007,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
 class TestReadWSModelFromFirstFrameErrors:
     @pytest.mark.asyncio
-    async def test_timeout_closes_without_error_frame(self):
+    async def test_transport_error_first_frame_closes_with_internal_error(self):
         import asyncio
 
         from litellm.proxy.response_api_endpoints.endpoints import (
@@ -1015,7 +1023,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -1105,6 +1113,34 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result == ("reasoning-group", raw)
         ws.send_text.assert_not_awaited()
         ws.close.assert_not_awaited()
+
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (None, 3600.0),
+        (60, 60.0),
+        (1200, 1200.0),
+        (7200, 7200.0),
+        (59, 3600.0),
+        (0, 3600.0),
+        (9000, 3600.0),
+        ("not-a-number", 3600.0),
+    ],
+)
+def test_responses_ws_session_limit_resolution(monkeypatch, configured, expected):
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _resolve_responses_ws_session_limit_seconds,
+    )
+
+    if configured is None:
+        monkeypatch.delitem(general_settings, "responses_websocket_session_limit_seconds", raising=False)
+    else:
+        monkeypatch.setitem(general_settings, "responses_websocket_session_limit_seconds", configured)
+
+    assert _resolve_responses_ws_session_limit_seconds() == expected
 
 
 class TestManagedResponsesSameProvider:
@@ -1259,7 +1295,7 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.common_utils.http_parsing_utils import (
-        _read_request_body as real_read_request_body,
+        read_request_body as real_read_request_body,
     )
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -1296,7 +1332,7 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
         with (
             patch.object(ps, "llm_router", mock_router),
             patch(
-                "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
+                "litellm.proxy.response_api_endpoints.endpoints.read_request_body",
                 side_effect=capturing_read_request_body,
             ),
         ):
@@ -1406,12 +1442,12 @@ class TestCursorMessagesArmToolNormalization:
         seen = {}
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
-            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+            from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
-            seen["body"] = await _read_request_body(request=request)
+            seen["body"] = await read_request_body(request=request)
             return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
 
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
         try:
             with patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion):
                 client = TestClient(app)
@@ -1438,7 +1474,7 @@ class TestCursorMessagesArmToolNormalization:
                         ],
                         "tool_choice": {"type": "custom", "name": "ApplyPatch"},
                     },
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -1469,9 +1505,9 @@ class TestCursorMessagesArmToolNormalization:
         seen = {}
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
-            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+            from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
-            seen["body"] = await _read_request_body(request=request)
+            seen["body"] = await read_request_body(request=request)
             return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
 
         body = {
@@ -1479,14 +1515,14 @@ class TestCursorMessagesArmToolNormalization:
             "messages": [{"role": "user", "content": "hi"}],
             "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
         }
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
         try:
             with patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion):
                 client = TestClient(app)
                 response = client.post(
                     "/cursor/chat/completions",
                     json=body,
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -1686,7 +1722,7 @@ class TestCursorInputArmFlattening:
             ],
         )
 
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
         try:
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
                 mock_router.aresponses = AsyncMock(return_value=mock_response)
@@ -1711,7 +1747,7 @@ class TestCursorInputArmFlattening:
                         ],
                         "tool_choice": {"type": "custom", "custom": {"name": "ApplyPatch"}},
                     },
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -1766,7 +1802,7 @@ class TestChatCompletionsBodyDetection:
             ],
         )
 
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
         try:
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
                 mock_router.aresponses = AsyncMock(return_value=mock_response)
@@ -1778,7 +1814,7 @@ class TestChatCompletionsBodyDetection:
                         "messages": None,
                         "input": [{"role": "user", "content": "hello"}],
                     },
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -1948,12 +1984,12 @@ class TestCursorModelSuffixResolutionEndToEnd:
         seen = {}
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
-            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+            from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
-            seen["body"] = await _read_request_body(request=request)
+            seen["body"] = await read_request_body(request=request)
             return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
 
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
         try:
             with (
                 patch("litellm.proxy.proxy_server.llm_router", new=_router_serving_only("claude-opus-5")),
@@ -1966,7 +2002,7 @@ class TestCursorModelSuffixResolutionEndToEnd:
                         "model": "claude-opus-5-thinking-xhigh-fast",
                         "messages": [{"role": "user", "content": "hi"}],
                     },
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -2003,7 +2039,7 @@ class TestCursorModelSuffixResolutionEndToEnd:
         mock_router = _router_serving_only("claude-opus-5")
         mock_router.aresponses = AsyncMock(return_value=mock_response)
 
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
         try:
             with patch("litellm.proxy.proxy_server.llm_router", new=mock_router):
                 client = TestClient(app)
@@ -2013,7 +2049,7 @@ class TestCursorModelSuffixResolutionEndToEnd:
                         "model": "claude-opus-5-thinking-high",
                         "input": [{"role": "user", "content": "hello"}],
                     },
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
@@ -2030,7 +2066,7 @@ def _cursor_budget_auth_env(base_model: str, spend: float):
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.model_max_budget_limiter import (
         VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
-        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+        PROXY_VirtualKeyModelMaxBudgetLimiter,
     )
 
     valid_token = UserAPIKeyAuth(
@@ -2038,7 +2074,7 @@ def _cursor_budget_auth_env(base_model: str, spend: float):
         token="hashed-cursor-budget-token",
         model_max_budget={base_model: {"budget_limit": 0.00001, "time_period": "1d"}},
     )
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     limiter.dual_cache.in_memory_cache.set_cache(
         key=f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{valid_token.token}:{base_model}:1d",
         value=spend,
@@ -2126,14 +2162,14 @@ class TestCursorVariantResolvedBeforeAuth:
     def _run_with_recording_auth(self, mock_router, request_model: str):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+        from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
         from fastapi import Request
 
         bodies_seen_by_auth = []
 
         async def recording_auth(request: Request) -> UserAPIKeyAuth:
-            bodies_seen_by_auth.append(await _read_request_body(request=request))
+            bodies_seen_by_auth.append(await read_request_body(request=request))
             return UserAPIKeyAuth(api_key="sk-test-cursor")
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
@@ -2230,7 +2266,7 @@ def _post_blocked_responses(
             patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
         ):
             client = TestClient(app)
-            return client.post("/v1/responses", json=body, headers={"Authorization": "Bearer sk-1234"})
+            return client.post("/v1/responses", json=body, headers={"Authorization": "Bearer sk-9876"})
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
 
@@ -2337,7 +2373,7 @@ class TestResponsesInputTokens:
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
         try:
             client = TestClient(app)
-            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-1234"})
+            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
             return response, token_counter_mock
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)

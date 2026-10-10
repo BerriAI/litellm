@@ -2,6 +2,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
 
+from pydantic import JsonValue
+
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.llms.anthropic.common_utils import (
+    flatten_unencrypted_web_search_results_in_anthropic_messages,
+    sanitize_tool_use_ids_in_anthropic_messages,
+    strip_empty_content_blocks_from_anthropic_messages,
+)
+from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequestOptionalParams,
     AnthropicStopDetails,
@@ -119,8 +128,40 @@ def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMe
     return ChatCompletionSystemMessage(role="system", content=system)
 
 
+def prepare_native_messages(
+    messages: list[dict[str, JsonValue]],
+    system: str | list[dict[str, JsonValue]] | None,
+    kwargs: dict[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str | None = None,
+    tools: list[dict[str, JsonValue]] | None = None,
+    api_base: str | None = None,
+    presanitized: bool = False,
+) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
+    normalized: Final = (
+        messages
+        if presanitized
+        else flatten_unencrypted_web_search_results_in_anthropic_messages(
+            sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+        )
+    )
+    return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
+        tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            normalized,
+            system,
+            kwargs,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            api_base=api_base,
+        ),
+    )
+
+
 @lru_cache(maxsize=1)
-def _anthropic_messages_optional_param_keys() -> frozenset[str]:
+def anthropic_messages_optional_param_keys() -> frozenset[str]:
     """
     Valid AnthropicMessagesRequestOptionalParams keys.
 
@@ -152,13 +193,13 @@ class AnthropicMessagesRequestUtils:
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys: Final = _anthropic_messages_optional_param_keys()
+        valid_keys: Final = anthropic_messages_optional_param_keys()
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
             from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-            AnthropicConfig._maybe_drop_speed_param(
+            AnthropicConfig.maybe_drop_speed_param(
                 model=model,
                 optional_params=filtered_params,
                 drop_params=drop_params,
@@ -174,6 +215,13 @@ class AnthropicMessagesRequestUtils:
                         drop_params=drop_params,
                         output_key=param,
                     )
+        if is_reasoning_auto_summary_enabled():
+            thinking_param: Final = filtered_params.get("thinking")
+            if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
+                return cast(
+                    AnthropicMessagesRequestOptionalParams,
+                    {**filtered_params, "thinking": {**thinking_param, "display": "summarized"}},
+                )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
 

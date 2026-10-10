@@ -12,6 +12,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.proxy_server import ProxyConfig
+from tests._master_key import MASTER_KEY
 
 
 def _make_db_model(model_name: str, model_id: str):
@@ -311,7 +312,7 @@ class TestDeleteDeploymentKeepsConfigModelsOnEmptyConfigRead:
     @pytest.mark.asyncio
     async def test_delete_deployment_keeps_config_models_when_config_read_has_no_model_list(self, tmp_path):
         config_file_path = str(tmp_path / "config.yaml")
-        (tmp_path / "config.yaml").write_text("general_settings:\n  master_key: sk-1234\n")
+        (tmp_path / "config.yaml").write_text(f"general_settings:\n  master_key: {MASTER_KEY}\n")
 
         router = self._router(
             [

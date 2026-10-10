@@ -1,38 +1,24 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.utils import EmbeddingResponse
-
-
-@dataclass(frozen=True, slots=True)
-class LiteLLMEmbeddingRequest:
-    model: str
-    input: object
-    api_key: str | None
-    api_base: str | None
-    custom_llm_provider: str | None
-    kwargs: Mapping[str, object]
 
 
 class NativeEmbedding(Protocol):
     def __call__(
         self,
-        request: LiteLLMEmbeddingRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        call: NativeCall,
     ) -> EmbeddingResponse: ...
 
 
 class NativeAembedding(Protocol):
     def __call__(
         self,
-        request: LiteLLMEmbeddingRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        call: NativeCall,
     ) -> Awaitable[EmbeddingResponse]: ...
 
 

@@ -40,6 +40,7 @@ describe("edit root: transport gates", () => {
       "description",
       "transport",
       "max_concurrent_requests",
+      "rpm",
       "command",
       "args",
       "env_json",
@@ -210,7 +211,7 @@ describe("create root: where it diverges from edit", () => {
   });
 });
 
-const ALWAYS = ["server_name", "alias", "description", "transport", "max_concurrent_requests"];
+const ALWAYS = ["server_name", "alias", "description", "transport", "max_concurrent_requests", "rpm"];
 const PERMS = [
   "allow_all_keys",
   "available_on_public_internet",
@@ -478,6 +479,7 @@ describe("projection shape", () => {
     expect("description" in projected).toBe(true);
     expect(projected.description).toBeUndefined();
     expect(Object.keys(projected)).toContain("max_concurrent_requests");
+    expect(Object.keys(projected)).toContain("rpm");
   });
 
   it("emits mounted-but-unset CREDENTIAL keys as undefined rather than omitting them", () => {

@@ -2,11 +2,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, NamedTuple
 
-from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 
-class LangsmithInputs(BaseModel):
+
+class LangsmithInputs(LiteLLMBaseModel):
     model: str | None = None
     messages: list[Any] | None = None
     stream: bool | None = None

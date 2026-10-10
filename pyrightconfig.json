@@ -1,7 +1,13 @@
 {
     "include": ["litellm"],
     "ignore": [],
-    "exclude": ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py"],
+    "exclude": ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py"],
+    "executionEnvironments": [
+        {
+            "root": "tests/e2e_harness",
+            "extraPaths": ["tests/e2e", "tests/e2e/batches", "tests/e2e/guardrails", "tests/e2e/load", "tests/e2e/logging"]
+        }
+    ],
     "pythonVersion": "3.12",
     "typeCheckingMode": "strict",
     "enableTypeIgnoreComments": false,

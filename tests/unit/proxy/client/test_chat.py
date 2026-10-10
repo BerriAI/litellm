@@ -7,6 +7,7 @@ import sys
 
 import pytest
 import requests
+from pydantic import ValidationError
 from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.exceptions import UnauthorizedError
 
@@ -256,3 +257,53 @@ def test_completions_stream_gives_up_at_the_timeout_instead_of_hanging(hanging_s
         next(client.completions_stream(model="gpt-5.4", messages=[{"role": "user", "content": "hi"}]))
 
     assert time.monotonic() - started < 10
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n'
+            b'data: {"choices": [{"delta": {"content": "lo"}}]}\n\n'
+            b"data: [DONE]\n\n",
+            [{"choices": [{"delta": {"content": "Hel"}}]}, {"choices": [{"delta": {"content": "lo"}}]}],
+        ),
+        (
+            b': keep-alive\n\nevent: ping\n\ndata: not json\n\ndata: {"id": "caf\xc3\xa9"}\n\ndata: 7\n\n',
+            [{"id": "café"}, 7],
+        ),
+        (b'data: {"id": 1}\n\ndata:  [DONE] \n\ndata: {"id": 2}\n\n', [{"id": 1}]),
+        (b"", []),
+    ],
+)
+@responses.activate
+def test_completions_stream_yields_parsed_sse_chunks(client, base_url, sample_messages, body, expected):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
+
+    assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == expected
+
+
+@responses.activate
+def test_completions_stream_rejects_bytes_that_are_not_utf8(client, base_url, sample_messages):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=b"data: \xff\n\n", status=200)
+
+    with pytest.raises(UnicodeDecodeError):
+        list(client.completions_stream(model="gpt-4", messages=sample_messages))
+
+
+@pytest.mark.parametrize("line", ['data: {"id": 1}', 5, memoryview(b'data: {"id": 1}')])
+@responses.activate
+def test_completions_stream_rejects_lines_that_are_not_bytes(client, base_url, sample_messages, monkeypatch, line):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=b"", status=200)
+    monkeypatch.setattr(requests.Response, "iter_lines", lambda self: iter([line]))
+
+    with pytest.raises(ValidationError):
+        list(client.completions_stream(model="gpt-4", messages=sample_messages))
+
+
+@responses.activate
+def test_completions_stream_accepts_bytearray_lines(client, base_url, sample_messages, monkeypatch):
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=b"", status=200)
+    monkeypatch.setattr(requests.Response, "iter_lines", lambda self: iter([bytearray(b'data: {"id": 1}')]))
+
+    assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == [{"id": 1}]

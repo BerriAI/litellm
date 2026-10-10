@@ -6,12 +6,13 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Container, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from pydantic import BaseModel
 
 import litellm
 import litellm.types
@@ -205,36 +206,108 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
     return system_content_str, msg_i
 
 
+_OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
+
+
+def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
+    return litellm.BadRequestError(
+        message=BAD_MESSAGE_ERROR_STR + f"the {message['role']} message at index {msg_i} {detail}",
+        model=model,
+        llm_provider="ollama",
+    )
+
+
+def _ollama_content_part(model: str, message: AllMessageValues, part: object, msg_i: int) -> tuple[str, str]:
+    match part:
+        case {"type": "text", "text": str() as text}:
+            return text, ""
+        case {"type": "text", "text": bad_text}:
+            raise _ollama_bad_message(
+                model, message, msg_i, f"has a {type(bad_text).__name__} text part; text must be a string"
+            )
+        case {"type": "text"}:
+            raise _ollama_bad_message(model, message, msg_i, "has a text part with no text; text must be a string")
+        case {"type": "image_url", "image_url": str() as image_url}:
+            return "", image_url
+        case {"type": "image_url", "image_url": {"url": str() as image_url}}:
+            return "", image_url
+        case {"type": "image_url", "image_url": dict()}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                "has an image_url object without a url string; image_url must be a URL string or an object with a url",
+            )
+        case {"type": "image_url", "image_url": bad_image_url}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                f"has a {type(bad_image_url).__name__} image_url; image_url must be a URL string or an object with a url",
+            )
+        case {"type": "image_url"}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                "has an image_url part with no image_url; image_url must be a URL string or an object with a url",
+            )
+        case Mapping():
+            return "", ""
+        case _:
+            raise _ollama_bad_message(
+                model, message, msg_i, f"has a {type(part).__name__} content part; content parts must be objects"
+            )
+
+
+def _ollama_user_message_parts(
+    model: str, message: AllMessageValues, msg_i: int
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    msg_content: Final = message.get("content")
+    if msg_content is None:
+        return (), ()
+    if isinstance(msg_content, str):
+        return ((msg_content,) if msg_content else ()), ()
+    if not isinstance(msg_content, list):
+        raise _ollama_bad_message(
+            model,
+            message,
+            msg_i,
+            f"has {type(msg_content).__name__} content; content must be a string or a list of content parts",
+        )
+    parts: Final = tuple(_ollama_content_part(model, message, part, msg_i) for part in msg_content)
+    texts: Final = tuple(text for text, _ in parts if text)
+    image_urls: Final = tuple(image_url for _, image_url in parts if image_url)
+    return texts, image_urls
+
+
+def _ollama_user_turn(model: str, messages: Sequence[AllMessageValues], msg_i: int) -> tuple[str, tuple[str, ...], int]:
+    user_run: Final = tuple(
+        itertools.takewhile(
+            lambda message: message["role"] in _OLLAMA_USER_ROLES, (messages[i] for i in range(msg_i, len(messages)))
+        )
+    )
+    user_parts: Final = tuple(
+        _ollama_user_message_parts(model, message, msg_i + offset) for offset, message in enumerate(user_run)
+    )
+    user_content_str: Final = "\n".join("\n".join(texts) for texts, _ in user_parts if texts)
+    image_urls: Final = tuple(itertools.chain.from_iterable(urls for _, urls in user_parts))
+    return user_content_str, image_urls, len(user_run)
+
+
 def ollama_pt(
     model: str, messages: list
 ) -> (
     str | OllamaVisionModelObject
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
-    user_message_types: Final = {"user", "tool", "function"}
     msg_i = 0
     images: Final = []
     prompt = ""
     while msg_i < len(messages):
         init_msg_i = msg_i
-        user_content_str = ""
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
-            msg_content = messages[msg_i].get("content")
-            if msg_content:
-                if isinstance(msg_content, list):
-                    for m in msg_content:
-                        if m.get("type", "") == "image_url":
-                            if isinstance(m["image_url"], str):
-                                images.append(m["image_url"])
-                            elif isinstance(m["image_url"], dict):
-                                images.append(m["image_url"]["url"])
-                        elif m.get("type", "") == "text":
-                            user_content_str += m["text"]
-                else:
-                    # Tool message content will always be a string
-                    user_content_str += msg_content
-
-            msg_i += 1
+        user_content_str, image_urls, user_run_len = _ollama_user_turn(model, messages, msg_i)
+        images.extend(image_urls)
+        msg_i += user_run_len
 
         if user_content_str:
             prompt += f"### User:\n{user_content_str}\n\n"
@@ -249,26 +322,18 @@ def ollama_pt(
             assistant_content_str += convert_content_list_to_str(messages[msg_i])
 
             tool_calls = messages[msg_i].get("tool_calls")
-            ollama_tool_calls = []
             if tool_calls:
-                for call in tool_calls:
-                    call_id: str = call["id"]
-                    function_name: str = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
-
-                    ollama_tool_calls.append(
+                if assistant_content_str:
+                    assistant_content_str += "\n"
+                assistant_content_str += "\n".join(
+                    json.dumps(
                         {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": function_name,
-                                "arguments": arguments,
-                            },
+                            "name": call["function"]["name"],
+                            "arguments": json.loads(call["function"]["arguments"]),
                         }
                     )
-
-            if ollama_tool_calls:
-                assistant_content_str += f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
+                    for call in tool_calls
+                )
 
             msg_i += 1
 
@@ -458,7 +523,7 @@ async def _afetch_and_extract_template(
     Returns: (chat_template, bos_token, eos_token)
     """
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
-        _extract_token_value,
+        extract_token_value,
     )
 
     bos_token = ""
@@ -480,8 +545,8 @@ async def _afetch_and_extract_template(
             and "chat_template" in tokenizer_config["tokenizer"]
         ):
             tokenizer_data: dict = tokenizer_config["tokenizer"]
-            bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
-            eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
+            bos_token = extract_token_value(token_value=tokenizer_data.get("bos_token"))
+            eos_token = extract_token_value(token_value=tokenizer_data.get("eos_token"))
             chat_template = tokenizer_data["chat_template"]
         else:
             # Fallback: Try to fetch chat template from separate .jinja file
@@ -495,8 +560,8 @@ async def _afetch_and_extract_template(
                     and isinstance(tokenizer_config["tokenizer"], dict)
                 ):
                     tokenizer_data: dict = tokenizer_config["tokenizer"]
-                    bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
-                    eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
+                    bos_token = extract_token_value(token_value=tokenizer_data.get("bos_token"))
+                    eos_token = extract_token_value(token_value=tokenizer_data.get("eos_token"))
             else:
                 raise Exception("No chat template found")
 
@@ -512,7 +577,7 @@ def _fetch_and_extract_template(
     Returns: (chat_template, bos_token, eos_token)
     """
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
-        _extract_token_value,
+        extract_token_value,
     )
 
     bos_token = ""
@@ -534,8 +599,8 @@ def _fetch_and_extract_template(
             and "chat_template" in tokenizer_config["tokenizer"]
         ):
             tokenizer_data: dict = tokenizer_config["tokenizer"]
-            bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
-            eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
+            bos_token = extract_token_value(token_value=tokenizer_data.get("bos_token"))
+            eos_token = extract_token_value(token_value=tokenizer_data.get("eos_token"))
             chat_template = tokenizer_data["chat_template"]
         else:
             # Fallback: Try to fetch chat template from separate .jinja file
@@ -549,8 +614,8 @@ def _fetch_and_extract_template(
                     and isinstance(tokenizer_config["tokenizer"], dict)
                 ):
                     tokenizer_data: dict = tokenizer_config["tokenizer"]
-                    bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
-                    eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
+                    bos_token = extract_token_value(token_value=tokenizer_data.get("bos_token"))
+                    eos_token = extract_token_value(token_value=tokenizer_data.get("eos_token"))
             else:
                 raise Exception("No chat template found")
 
@@ -560,8 +625,8 @@ def _fetch_and_extract_template(
 async def ahf_chat_template(model: str, messages: list, chat_template: str | None = None):
     """HuggingFace chat template (async version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
-        _aget_chat_template_file,
-        _aget_tokenizer_config,
+        aget_chat_template_file,
+        aget_tokenizer_config,
         strftime_now,
     )
 
@@ -572,8 +637,8 @@ async def ahf_chat_template(model: str, messages: list, chat_template: str | Non
     template, bos_token, eos_token = await _afetch_and_extract_template(
         model=model,
         chat_template=chat_template,
-        get_config_fn=_aget_tokenizer_config,
-        get_template_fn=_aget_chat_template_file,
+        get_config_fn=aget_tokenizer_config,
+        get_template_fn=aget_chat_template_file,
     )
     return _render_chat_template(
         env=env,
@@ -587,8 +652,8 @@ async def ahf_chat_template(model: str, messages: list, chat_template: str | Non
 def hf_chat_template(model: str, messages: list, chat_template: str | None = None):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
-        _get_chat_template_file,
-        _get_tokenizer_config,
+        get_chat_template_file,
+        get_tokenizer_config,
         strftime_now,
     )
 
@@ -599,8 +664,8 @@ def hf_chat_template(model: str, messages: list, chat_template: str | None = Non
     template, bos_token, eos_token = _fetch_and_extract_template(
         model=model,
         chat_template=chat_template,
-        get_config_fn=_get_tokenizer_config,
-        get_template_fn=_get_chat_template_file,
+        get_config_fn=get_tokenizer_config,
+        get_template_fn=get_chat_template_file,
     )
     return _render_chat_template(
         env=env,
@@ -1160,7 +1225,7 @@ def _gemini_tool_call_invoke_helper(
     return function_call
 
 
-def _encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: str | None) -> str:
+def encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: str | None) -> str:
     """
     Embed thought signature into tool call ID for OpenAI client compatibility.
 
@@ -1179,7 +1244,10 @@ def _encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: st
     return tool_call_id
 
 
-def _get_thought_signature_from_tool(tool: dict) -> str | None:
+_encode_tool_call_id_with_signature = encode_tool_call_id_with_signature
+
+
+def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 
     If not provided try to extract thought signature from tool call id
@@ -1191,32 +1259,50 @@ def _get_thought_signature_from_tool(tool: dict) -> str | None:
     # First check tool's provider_specific_fields
     provider_fields: Final = tool.get("provider_specific_fields") or {}
     if isinstance(provider_fields, dict):
-        signature = provider_fields.get("thought_signature")
-        if signature:
-            return signature
+        typed_provider_fields: Final = cast(  # cast-ok: preserve dynamic provider response fields
+            dict[str, object], provider_fields
+        )
+        signature_from_tool_fields: Final = typed_provider_fields.get("thought_signature")
+        if signature_from_tool_fields:
+            return cast(str, signature_from_tool_fields)  # cast-ok: untyped provider response field
 
     # Then check function's provider_specific_fields
     function: Final = tool.get("function")
     if function:
         if isinstance(function, dict):
-            func_provider_fields: Final = function.get("provider_specific_fields") or {}
+            function_dict: Final = cast(  # cast-ok: preserve dynamic provider response fields
+                dict[str, object], function
+            )
+            func_provider_fields: Final = function_dict.get("provider_specific_fields") or {}
             if isinstance(func_provider_fields, dict):
-                signature = func_provider_fields.get("thought_signature")
-                if signature:
-                    return signature
-        elif hasattr(function, "provider_specific_fields") and function.provider_specific_fields:
-            if isinstance(function.provider_specific_fields, dict):
-                signature = function.provider_specific_fields.get("thought_signature")
-                if signature:
-                    return signature
+                typed_func_provider_fields: Final = cast(  # cast-ok: preserve dynamic provider response fields
+                    dict[str, object], func_provider_fields
+                )
+                signature_from_function_fields: Final = typed_func_provider_fields.get("thought_signature")
+                if signature_from_function_fields:
+                    return cast(str, signature_from_function_fields)  # cast-ok: untyped provider response field
+        elif hasattr(function, "provider_specific_fields") and getattr(function, "provider_specific_fields"):
+            function_provider_fields: Final[object] = getattr(function, "provider_specific_fields")
+            if isinstance(function_provider_fields, dict):
+                typed_function_provider_fields: Final = cast(  # cast-ok: provider fields are dynamic
+                    dict[str, object], function_provider_fields
+                )
+                signature_from_model_fields: Final = typed_function_provider_fields.get("thought_signature")
+                if signature_from_model_fields:
+                    return cast(str, signature_from_model_fields)  # cast-ok: untyped provider response field
     # Check if thought signature is embedded in tool call ID
-    tool_call_id: Final = tool.get("id")
+    tool_call_id: Final = cast(  # cast-ok: tool IDs come from model responses
+        str, tool.get("id")
+    )
     if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
         parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
         if len(parts) == 2:
             _, signature = parts
             return signature
     return None
+
+
+_get_thought_signature_from_tool = get_thought_signature_from_tool
 
 
 def _get_dummy_thought_signature() -> str:
@@ -1289,7 +1375,7 @@ def convert_to_gemini_tool_call_invoke(
             VertexGeminiConfig,
         )
 
-        needs_dummy_signature: Final = model is not None and VertexGeminiConfig._is_gemini_3_or_newer(model)
+        needs_dummy_signature: Final = model is not None and VertexGeminiConfig.is_gemini_3_or_newer(model)
 
         if tool_calls is not None:
             for tool in tool_calls:
@@ -1300,7 +1386,7 @@ def convert_to_gemini_tool_call_invoke(
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {"function_call": gemini_function_call}
-                        thought_signature = _get_thought_signature_from_tool(dict(tool))
+                        thought_signature = get_thought_signature_from_tool(dict(tool))
                         # Gemini signs only the first functionCall part of a parallel batch, so scope the
                         # placeholder fallback to that part instead of fabricating one per sibling call:
                         # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures#parallel_function_calling_example
@@ -1729,11 +1815,16 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
-def _find_server_tool_result(
+ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+
+
+def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: Sequence[object] | None,
     tool_results: Sequence[object] | None,
 ) -> dict[str, object] | None:
+    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
@@ -1808,11 +1899,7 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        server_tool_result = (
-            _find_server_tool_result(tool_id, web_search_results, tool_results)
-            if tool_id.startswith("srvtoolu_")
-            else None
-        )
+        server_tool_result = find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         if server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {
@@ -1919,7 +2006,7 @@ def anthropic_infer_file_id_content_type(
 def anthropic_process_openai_file_message(
     message: ChatCompletionFileObject,
 ) -> AnthropicMessagesDocumentParam | AnthropicMessagesImageParam | AnthropicMessagesContainerUploadParam:
-    file_message: Final = cast(ChatCompletionFileObject, message)
+    file_message: Final = message
     file_sub: Final = file_message.get("file")
     if file_sub is None:
         raise litellm.BadRequestError(
@@ -3381,12 +3468,15 @@ def _parse_content_type(content_type: str) -> str:
     return m.get_content_type()
 
 
-def _parse_mime_type(base64_data: str) -> str | None:
+def parse_mime_type(base64_data: str) -> str | None:
     mime_type_match: Final = re.match(r"data:(.*?);base64", base64_data)
     if mime_type_match:
         return mime_type_match.group(1)
     else:
         return None
+
+
+_parse_mime_type = parse_mime_type
 
 
 class BedrockImageProcessor:
@@ -3459,7 +3549,7 @@ class BedrockImageProcessor:
         return img_without_base_64, mime_type, image_format
 
     @staticmethod
-    def _validate_format(mime_type: str, image_format: str) -> str:
+    def validate_format(mime_type: str, image_format: str) -> str:
         """Validate image format and mime type for both images and documents."""
 
         supported_image_formats: Final = litellm.AmazonConverseConfig().get_supported_image_types()
@@ -3485,6 +3575,8 @@ class BedrockImageProcessor:
                     f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
+
+    _validate_format = validate_format
 
     @staticmethod
     def _get_document_format(mime_type: str, supported_doc_formats: list[str]) -> str:
@@ -3596,7 +3688,7 @@ class BedrockImageProcessor:
             mime_type = format
             image_format = mime_type.split("/")[1]
 
-        image_format = cls._validate_format(mime_type, image_format)
+        image_format = cls.validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
     @classmethod
@@ -3615,7 +3707,7 @@ class BedrockImageProcessor:
             mime_type = format
             image_format = mime_type.split("/")[1]
 
-        image_format = cls._validate_format(mime_type, image_format)
+        image_format = cls.validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
 
@@ -3805,6 +3897,11 @@ def _parse_bedrock_tool_result_content_list(
             _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
         elif content["type"] == "file":
             _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
+        elif content["type"] == "tool_reference":
+            content_map = cast(dict[str, object], content)  # cast-ok: untyped anthropic json
+            tool_name = content_map.get("tool_name")
+            if isinstance(tool_name, str):
+                tool_result_content_blocks.append(BedrockToolResultContentBlock(text=tool_name))
     return tool_result_content_blocks
 
 
@@ -3887,7 +3984,7 @@ def _convert_to_bedrock_tool_call_result(
 
     tool_result: Final = BedrockToolResultBlock(content=tool_result_content_blocks, toolUseId=id)
     if used_search_results:
-        tool_result["status"] = cast(Literal["success"], "success")
+        tool_result["status"] = "success"
 
     content_block: Final = BedrockContentBlock(toolResult=tool_result)
 
@@ -4080,7 +4177,7 @@ def _insert_assistant_continue_message(
                 )
             )
     elif litellm.modify_params:
-        text = convert_content_list_to_str(cast(ChatCompletionAssistantMessage, DEFAULT_ASSISTANT_CONTINUE_MESSAGE))
+        text = convert_content_list_to_str(DEFAULT_ASSISTANT_CONTINUE_MESSAGE)
         messages.append(
             BedrockMessageBlock(
                 role="assistant",
@@ -4405,14 +4502,14 @@ class BedrockConverseMessagesProcessor:
                                 _parts.append(_part)
                             elif element["type"] == "file":
                                 _part = await BedrockConverseMessagesProcessor._async_process_file_message(
-                                    message=cast(ChatCompletionFileObject, element)
+                                    message=element
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "document":
                                 _part = BedrockConverseMessagesProcessor._process_document_message(element)
                                 _parts.append(_part)
                             _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                                message_block=cast(OpenAIMessageContentListBlock, element),
+                                message_block=element,
                                 block_type="content_block",
                                 model=model,
                             )
@@ -4526,7 +4623,7 @@ class BedrockConverseMessagesProcessor:
                         if isinstance(element, dict):
                             if element["type"] == "thinking":
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[cast(ChatCompletionThinkingBlock, element)]
+                                    thinking_blocks=[element]
                                 )
                                 assistants_parts = (
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4609,7 +4706,7 @@ class BedrockConverseMessagesProcessor:
         return reasoning_content_blocks
 
     @staticmethod
-    def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
+    def process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
         file_message: Final = message.get("file")
         if file_message is None:
             raise litellm.BadRequestError(
@@ -4628,6 +4725,8 @@ class BedrockConverseMessagesProcessor:
             )
         format: Final = file_message.get("format")
         return BedrockImageProcessor.process_image_sync(image_url=cast(str, file_id or file_data), format=format)
+
+    _process_file_message = process_file_message
 
     @staticmethod
     async def _async_process_file_message(
@@ -4667,7 +4766,7 @@ class BedrockConverseMessagesProcessor:
             )
         media_type: Final[str] = source["media_type"]
         data: Final[str] = source["data"]
-        doc_format = BedrockImageProcessor._validate_format(mime_type=media_type, image_format=media_type.split("/")[1])
+        doc_format = BedrockImageProcessor.validate_format(mime_type=media_type, image_format=media_type.split("/")[1])
 
         # Deterministic name using the same hashing pattern as _create_bedrock_block
         HASH_SAMPLE_BYTES: Final = 64 * 1024
@@ -4778,15 +4877,13 @@ def _bedrock_converse_messages_pt(
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
-                            _part = BedrockConverseMessagesProcessor._process_file_message(
-                                message=cast(ChatCompletionFileObject, element)
-                            )
+                            _part = BedrockConverseMessagesProcessor.process_file_message(message=element)
                             _parts.append(_part)
                         elif element["type"] == "document":
                             _part = BedrockConverseMessagesProcessor._process_document_message(element)
                             _parts.append(_part)
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                            message_block=cast(OpenAIMessageContentListBlock, element),
+                            message_block=element,
                             block_type="content_block",
                             model=model,
                         )
@@ -4903,7 +5000,7 @@ def _bedrock_converse_messages_pt(
                         if element["type"] == "thinking":
                             thinking_block = (
                                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[cast(ChatCompletionThinkingBlock, element)]
+                                    thinking_blocks=[element]
                                 )
                             )
                             assistants_parts = (
@@ -5164,18 +5261,33 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
 
 
 # Function call template
-def function_call_prompt(messages: list, functions: list):
-    function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
+def function_call_prompt(
+    messages: list[dict[str, object]],
+    functions: list[object],
+) -> list[dict[str, object]]:
+    function_prompt = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
     for function in functions:
         function_prompt += f"""\n{function}\n"""
 
+    def _append_function_prompt(message: dict[str, object]) -> bool:
+        role: Final = cast(  # cast-ok: preserve dynamic role membership behavior
+            Container[object], message["role"]
+        )
+        if "system" not in role:
+            return False
+
+        content: Final = message["content"]
+        if isinstance(content, str):
+            message["content"] = f"{content} {function_prompt}"
+        else:
+            cast(  # cast-ok: preserve dynamic content append behavior
+                list[object], content
+            ).append({"type": "text", "text": f""" {function_prompt}"""})
+        return True
+
     function_added_to_prompt = False
     for message in messages:
-        if "system" in message["role"]:
-            if isinstance(message["content"], str):
-                message["content"] += f""" {function_prompt}"""
-            else:
-                message["content"].append({"type": "text", "text": f""" {function_prompt}"""})
+        if _append_function_prompt(message):
             function_added_to_prompt = True
 
     if function_added_to_prompt is False:
@@ -5277,7 +5389,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
+        if litellm.AnthropicTextConfig.is_anthropic_text_model(model):
             return anthropic_pt(messages=messages)
         return anthropic_messages_pt(messages=messages, model=model, llm_provider=custom_llm_provider)
     elif custom_llm_provider == "anthropic_xml":
@@ -5292,7 +5404,7 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     elif custom_llm_provider == "mistral":
-        return litellm.MistralConfig()._transform_messages(messages=messages, model=model)
+        return litellm.MistralConfig().transform_messages(messages=messages, model=model)
     elif custom_llm_provider == "bedrock":
         if "amazon.titan-text" in model:
             return amazon_titan_pt(messages=messages)

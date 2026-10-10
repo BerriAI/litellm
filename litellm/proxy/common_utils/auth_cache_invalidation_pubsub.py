@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.config_sync_pubsub import (
-    _ConfigSyncPubSub,
-    _pubsub_capable_client,
+from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
+    ConfigSyncPubSub,
+    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     coordination_redis_cache,
+    pubsub_capable_client,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 
@@ -75,7 +77,7 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
 
 async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
+        client: Final = pubsub_capable_client(redis_cache)
         async with _in_flight_publishes:
             await client.publish(auth_cache_invalidation_channel(redis_cache), message)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
@@ -181,7 +183,7 @@ class AuthCacheInvalidationSubscriber:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)
+                client = pubsub_capable_client(self._redis_cache)
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
@@ -200,7 +202,7 @@ class AuthCacheInvalidationSubscriber:
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
@@ -222,7 +224,7 @@ class AuthCacheInvalidationSubscriber:
             additional_cache.delete_cache(parsed.cache_key)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
         try:
             await pubsub.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection

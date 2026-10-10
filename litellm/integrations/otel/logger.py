@@ -1,5 +1,6 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
+import sys
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
@@ -53,6 +54,7 @@ from litellm.integrations.otel.model.spans import SpanRole, span_role_for_servic
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
+    active_phase_span,
     is_recordable_span,
     mcp_message_transport_span,
     post_response_root,
@@ -573,6 +575,7 @@ class OpenTelemetryV2(CustomLogger):
             request_purpose=call.purpose,
             trace=call.trace,
             session_id=call.session_id,
+            metadata_keys=tuple(self.config.baggage_metadata_keys),
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -777,6 +780,11 @@ class OpenTelemetryV2(CustomLogger):
         if is_recordable_span(span):
             span.add_event(name, attributes)
 
+    def set_phase_attributes(self, attributes: Mapping[str, str | int | float | bool]) -> None:
+        span: Final = active_phase_span()
+        if span is not None and is_recordable_span(span):
+            span.set_attributes(attributes)
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -966,10 +974,12 @@ def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") 
 
 
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
-    try:
-        from litellm.proxy import proxy_server
-    except Exception:
-        return None
+    """The proxy's registered V2 logger, read without importing the proxy.
+
+    Request paths call this (the router's ``route`` phase among them), so importing
+    ``proxy_server`` here would load the whole proxy on an SDK caller's event loop.
+    """
+    proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
     logger: Final = getattr(proxy_server, "open_telemetry_logger", None)
     return logger if isinstance(logger, OpenTelemetryV2) else None
 
@@ -1037,6 +1047,12 @@ def phase_event(name: str, attributes: Mapping[str, str | int] | None = None) ->
     logger: Final = _registered_v2_logger()
     if logger is not None:
         logger.add_phase_event(name, attributes)
+
+
+def phase_attributes(attributes: Mapping[str, str | int | float | bool]) -> None:
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        logger.set_phase_attributes(attributes)
 
 
 def build_otel_v2_logger(

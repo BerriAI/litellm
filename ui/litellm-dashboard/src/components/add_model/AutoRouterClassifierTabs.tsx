@@ -16,7 +16,11 @@ import {
   type ClassifierType,
   type ComplexityRouterConfigValue,
 } from "./ComplexityRouterConfig";
-import { defaultJevClassifierConfig, normalizeJevClassifierConfig } from "./jev_classifier_config";
+import {
+  defaultJevClassifierConfig,
+  isOssClassifierProvider,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
 import { transitionClassifierType } from "./classifier_type_transition";
 import { isForecastClassifier } from "./forecast_classifier_config";
 import {
@@ -28,7 +32,7 @@ import {
   AUTO_ROUTER_CONTACT_URL,
 } from "./AutoRouterAvailability";
 
-function ClassifierOption({
+export function ClassifierOption({
   value,
   label,
   description,
@@ -75,7 +79,7 @@ function ClassifierOption({
   );
 }
 
-function ClassifierMenu({
+export function ClassifierMenu({
   id,
   label,
   value,
@@ -150,7 +154,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     if (next === "jev") changeType("jev");
   };
   const changeProvider = (provider: unknown) => {
-    if (provider !== "jev" && provider !== "laya" && provider !== "bespoke") return;
+    if (!isOssClassifierProvider(provider)) return;
     const defaults = defaultJevClassifierConfig(provider);
     onChange({
       ...value,
@@ -173,7 +177,11 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
-            { value: "jev", label: "OSS Classifier", description: "Use Jev, Laya, or Bespoke Nimble to choose a tier" },
+            {
+              value: "jev",
+              label: "OSS Classifier",
+              description: "Use Jev, Laya, Bespoke Nimble, or Databricks to choose a tier",
+            },
           ].map((option) => (
             <Label
               key={option.value}
@@ -217,6 +225,10 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
             <Label>
               <RadioGroupItem value="bespoke" />
               Bespoke Nimble
+            </Label>
+            <Label>
+              <RadioGroupItem value="databricks" />
+              Databricks
             </Label>
           </RadioGroup>
         </fieldset>

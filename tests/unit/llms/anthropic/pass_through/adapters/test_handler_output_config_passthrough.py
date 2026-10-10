@@ -27,6 +27,7 @@ Tests cover (consolidating PRs #23706 and #22727):
 
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,14 +35,13 @@ import pytest
 # Anchor sys.path to this file's location — not the working-directory-relative
 # pattern Greptile flagged on PR #23706. Resolves correctly regardless of
 # where pytest is invoked from.
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     ANTHROPIC_ONLY_REQUEST_KEYS,
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -187,9 +187,7 @@ class TestOutputConfigStrippedFromCompletionKwargs:
         result = _call_prepare(
             extra_kwargs={
                 "custom_llm_provider": "azure",
-                "output_config": {
-                    "format": {"type": "json_schema", "schema": losing_schema}
-                },
+                "output_config": {"format": {"type": "json_schema", "schema": losing_schema}},
             },
             output_format={"type": "json_schema", "schema": winning_schema},
         )
@@ -250,3 +248,18 @@ class TestPromptCacheOptionsForwarded:
         result = _call_prepare(extra_kwargs={"prompt_cache_options": {"mode": "explicit"}}, model="gpt-5.6")
         completion_kwargs = result[0] if isinstance(result, tuple) else result
         assert completion_kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("converted_stream_key", sorted(CONVERTED_STREAM_KEYS))
+async def test_messages_layer_converted_stream_flag_still_gets_a_message_back(converted_stream_key: str):
+    response: Final = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+        max_tokens=16,
+        messages=MESSAGES,
+        model="openai/gpt-4o",
+        stream=False,
+        mock_response="hi",
+        **{converted_stream_key: True},
+    )
+
+    assert response["content"][0]["text"] == "hi"

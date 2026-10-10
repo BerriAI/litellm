@@ -2,7 +2,7 @@
 Repository for the auto-router per-session rollup (LiteLLM_AutoRouterSession).
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.repositories.base_repository import BaseRepository
@@ -12,10 +12,21 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _AutoRouterSessionDb(Protocol):
+    @property
+    def litellm_autoroutersession(self) -> TableActions["prisma_models.LiteLLM_AutoRouterSession"]: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _AutoRouterSessionDb: ...
+
+
 class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_AutoRouterSession"]:
-        return self.prisma_client.db.litellm_autoroutersession
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.db.litellm_autoroutersession
 
     @property
     def model_class(self) -> type[LiteLLM_AutoRouterSession]:

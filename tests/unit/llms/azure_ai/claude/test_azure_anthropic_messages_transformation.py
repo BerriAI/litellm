@@ -40,7 +40,7 @@ class TestAzureAnthropicMessagesConfig:
         api_key = "test-api-key"
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
@@ -73,7 +73,7 @@ class TestAzureAnthropicMessagesConfig:
         litellm_params = {"api_key": "test-api-key"}
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
@@ -99,7 +99,7 @@ class TestAzureAnthropicMessagesConfig:
         litellm_params = {"api_key": "test-api-key"}
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(

@@ -51,10 +51,10 @@ async def check_feature_access_for_user(
     # Feature is disabled.  Check if team/org admins are exempted.
     if general_settings.get(allow_team_admins_flag, False):
         from litellm.proxy.management_endpoints.common_utils import (
-            _user_has_admin_privileges,
+            user_has_admin_privileges,
         )
 
-        is_admin: Final = await _user_has_admin_privileges(
+        is_admin: Final = await user_has_admin_privileges(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
