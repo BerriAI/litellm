@@ -1807,6 +1807,18 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
     )
 
 
+LITELLM_INTERNAL_ASSISTANT_FIELDS: Final = LITELLM_INTERNAL_MESSAGE_FIELDS.difference({"reasoning_content"})
+
+
+def strip_litellm_internal_assistant_fields(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "assistant" or LITELLM_INTERNAL_ASSISTANT_FIELDS.isdisjoint(message):
+        return message
+    return cast(  # cast-ok: same TypedDict minus internal keys
+        AllMessageValues,
+        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_ASSISTANT_FIELDS},
+    )
+
+
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
