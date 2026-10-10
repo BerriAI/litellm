@@ -1665,9 +1665,15 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
 
+                # When streaming, the initial output_item.added event introduces the tool
+                # call. Arguments are streamed subsequently via function_call_arguments.delta events.
+                # If parsed_chunk explicitly provides arguments (e.g. non-delta test/mock chunk),
+                # use it; otherwise initialize arguments to "" so that delta events don't duplicate
+                # arguments already present on the output_item.
+                function_arguments = parsed_chunk.get("arguments") or ""
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
                     name=converted["function"]["name"] or None,
-                    arguments=converted["function"]["arguments"] or parsed_chunk.get("arguments") or "",
+                    arguments=function_arguments,
                 )
                 if provider_specific_fields:
                     function_chunk["provider_specific_fields"] = provider_specific_fields
