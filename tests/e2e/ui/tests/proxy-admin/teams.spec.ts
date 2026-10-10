@@ -117,7 +117,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await page.getByRole("tab", { name: "Members" }).click();
 
-    await page.getByTestId("edit-member").first().click();
+    await page.locator("tbody tr[data-row-id]").first().click();
 
     const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
@@ -164,7 +164,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await page.getByRole("tab", { name: "Members" }).click();
 
-    await page.getByTestId("edit-member").first().click();
+    await page.locator("tbody tr[data-row-id]").first().click();
 
     const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });

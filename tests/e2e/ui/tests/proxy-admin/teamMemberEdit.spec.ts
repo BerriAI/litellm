@@ -91,7 +91,7 @@ test.describe("Proxy Admin - Team member edit", () => {
 
     const memberRow = page.locator("tr", { hasText: memberId }).first();
     await expect(memberRow).toBeVisible({ timeout: 10_000 });
-    await memberRow.getByTestId("edit-member").click();
+    await memberRow.getByText(memberId).first().click();
 
     const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 10_000 });

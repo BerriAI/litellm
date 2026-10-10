@@ -19,6 +19,7 @@ interface BudgetDurationDropdownProps {
   style?: React.CSSProperties;
   placeholder?: string;
   showNeverResets?: boolean;
+  disabled?: boolean;
 }
 
 const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
@@ -29,9 +30,10 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   style = {},
   placeholder = "n/a",
   showNeverResets = false,
+  disabled = false,
 }) => {
   return (
-    <Select items={DURATION_LABELS} value={value || null} onValueChange={onChange}>
+    <Select items={DURATION_LABELS} value={value || null} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger id={id} className={`w-full ${className}`} style={style}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

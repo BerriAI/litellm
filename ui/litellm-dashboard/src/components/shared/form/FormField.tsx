@@ -20,8 +20,12 @@ export type FormFieldControlProps<
   "aria-describedby": string | undefined;
 };
 
-export interface FormFieldProps<TFieldValues extends FieldValues, TName extends FieldPath<TFieldValues>> {
-  control: Control<TFieldValues>;
+export interface FormFieldProps<
+  TFieldValues extends FieldValues,
+  TName extends FieldPath<TFieldValues>,
+  TTransformedValues = TFieldValues,
+> {
+  control: Control<TFieldValues, unknown, TTransformedValues>;
   name: TName;
   label?: React.ReactNode;
   description?: React.ReactNode;
@@ -30,7 +34,11 @@ export interface FormFieldProps<TFieldValues extends FieldValues, TName extends 
   children: (control: FormFieldControlProps<TFieldValues, TName>) => React.ReactNode;
 }
 
-export const FormField = <TFieldValues extends FieldValues, TName extends FieldPath<TFieldValues>>({
+export const FormField = <
+  TFieldValues extends FieldValues,
+  TName extends FieldPath<TFieldValues>,
+  TTransformedValues = TFieldValues,
+>({
   control,
   name,
   label,
@@ -38,7 +46,7 @@ export const FormField = <TFieldValues extends FieldValues, TName extends FieldP
   orientation,
   className,
   children,
-}: FormFieldProps<TFieldValues, TName>) => {
+}: FormFieldProps<TFieldValues, TName, TTransformedValues>) => {
   const reactId = React.useId();
   const controlId = `${reactId}-control`;
   const descriptionId = `${reactId}-description`;

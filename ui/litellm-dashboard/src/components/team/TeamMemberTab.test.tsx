@@ -16,6 +16,9 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 const { POST } = vi.hoisted(() => ({ POST: vi.fn() }));
 vi.mock("@/lib/http/api", () => ({ fetchClient: { POST } }));
 
+const { toast } = vi.hoisted(() => ({ toast: { success: vi.fn(), fromError: vi.fn() } }));
+vi.mock("@/lib/toast", () => ({ toast }));
+
 vi.mock("@/utils/roles", () => ({
   isUserTeamAdminForSingleTeam: vi.fn(() => false),
   isProxyAdminRole: vi.fn(() => false),
@@ -31,6 +34,7 @@ const mockSetIsEditMemberModalVisible = vi.fn();
 const mockSetIsAddMemberModalVisible = vi.fn();
 const mockOnMemberSpendReset = vi.fn();
 const mockOnMemberBudgetReset = vi.fn();
+const mockOnMembersBulkUpdated = vi.fn();
 
 const budgetResetIso = new Date(2026, 6, 15, 12, 0, 0).toISOString();
 
@@ -129,6 +133,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -146,6 +151,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -166,6 +172,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -186,6 +193,7 @@ describe("TeamMembersComponent", () => {
       handleMemberDelete: mockHandleMemberDelete,
       onMemberSpendReset: mockOnMemberSpendReset,
       onMemberBudgetReset: mockOnMemberBudgetReset,
+      onMembersBulkUpdated: mockOnMembersBulkUpdated,
       setSelectedEditMember: mockSetSelectedEditMember,
       setIsEditMemberModalVisible: mockSetIsEditMemberModalVisible,
       setIsAddMemberModalVisible: mockSetIsAddMemberModalVisible,
@@ -211,6 +219,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -239,6 +248,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -267,6 +277,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -284,6 +295,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -307,6 +319,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -324,6 +337,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -342,6 +356,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -363,14 +378,14 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
       />,
     );
 
-    const editButtons = screen.getAllByTestId("edit-member");
-    await user.click(editButtons[0]);
+    await user.click(screen.getAllByRole("cell", { name: "user1@test.com" })[0]);
 
     expect(mockSetIsEditMemberModalVisible).toHaveBeenCalledWith(true);
     expect(mockSetSelectedEditMember).toHaveBeenCalled();
@@ -399,6 +414,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -409,7 +425,7 @@ describe("TeamMembersComponent", () => {
     expect(within(memberRow).getByText("0 RPM / 0 TPM")).toBeInTheDocument();
     expect(within(memberRow).queryByText("No Limits")).not.toBeInTheDocument();
 
-    await user.click(within(memberRow).getByTestId("edit-member"));
+    await user.click(within(memberRow).getAllByRole("cell", { name: "user1@test.com" })[0]);
 
     const zeroLimitsMember = { user_id: "user1@test.com", max_budget_in_team: 0, tpm_limit: 0, rpm_limit: 0 };
     expect(mockSetSelectedEditMember).toHaveBeenCalledWith(expect.objectContaining(zeroLimitsMember));
@@ -454,6 +470,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -486,6 +503,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -493,7 +511,6 @@ describe("TeamMembersComponent", () => {
     );
 
     expect(screen.queryByTestId("delete-member")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("edit-member")).toHaveLength(2);
   });
 
   it("should show delete button for proxy admin when canEditTeam is true", () => {
@@ -507,6 +524,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -514,10 +532,10 @@ describe("TeamMembersComponent", () => {
     );
 
     expect(screen.getAllByTestId("delete-member")).toHaveLength(2);
-    expect(screen.getAllByTestId("edit-member")).toHaveLength(2);
   });
 
-  it("should hide action buttons when canEditTeam is false", () => {
+  it("should hide action buttons and not open edit from a row when canEditTeam is false", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <TeamMembersComponent
         teamData={createMockTeamData()}
@@ -525,14 +543,17 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
       />,
     );
 
-    expect(screen.queryByTestId("edit-member")).not.toBeInTheDocument();
     expect(screen.queryByTestId("delete-member")).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("cell", { name: "user1@test.com" })[0]);
+    expect(mockSetIsEditMemberModalVisible).not.toHaveBeenCalled();
   });
 
   describe("reset spend", () => {
@@ -544,6 +565,7 @@ describe("TeamMembersComponent", () => {
           handleMemberDelete={mockHandleMemberDelete}
           onMemberSpendReset={mockOnMemberSpendReset}
           onMemberBudgetReset={mockOnMemberBudgetReset}
+          onMembersBulkUpdated={mockOnMembersBulkUpdated}
           setSelectedEditMember={mockSetSelectedEditMember}
           setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
           setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -684,6 +706,7 @@ describe("TeamMembersComponent", () => {
           handleMemberDelete={mockHandleMemberDelete}
           onMemberSpendReset={mockOnMemberSpendReset}
           onMemberBudgetReset={mockOnMemberBudgetReset}
+          onMembersBulkUpdated={mockOnMembersBulkUpdated}
           setSelectedEditMember={mockSetSelectedEditMember}
           setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
           setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -734,9 +757,28 @@ describe("TeamMembersComponent", () => {
       );
 
       const row = screen.getByRole("row", { name: /user2@test\.com/ });
-      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Custom");
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Team default");
+      expect(within(row).queryByTestId("reset-member-budget")).not.toBeInTheDocument();
       expect(row).toHaveTextContent("$20.00");
       expect(row).not.toHaveTextContent("Unlimited");
+    });
+
+    it("shows no budget source for a member whose private row has no budget limit when the team has no default", () => {
+      const base = createMockTeamData();
+      renderTab(
+        createMockTeamData({
+          team_memberships: [
+            {
+              ...base.team_memberships[0],
+              litellm_budget_table: { ...base.team_memberships[0].litellm_budget_table, max_budget: null },
+            },
+          ],
+        }),
+      );
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).queryByTestId("member-budget-source")).not.toBeInTheDocument();
+      expect(row).toHaveTextContent("Unlimited");
     });
 
     it("shows no source label for a member with neither a custom nor a team budget", () => {
@@ -744,6 +786,65 @@ describe("TeamMembersComponent", () => {
 
       expect(screen.queryByTestId("member-budget-source")).not.toBeInTheDocument();
       expect(screen.queryByTestId("reset-member-budget")).not.toBeInTheDocument();
+    });
+
+    const teamWithDefault = (defaultMaxBudget: number | null, memberships: TeamData["team_memberships"]) => {
+      const base = createMockTeamData();
+      return createMockTeamData({
+        team_info: {
+          ...base.team_info,
+          team_member_budget_table: {
+            max_budget: defaultMaxBudget,
+            budget_duration: null,
+            tpm_limit: null,
+            rpm_limit: null,
+          },
+        },
+        team_memberships: memberships,
+      });
+    };
+
+    const ownRowWithOnlyRpm = (): TeamData["team_memberships"][number] => {
+      const base = createMockTeamData().team_memberships[0];
+      return {
+        ...base,
+        litellm_budget_table: { ...base.litellm_budget_table, max_budget: null, tpm_limit: null, rpm_limit: 100 },
+      };
+    };
+
+    it.each([
+      ["$0", 0],
+      ["blank", null],
+    ])("shows Unlimited with no source for a member without their own cap when the team default is %s", (_, value) => {
+      renderTab(teamWithDefault(value, [ownRowWithOnlyRpm()]));
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).queryByTestId("member-budget-source")).not.toBeInTheDocument();
+      expect(row).toHaveTextContent("Unlimited");
+    });
+
+    it("keeps a member on the shared $0 team default row at $0", () => {
+      const base = createMockTeamData().team_memberships[0];
+      const onSharedDefaultRow: TeamData["team_memberships"][number] = {
+        ...base,
+        budget_id: "team-default-budget",
+        budget_source: "team_default",
+        litellm_budget_table: { ...base.litellm_budget_table, budget_id: "team-default-budget", max_budget: 0 },
+      };
+      renderTab(teamWithDefault(0, [onSharedDefaultRow]));
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Team default");
+      expect(row).toHaveTextContent("$0.00");
+      expect(row).not.toHaveTextContent("Unlimited");
+    });
+
+    it("caps a member with no membership budget row at a positive team default", () => {
+      renderTab(teamWithDefault(10, []));
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Team default");
+      expect(row).toHaveTextContent("$10.00");
     });
 
     it("only offers Use team default on customized members, and only to editors", () => {
@@ -808,6 +909,140 @@ describe("TeamMembersComponent", () => {
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(POST).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bulk edit", () => {
+    const BULK_UPDATE_ROUTE = "/management/v1/teams/{team_id}/members/bulk_update";
+
+    const renderTab = (canEditTeam: boolean) =>
+      renderWithProviders(
+        <TeamMembersComponent
+          teamData={createMockTeamData()}
+          canEditTeam={canEditTeam}
+          handleMemberDelete={mockHandleMemberDelete}
+          onMemberSpendReset={mockOnMemberSpendReset}
+          onMemberBudgetReset={mockOnMemberBudgetReset}
+          onMembersBulkUpdated={mockOnMembersBulkUpdated}
+          setSelectedEditMember={mockSetSelectedEditMember}
+          setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+          setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+        />,
+      );
+
+    const openBulkEditForBothMembers = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole("checkbox", { name: "Select user1@test.com" }));
+      await user.click(screen.getByRole("checkbox", { name: "Select user2@test.com" }));
+      await user.click(screen.getByRole("button", { name: "Bulk Edit (2 selected)" }));
+      return screen.findByRole("dialog", { name: "Bulk Edit Members" });
+    };
+
+    it("offers no row selection or bulk edit to someone who cannot edit the team", () => {
+      renderTab(false);
+
+      expect(screen.queryByRole("checkbox", { name: "Select user1@test.com" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("bulk-edit-members")).not.toBeInTheDocument();
+    });
+
+    it("sends only the ticked limits, with a blank ticked limit as a clear, for every selected member", async () => {
+      const user = userEvent.setup();
+      POST.mockResolvedValue({
+        data: {
+          data: [
+            { user_id: "user1@test.com", success: true },
+            { user_id: "user2@test.com", success: true },
+          ],
+        },
+      });
+      renderTab(true);
+      expect(screen.getByRole("button", { name: "Bulk Edit (0 selected)" })).toBeDisabled();
+
+      const dialog = await openBulkEditForBothMembers(user);
+      const submit = within(dialog).getByRole("button", { name: "Update 2 members" });
+      expect(submit).toBeDisabled();
+
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member Budget (USD)" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member Budget/ }), {
+        target: { value: "50" },
+      });
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member TPM Limit" }));
+      await user.click(submit);
+
+      await waitFor(() => expect(mockOnMembersBulkUpdated).toHaveBeenCalledTimes(1));
+      expect(POST).toHaveBeenCalledExactlyOnceWith(BULK_UPDATE_ROUTE, {
+        params: { path: { team_id: "team-123" } },
+        body: {
+          members: [
+            { user_id: "user1@test.com", max_budget_in_team: 50, tpm_limit: null },
+            { user_id: "user2@test.com", max_budget_in_team: 50, tpm_limit: null },
+          ],
+        },
+      });
+      expect(toast.success).toHaveBeenCalledWith("Updated 2 members");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Bulk Edit (0 selected)" })).toBeDisabled();
+    });
+
+    it("keeps only the members that failed selected and names them in the error", async () => {
+      const user = userEvent.setup();
+      POST.mockResolvedValue({
+        data: {
+          data: [
+            { user_id: "user1@test.com", success: true },
+            { user_id: "user2@test.com", success: false, error: "Member not found in team" },
+          ],
+        },
+      });
+      renderTab(true);
+
+      const dialog = await openBulkEditForBothMembers(user);
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member RPM Limit" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), {
+        target: { value: "10" },
+      });
+      await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
+
+      await waitFor(() => expect(mockOnMembersBulkUpdated).toHaveBeenCalledTimes(1));
+      expect(toast.fromError).toHaveBeenCalledWith(
+        "Updated 1 of 2 members. Failed: user2@test.com: Member not found in team",
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Bulk Edit (1 selected)" })).toBeEnabled();
+      expect(screen.getByRole("checkbox", { name: "Select user2@test.com" })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "Select user1@test.com" })).not.toBeChecked();
+    });
+
+    it("blocks a malformed limit in the form without calling the API", async () => {
+      const user = userEvent.setup();
+      renderTab(true);
+
+      const dialog = await openBulkEditForBothMembers(user);
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member TPM Limit" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member TPM Limit/ }), {
+        target: { value: "1.5" },
+      });
+      await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
+
+      expect(await within(dialog).findByText(/Enter a whole number/)).toBeVisible();
+      expect(POST).not.toHaveBeenCalled();
+      expect(mockOnMembersBulkUpdated).not.toHaveBeenCalled();
+    });
+
+    it("keeps the dialog open and the selection intact when the request fails", async () => {
+      const user = userEvent.setup();
+      POST.mockRejectedValue(new Error("Only team admins can update member budgets"));
+      renderTab(true);
+
+      const dialog = await openBulkEditForBothMembers(user);
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member RPM Limit" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), {
+        target: { value: "10" },
+      });
+      await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
+
+      await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith("Only team admins can update member budgets"));
+      expect(mockOnMembersBulkUpdated).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Bulk Edit Members" })).toBeInTheDocument();
     });
   });
 });

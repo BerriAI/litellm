@@ -1,3 +1,4 @@
+import { useBulkUpdateTeamMembers } from "@/app/(dashboard)/hooks/teams/useBulkUpdateTeamMembers";
 import { useResetTeamMemberBudget } from "@/app/(dashboard)/hooks/teams/useResetTeamMemberBudget";
 import { useResetTeamMemberSpend } from "@/app/(dashboard)/hooks/teams/useResetTeamMemberSpend";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -6,15 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import MemberTable from "@/components/common_components/MemberTable";
+import MemberTable, { memberRowId } from "@/components/common_components/MemberTable";
 import { Member } from "@/components/networking";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
 import { toast } from "@/lib/toast";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
-import { CircleHelp } from "lucide-react";
+import type { RowSelectionState } from "@tanstack/react-table";
+import { CircleHelp, Pencil } from "lucide-react";
 import { useState, type ComponentProps } from "react";
+import BulkEditMembersDialog from "./BulkEditMembersDialog";
+import { buildBulkMemberPatches, type MemberLimitsPatch } from "./bulkMemberLimits";
+import { hasCustomMaxBudget } from "./memberBudgetReset";
 import { TeamData, TeamMemberBudgetSource, TeamMembership } from "./TeamInfo";
 
 const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, string> = {
@@ -22,8 +27,14 @@ const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, stri
   custom: "Custom",
 };
 
+const positiveOrNull = (value: number | null): number | null => (value !== null && value > 0 ? value : null);
+
 const formatBudget = (value: number | null): string =>
   value === null ? "Unlimited" : `$${formatNumberWithCommas(value, 2)}`;
+
+const MAX_LISTED_FAILURES = 3;
+
+const pluralMembers = (count: number): string => `${count} member${count === 1 ? "" : "s"}`;
 
 export const seedMemberBudgetFields = (
   record: Member,
@@ -48,6 +59,7 @@ interface TeamMemberTabProps {
   setIsAddMemberModalVisible: (visible: boolean) => void;
   onMemberSpendReset: () => void;
   onMemberBudgetReset: () => void;
+  onMembersBulkUpdated: () => void;
 }
 
 export default function TeamMemberTab({
@@ -59,11 +71,17 @@ export default function TeamMemberTab({
   setIsAddMemberModalVisible,
   onMemberSpendReset,
   onMemberBudgetReset,
+  onMembersBulkUpdated,
 }: TeamMemberTabProps) {
   const [memberToResetSpend, setMemberToResetSpend] = useState<Member | null>(null);
   const [memberToResetBudget, setMemberToResetBudget] = useState<Member | null>(null);
   const { mutate: resetMemberSpend, isPending: isResettingSpend } = useResetTeamMemberSpend();
   const { mutate: resetMemberBudget, isPending: isResettingBudget } = useResetTeamMemberBudget();
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [bulkEditMembers, setBulkEditMembers] = useState<Member[] | null>(null);
+  const { mutate: bulkUpdateMembers, isPending: isBulkUpdating } = useBulkUpdateTeamMembers();
+  const members = teamData.team_info.members_with_roles;
+  const selectedMembers = members.filter((member) => rowSelection[memberRowId(member)]);
   const teamDefaultBudget = teamData.team_info.team_member_budget_table?.max_budget ?? null;
 
   const formatNumber = (value: number | null): string => {
@@ -97,16 +115,20 @@ export default function TeamMemberTab({
     return membership?.total_spend ?? 0;
   };
 
+  const enforcedTeamDefaultBudget = positiveOrNull(teamDefaultBudget);
+
   const getUserBudgetSource = (userId: string | null): TeamMemberBudgetSource => {
     if (!userId) return "none";
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.budget_source ?? "none";
+    if (membership?.budget_source === "team_default") return "team_default";
+    if (membership !== undefined && hasCustomMaxBudget(membership)) return "custom";
+    return enforcedTeamDefaultBudget === null ? "none" : "team_default";
   };
 
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
+    return membership?.litellm_budget_table?.max_budget ?? enforcedTeamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user
@@ -291,6 +313,36 @@ export default function TeamMemberTab({
     );
   };
 
+  const handleBulkUpdate = (limits: MemberLimitsPatch) => {
+    if (!bulkEditMembers) return;
+    const targets = bulkEditMembers;
+    bulkUpdateMembers(
+      { teamId: teamData.team_id, members: buildBulkMemberPatches(targets, limits) },
+      {
+        onSuccess: (results) => {
+          const failures = targets.flatMap((member, index) =>
+            results[index]?.success === true ? [] : [{ member, error: results[index]?.error ?? "No result returned" }],
+          );
+          setBulkEditMembers(null);
+          setRowSelection(Object.fromEntries(failures.map(({ member }) => [memberRowId(member), true])));
+          onMembersBulkUpdated();
+          if (failures.length === 0) {
+            toast.success(`Updated ${pluralMembers(targets.length)}`);
+            return;
+          }
+          const listed = failures
+            .slice(0, MAX_LISTED_FAILURES)
+            .map(({ member, error }) => `${member.user_email || member.user_id}: ${error}`)
+            .join("; ");
+          toast.fromError(
+            `Updated ${targets.length - failures.length} of ${pluralMembers(targets.length)}. Failed: ${listed}`,
+          );
+        },
+        onError: (error) => toast.fromError(parseErrorMessage(error)),
+      },
+    );
+  };
+
   const resetSpendDisabledReason = (member: Member): string | null => {
     if (!isProxyAdmin && member.user_id === userId) return "Ask a proxy admin to reset your own spend";
     if (getUserCurrentCycleSpend(member.user_id) <= 0) return "No current cycle spend to reset";
@@ -301,7 +353,7 @@ export default function TeamMemberTab({
     <>
       <MemberTable
         key={teamData.team_id}
-        members={teamData.team_info.members_with_roles}
+        members={members}
         canEdit={canEditTeam}
         onEdit={(record) => {
           const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
@@ -318,6 +370,28 @@ export default function TeamMemberTab({
         }
         onResetSpend={setMemberToResetSpend}
         resetSpendDisabledReason={resetSpendDisabledReason}
+        {...(canEditTeam && {
+          selection: { rowSelection, onRowSelectionChange: setRowSelection },
+          toolbarActions: (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={selectedMembers.length === 0}
+              onClick={() => setBulkEditMembers(selectedMembers)}
+              data-testid="bulk-edit-members"
+            >
+              <Pencil />
+              Bulk Edit ({selectedMembers.length} selected)
+            </Button>
+          ),
+        })}
+      />
+      <BulkEditMembersDialog
+        members={bulkEditMembers}
+        teamModels={teamData.team_info.models ?? []}
+        isSaving={isBulkUpdating}
+        onCancel={() => setBulkEditMembers(null)}
+        onSubmit={handleBulkUpdate}
       />
       <Dialog open={memberToResetSpend !== null} onOpenChange={(open) => !open && setMemberToResetSpend(null)}>
         <DialogContent>

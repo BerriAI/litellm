@@ -16,10 +16,11 @@ type MembershipBudgetRow = Pick<TeamMembership, "user_id" | "budget_source"> & {
   litellm_budget_table?: Pick<TeamMembership["litellm_budget_table"], "max_budget"> | null;
 };
 
+export const hasCustomMaxBudget = (membership: MembershipBudgetRow): boolean =>
+  membership.budget_source === "custom" && membership.litellm_budget_table?.max_budget != null;
+
 export const customBudgetMemberUserIds = (memberships: readonly MembershipBudgetRow[]): string[] =>
-  memberships
-    .filter((m) => m.budget_source === "custom" && m.litellm_budget_table?.max_budget != null)
-    .map((m) => m.user_id);
+  memberships.filter(hasCustomMaxBudget).map((m) => m.user_id);
 
 export const shouldPromptMemberBudgetReset = (
   nextBudget: number | undefined,

@@ -48,7 +48,14 @@ export default function TableIconActionButton({
   const { icon, className } = TableIconActionButtonMap[variant];
   const title = disabled ? disabledTooltipText : tooltipText;
   const button = (
-    <BaseActionButton icon={icon} onClick={onClick} className={className} disabled={disabled} dataTestId={dataTestId} />
+    <BaseActionButton
+      icon={icon}
+      onClick={onClick}
+      label={tooltipText ?? variant}
+      className={className}
+      disabled={disabled}
+      dataTestId={dataTestId}
+    />
   );
 
   if (!title) {

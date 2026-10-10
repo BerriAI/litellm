@@ -186,16 +186,51 @@ describe("MemberTable role filter", () => {
 });
 
 describe("MemberTable actions", () => {
-  it("passes the clicked member to onEdit and onDelete", async () => {
+  it("opens edit from a row click and deletes only from the delete button", async () => {
     const user = userEvent.setup();
     const { onEdit, onDelete } = renderTable();
     const row = screen.getByRole("row", { name: /amy@example\.com/ });
 
-    await user.click(within(row).getByTestId("edit-member"));
     await user.click(within(row).getByTestId("delete-member"));
+    expect(onDelete).toHaveBeenCalledWith(MEMBERS[2]);
+    expect(onEdit).not.toHaveBeenCalled();
+
+    await user.click(within(row).getByText("amy@example.com"));
+    expect(onEdit).toHaveBeenCalledWith(MEMBERS[2]);
+  });
+
+  it("opens edit with Enter on a focused row", async () => {
+    const user = userEvent.setup();
+    const { onEdit } = renderTable();
+
+    screen.getByRole("row", { name: /amy@example\.com/ }).focus();
+    await user.keyboard("{Enter}");
 
     expect(onEdit).toHaveBeenCalledWith(MEMBERS[2]);
-    expect(onDelete).toHaveBeenCalledWith(MEMBERS[2]);
+  });
+
+  it("does not open edit from a row click when the caller cannot edit", async () => {
+    const user = userEvent.setup();
+    const { onEdit } = renderTable({ canEdit: false });
+
+    await user.click(screen.getByText("amy@example.com"));
+
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("does not open edit from a click on a disabled reset spend control", async () => {
+    const user = userEvent.setup();
+    const { onEdit, onResetSpend } = renderTable({
+      onResetSpend: vi.fn(),
+      resetSpendDisabledReason: () => "No current cycle spend to reset",
+    });
+    const resetButton = within(screen.getByRole("row", { name: /amy@example\.com/ })).getByTestId("reset-member-spend");
+    expect(resetButton).toHaveAttribute("aria-disabled", "true");
+
+    await user.click(resetButton.parentElement!);
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(onResetSpend).not.toHaveBeenCalled();
   });
 
   it("hides delete for members the caller excludes", () => {

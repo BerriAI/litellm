@@ -27,7 +27,7 @@ import {
 } from "@tanstack/react-table";
 import { SearchX } from "lucide-react";
 import * as React from "react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -44,6 +44,7 @@ import { cn, cva } from "@/lib/cva.config";
 
 import "./columnMeta";
 import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
+import { startDragSelection } from "./dragRowSelection";
 import type {
   ColumnPinnedSide,
   DataTableProps,
@@ -267,6 +268,8 @@ function DataTableBodyCell<TData>({ cell, size, stickyHeader, enableColumnResizi
 
 interface BodyRowProps<TData> {
   row: Row<TData>;
+  table: Table<TData>;
+  dragSelect: boolean;
   size: DataTableSize;
   stickyHeader: boolean;
   enableColumnResizing: boolean;
@@ -277,6 +280,8 @@ interface BodyRowProps<TData> {
 
 function DataTableBodyRow<TData>({
   row,
+  table,
+  dragSelect,
   size,
   stickyHeader,
   enableColumnResizing,
@@ -286,6 +291,31 @@ function DataTableBodyRow<TData>({
 }: BodyRowProps<TData>) {
   const clickable = onRowClick !== undefined;
   const cells = row.getVisibleCells();
+  const pressStartedOnControl = useRef(false);
+  const pressBecameSelection = useRef(false);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLTableRowElement>) => {
+    pressStartedOnControl.current =
+      event.target instanceof Element && event.target.closest(INTERACTIVE_SELECTOR) !== null;
+    pressBecameSelection.current = false;
+    const tableElement = event.currentTarget.closest("table");
+    const isPlainPrimaryPress = event.button === 0 && !pressStartedOnControl.current;
+    const canStartDrag = dragSelect && isPlainPrimaryPress && row.getCanSelect();
+    if (!canStartDrag || tableElement === null) {
+      return;
+    }
+    const drag = {
+      table,
+      anchor: row,
+      tableElement,
+      pointer: { x: event.clientX, y: event.clientY },
+      waitForRowChange: true,
+      onSelectionStart: () => {
+        pressBecameSelection.current = true;
+      },
+    };
+    startDragSelection(drag);
+  };
 
   const handleClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
     if (onRowClick === undefined) {
@@ -295,9 +325,24 @@ function DataTableBodyRow<TData>({
     if (target === null || !event.currentTarget.contains(target)) {
       return;
     }
-    if (target.closest(INTERACTIVE_SELECTOR) !== null) {
+    if (
+      target.closest(INTERACTIVE_SELECTOR) !== null ||
+      pressStartedOnControl.current ||
+      pressBecameSelection.current
+    ) {
       return;
     }
+    if (window.getSelection()?.isCollapsed === false) {
+      return;
+    }
+    onRowClick(row.original);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (onRowClick === undefined || event.key !== "Enter" || event.target !== event.currentTarget) {
+      return;
+    }
+    event.preventDefault();
     onRowClick(row.original);
   };
 
@@ -305,8 +350,17 @@ function DataTableBodyRow<TData>({
     <Fragment>
       <TableRow
         data-row-id={row.id}
-        className={cn(clickable ? "cursor-pointer" : "", size === "compact" ? "h-8" : "", rowClassName?.(row))}
+        tabIndex={clickable ? 0 : undefined}
+        className={cn(
+          clickable
+            ? "cursor-pointer outline-none focus-visible:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            : "",
+          size === "compact" ? "h-8" : "",
+          rowClassName?.(row),
+        )}
+        onPointerDown={clickable ? handlePointerDown : undefined}
         onClick={clickable ? handleClick : undefined}
+        onKeyDown={clickable ? handleKeyDown : undefined}
       >
         {cells.map((cell) => (
           <DataTableBodyCell
@@ -607,6 +661,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
     enableColumnResizing = false,
     onRowClick,
+    enableRowSelection,
     rowClassName,
     renderSubComponent,
     maxBodyHeight,
@@ -622,6 +677,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined || fillHeight;
+  const dragSelect = enableRowSelection !== undefined;
   const stretchEmpty = fillHeight && !isLoading && rows.length === 0;
   const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
@@ -669,6 +725,8 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
       <DataTableBodyRow
         key={row.id}
         row={row}
+        table={table}
+        dragSelect={dragSelect}
         size={size}
         stickyHeader={stickyHeader}
         enableColumnResizing={enableColumnResizing}
