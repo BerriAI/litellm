@@ -6293,3 +6293,38 @@ async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk
     assert "".join(chunk.choices[0].text or "" for chunk in chunks) == "reply"
     final_usage: Final = chunks[-1].usage
     assert (final_usage.prompt_tokens, final_usage.completion_tokens, final_usage.total_tokens) == (3, 2, 5)
+
+
+def test_model_alias_map_resolves_the_outbound_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_alias_map", {"test-alias": "openai/resolved-model"})
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-alias",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "resolved-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "resolved"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = completion(
+        model="test-alias",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+    )
+
+    assert response.model == "resolved-model"
+    assert json.loads(route.calls[0].request.content)["model"] == "resolved-model"

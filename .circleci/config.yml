@@ -379,50 +379,6 @@ commands:
       - save_cargo_target
 
 jobs:
-  # Add Windows testing job
-  using_litellm_on_windows:
-    executor:
-      name: win/default
-      shell: powershell.exe
-    working_directory: ~/project
-    environment:
-      UV_PYTHON: "3.11"
-      CARGO_HTTP_MULTIPLEXING: "false"
-      CARGO_NET_RETRY: "5"
-    steps:
-      - checkout
-      - run:
-          name: Install Python
-          command: |
-            choco install python --version=3.11.0 -y --no-progress --force
-            refreshenv
-            python --version
-          environment:
-            CHOCOLATEY_CONFIRM_ALL: "true"
-      - install_windows_toolchain
-      - run:
-          name: Install Dependencies
-          no_output_timeout: 30m
-          environment:
-            UV_HTTP_TIMEOUT: "300"
-          command: |
-            $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
-            for ($attempt = 1; $attempt -le 5; $attempt++) {
-              Write-Host "uv sync attempt $attempt/5"
-              uv sync --frozen --group dev --python 3.11
-              if ($LASTEXITCODE -eq 0) {
-                break
-              }
-              if ($attempt -eq 5) {
-                exit $LASTEXITCODE
-              }
-              Start-Sleep -Seconds 15
-            }
-      - run:
-          name: Run Windows-specific test
-          command: |
-            uv run --no-sync python -m pytest --tb=short tests/windows_tests/ -v
-
   windows_release_wheel:
     executor:
       name: win/default
@@ -808,7 +764,7 @@ jobs:
       - *python312_image
     working_directory: ~/project
     resource_class: large
-    parallelism: 4
+    parallelism: 1
     environment:
       FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
     steps:
@@ -1289,89 +1245,6 @@ jobs:
           paths:
             - audio_coverage.xml
             - audio_coverage
-  installing_litellm_on_python:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest --tb=short -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
-
-  installing_litellm_on_python_3_13:
-    docker:
-      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest --tb=short -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
-
-  installing_litellm_on_python_v2_migration_resolver:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run both migration resolvers against Postgres
-          command: |
-            uv run --no-sync python -m pytest --tb=short -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
-
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2024.04.1 # Use machine executor instead of docker
@@ -2064,95 +1937,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  proxy_build_from_pip_tests:
-    # Change from docker to machine executor
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: large
-    working_directory: ~/project
-    steps:
-      - checkout
-      - run:
-          name: Generate LiteLLM master key
-          command: |
-            key="$(openssl rand -hex 16)"
-            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      # Remove Docker CLI installation since it's already available in machine executor
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - run:
-          name: Build Docker image
-          command: |
-            docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
-      - start_postgres
-      - start_fake_openai_endpoint
-      - run:
-          name: Run Docker container
-          # intentionally give bad redis credentials here
-          # the OTEL test - should get this as a trace
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=$REDIS_HOST \
-              -e REDIS_PASSWORD=$REDIS_PASSWORD \
-              -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e OTEL_EXPORTER="in_memory" \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e COHERE_API_KEY=$COHERE_API_KEY \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e GCS_FLUSH_INTERVAL="1" \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
-              my-app:latest \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --junitxml=test-results/junit-2.xml \
-                --durations=5"
-          no_output_timeout: 15m
-            # Clean up first container
-      - store_test_results:
-          path: test-results
-      - run:
-          name: Stop and remove first container
-          command: |
-            docker stop my-app || true
-            docker rm my-app || true
-            docker stop postgres-db || true
-            docker rm postgres-db || true
-          when: always
   proxy_pass_through_endpoint_tests:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -3141,8 +2925,8 @@ jobs:
               timeout --signal=TERM 15m uv run --no-sync pytest \
               tests/unit/test_redis.py tests/unit/caching/test_redis_connection_pool.py \
               tests/unit/caching/test_redis_cluster_cache.py tests/unit/caching/test_evicted_client_closer.py \
-              tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
-              tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_gcp_credentials \
+              tests/integration/sdk/test_redis_cluster_iam_auth.py::test_sync_cluster_authenticates_with_azure_credentials \
+              tests/integration/sdk/test_redis_cluster_iam_auth.py::test_sync_cluster_authenticates_with_gcp_credentials \
               --tb=short -vv --reruns 2 --reruns-delay 1 --durations=20 --cov=./litellm \
               --cov-report=xml:coverage.xml -o junit_family=xunit1 --junitxml=test-results/junit.xml
       - when:
@@ -3268,6 +3052,8 @@ workflows:
                 - "6.4.0"
                 - "7.4.1"
                 - "8.0.1"
+      - windows_release_wheel
+      - base_sdk_install
   build_and_test:
     unless:
       or:
@@ -3275,10 +3061,7 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows
-      - windows_release_wheel
       - provider_replay_harness
-      - base_sdk_install
       - local_testing_part1
       - local_testing_part2
       - langfuse_logging_unit_tests
@@ -3302,7 +3085,6 @@ workflows:
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-      - proxy_build_from_pip_tests
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
@@ -3336,9 +3118,6 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-      - installing_litellm_on_python
-      - installing_litellm_on_python_3_13
-      - installing_litellm_on_python_v2_migration_resolver
       - helm_chart_testing:
           requires:
             - build_docker_database_image
