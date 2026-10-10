@@ -408,7 +408,7 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs) -> str | None:  # kwargs-ok: dynamic request parameters are part of the cache key
+    def get_cache_key(self, **kwargs: object) -> str | None:  # kwargs-ok: dynamic request parameters are part of the cache key
         """
         Get the cache key for the given arguments.
 
@@ -447,8 +447,8 @@ class Cache:
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
-                    param_value = kwargs[param]
-                    cache_key += f"{param}: {param_value}"
+                    optional_param_value: object = kwargs[param]
+                    cache_key += f"{param}: {optional_param_value}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
@@ -680,9 +680,7 @@ class Cache:
         try:
             from litellm.proxy._types import UserAPIKeyAuth
         except ImportError:
-
-            class UserAPIKeyAuth:  # pragma: no cover - proxy types are available in proxy deployments
-                pass
+            return False, None
 
         for metadata in metadata_sources:
             auth_object: object | None = metadata.get("user_api_key_auth")
@@ -718,6 +716,14 @@ class Cache:
         if authenticated_namespace is None:
             return None
         return self._add_namespace_to_cache_key(explicit_key, **kwargs)
+
+    def prepare_explicit_cache_key(
+        self,
+        explicit_key: object,
+        **kwargs: object,  # kwargs-ok: auth metadata scopes caller keys
+    ) -> str | None:
+        """Normalize a caller-provided key for integrations outside this class."""
+        return self._prepare_explicit_cache_key(explicit_key, **kwargs)
 
     def generate_streaming_content(self, content):
         chunk_size: Final = 5  # Adjust the chunk size as needed
@@ -1035,7 +1041,7 @@ class Cache:
         responses distribute it evenly (with remainder) so that summing all
         per-item values on retrieval reconstructs the original total.
         """
-        if result.usage is None or result.usage.prompt_tokens is None:
+        if result.usage is None:
             return None
 
         total: Final = result.usage.prompt_tokens
