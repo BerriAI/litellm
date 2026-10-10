@@ -10,6 +10,7 @@ import cerebrasLogo from "../../public/assets/logos/cerebras.svg";
 import cloudflareLogo from "../../public/assets/logos/cloudflare.svg";
 import cohereLogo from "../../public/assets/logos/cohere.svg";
 import cometapiLogo from "../../public/assets/logos/cometapi.svg";
+import cortiLogo from "../../public/assets/logos/corti.svg";
 import cursorLogo from "../../public/assets/logos/cursor.svg";
 import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
@@ -99,6 +100,7 @@ export enum Providers {
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
   COMPACTIFAI = "Compactifai",
+  CORTI = "Corti",
   Cursor = "Cursor",
   Dashscope = "Dashscope",
   Databricks = "Databricks (Qwen API)",
@@ -221,6 +223,7 @@ export const provider_map: Record<string, string> = {
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
   COMPACTIFAI: "compactifai",
+  CORTI: "corti",
   Cursor: "cursor",
   Dashscope: "dashscope",
   Databricks: "databricks",
@@ -345,6 +348,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Cohere]: cohereLogo.src,
   [Providers.COHERE_CHAT]: cohereLogo.src,
   [Providers.COMETAPI]: cometapiLogo.src,
+  [Providers.CORTI]: cortiLogo.src,
   [Providers.Cursor]: cursorLogo.src,
   [Providers.Databricks]: databricksLogo.src,
   [Providers.Dashscope]: qwenLogo.src,
@@ -459,6 +463,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Bedrock]: "claude-3-opus",
   [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
+  [Providers.CORTI]: "corti/corti-s1",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",

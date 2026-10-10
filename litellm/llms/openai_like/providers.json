@@ -195,6 +195,18 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
+  "corti": {
+    "base_url": "https://ai.eu.corti.app/v1",
+    "api_key_env": "CORTI_API_KEY",
+    "api_base_env": "CORTI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "constraints": {
+      "temperature_max": 1.0
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "scx-ai": {
     "base_url": "https://api.scx.ai/v1",
     "api_key_env": "SCX_API_KEY",
