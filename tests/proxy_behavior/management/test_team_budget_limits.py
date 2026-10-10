@@ -10,12 +10,11 @@ Pins the five helpers
 
 Driven through /team/new + /team/update.
 
-Structural finding, updated: /team/new loads the org via `get_org_object`
-WITH `include_budget_table=True`, so the org max_budget / org tpm / org rpm
-guards inside `_check_org_team_limits` are live there and are pinned as
-enforced below. /team/update still loads the org without the budget
-relation, so its budget guards remain no-ops. The `models` subset guard IS
-reachable on both because it reads `org_table.models` directly. The
+Structural finding, updated: /team/new and /team/update both load the org
+via `get_org_object` WITH `include_budget_table=True`, so the org max_budget /
+org tpm / org rpm guards inside `_check_org_team_limits` are live on both and
+are pinned as enforced below. The `models` subset guard reads
+`org_table.models` directly. The
 `_check_user_team_limits` guards reach all branches through
 `user_api_key_dict`, no relation include needed.
 """
@@ -139,9 +138,8 @@ async def test_check_org_team_limits_models_subset(
 
 
 # ---------------------------------------------------------------------------
-# _check_org_team_limits — budget / tpm / rpm live on /team/new since its
-# get_org_object call passes include_budget_table=True. (/team/update still
-# loads the org without the budget relation, so its guards remain no-ops.)
+# _check_org_team_limits — budget / tpm / rpm live on /team/new and
+# /team/update since both get_org_object calls pass include_budget_table=True.
 # ---------------------------------------------------------------------------
 
 _ORG_BUDGET_ENFORCED_SCENARIOS = [
@@ -214,6 +212,35 @@ async def test_check_org_team_limits_budget_enforced(
     assert resp.status_code == expected_status, f"{body_extras!r} → {resp.status_code}: {resp.text}"
     rows = await prisma.db.litellm_teamtable.find_many(where={"team_id": team_id})
     assert len(rows) == (1 if expected_status == 200 else 0)
+
+
+@pytest.mark.parametrize(
+    "org_budget,body_extras,expected_status",
+    [(b, c, d) for (_id, b, c, d) in _ORG_BUDGET_ENFORCED_SCENARIOS],
+    ids=[s[0] for s in _ORG_BUDGET_ENFORCED_SCENARIOS],
+)
+async def test_check_org_team_limits_budget_enforced_on_update(
+    org_budget,
+    body_extras: Dict[str, Any],
+    expected_status: int,
+    proxy_client,
+    prisma,
+    scratch,
+    world,
+):
+    org_id = await create_scratch_org(prisma, scratch.prefix, **org_budget)
+    team_id = await create_scratch_team(prisma, scratch.tag("team"), organization_id=org_id)
+    seeder = world.keys[Actor.PROXY_ADMIN].cleartext
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {seeder}"},
+        json={"team_id": team_id, **body_extras},
+    )
+    assert resp.status_code == expected_status, f"{body_extras!r} → {resp.status_code}: {resp.text}"
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    persisted = {field: getattr(row, field) for field in body_extras}
+    assert (persisted == body_extras) == (expected_status == 200)
 
 
 # ---------------------------------------------------------------------------
@@ -310,65 +337,40 @@ async def test_check_user_team_limits(
 # /team/update path — budget authority.
 #
 # The caller's PERSONAL limits are never applied on update (that compared the
-# wrong thing). But raising a team's spend ceiling is reserved for proxy admins:
-# a team admin may keep or LOWER the budget, only a proxy admin may RAISE it.
-# _check_user_team_limits() only runs on /team/new.
+# wrong thing). Raising a team's spend ceiling is reserved for proxy admins.
+# max_budget is not on the team-admin allow-list yet (LIT-5722), so a team
+# admin is refused in either direction; the raise-only guard underneath the
+# allow-list is pinned in the unit tests. _check_user_team_limits() only runs
+# on /team/new.
 # ---------------------------------------------------------------------------
 
 
-async def test_team_admin_raise_budget_blocked(proxy_client, prisma, scratch):
-    """A team admin cannot raise the team's budget; the block is NOT based on
-    their personal budget (which here is higher than the requested value)."""
-    caller_cleartext = await _seed_scratch_actor_with_caps(
-        prisma,
-        scratch.prefix,
-        max_budget=100000.0,  # generous personal budget; must not matter
-    )
-    creator_user_id = f"{scratch.prefix}-team-creator"
+@pytest.mark.parametrize(
+    "personal_budget,requested_budget",
+    [(100000.0, 999.0), (10.0, 300.0)],
+    ids=["raise_with_generous_personal_budget", "lower_with_tiny_personal_budget"],
+)
+async def test_team_admin_cannot_change_budget_while_max_budget_is_not_editable(
+    proxy_client, prisma, scratch, personal_budget: float, requested_budget: float
+):
+    caller_cleartext = await _seed_scratch_actor_with_caps(prisma, scratch.prefix, max_budget=personal_budget)
     team_id = await create_scratch_team(
         prisma,
         team_id=scratch.tag("team"),
-        admin_user_ids=[creator_user_id],
-        max_budget=50.0,
-    )
-    # Raise the team budget 50 -> 999 as a team admin.
-    resp = await proxy_client.post(
-        "/team/update",
-        headers={"Authorization": f"Bearer {caller_cleartext}"},
-        json={"team_id": team_id, "max_budget": 999.0},
-    )
-    assert resp.status_code == 403, resp.text
-
-    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
-    assert row is not None
-    assert row.max_budget == 50.0, "team budget must not change on a blocked raise"
-
-
-async def test_team_admin_lower_budget_allowed(proxy_client, prisma, scratch):
-    """A team admin may freely lower (or keep) the team's budget."""
-    caller_cleartext = await _seed_scratch_actor_with_caps(
-        prisma,
-        scratch.prefix,
-        max_budget=10.0,  # below both the old and new team budget; must not matter
-    )
-    creator_user_id = f"{scratch.prefix}-team-creator"
-    team_id = await create_scratch_team(
-        prisma,
-        team_id=scratch.tag("team"),
-        admin_user_ids=[creator_user_id],
+        admin_user_ids=[f"{scratch.prefix}-team-creator"],
         max_budget=500.0,
     )
-    # Lower the team budget 500 -> 300 as a team admin.
     resp = await proxy_client.post(
         "/team/update",
         headers={"Authorization": f"Bearer {caller_cleartext}"},
-        json={"team_id": team_id, "max_budget": 300.0},
+        json={"team_id": team_id, "max_budget": requested_budget},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 403, resp.text
+    assert "Team admin editable fields" in resp.text, resp.text
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
     assert row is not None
-    assert row.max_budget == 300.0, "team admin should be able to lower the budget"
+    assert row.max_budget == 500.0, "a refused update must leave the team budget unchanged"
 
 
 async def test_proxy_admin_raise_budget_allowed(proxy_client, prisma, scratch):

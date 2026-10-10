@@ -19,7 +19,7 @@ from typing import Final
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 from litellm.integrations.otel.model.semconv import DB, Server
-from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
+from litellm.integrations.otel.model.spans import POSTGRESQL, PostgresOperation, db_system
 
 _DATABASE_URL_ENV: Final = "DATABASE_URL"
 _READ_REPLICA_ENV: Final = "DATABASE_URL_READ_REPLICA"
@@ -140,23 +140,31 @@ def postgres_endpoint() -> DatabaseEndpoint | None:
     return parse_database_endpoint(os.environ.get(_DATABASE_URL_ENV, ""))
 
 
-def db_span_attributes(service_name: str, call_type: str | None = None) -> Mapping[str, str | int]:
+def db_span_attributes(
+    service_name: str, call_type: str | None = None, operation: PostgresOperation | None = None
+) -> Mapping[str, str | int]:
     """The ``db.*``/``server.*`` attributes for a datastore service call.
 
     Empty for services that are not outbound datastore calls. Endpoint
     attributes are PostgreSQL-only: ``DATABASE_URL`` says nothing about where
     the redis-backed services point. ``db.system`` rides alongside the current
     ``db.system.name`` because Datadog's OTLP intake still types a database span
-    from the older key.
+    from the older key. A resolved Prisma ``operation`` puts the SQL verb on
+    ``db.operation.name`` (the raw method stays on ``litellm.service.call_type``),
+    the table (or the declared ``collection`` list) on ``db.collection.name`` and ``"{VERB} {table}"`` on
+    ``db.query.summary``; without one, ``db.operation.name`` is the call type.
     """
     system: Final = db_system(service_name)
     if system is None:
         return _EMPTY_ATTRIBUTES
     endpoint: Final = postgres_endpoint() if system == POSTGRESQL else None
+    table: Final = operation.table if operation is not None else None
     pairs: Final[tuple[tuple[str, str | int | None], ...]] = (
         (DB.SYSTEM_NAME, system),
         (DB.SYSTEM_LEGACY, system),
-        (DB.OPERATION_NAME, call_type),
+        (DB.OPERATION_NAME, operation.verb if operation is not None else call_type),
+        (DB.COLLECTION_NAME, operation.collection or table if operation is not None else None),
+        (DB.QUERY_SUMMARY, f"{operation.verb.upper()} {table}" if operation is not None and table else None),
         (Server.ADDRESS, endpoint.address if endpoint is not None else None),
         (Server.PORT, endpoint.port if endpoint is not None else None),
         (DB.NAMESPACE, endpoint.namespace if endpoint is not None else None),

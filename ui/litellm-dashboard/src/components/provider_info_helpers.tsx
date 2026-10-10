@@ -15,6 +15,7 @@ import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
@@ -31,6 +32,7 @@ import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
 import lmstudioLogo from "../../public/assets/logos/lmstudio.svg";
 import metaLlamaLogo from "../../public/assets/logos/meta_llama.svg";
+import microsoft365CopilotLogo from "../../public/assets/logos/microsoft_365_copilot.svg";
 import microsoftAzureLogo from "../../public/assets/logos/microsoft_azure.svg";
 import minimaxLogo from "../../public/assets/logos/minimax.svg";
 import mistralLogo from "../../public/assets/logos/mistral.svg";
@@ -54,8 +56,11 @@ import sapLogo from "../../public/assets/logos/sap.png";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
+import strandsLogo from "../../public/assets/logos/strands.svg";
+import tencentLogo from "../../public/assets/logos/tencent.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
 import topazLogo from "../../public/assets/logos/topaz.svg";
+import typesafeLogo from "../../public/assets/logos/typesafe.png";
 import v0Logo from "../../public/assets/logos/v0.svg";
 import vercelLogo from "../../public/assets/logos/vercel.svg";
 import vllmLogo from "../../public/assets/logos/vllm.png";
@@ -80,6 +85,7 @@ export enum Providers {
   SageMaker = "AWS SageMaker",
   Azure = "Azure",
   Azure_AI_Studio = "Azure AI Foundry (Studio)",
+  Azure_Speech = "Azure AI Speech",
   AZURE_TEXT = "Azure Text",
   BASETEN = "Baseten",
   BYTEZ = "Bytez",
@@ -102,6 +108,7 @@ export enum Providers {
   Deepseek = "Deepseek",
   DOCKER_MODEL_RUNNER = "Docker Model Runner",
   DOTPROMPT = "Dotprompt",
+  EDENAI = "Eden AI",
   ElevenLabs = "ElevenLabs",
   EMPOWER = "Empower",
   FalAI = "Fal AI",
@@ -126,6 +133,7 @@ export enum Providers {
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
   MARITALK = "Maritalk",
+  MICROSOFT_365_COPILOT = "Microsoft 365 Copilot",
   MiniMax = "MiniMax",
   MistralAI = "Mistral AI",
   MOONSHOT = "Moonshot",
@@ -151,28 +159,32 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
-  Qwen_AI_Platform = "Qwen AI Platform",
+  Qwen_AI_Platform = "Qianwen AI Platform",
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
   RunwayML = "RunwayML",
   SAGEMAKER_LEGACY = "Sagemaker",
+  Sail = "Sail",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
+  StrandsDecider = "Strands Decider",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
+  Tencent = "Tencent",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
+  TypeSafe = "TypeSafe",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   VERTEX_AI_BETA = "Vertex Ai Beta",
   VLLM = "Local vLLM",
   VolcEngine = "VolcEngine",
-  Voyage = "Voyage AI",
+  Voyage = "VoyageAI by MongoDB",
   WANDB = "Wandb",
   WATSONX = "Watsonx",
   WATSONX_TEXT = "Watsonx Text",
@@ -193,6 +205,7 @@ export const provider_map: Record<string, string> = {
   AUTO_ROUTER: "auto_router",
   Azure: "azure",
   Azure_AI_Studio: "azure_ai",
+  Azure_Speech: "azure_speech",
   AZURE_TEXT: "azure_text",
   BASETEN: "baseten",
   Bedrock: "bedrock",
@@ -217,6 +230,7 @@ export const provider_map: Record<string, string> = {
   Deepseek: "deepseek",
   DOCKER_MODEL_RUNNER: "docker_model_runner",
   DOTPROMPT: "dotprompt",
+  EDENAI: "edenai",
   ElevenLabs: "elevenlabs",
   EMPOWER: "empower",
   FalAI: "fal_ai",
@@ -240,6 +254,7 @@ export const provider_map: Record<string, string> = {
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
   LM_STUDIO: "lm_studio",
+  MICROSOFT_365_COPILOT: "microsoft_365_copilot",
   MARITALK: "maritalk",
   MiniMax: "minimax",
   MistralAI: "mistral",
@@ -273,15 +288,19 @@ export const provider_map: Record<string, string> = {
   RunwayML: "runwayml",
   SAGEMAKER_LEGACY: "sagemaker",
   SageMaker: "sagemaker_chat",
+  Sail: "sail",
   Sambanova: "sambanova",
   SAP: "sap",
   SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
+  StrandsDecider: "strands_decider",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
+  Tencent: "tencent",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
+  TypeSafe: "typesafe",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -299,6 +318,9 @@ export const provider_map: Record<string, string> = {
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
 
+export const resolveLitellmProviderSlug = (provider: string): string =>
+  provider_map[provider] ?? provider.toLowerCase();
+
 export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
@@ -310,6 +332,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.AssemblyAI]: assemblyaiSmallLogo.src,
   [Providers.Azure]: microsoftAzureLogo.src,
   [Providers.Azure_AI_Studio]: microsoftAzureLogo.src,
+  [Providers.Azure_Speech]: microsoftAzureLogo.src,
   [Providers.AZURE_TEXT]: microsoftAzureLogo.src,
   [Providers.BASETEN]: basetenLogo.src,
   [Providers.Bedrock]: bedrockLogo.src,
@@ -328,6 +351,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
+  [Providers.EDENAI]: edenaiLogo.src,
   [Providers.ElevenLabs]: elevenlabsLogo.src,
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
@@ -346,6 +370,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
+  [Providers.MICROSOFT_365_COPILOT]: microsoft365CopilotLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
   [Providers.MOONSHOT]: moonshotLogo.src,
   [Providers.MORPH]: morphLogo.src,
@@ -375,10 +400,13 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
+  [Providers.StrandsDecider]: strandsLogo.src,
+  [Providers.Tencent]: tencentLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
   [Providers.TogetherAI]: togetheraiLogo.src,
   [Providers.TOPAZ]: topazLogo.src,
   [Providers.Triton]: nvidiaTritonLogo.src,
+  [Providers.TypeSafe]: typesafeLogo.src,
   [Providers.V0]: v0Logo.src,
   [Providers.VERCEL_AI_GATEWAY]: vercelLogo.src,
   [Providers.Vertex_AI]: googleLogo.src,
@@ -427,20 +455,27 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Anthropic]: "claude-3-opus",
   [Providers.Azure]: "my-deployment",
   [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
+  [Providers.Azure_Speech]: "azure_speech/short-audio",
   [Providers.Bedrock]: "claude-3-opus",
   [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
+  [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+  [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
+  [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",
+  [Providers.Tencent]: "tencent/deepseek-v4-pro",
+  [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",
@@ -455,7 +490,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
 
 export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
-  let custom_llm_provider = provider_map[providerKey];
+  let custom_llm_provider = providerKey ? resolveLitellmProviderSlug(providerKey) : undefined;
 
   let providerModels: Array<string> = [];
 

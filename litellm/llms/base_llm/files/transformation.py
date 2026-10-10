@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.files.types import FileContentStreamingResult
 from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -20,19 +20,21 @@ from litellm.types.utils import LlmProviders, ModelResponse
 from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.proxy._types import UserAPIKeyAuth as _UserAPIKeyAuth
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any
     Router = _Router
+    UserAPIKeyAuth = _UserAPIKeyAuth
 else:
     LiteLLMLoggingObj = Any
     Span = Any
     Router = Any
+    UserAPIKeyAuth = Any
 
 
 class BaseFileUploadStream(ABC):
@@ -133,6 +135,9 @@ class BaseFilesConfig(BaseConfig):
     ) -> OpenAIFileObject:
         """Transform file retrieve response into OpenAI format."""
 
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code)
+
     @abstractmethod
     def transform_delete_file_request(
         self,
@@ -196,6 +201,18 @@ class BaseFilesConfig(BaseConfig):
     ) -> "HttpxBinaryResponseContent":
         """Transform file content response into OpenAI format."""
 
+    async def transform_file_content_stream(
+        self,
+        *,
+        stream_iterator: AsyncGenerator[bytes, None],
+        headers: Mapping[str, str],
+        request_url: str,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> FileContentStreamingResult:
+        """Transform a streamed file content body. Passes the upstream bytes and headers through by default."""
+        return FileContentStreamingResult(stream_iterator=stream_iterator, headers=headers)
+
     def transform_request(
         self,
         model: str,
@@ -218,7 +235,7 @@ class BaseFilesConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

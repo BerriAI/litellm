@@ -7,10 +7,11 @@ vi.mock("@/lib/toast", () => ({
 }));
 
 // ---- Hoisted shared mocks (safe to use inside vi.mock factories) ----
-const { keyUpdateCallMock, keyDeleteCallMock, mockUseAuthorized } = vi.hoisted(() => {
+const { keyUpdateCallMock, keyDeleteCallMock, invalidateQueriesMock, mockUseAuthorized } = vi.hoisted(() => {
   return {
     keyUpdateCallMock: vi.fn().mockResolvedValue({}),
     keyDeleteCallMock: vi.fn().mockResolvedValue({}),
+    invalidateQueriesMock: vi.fn().mockResolvedValue(undefined),
     mockUseAuthorized: vi.fn(),
   };
 });
@@ -22,8 +23,16 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: mockUseAuthorized,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => ({ data: [] }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeamMemberBudgets", () => ({
+  useTeamMemberBudgets: vi.fn().mockReturnValue({}),
 }));
 
 // Networking: wire the hoisted fns so we can assert calls later
@@ -170,7 +179,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
   return {
     ...actual,
-    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+    useQueryClient: () => ({ invalidateQueries: invalidateQueriesMock }),
   };
 });
 
@@ -363,6 +372,24 @@ describe("KeyInfoView handleKeyUpdate mcp_toolsets", () => {
     const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
     expect(sentPayload.object_permission.mcp_toolsets).toEqual(["ts-1"]);
     expect(sentPayload.max_budget).toBe(40000);
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate cache sync", () => {
+  it("should invalidate every cached key query so the list and detail views re-read the saved key", async () => {
+    keyUpdateCallMock.mockResolvedValueOnce({
+      object_permission: { mcp_servers: ["srv-1"], mcp_tool_permissions: { "srv-1": ["read_wiki"] } },
+    });
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = { token: "tok_123", metadata: {} };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Key updated successfully"));
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ["keys"] });
   });
 });
 

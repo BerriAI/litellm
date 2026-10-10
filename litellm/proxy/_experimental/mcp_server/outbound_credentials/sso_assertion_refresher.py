@@ -287,7 +287,7 @@ class SSOAssertionRefresher:
             client_id=config.client_id,
             client_secret=config.client_secret.get_secret_value(),
         )
-        form: Final = {  # mutable-ok: the RFC 6749 form body is a wire format the HTTP client takes as a mapping
+        form: Final = {
             "grant_type": _REFRESH_GRANT_TYPE,
             "refresh_token": carried_refresh_token,
             **client_auth.body,

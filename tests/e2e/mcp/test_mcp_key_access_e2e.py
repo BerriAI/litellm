@@ -13,12 +13,15 @@ and must be refused with a 403 on `tools/call`.
 from __future__ import annotations
 
 import pytest
+from typing import Final
 
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpClient
+from models import KeyGenerateBody, ObjectPermission
 
 pytestmark = pytest.mark.e2e
 
@@ -31,6 +34,12 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
 
 
 class TestMcpKeyGrantByAlias:
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_alias_grant_persists_verbatim_and_lists_tools(
         self,
         client: McpClient,
@@ -42,8 +51,8 @@ class TestMcpKeyGrantByAlias:
         grants access on every region. The same key must still see the server's
         tools, proving the alias grant is honored at request time."""
         server_id = register_datadog_mcp(client, resources)
-        client.await_registered(server_id)
-        alias = next(row.alias for row in client.registered_servers() if row.server_id == server_id)
+        registered = client.await_registered(server_id)
+        alias = registered.alias
         assert alias, f"registered server {server_id} has no alias to grant by"
 
         key = _key(client, resources, mcp_servers=[alias])
@@ -60,6 +69,12 @@ class TestMcpKeyGrantByAlias:
 
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_list_tools_denied_without_permission(
         self,
         client: McpClient,
@@ -80,6 +95,12 @@ class TestMcpKeyWithoutAccessIsDenied:
         )
 
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_call_tool_denied_without_permission(
         self,
         client: McpClient,
@@ -108,3 +129,48 @@ class TestMcpKeyWithoutAccessIsDenied:
             denied_key, server_id=server_id, name=tool_name, arguments=search_args
         )
         assert "access_denied" in denied.body, f"403 was not an MCP access denial: {denied.body}"
+
+
+class TestMcpHealthVisibility:
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
+    def test_route_restricted_health_matches_server_grants(
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+    ) -> None:
+        server_x: Final = register_datadog_mcp(client, resources)
+        server_y: Final = register_datadog_mcp(client, resources)
+        client.await_registered(server_x)
+        client.await_registered(server_y)
+        owned: Final = {server_x, server_y}
+        permitted: Final = _key(client, resources, mcp_servers=[server_x])
+        tool: Final = client.await_tool(permitted, server_x, SEARCH_LOGS_TOOL)
+        result: Final = client.await_call_tool(
+            permitted, server_id=server_x, name=tool,
+            arguments={"query": "service:litellm", "from": DD_SEARCH_FROM, "to": "now", "max_tokens": 1000},
+        )
+        assert result.is_error is not True, f"permitted control failed: {result}"
+
+        for grants in ([server_x], [server_y], []):
+            key = client.proxy.generate_key(KeyGenerateBody(
+                user_id=f"e2e-mcp-health-{unique_marker()}",
+                allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"],
+                object_permission=ObjectPermission(mcp_servers=grants),
+            ))
+            resources.defer(lambda key=key: client.proxy.delete_key(key))
+            listed = unwrap(client.list_servers(key)).root
+            assert {row.server_id for row in listed}.intersection(owned) == set(grants)
+            for requested in (None, [server_y], [server_x, server_y]):
+                health = unwrap(client.server_health(key, requested)).root
+                expected = set(grants) if requested is None else set(grants).intersection(requested)
+                assert {row.server_id for row in health}.intersection(owned) == expected, (
+                    f"health disclosed servers outside grants {grants}, requested {requested}: {health}"
+                )
+                assert all(row.status == "healthy" for row in health if row.server_id in owned), (
+                    f"upstream control unhealthy: {health}"
+                )

@@ -22,6 +22,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
+from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -70,7 +71,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         # The base path segment is data-driven per model (use_openai_responses_path
         # flag): gemma-4-* and gpt-5.x are served on /openai/v1, everything else on
         # /v1. An explicit api_base still wins over the derived default.
@@ -81,6 +82,15 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        litellm_params: GenericLiteLLMParams | None = None,
+        model: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key, litellm_params, model)
 
     def validate_environment(
         self,
@@ -108,13 +118,22 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params: Final = super().get_supported_openai_params(model)
+        extra_params: Final = tuple(
+            param
+            for param, supported in (
+                ("verbosity", is_gpt_reasoning_series_name(model)),
+                ("reasoning_effort", self._supports_reasoning(model)),
+            )
+            if supported and param not in base_params
+        )
+        return [*base_params, *extra_params]
+
+    def _supports_reasoning(self, model: str) -> bool:
         try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                if "reasoning_effort" not in base_params:
-                    base_params.append("reasoning_effort")
+            return litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
         except Exception as e:
             verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
-        return base_params
+            return False
 
     def get_model_response_iterator(
         self,

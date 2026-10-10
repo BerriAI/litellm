@@ -1,7 +1,7 @@
 """Path allowlist for the gateway component.
 
 The gateway exposes the LLM data-plane surface: chat/completions, embeddings,
-audio, batches, files, fine-tuning, rerank, ocr, rag, video, search, image,
+audio, batches, files, fine-tuning, rerank, decisions, ocr, rag, video, search, image,
 responses, vector stores, passthrough providers, realtime websockets, MCP
 tool-call endpoints, and operational endpoints (/health, /metrics, and the
 /debug/memory/summary read of the serving worker's RSS).
@@ -60,6 +60,10 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/rerank",
     "/v2/rerank",
     "/rerank",
+    "/v1/decisions",
+    "/decisions",
+    "/v1/systemone",
+    "/systemone",
     "/v1/ocr",
     "/ocr",
     "/v1/rag/",
@@ -73,6 +77,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/containers",
     "/containers",
     "/v1/evals",
+    "/v1/traces",
+    "/v1/logs",
     "/v1/memory",
     "/queue/chat/",
     # Google data plane (v1beta is the Google AI Studio version)
@@ -82,9 +88,11 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/anthropic/",
     "/azure/",
     "/azure_ai/",
+    "/azure_speech/",
     "/aws/",
     "/bedrock/",
     "/comprehendmedical",
+    "/transcribe",
     "/cohere/",
     "/gemini/",
     "/gigachat/",
@@ -93,15 +101,20 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/vertex-ai/",
     "/assemblyai/",
     "/eu.assemblyai/",
+    "/deepgram/",
+    "/fal_ai/",
     "/langfuse/",
     "/vllm/",
     "/mistral/",
+    "/typesafe/",
+    "/openrouter/",
     "/nvidia_nim/",
     "/groq/",
     "/voyage/",
     "/cursor/",
     "/milvus/",
     "/openai_passthrough/",
+    "/tinyfish/",
     # Dynamic provider / toolset passthrough (path templates)
     "/{provider}/",
     "/toolset/",
@@ -124,6 +137,7 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/redoc",
         "/test",
         "/debug/memory/summary",
+        "/api/event_logging/batch",
     }
 )
 

@@ -74,18 +74,34 @@ body:
     validations:
       required: true
   - type: dropdown
-    id: component
+    id: domain
     attributes:
-      label: What part of LiteLLM is this about?
+      label: Which part of LiteLLM is this about?
+      description: Best guess is fine, we will relabel if needed.
       options:
-        - ''
-        - "SDK (litellm Python package)"
-        - "Proxy"
-        - "UI Dashboard"
+        - "Cost map: model prices and context windows"
+        - "LLM translation: a specific provider's request or response"
+        - "Routing: load balancing, fallbacks, retries, cooldowns"
+        - "Caching: response cache, Redis, semantic cache"
+        - "Proxy core: startup, config, health checks, endpoints"
+        - "Proxy auth: virtual keys, JWT, SSO, SCIM, roles"
+        - "Management: creating and editing keys, teams, users, orgs, models"
+        - "Spend tracking: spend logs, cost attribution, usage reports"
+        - "Budgets and rate limits: budgets, tpm/rpm, 429s"
+        - "Database: Prisma, migrations, Postgres"
+        - "Logging: callbacks, Langfuse, Datadog, OTel, Prometheus, alerting"
+        - "Guardrails: moderation, PII masking, policies"
+        - "MCP: servers, tools, OAuth"
+        - "Agents: A2A, agent endpoints, skills"
+        - "Vector stores: knowledge bases, RAG, search"
+        - "Passthrough: raw provider endpoints through the proxy"
+        - "Admin UI"
+        - "Python SDK: the litellm package itself"
+        - "Deploy: Docker, Helm, Terraform"
         - "Docs"
-        - "Other"
+        - "Not sure"
     validations:
-      required: true
+      required: false
   - type: dropdown
     id: hiring-interest
     attributes:

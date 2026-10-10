@@ -20,6 +20,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     PTU_LAPSED_ALERT_LIMIT,
@@ -30,11 +31,33 @@ from litellm.constants import (
     PTU_SENTINEL_API_KEY,
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
+
+
+class _DailyTeamSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyTeamSpend"]):
+    table_name = "litellm_dailyteamspend"
+
+
+def _daily_team_spend_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_DailyTeamSpend]":
+    """The sentinel rows this rollup writes, reads back and prunes."""
+    return _DailyTeamSpendRepository(prisma_client).table
+
+
+def _proxy_model_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_ProxyModelTable]":
+    """The stored deployments the rollup scans for PTU config."""
+    return ModelRepository(prisma_client).table
+
 
 _HOURS_PER_DAY: Final = 24
 _PRUNE_ID_CHUNK_SIZE: Final = 5_000
@@ -97,7 +120,7 @@ def _decode_model_info(raw: object) -> "Mapping[str, object] | None":
     """
     if isinstance(raw, str):
         try:
-            decoded: Final = json.loads(raw)
+            decoded: Final[object] = json.loads(raw)
         except (TypeError, ValueError):
             return None
         return decoded if isinstance(decoded, dict) else None
@@ -228,8 +251,8 @@ async def _upsert_ptu_daily_row(
     rename must not move the row. ``model_group`` carries the operator-facing name, which
     is outside the key and is what the usage views display.
     """
-    where: Final = {  # mutable-ok: prisma upsert filter payload
-        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {  # mutable-ok: prisma composite-key filter
+    where: Final = {
+        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
             "team_id": team_id,
             "date": date_str,
             "api_key": PTU_SENTINEL_API_KEY,
@@ -240,10 +263,10 @@ async def _upsert_ptu_daily_row(
         }
     }
     now: Final = datetime.now(timezone.utc)
-    await prisma_client.db.litellm_dailyteamspend.upsert(
+    await _daily_team_spend_table(prisma_client).upsert(
         where=where,
-        data={  # mutable-ok: prisma upsert data payload
-            "create": {  # mutable-ok: prisma create payload
+        data={
+            "create": {
                 "team_id": team_id,
                 "date": date_str,
                 "api_key": PTU_SENTINEL_API_KEY,
@@ -254,7 +277,7 @@ async def _upsert_ptu_daily_row(
                 "endpoint": "",
                 "ptu_flat_cost": flat_cost,
             },
-            "update": {  # mutable-ok: prisma update payload
+            "update": {
                 "model_group": model_name,
                 "ptu_flat_cost": flat_cost,
                 "updated_at": now,
@@ -353,7 +376,7 @@ async def _load_ptu_models(prisma_client: "PrismaClient", *, router: object | No
     The router is handed in rather than read off the proxy module, so a run prices exactly
     the deployments its caller declares and nothing a co-resident process left behind.
     """
-    rows: Final = await prisma_client.db.litellm_proxymodeltable.find_many()
+    rows: Final = await _proxy_model_table(prisma_client).find_many()
     db_ids: Final = frozenset(model_id for row in rows if (model_id := str(getattr(row, "model_id", "") or "")))
     config_records: Final = _config_deployments(router, owned_by_db=db_ids)
     models: Final = tuple(
@@ -502,9 +525,9 @@ async def _existing_sentinel_keys(
     The row's ``model`` column holds the deployment id, so this is an exact identity and
     survives a rename. Nothing here reads the display name.
     """
-    date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}  # mutable-ok: prisma range filter
-    rows: Final = await prisma_client.db.litellm_dailyteamspend.find_many(
-        where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}  # mutable-ok: prisma find filter
+    date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}
+    rows: Final = await _daily_team_spend_table(prisma_client).find_many(
+        where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}
     )
     return frozenset(
         (
@@ -585,6 +608,8 @@ async def run_scheduled_ptu_rollup(
     target_date: date | None = None,
     alert: Callable[[str], Awaitable[None]] | None = None,
     router: object | None = None,
+    *,
+    clock: Callable[[], datetime] = get_utc_datetime,
 ) -> RollupResult | None:
     """Run the daily rollup under a cross-pod lock so only one proxy reconciles a day.
 
@@ -608,8 +633,12 @@ async def run_scheduled_ptu_rollup(
     if not is_ptu_cost_attribution_enabled():
         return None
 
+    today: Final = clock().date()
+
     if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False, router=router)
+        return await _run_and_alert(
+            prisma_client, target_date=target_date, today=today, alert=alert, may_prune=False, router=router
+        )
 
     if not await pod_lock_manager.acquire_lock(cronjob_id=PTU_ROLLUP_JOB_ID, ttl=PTU_ROLLUP_LOCK_TTL_SECONDS):
         if await _lock_is_held(pod_lock_manager):
@@ -623,14 +652,19 @@ async def run_scheduled_ptu_rollup(
             "PTU rollup: could not take the rollup lock and no other pod holds it, "
             "running unguarded rather than skipping the day"
         )
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False, router=router)
+        return await _run_and_alert(
+            prisma_client, target_date=target_date, today=today, alert=alert, may_prune=False, router=router
+        )
 
     try:
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=True, router=router)
+        return await _run_and_alert(
+            prisma_client, target_date=target_date, today=today, alert=alert, may_prune=True, router=router
+        )
     finally:
         await pod_lock_manager.release_lock(cronjob_id=PTU_ROLLUP_JOB_ID)
 
 
+@with_service_target(POD_LOCK_TARGET)
 async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
     """True only when the rollup lock is readable and someone is holding it.
 
@@ -649,6 +683,7 @@ async def _run_and_alert(
     prisma_client: "PrismaClient",
     *,
     target_date: date | None,
+    today: date,
     alert: "Callable[[str], Awaitable[None]] | None",
     may_prune: bool = True,
     router: object | None = None,
@@ -664,8 +699,9 @@ async def _run_and_alert(
     explicit date means reconcile exactly that day, so it stays a single-day operation.
     Its failure is contained: the day's own result is returned either way.
     """
+    rollup_date: Final = target_date or today - timedelta(days=1)
     result: Final = await run_ptu_flat_cost_rollup(
-        prisma_client, target_date=target_date, may_prune=may_prune, router=router
+        prisma_client, target_date=rollup_date, may_prune=may_prune, router=router
     )
     if result.rows_failed:
         await _deliver_alert(
@@ -683,13 +719,14 @@ async def _run_and_alert(
             "by the provider with nothing attributing it here. Extend the window, or retire the deployment.",
         )
     if target_date is None:
-        await _backfill_and_alert(prisma_client, alert=alert, router=router)
+        await _backfill_and_alert(prisma_client, today=today, alert=alert, router=router)
     return result
 
 
 async def _backfill_and_alert(
     prisma_client: "PrismaClient",
     *,
+    today: date,
     alert: "Callable[[str], Awaitable[None]] | None",
     router: object | None = None,
 ) -> None:
@@ -699,7 +736,7 @@ async def _backfill_and_alert(
     caller whatever the catch-up pass does.
     """
     try:
-        backfill: Final = await run_ptu_flat_cost_backfill(prisma_client, router=router)
+        backfill: Final = await run_ptu_flat_cost_backfill(prisma_client, today=today, router=router)
     except Exception as exc:  # noqa: BLE001  # the catch-up pass must not fail the day's rollup
         verbose_proxy_logger.error("PTU backfill: catch-up pass failed, the day's rollup still stands: %s", exc)
         return
@@ -728,11 +765,11 @@ def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...]") 
     Returns a plain dict because the query builder serialises the mapping it is handed and
     rejects a read-only view of one.
     """
-    return {  # mutable-ok: prisma delete filter
+    return {
         "date": date_str,
         "api_key": PTU_SENTINEL_API_KEY,
-        "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-        "model": {"in": chunk},  # mutable-ok: prisma membership filter
+        "updated_at": {"lt": cutoff},
+        "model": {"in": chunk},
     }
 
 
@@ -771,7 +808,7 @@ async def _prune_unrefreshed_sentinel_rows(
     )
     filters: Final = tuple(_prune_filter(date_str=date_str, cutoff=cutoff, chunk=chunk) for chunk in chunks)
     deletions: Final = tuple(
-        [await prisma_client.db.litellm_dailyteamspend.delete_many(where=where) for where in filters]
+        [await _daily_team_spend_table(prisma_client).delete_many(where=where) for where in filters]
     )
     deleted: Final = sum(deletions)
     if deleted:

@@ -1,5 +1,6 @@
 import { Agent } from "@/components/agents/types";
 import { AgentCreateInfo } from "@/components/networking";
+import { parseKillSwitchForForm } from "./kill_switch_config";
 
 /**
  * Detects the agent type from an agent's litellm_params.
@@ -77,6 +78,7 @@ export const parseDynamicAgentForForm = (agent: Agent, agentTypeInfo: AgentCreat
   values.cost_per_query = agent.litellm_params?.cost_per_query;
   values.input_cost_per_token = agent.litellm_params?.input_cost_per_token;
   values.output_cost_per_token = agent.litellm_params?.output_cost_per_token;
+  values.kill_switch = parseKillSwitchForForm(agent.kill_switch);
 
   return values;
 };

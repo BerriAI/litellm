@@ -13,7 +13,7 @@ else:
 
 
 class GoogleAIStudioTokenCounter:
-    def _clean_contents_for_gemini_api(self, contents: Any) -> Any:
+    def _clean_contents_for_gemini_api(self, contents: Any) -> object:
         """
         Clean up contents to remove unsupported fields for the Gemini API.
 
@@ -84,7 +84,7 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """
         Count tokens using Google Gen AI Studio countTokens endpoint.
