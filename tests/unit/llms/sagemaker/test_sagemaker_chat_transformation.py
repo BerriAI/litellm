@@ -13,6 +13,7 @@ steady provider stream into gap-then-burst delivery.
 import binascii
 import json
 import struct
+from collections.abc import Mapping
 from typing import AsyncIterator, Iterator
 from unittest.mock import MagicMock
 
@@ -258,15 +259,17 @@ class _RequestCapturingHTTPHandler(HTTPHandler):
     def __init__(self) -> None:
         super().__init__()
         self.request_headers: dict[str, str] = {}
-        self.request_body: dict = {}
+        self.request_body: dict[str, object] = {}
 
-    def post(self, url: str, headers=None, data=None, **kwargs) -> httpx.Response:
+    def post(self, url: str, headers: Mapping[str, str] | None = None, data=None, **kwargs) -> httpx.Response:
         self.request_headers = dict(headers or {})
         self.request_body = json.loads(data)
         return httpx.Response(200, json=_STUB_COMPLETION_RESPONSE, request=httpx.Request("POST", url))
 
 
-def _invoke_sagemaker_chat(monkeypatch, **extra_params) -> _RequestCapturingHTTPHandler:
+def _invoke_sagemaker_chat(
+    monkeypatch, model: str = "sagemaker_chat/my-endpoint", **extra_params
+) -> _RequestCapturingHTTPHandler:
     """Drive one sagemaker_chat completion against an injected transport.
 
     A Bedrock API key short-circuits SigV4 inside `BaseAWSLLM._sign_request`, which would hide
@@ -275,7 +278,7 @@ def _invoke_sagemaker_chat(monkeypatch, **extra_params) -> _RequestCapturingHTTP
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     client = _RequestCapturingHTTPHandler()
     litellm.completion(
-        model="sagemaker_chat/my-endpoint",
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         aws_access_key_id="AKIATESTTESTTESTTEST",
         aws_secret_access_key="test-secret-key",
@@ -313,6 +316,26 @@ def test_hf_model_name_becomes_the_body_model(monkeypatch):
 
     assert client.request_body["model"] == "org/served-model"
     assert "hf_model_name" not in client.request_body
+
+
+@pytest.mark.parametrize("model", ["sagemaker_chat/my-endpoint", "sagemaker_nova/my-endpoint"])
+def test_body_carries_no_aws_credentials_or_routing_params(monkeypatch: pytest.MonkeyPatch, model: str):
+    client = _invoke_sagemaker_chat(
+        monkeypatch,
+        model=model,
+        aws_session_token="test-session-token",
+        model_id="my-inference-component",
+        sagemaker_base_url="https://my-private-endpoint.example.com/invocations",
+        top_k=5,
+    )
+
+    assert [key for key in client.request_body if key.startswith("aws_")] == []
+    assert "model_id" not in client.request_body
+    assert "sagemaker_base_url" not in client.request_body
+    assert client.request_body["top_k"] == 5
+    assert client.request_body["messages"] == [{"role": "user", "content": "hi"}]
+    assert "Credential=AKIATESTTESTTESTTEST/" in client.request_headers["Authorization"]
+    assert client.request_headers["X-Amz-Security-Token"] == "test-session-token"
 
 
 def test_body_model_stays_the_endpoint_name_when_hf_model_name_is_unset(monkeypatch):
