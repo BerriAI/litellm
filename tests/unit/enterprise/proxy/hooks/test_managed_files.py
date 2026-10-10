@@ -162,7 +162,6 @@ class _InMemoryManagedFilesDatabase:
 class _InMemoryManagedFilesPrismaClient:
     def __init__(self, managed_file_table: _InMemoryManagedFileTable) -> None:
         self.db: Final = _InMemoryManagedFilesDatabase(managed_file_table)
-        self.writer_db: Final = self.db
 
 
 def _managed_files_with_fake_prisma(
@@ -2584,8 +2583,10 @@ async def test_afile_retrieve_refresh_keeps_the_known_size_when_the_provider_rep
 @pytest.mark.usefixtures("_respx_sees_provider_calls")
 @respx.mock
 async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it_runs():
-    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
-        _batch_output_row("xai", size_bytes=0, fallback=True)
+    placeholder_row: Final = _batch_output_row("xai", size_bytes=0, fallback=True)
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(placeholder_row)
+    await proxy_managed_files.internal_usage_cache.async_set_cache(
+        key="unified-output", value=placeholder_row.model_dump(), litellm_parent_otel_span=None
     )
 
     def batch_job_writes_then_xai_answers(_request: httpx.Request) -> httpx.Response:
@@ -2594,15 +2595,27 @@ async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it
 
     respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(side_effect=batch_job_writes_then_xai_answers)
 
-    response: Final = await proxy_managed_files.afile_retrieve(
+    raced_response: Final = await proxy_managed_files.afile_retrieve(
         file_id="unified-output",
         litellm_parent_otel_span=None,
         llm_router=_provider_router("xai"),
     )
+    raced_row: Final = managed_file_table.rows["unified-output"].file_object
+    assert raced_row is not None
+    assert (raced_response.filename, raced_row.bytes, raced_row.filename) == (
+        f"{_XAI_BATCH_ID}_results.jsonl",
+        2565,
+        _XAI_BATCH_ID,
+    )
 
+    next_response: Final = await proxy_managed_files.afile_retrieve(
+        file_id="unified-output",
+        litellm_parent_otel_span=None,
+        llm_router=_provider_router("xai"),
+    )
     stored: Final = managed_file_table.rows["unified-output"].file_object
     assert stored is not None
-    assert (response.bytes, stored.bytes, stored.filename, stored.litellm_details_fallback) == (
+    assert (next_response.bytes, stored.bytes, stored.filename, stored.litellm_details_fallback) == (
         2565,
         2565,
         f"{_XAI_BATCH_ID}_results.jsonl",
@@ -2611,24 +2624,22 @@ async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it
     assert len(managed_file_table.update_many_calls) == 2
 
 
-class _LaggingReplicaPrismaClient:
-    def __init__(self, reader: _InMemoryManagedFileTable, writer: _InMemoryManagedFileTable) -> None:
-        self.db: Final = _InMemoryManagedFilesDatabase(reader)
-        self.writer_db: Final = _InMemoryManagedFilesDatabase(writer)
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_respx_sees_provider_calls")
 @respx.mock
-async def test_afile_retrieve_refresh_reads_the_size_back_from_the_writer_not_a_lagging_replica():
-    writer: Final = _InMemoryManagedFileTable(_batch_output_row("xai", size_bytes=2565, fallback=True))
-    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(
-        DualCache(),
-        prisma_client=_LaggingReplicaPrismaClient(
-            _InMemoryManagedFileTable(_batch_output_row("xai", size_bytes=0, fallback=True)), writer
-        ),
+async def test_afile_retrieve_refresh_that_loses_its_write_still_answers_with_the_known_size():
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
+        _batch_output_row("xai", size_bytes=2565, fallback=True)
     )
-    _provider_file_route("xai")
+    read_row: Final = managed_file_table.rows["unified-output"]
+    assert read_row.file_object is not None
+    newer_file_object: Final = read_row.file_object.model_copy(update={"created_at": 456})
+
+    def another_write_lands_then_xai_answers(_request: httpx.Request) -> httpx.Response:
+        managed_file_table.rows["unified-output"] = read_row.model_copy(update={"file_object": newer_file_object})
+        return _xai_completed_batch()
+
+    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(side_effect=another_write_lands_then_xai_answers)
 
     response: Final = await proxy_managed_files.afile_retrieve(
         file_id="unified-output",
@@ -2636,14 +2647,8 @@ async def test_afile_retrieve_refresh_reads_the_size_back_from_the_writer_not_a_
         llm_router=_provider_router("xai"),
     )
 
-    stored: Final = writer.rows["unified-output"].file_object
-    assert stored is not None
-    assert (response.bytes, stored.bytes, stored.filename, stored.litellm_details_fallback) == (
-        2565,
-        2565,
-        f"{_XAI_BATCH_ID}_results.jsonl",
-        None,
-    )
+    assert (response.bytes, response.filename) == (2565, f"{_XAI_BATCH_ID}_results.jsonl")
+    assert managed_file_table.rows["unified-output"].file_object == newer_file_object
 
 
 @pytest.mark.asyncio

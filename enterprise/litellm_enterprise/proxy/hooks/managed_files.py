@@ -194,9 +194,6 @@ def _is_transient_file_retrieve_error(error: Exception) -> bool:
     return isinstance(error, (httpx.TransportError, APIConnectionError, asyncio.TimeoutError))
 
 
-_REFRESH_SAVE_ATTEMPTS: Final = 3
-
-
 def _stored_json_text(raw_file_object: object) -> str:
     """JSON text of a stored file object exactly as read, for a write that must not race a newer one."""
     if isinstance(raw_file_object, BaseModel):
@@ -853,30 +850,26 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         stored: LiteLLM_ManagedFileTable,
         file_object: OpenAIFileObject,
     ) -> OpenAIFileObject | None:
-        """Save refreshed details only over the row as read, re-reading it after another write landed first."""
-        repository: Final = ManagedFileRepository(self.prisma_client, use_writer=True)
-        expected_raw: object = stored.file_object  # rebind-ok: replaced by the writer's copy after a lost race
-        for _ in range(_REFRESH_SAVE_ATTEMPTS):
-            expected_object = _parse_managed_file_object(expected_raw, stored.unified_file_id)  # rebind-ok: per attempt
-            sized_file_object = _with_measured_size(  # rebind-ok: per attempt
-                file_object, expected_object.bytes if expected_object is not None else None
+        """Save refreshed details, keeping a known size, only over the row as read; drop the cached copy if a newer write won."""
+        stored_object: Final = _parse_managed_file_object(stored.file_object, stored.unified_file_id)
+        sized_file_object: Final = _with_measured_size(
+            file_object, stored_object.bytes if stored_object is not None else None
+        )
+        if not await ManagedFileRepository(self.prisma_client).update_file_object(
+            stored.unified_file_id,
+            sized_file_object,
+            if_file_object=_stored_json_text(stored.file_object) if stored.file_object is not None else None,
+        ):
+            await self.internal_usage_cache.async_set_cache(
+                key=stored.unified_file_id, value=None, litellm_parent_otel_span=None
             )
-            if await repository.update_file_object(
-                stored.unified_file_id,
-                sized_file_object,
-                if_file_object=_stored_json_text(expected_raw) if expected_raw is not None else None,
-            ):
-                await self.internal_usage_cache.async_set_cache(
-                    key=stored.unified_file_id,
-                    value=stored.model_copy(update={"file_object": sized_file_object}).model_dump(),
-                    litellm_parent_otel_span=None,
-                )
-                return sized_file_object
-            current_row = await repository.table.find_first(where={"unified_file_id": stored.unified_file_id})  # rebind-ok: per attempt
-            if current_row is None:
-                return None
-            expected_raw = current_row.file_object
-        return None
+            return None
+        await self.internal_usage_cache.async_set_cache(
+            key=stored.unified_file_id,
+            value=stored.model_copy(update={"file_object": sized_file_object}).model_dump(),
+            litellm_parent_otel_span=None,
+        )
+        return sized_file_object
 
     async def store_batch_output_file(
         self,
