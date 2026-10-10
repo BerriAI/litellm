@@ -341,9 +341,14 @@ async def test_acompletion_sagemaker_non_stream(
 
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.usefixtures("fake_provider_credentials")
-def test_completion_sagemaker_non_stream(respx_mock: respx.MockRouter) -> None:
+def test_completion_sagemaker_non_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
     url: Final = (
-        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/"
+        "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/"
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
     )
     route: Final = respx_mock.post(url).mock(
@@ -404,16 +409,22 @@ def test_completion_sagemaker_prompt_template_non_stream(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        litellm,
-        "custom_prompt_dict",
-        {
-            "deepseek-ai/deepseek-coder-6.7b-instruct": {
-                "roles": {},
-                "initial_prompt_value": "Question: ",
-                "final_prompt_value": " Answer:",
-            }
-        },
+    monkeypatch.setattr(litellm, "known_tokenizer_config", {})
+    tokenizer_route: Final = respx_mock.get(
+        "https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct/raw/main/tokenizer_config.json"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "bos_token": {"content": "<｜begin▁of▁sentence｜>"},
+                "eos_token": {"content": "<|EOT|>"},
+                "chat_template": (
+                    "{{ bos_token }}You are a coding assistant\n"
+                    "{% for message in messages %}### Instruction:\n{{ message['content'] }}\n{% endfor %}"
+                    "### Response:"
+                ),
+            },
+        )
     )
     url: Final = (
         "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/deepseek_coder_6.7_instruct/invocations"
@@ -431,12 +442,49 @@ def test_completion_sagemaker_prompt_template_non_stream(
         num_retries=0,
     )
 
-    assert route.called
+    assert tokenizer_route.call_count == 1
     assert json.loads(route.calls[0].request.content) == {
-        "inputs": "Question: hi Answer:",
+        "inputs": "<｜begin▁of▁sentence｜>You are a coding assistant\n### Instruction:\nhi\n### Response:",
         "parameters": {"temperature": 0.2, "max_new_tokens": 80},
     }
     assert response.choices[0].message.content == "SageMaker reply"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize(
+    ("environment", "call_kwargs", "expected_region"),
+    [
+        ({}, {}, "us-west-2"),
+        ({"AWS_REGION_NAME": "us-east-1"}, {}, "us-east-1"),
+        ({"AWS_REGION_NAME": "eu-west-1"}, {"aws_region_name": "us-east-1"}, "us-east-1"),
+    ],
+    ids=["default_region", "environment_region", "config_region_beats_environment"],
+)
+def test_sagemaker_region_resolution(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    environment: dict[str, str],
+    call_kwargs: dict[str, str],
+    expected_region: str,
+) -> None:
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    url: Final = f"https://runtime.sagemaker.{expected_region}.amazonaws.com/endpoints/mock-endpoint/invocations"
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    litellm.completion(
+        model="sagemaker/mock-endpoint",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        num_retries=0,
+        **call_kwargs,
+    )
+
+    assert route.call_count == 1
+    assert str(route.calls[0].request.url) == url
 
 
 @pytest.mark.asyncio
@@ -522,14 +570,15 @@ async def test_completion_sagemaker_stream(
         )
     )
     chunks: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
-    content: Final = tuple(
-        chunk.choices[0].delta.content
-        for chunk in chunks
-        if chunk.choices[0].delta.content is not None
-    )
 
-    assert route.called
-    assert content == ("hello", " world")
+    assert json.loads(route.calls[0].request.content) == {
+        "inputs": "hi - what is ur name",
+        "parameters": {"temperature": 0.2, "max_new_tokens": 80},
+        "stream": True,
+    }
+    assert chunks[0].choices[0].delta.role == "assistant"
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks) == ("hello", " world", None)
+    assert tuple(chunk.choices[0].finish_reason for chunk in chunks) == (None, None, "stop")
 
 
 @pytest.mark.usefixtures("httpx_transport")

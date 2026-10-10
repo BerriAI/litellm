@@ -7,7 +7,10 @@ import json
 import struct
 from typing import Final
 
+import httpx
+import litellm
 import pytest
+import respx
 
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.nova.transformation import SagemakerNovaConfig
@@ -449,7 +452,7 @@ class TestSagemakerNovaTransformRequest:
             headers={},
         )
 
-        assert request["messages"] == messages
+        assert request == {"messages": messages}
 
     def test_should_include_all_nova_params_in_request(self):
         """Nova-specific params should appear in the request body."""
@@ -469,23 +472,81 @@ class TestSagemakerNovaTransformRequest:
         assert request["max_tokens"] == 512
         assert request["reasoning_effort"] == "low"
 
-    def test_should_parse_streamed_nova_chunks_and_final_usage(self):
-        config: Final = SagemakerNovaConfig()
-        chunks: Final = tuple(
-            chunk
-            for chunk in AWSEventStreamDecoder(model="nova-endpoint", is_messages_api=True).iter_bytes(
-                iter(
-                    [
-                        _nova_stream_frame("Nova ", None),
-                        _nova_stream_frame("stream", "stop"),
-                    ]
-                )
-            )
-            if chunk is not None
-        )
 
-        assert config.supports_stream_param_in_request_body
-        assert tuple(chunk.choices[0].delta.content for chunk in chunks) == ("Nova ", "stream")
-        assert chunks[-1].choices[0].finish_reason == "stop"
-        assert chunks[-1].usage is not None
-        assert chunks[-1].usage.total_tokens == 3
+NOVA_URL: Final = "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/nova-endpoint/invocations"
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_nova_completion_parses_content_finish_reason_and_usage(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(NOVA_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-nova-single",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "nova-endpoint",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Four"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 14, "completion_tokens": 2, "total_tokens": 16},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="sagemaker_nova/nova-endpoint",
+        messages=[{"role": "user", "content": "What is 2+2? Reply in one word."}],
+        max_tokens=32,
+        temperature=0.1,
+        num_retries=0,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "messages": [{"role": "user", "content": "What is 2+2? Reply in one word."}],
+        "max_tokens": 32,
+        "temperature": 0.1,
+    }
+    assert response.choices[0].message.content == "Four"
+    assert response.choices[0].finish_reason == "stop"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (
+        14,
+        2,
+        16,
+    )
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_nova_streaming_sends_stream_flag_and_parses_chunks_and_usage(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{NOVA_URL}-response-stream").mock(
+        return_value=httpx.Response(
+            200,
+            content=_nova_stream_frame("Nova ", None) + _nova_stream_frame("stream", "stop"),
+        )
+    )
+    stream: Final = litellm.completion(
+        model="sagemaker_nova/nova-endpoint",
+        messages=[{"role": "user", "content": "Count from 1 to 5."}],
+        max_tokens=64,
+        stream=True,
+        stream_options={"include_usage": True},
+        num_retries=0,
+    )
+    chunks: Final = tuple(stream)
+
+    assert json.loads(route.calls[0].request.content) == {
+        "messages": [{"role": "user", "content": "Count from 1 to 5."}],
+        "max_tokens": 64,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks) == ("Nova ", "stream", None, None)
+    assert tuple(chunk.choices[0].finish_reason for chunk in chunks) == (None, None, "stop", None)
+    assert (chunks[-1].usage.prompt_tokens, chunks[-1].usage.completion_tokens, chunks[-1].usage.total_tokens) == (
+        2,
+        1,
+        3,
+    )
