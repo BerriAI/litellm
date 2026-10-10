@@ -11,9 +11,10 @@ from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
@@ -27,7 +28,9 @@ from litellm.llms.openai.organization_costs import (
     fetch_openai_daily_costs,
     provider_billing_get,
 )
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.spend_capture_rate import (
     CaptureRateDay,
     CaptureRateReport,
@@ -68,7 +71,7 @@ ProviderBillingFailure: TypeAlias = ProviderBillingCredentialMissing | ProviderB
 CheckResult: TypeAlias = CaptureRateReport | ProviderBillingFailure
 
 
-class _CapturedSpendRow(BaseModel):
+class _CapturedSpendRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     date: str
@@ -290,6 +293,7 @@ async def _claims_alert_window(pod_lock_manager: "PodLockManager | None") -> boo
     return acquired or not await _lock_is_held(pod_lock_manager, redis_cache)
 
 
+@with_service_target(POD_LOCK_TARGET)
 async def _lock_is_held(pod_lock_manager: "PodLockManager", redis_cache: "RedisCache") -> bool:
     try:
         return bool(

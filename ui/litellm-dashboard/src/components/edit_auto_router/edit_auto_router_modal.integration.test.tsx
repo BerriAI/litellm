@@ -84,6 +84,39 @@ describe("EditAutoRouterModal keyword matching", () => {
     modelPatchUpdateCall.mockClear();
   });
 
+  it("reopens saved cache settings and persists an explicit opt-out and cleared estimates", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            cache_aware_routing: true,
+            cache_aware_routing_output_tokens: 512,
+            cache_aware_routing_timeout_ms: 750,
+          },
+        },
+      },
+    });
+    await screen.findByRole("textbox", { name: "Auto Router Name" });
+    openAutoRouterAdvanced("Cache-aware routing");
+    const toggle = screen.getByRole("switch", { name: "Cache-aware routing" });
+    expect(toggle).toBeChecked();
+    expect(screen.getByLabelText("Expected output tokens")).toHaveValue(512);
+    expect(screen.getByLabelText("Prediction timeout (ms)")).toHaveValue(750);
+    fireEvent.change(screen.getByLabelText("Expected output tokens"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Prediction timeout (ms)"), { target: { value: "" } });
+    await user.click(toggle);
+    await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig().cache_aware_routing).toBe(false);
+    expect(savedConfig()).not.toHaveProperty("cache_aware_routing_output_tokens");
+    expect(savedConfig()).not.toHaveProperty("cache_aware_routing_timeout_ms");
+  });
+
   it("saves a member's changed routing config without resending administrator settings", async () => {
     const user = userEvent.setup();
     renderModal({
@@ -164,6 +197,40 @@ describe("EditAutoRouterModal keyword matching", () => {
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
     if (raw === "") expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
     else expect(savedConfig().heuristic_v2_success_threshold).toBe(0);
+  });
+
+  it("saves a legacy heuristic-first router with a v2 chain and an edited success threshold", async () => {
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_first",
+            heuristic_first_max_tier: "SIMPLE",
+            classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+            token_thresholds: { simple: 12, complex: 800 },
+          },
+        },
+      },
+    });
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Heuristic before the judge", "Heuristic v2");
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.88" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    const expected = {
+      classifier_type: "heuristic_first",
+      local_heuristic: "heuristic_v2",
+      heuristic_v2_success_threshold: 0.88,
+      token_thresholds: { simple: 12, complex: 800 },
+      classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    };
+    expect(savedConfig()).toMatchObject(expected);
   });
 
   it("blocks an invalid threshold edit and retains a corrected value when switching classifiers", async () => {

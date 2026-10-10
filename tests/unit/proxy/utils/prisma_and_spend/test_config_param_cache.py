@@ -12,13 +12,15 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm.proxy.utils as utils_mod
+from litellm._internal_context import current_service_target
 from litellm.proxy.utils import (
     _config_cache_key,
     _ConfigRow,
@@ -213,14 +215,23 @@ async def test_invalidate_config_param_evicts_from_cache(
 
 
 @pytest.mark.asyncio
-async def test_invalidate_config_param_propagates_cache_error(
-    _swap_config_cache: Any,
+async def test_invalidate_config_param_survives_a_cache_error(
+    _swap_config_cache: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     _swap_config_cache.async_delete_cache = AsyncMock(
         side_effect=ConnectionError("redis down")
     )
-    with pytest.raises(ConnectionError):
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+    utils_mod.verbose_proxy_logger.addHandler(caplog.handler)
+    try:
         await invalidate_config_param("p5")
+    finally:
+        utils_mod.verbose_proxy_logger.removeHandler(caplog.handler)
+    actual: Final = {
+        "delete_calls": _swap_config_cache.async_delete_cache.await_count,
+        "warned": "config cache eviction of p5 failed: redis down" in caplog.text,
+    }
+    assert actual == {"delete_calls": 1, "warned": True}
 
 
 @pytest.mark.asyncio
@@ -265,3 +276,31 @@ async def test_prefetch_config_params_swallows_db_error_without_caching(
     prisma.db.litellm_config.find_many = AsyncMock(side_effect=RuntimeError("boom"))
     await prefetch_config_params(prisma, ["a", "b"])
     assert _swap_config_cache._store == {}
+
+
+@pytest.mark.asyncio
+async def test_config_param_cache_calls_declare_the_config_params_key_family(
+    _swap_config_cache: Any,
+) -> None:
+    """The config cache read and the miss write-back both run inside
+    ``service_target("config_params")`` so their Redis spans read
+    ``redis.get config_params`` / ``redis.set config_params``."""
+    seen: list[tuple[str, Any]] = []
+
+    async def _get(*_args: Any, **_kwargs: Any) -> None:
+        seen.append(("get", current_service_target()))
+
+    async def _set(*_args: Any, **_kwargs: Any) -> None:
+        seen.append(("set", current_service_target()))
+
+    _swap_config_cache.async_get_cache = AsyncMock(side_effect=_get)
+    _swap_config_cache.async_set_cache = AsyncMock(side_effect=_set)
+    prisma = MagicMock()
+    prisma.get_generic_data = AsyncMock(
+        return_value=SimpleNamespace(param_name="p1", param_value={"x": 1})
+    )
+
+    await get_config_param(prisma, "p1")
+
+    assert seen == [("get", "config_params"), ("set", "config_params")]
+    assert current_service_target() is None

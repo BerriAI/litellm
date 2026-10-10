@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from typing import Final
 
 import pytest
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import CredentialCreateBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -14,9 +16,20 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
+CLAUDE_BACKEND: Final = "anthropic/claude-haiku-4-5"
+
 
 class TestCredentialBackedMessages:
     @pytest.mark.covers("mgmt.credential.new.serves_request")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CLAUDE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_credential_backed_messages(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         marker = unique_marker()
         credential_name = f"e2e-cred-{marker}"
@@ -35,7 +48,7 @@ class TestCredentialBackedMessages:
         model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="anthropic/claude-haiku-4-5",
+                model=CLAUDE_BACKEND,
                 litellm_credential_name=credential_name,
             ),
         )

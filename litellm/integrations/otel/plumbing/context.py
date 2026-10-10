@@ -1,7 +1,8 @@
 """Trace-context + Baggage helpers."""
 
 import os
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Final
 
@@ -246,14 +247,51 @@ def resolve_service_span_context(
     return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
 
 
+_post_response_root: Final["ContextVar[SpanContext | None]"] = ContextVar(
+    "litellm_otel_post_response_root", default=None
+)
+
+
+@contextmanager
+def post_response_root(span: Span) -> Generator[None]:
+    """Nest the post-response service calls inside this block under ``span``."""
+    token: Final = _post_response_root.set(span.get_span_context())
+    try:
+        yield
+    finally:
+        _post_response_root.reset(token)
+
+
 def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
     if not isinstance(parent, ReadableSpan):
         return False
     if in_post_response_phase():
-        return True
+        return parent.get_span_context() != _post_response_root.get()
     if parent.end_time is None:
         return False
     return end_time_ns is None or end_time_ns > parent.end_time
+
+
+_active_phase_span: Final["ContextVar[Span | None]"] = ContextVar("litellm_otel_active_phase_span", default=None)
+
+
+@contextmanager
+def active_phase(span: Span) -> Generator[None]:
+    """Make ``span`` the phase that request-level spans opened inside the block nest under.
+
+    A ContextVar rather than the ambient span so a close callback whose task was
+    spawned inside the phase still parents to it, while one spawned after the
+    phase exited sees no phase at all.
+    """
+    token: Final = _active_phase_span.set(span)
+    try:
+        yield
+    finally:
+        _active_phase_span.reset(token)
+
+
+def active_phase_span() -> Span | None:
+    return _active_phase_span.get()
 
 
 def resolve_request_span_context() -> Context:
@@ -267,12 +305,26 @@ def resolve_request_span_context() -> Context:
 
     Unlike :func:`resolve_parent_context` (used by DB/service spans, which DO want
     to nest under the active phase span, e.g. an auth DB lookup under ``auth``),
-    this never returns the active span when an anchor exists.
+    this never returns the momentarily active span when an anchor exists.
     """
     root: Final = request_root_span()
     if root is not None:
         return context_from_span(root)
     return get_current()
+
+
+def resolve_internal_call_span_context() -> Context:
+    """The parent context for an LLM call litellm itself makes while working a request.
+
+    The auto-router classifier runs inside ``route {model_group}``; that phase, opened
+    with :func:`active_phase`, owns the sub-call so it reads as part of routing rather
+    than as a second provider attempt beside the caller's own ``chat``. With no phase
+    open the sub-call anchors like any request-level span.
+    """
+    phase: Final = active_phase_span()
+    if phase is not None:
+        return context_from_span(phase)
+    return resolve_request_span_context()
 
 
 def resolve_mcp_span_context(

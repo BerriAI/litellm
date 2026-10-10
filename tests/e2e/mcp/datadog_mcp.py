@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from typing import Protocol
 
 from e2e_config import datadog_mcp_url, unique_marker
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 
 SEARCH_LOGS_TOOL = "search_datadog_logs"
+
+
+class DdLogsReader(Protocol):
+    def poll_events_for_marker(self, marker: str) -> list[object]: ...
 
 
 def _dd_api_key() -> str:
@@ -31,6 +37,7 @@ def assert_dd_mcp_creds() -> None:
         )
 
 
+@step("Register the Datadog remote MCP server with its credentials from the environment")
 def register_datadog_mcp(
     client: McpClient,
     resources: ResourceManager,

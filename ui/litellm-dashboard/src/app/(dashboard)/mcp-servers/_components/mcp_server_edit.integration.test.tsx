@@ -88,6 +88,7 @@ const EXPECTED_BASE: Readonly<Record<string, unknown>> = {
     tool_allowlist_enforced: false,
   },
   oauth_passthrough: false,
+  rpm: undefined,
   server_id: "srv_1",
   server_name: "srv",
   static_headers: {},

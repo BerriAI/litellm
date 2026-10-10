@@ -3,12 +3,13 @@ import json
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from litellm._uuid import uuid4
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
@@ -17,7 +18,7 @@ USER_BANNER_MAX_MESSAGE_LENGTH: Final = 4000
 UserBannerSeverity = Literal["info", "warning", "error"]
 
 
-class UserBannerUpdate(BaseModel):
+class UserBannerUpdate(LiteLLMBaseModel):
     enabled: bool = Field(
         default=False,
         description="If true, the banner is shown to all authenticated dashboard users.",
@@ -49,7 +50,7 @@ class UserBanner(UserBannerUpdate):
     )
 
 
-class UpdateUserBannerResponse(BaseModel):
+class UpdateUserBannerResponse(LiteLLMBaseModel):
     message: str
     banner: UserBanner
 
