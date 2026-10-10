@@ -2086,9 +2086,9 @@ def _complete_scaledown(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
             optional_params=ctx.optional_params,
             litellm_params=ctx.litellm_params,
             shared_session=ctx.shared_session,
-            timeout=cast(
+            timeout=cast(  # cast-ok: CompletionTimeout.resolve normalizes this value
                 float | httpx.Timeout, ctx.timeout
-            ),  # cast-ok: CompletionTimeout.resolve normalizes this value
+            ),
             client=_dispatch_client_http(ctx),
             custom_llm_provider=ctx.custom_llm_provider,
             encoding=_get_encoding(),
