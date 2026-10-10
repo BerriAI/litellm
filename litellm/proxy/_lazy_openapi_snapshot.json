@@ -11620,13 +11620,24 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
             "logging_only_scope": {
               "anyOf": [
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -11634,7 +11645,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask_request_content": {
@@ -14027,13 +14038,24 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
             "logging_only_scope": {
               "anyOf": [
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -14041,7 +14063,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask": {
@@ -35126,28 +35148,6 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
-        "Scope": {
-          "additionalProperties": false,
-          "properties": {
-            "all_teams": {
-              "default": false,
-              "title": "All Teams",
-              "type": "boolean"
-            },
-            "api_key_hash": {
-              "default": "",
-              "title": "Api Key Hash",
-              "type": "string"
-            },
-            "team_id": {
-              "default": "",
-              "title": "Team Id",
-              "type": "string"
-            }
-          },
-          "title": "Scope",
-          "type": "object"
-        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -35186,105 +35186,6 @@
             "type"
           ],
           "title": "ValidationError",
-          "type": "object"
-        },
-        "Worker": {
-          "additionalProperties": false,
-          "properties": {
-            "analysis_key_id": {
-              "anyOf": [
-                {
-                  "pattern": "^[a-f0-9]{64}$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Analysis Key Id"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "last_seen": {
-              "format": "date-time",
-              "title": "Last Seen",
-              "type": "string"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "revoked": {
-              "default": false,
-              "title": "Revoked",
-              "type": "boolean"
-            },
-            "scope": {
-              "$ref": "#/components/schemas/Scope"
-            }
-          },
-          "required": [
-            "id",
-            "name",
-            "scope",
-            "last_seen"
-          ],
-          "title": "Worker",
-          "type": "object"
-        },
-        "WorkerCreated": {
-          "additionalProperties": false,
-          "properties": {
-            "image": {
-              "title": "Image",
-              "type": "string"
-            },
-            "managed": {
-              "default": false,
-              "title": "Managed",
-              "type": "boolean"
-            },
-            "token": {
-              "title": "Token",
-              "type": "string"
-            },
-            "worker": {
-              "$ref": "#/components/schemas/Worker"
-            }
-          },
-          "required": [
-            "image",
-            "worker",
-            "token"
-          ],
-          "title": "WorkerCreated",
-          "type": "object"
-        },
-        "WorkerName": {
-          "properties": {
-            "analysis_key_id": {
-              "pattern": "^[a-f0-9]{64}$",
-              "title": "Analysis Key Id",
-              "type": "string"
-            },
-            "managed": {
-              "default": false,
-              "title": "Managed",
-              "type": "boolean"
-            },
-            "name": {
-              "default": "Lens worker",
-              "minLength": 1,
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          "required": [
-            "analysis_key_id"
-          ],
-          "title": "WorkerName",
           "type": "object"
         }
       }
@@ -36323,52 +36224,6 @@
             }
           ],
           "summary": "Introspect Endpoint",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
-      "/lens/workers/register": {
-        "post": {
-          "operationId": "register_worker_lens_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]

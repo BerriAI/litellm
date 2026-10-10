@@ -5,6 +5,7 @@ import sys
 from collections.abc import Collection, Iterator, Mapping
 from functools import lru_cache
 from logging import Logger
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request, status
@@ -37,7 +38,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
-from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
@@ -269,7 +270,8 @@ def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
     if wif_fields:
         raise ValueError(
             f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
-            f"workload identity federation ({wif_fields[0]}), which a request body cannot choose. "
+            f"workload identity federation or OAuth token exchange ({wif_fields[0]}), which a request body "
+            "cannot choose. "
             "A proxy admin attaches it to a deployment."
         )
 
@@ -278,6 +280,7 @@ _DEPLOYMENT_MANAGEMENT_ROUTES: Final[frozenset[str]] = frozenset(
     ("/model/new", "/model/update", "/model/delete", "/health/test_connection")
 )
 _DEPLOYMENT_ID_UPDATE_ROUTE: Final = re.compile(r"^/model/[^/]+/update$")
+_MCP_SERVER_MANAGEMENT_ROUTE: Final = re.compile(r"^/v1/mcp/server(?:/.*)?$")
 
 
 def route_manages_deployments(route: str | None) -> bool:
@@ -294,6 +297,10 @@ def route_manages_deployments(route: str | None) -> bool:
     return route is not None and (
         route in _DEPLOYMENT_MANAGEMENT_ROUTES or _DEPLOYMENT_ID_UPDATE_ROUTE.fullmatch(route) is not None
     )
+
+
+def route_manages_mcp_servers(route: str | None) -> bool:
+    return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -411,6 +418,8 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "anthropic_workspace_id",
     "anthropic-workspace-id",
     "bedrock_tags",
+    # Deployment-pinned AgentCore session: every new caller-chosen value provisions another microVM.
+    "agentcore_runtime_session_id",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
@@ -437,6 +446,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
+    # Per-user GitHub Copilot connection slots: the mode is decided by the
+    # stored credential's values and the caller's connection by the proxy's own
+    # secret_fields, so a body-supplied value could only spoof either.
+    "github_copilot_auth_type",
+    "user_provider_credentials",
+    "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -447,19 +462,25 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 
 
 def _check_banned_params(
-    body: dict,
+    body: Mapping[str, object],
     general_settings: dict,
     llm_router: Router | None,
     model: str,
     *,
     manages_deployments: bool = False,
+    mcp_server_fields_allowed: bool = False,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
-    reject_server_owned_wif_params(body)
+    wif_body: Final[Mapping[str, object]] = (
+        MappingProxyType({key: value for key, value in body.items() if key not in oauth_token_exchange_litellm_params})
+        if mcp_server_fields_allowed
+        else body
+    )
+    reject_server_owned_wif_params(wif_body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
     for param in _BANNED_REQUEST_BODY_PARAMS:
@@ -604,7 +625,14 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
-    _check_banned_params(request_body, general_settings, llm_router, model, manages_deployments=manages_deployments)
+    _check_banned_params(
+        request_body,
+        general_settings,
+        llm_router,
+        model,
+        manages_deployments=manages_deployments,
+        mcp_server_fields_allowed=route_manages_mcp_servers(route),
+    )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:

@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -26,7 +27,7 @@ import {
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
 import CredentialModal from "../model_add/CredentialModal";
-import { isAnthropicProvider } from "../model_add/anthropic_federation";
+import { federatedProviderOf } from "../model_add/credential_federation";
 import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
@@ -35,7 +36,10 @@ import ConditionalPublicModelName from "./conditional_public_model_name";
 import LiteLLMModelNameField from "./litellm_model_name";
 import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
+import { authTypesFor } from "./provider_auth_types";
 import { TEST_MODES } from "./add_model_modes";
+import DecisionModelNote from "./DecisionModelNote";
+import { decisionModelsSublabel, type DecisionCatalog } from "@/lib/decisionModels";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -57,6 +61,7 @@ interface AddModelFormProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
   credentials: CredentialItem[];
+  decisionCatalog: DecisionCatalog;
 }
 
 const connectionTestModelName = (values: MountedFormValues): string | undefined => {
@@ -80,6 +85,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   setShowAdvancedSettings,
   teams,
   credentials,
+  decisionCatalog,
 }) => {
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
@@ -97,11 +103,18 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
+  const pickedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
   const queryClient = useQueryClient();
+  const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
+  const [credentialModalAuthTypeId, setCredentialModalAuthTypeId] = useState<string | undefined>();
+  const [selectedAuthTypeId, setSelectedAuthTypeId] = useState("");
+  const canCreateCredential = isProxyAdminRole(userRole ?? "");
   const [isFederatedCredentialModalOpen, setIsFederatedCredentialModalOpen] = useState(false);
-  const canCreateFederatedCredential = isProxyAdminRole(userRole ?? "") && isAnthropicProvider(selectedProvider);
+  const canCreateFederatedCredential =
+    isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
+  const selectedAuthType = authTypesFor(selectedProvider).find(({ id }) => id === selectedAuthTypeId);
 
-  const handleCreateFederatedCredential = async (values: Record<string, unknown>) => {
+  const handleCreateCredential = async (values: Record<string, unknown>) => {
     const credential = buildCredential(values, withoutRestrictedFields(values));
     try {
       await credentialCreateCall(accessToken, credential);
@@ -110,9 +123,23 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       return;
     }
     toast.success("Credential added successfully");
+    setIsCredentialModalOpen(false);
     setIsFederatedCredentialModalOpen(false);
     await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
     form.setValue("litellm_credential_name", credential.credential_name, { shouldDirty: true });
+  };
+
+  const openCredentialModal = (authTypeId?: string) => {
+    setCredentialModalAuthTypeId(authTypeId);
+    setIsCredentialModalOpen(true);
+  };
+
+  const handleSubmit = async () => {
+    if (selectedAuthType?.credentialOnly && !selectedCredentialName) {
+      toast.error("Create or select a credential for this auth type");
+      return false;
+    }
+    return handleOk();
   };
 
   const handleTestConnection = async () => {
@@ -146,21 +173,17 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       sortedProviderMetadata.map((providerInfo) => ({
         label: providerInfo.provider_display_name,
         value: providerInfo.provider,
+        sublabel: decisionModelsSublabel(decisionCatalog, providerInfo.litellm_provider),
         icon: <ProviderLogo provider={providerInfo.provider} className="w-5 h-5" />,
       })),
-    [sortedProviderMetadata],
+    [sortedProviderMetadata, decisionCatalog],
   );
 
-  const credentialOptions: SearchSelectOption[] = useMemo(
-    () => [
-      { label: "None", value: "" },
-      ...credentials.map((credential) => ({
-        label: credential.credential_name,
-        value: credential.credential_name,
-      })),
-    ],
-    [credentials],
-  );
+  const pickedLitellmProvider = sortedProviderMetadata.find(
+    (providerInfo) => providerInfo.provider === pickedProvider,
+  )?.litellm_provider;
+
+  const credentialSelectOptions: SearchSelectOption[] = useMemo(() => credentialOptions(credentials), [credentials]);
 
   const applyProviderSelection = (provider: string | null) => {
     setSelectedProvider(provider);
@@ -195,7 +218,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void handleOk().then((submitted) => {
+                  void handleSubmit().then((submitted) => {
                     if (submitted) {
                       setTeamAdminSelectedTeam(null);
                     }
@@ -261,6 +284,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                         providerModels={providerModels}
                         getPlaceholder={getPlaceholder}
                       />
+                      <DecisionModelNote catalog={decisionCatalog} litellmProvider={pickedLitellmProvider} />
 
                       {/* Conditionally Render "Public Model Name" */}
                       <ConditionalPublicModelName />
@@ -323,7 +347,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           <SearchSelect
                             inputId={control.id}
                             placeholder="Select or search for existing credentials"
-                            options={credentialOptions}
+                            options={credentialSelectOptions}
                             value={(control.value as string | null | undefined) ?? ""}
                             onValueChange={(value) => control.onChange(value === "" ? null : value)}
                           />
@@ -338,7 +362,12 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <span className="px-4 text-muted-foreground text-sm">OR</span>
                             <div className="grow border-t border-border"></div>
                           </div>
-                          <ProviderSpecificFields selectedProvider={selectedProvider} />
+                          <ProviderSpecificFields
+                            selectedProvider={selectedProvider}
+                            context="model"
+                            onAuthTypeChange={setSelectedAuthTypeId}
+                            onCreateCredential={canCreateCredential ? openCredentialModal : undefined}
+                          />
                           {canCreateFederatedCredential && (
                             <div className="mb-4 flex flex-col items-start gap-2">
                               <span className="text-sm text-muted-foreground">
@@ -483,6 +512,17 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         </CardContent>
       </Card>
 
+      {isCredentialModalOpen && (
+        <CredentialModal
+          open
+          mode="add"
+          initialProvider={selectedProvider}
+          initialAuthTypeId={credentialModalAuthTypeId}
+          providerLocked
+          onCancel={() => setIsCredentialModalOpen(false)}
+          onSubmit={handleCreateCredential}
+        />
+      )}
       {isFederatedCredentialModalOpen && (
         <CredentialModal
           open
@@ -491,7 +531,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
           initialAuthMethod="federation"
           providerLocked
           onCancel={() => setIsFederatedCredentialModalOpen(false)}
-          onSubmit={handleCreateFederatedCredential}
+          onSubmit={handleCreateCredential}
         />
       )}
       {/* Test Connection Results Modal */}

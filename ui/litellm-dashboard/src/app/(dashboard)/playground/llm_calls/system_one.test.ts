@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeSystemOneRequest } from "./system_one";
+import { fetchDecisionModels, makeSystemOneRequest } from "./system_one";
 import type { SystemOneRequest, SystemOneResponse } from "../components/systemOneUI/lib/schemas";
 
 vi.mock("@/components/networking", () => ({
@@ -104,5 +104,48 @@ describe("makeSystemOneRequest", () => {
     await expect(makeSystemOneRequest(payload, "session-key")).rejects.toThrow(
       "System One response has an invalid shape.",
     );
+  });
+});
+
+describe("fetchDecisionModels", () => {
+  const mockFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+  const modelGroupInfo = (data: unknown) => ({ ok: true, text: async () => JSON.stringify({ data }) }) as Response;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("lists the key's decision models from the proxy that answers the request, sorted by name", async () => {
+    mockFetch.mockResolvedValueOnce(
+      modelGroupInfo([
+        { model_group: "pplx-decider", mode: "evaluation" },
+        { model_group: "gpt-5.5", mode: "chat" },
+        { model_group: "jev-latest", mode: "evaluation" },
+        { model_group: "unknown-mode", mode: null },
+      ]),
+    );
+
+    await expect(fetchDecisionModels("virtual-key", "https://custom.example.com/")).resolves.toEqual([
+      "jev-latest",
+      "pplx-decider",
+    ]);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://custom.example.com/model_group/info",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Authorization: "Bearer virtual-key" }),
+      }),
+    );
+  });
+
+  it("rejects a response that is not a model group list", async () => {
+    mockFetch.mockResolvedValueOnce(modelGroupInfo([{ mode: "evaluation" }]));
+
+    await expect(fetchDecisionModels("virtual-key")).rejects.toThrow();
   });
 });
