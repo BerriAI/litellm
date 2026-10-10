@@ -291,6 +291,23 @@ describe("CustomCodeModal", () => {
     expect(mockCreate.mock.calls[0][1]).not.toHaveProperty("litellm_params.logging_only_continue_on_input_failure");
   });
 
+  it("disables and unchecks the continue toggle under a directional scope", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("logging_only");
+    await user.click(await screen.findByRole("option", { name: "logging_only" }));
+    await user.click(await screen.findByRole("combobox", { name: "Logging only scope" }));
+    await user.click(await screen.findByRole("option", { name: "Input only (request)" }));
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Continue observing the response after a flagged request",
+    });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).not.toBeChecked();
+  });
+
   it("should send the continue flag and migrate a legacy both scope in edit mode", async () => {
     const user = userEvent.setup();
     renderModal({

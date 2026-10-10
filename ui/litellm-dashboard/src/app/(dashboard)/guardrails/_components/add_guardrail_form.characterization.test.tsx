@@ -145,6 +145,26 @@ describe("AddGuardrailForm create payload characterization", () => {
     expect(payload()?.litellm_params.logging_only_scope).toBe("output");
   });
 
+  it("disables and unchecks the continue toggle under a directional scope", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      supported_modes: ["pre_call", "logging_only"],
+    });
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await pickProvider(user, "Bedrock Guardrail");
+    await user.click(screen.getByLabelText("Mode"));
+    await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
+    await chooseSelectOption(user, await screen.findByLabelText("Logging only scope"), "Input only (request)");
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Continue observing the response after a flagged request",
+    });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).not.toBeChecked();
+  });
+
   it("hides directional scope choices for providers that do not support them", async () => {
     vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
       ...uiSettings,

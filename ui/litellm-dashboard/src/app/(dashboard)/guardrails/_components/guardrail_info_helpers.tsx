@@ -146,7 +146,14 @@ export const loggingOnlyContinueFromParams = (
     | null
     | undefined,
 ): boolean =>
-  litellmParams?.logging_only_scope === "both" || litellmParams?.logging_only_continue_on_input_failure === true;
+  litellmParams?.logging_only_scope === "both" ||
+  (litellmParams?.logging_only_continue_on_input_failure === true &&
+    (litellmParams?.logging_only_scope === null || litellmParams?.logging_only_scope === undefined));
+
+export const effectiveLoggingOnlyContinue = (
+  choice: LoggingOnlyScopeChoice | undefined,
+  toggle: boolean | undefined,
+): boolean => choice === "default" && toggle === true;
 
 export const getLoggingOnlyScopeUpdate = (
   litellmParams:
@@ -162,12 +169,12 @@ export const getLoggingOnlyScopeUpdate = (
   if (
     choice === undefined ||
     (choice === loggingOnlyScopeToChoice(litellmParams?.logging_only_scope) &&
-      (continueToggle ?? false) === loggingOnlyContinueFromParams(litellmParams))
+      effectiveLoggingOnlyContinue(choice, continueToggle) === loggingOnlyContinueFromParams(litellmParams))
   )
     return {};
   return {
     logging_only_scope: choiceToLoggingOnlyScope(choice),
-    logging_only_continue_on_input_failure: continueToggle ?? false,
+    logging_only_continue_on_input_failure: effectiveLoggingOnlyContinue(choice, continueToggle),
   };
 };
 

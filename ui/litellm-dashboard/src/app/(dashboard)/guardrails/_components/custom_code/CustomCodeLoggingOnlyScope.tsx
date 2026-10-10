@@ -1,6 +1,7 @@
 import React from "react";
 import {
   choiceToLoggingOnlyScope,
+  effectiveLoggingOnlyContinue,
   getLoggingOnlyScopeOptions,
   getLoggingOnlyScopeUpdate,
   type LoggingOnlyScope,
@@ -50,7 +51,9 @@ export const getCustomCodeLoggingOnlyScopeCreate = (
   const scope = choiceToLoggingOnlyScope(choice);
   return {
     ...(scope === null ? {} : { logging_only_scope: scope }),
-    ...(continueOnInputFailure ? { logging_only_continue_on_input_failure: true } : {}),
+    ...(effectiveLoggingOnlyContinue(choice, continueOnInputFailure)
+      ? { logging_only_continue_on_input_failure: true }
+      : {}),
   };
 };
 

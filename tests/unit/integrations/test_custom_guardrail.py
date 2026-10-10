@@ -2884,12 +2884,12 @@ class TestLoggingOnlyApplyGuardrail:
         assert [entry["guardrail_status"] for entry in entries] == ["success"]
 
     @pytest.mark.parametrize(
-        "scope,continue_on_input_failure,expected_calls",
+        "scope,continue_on_input_failure,expected_calls,expected_statuses",
         (
-            (None, True, [("response", ["general kenobi"])]),
-            ("input", True, []),
-            ("output", True, [("response", ["general kenobi"])]),
-            (None, False, []),
+            (None, True, [("response", ["general kenobi"])], ["success"]),
+            ("input", True, [], []),
+            ("output", True, [("response", ["general kenobi"])], ["success"]),
+            (None, False, [], []),
         ),
     )
     @pytest.mark.asyncio
@@ -2898,6 +2898,7 @@ class TestLoggingOnlyApplyGuardrail:
         scope: LoggingOnlyDirection | None,
         continue_on_input_failure: bool,
         expected_calls: list[tuple[str, list[str]]],
+        expected_statuses: list[str],
     ):
         import threading
 
@@ -2911,6 +2912,8 @@ class TestLoggingOnlyApplyGuardrail:
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
         assert guardrail.calls == expected_calls
+        entries: Final = out_kwargs["standard_logging_object"].get("guardrail_information") or []
+        assert [entry["guardrail_status"] for entry in entries] == expected_statuses
 
     @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):

@@ -2,7 +2,13 @@
 
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useId } from "react";
-import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
+import {
+  useController,
+  useWatch,
+  type Control,
+  type ControllerRenderProps,
+  type RegisterOptions,
+} from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -174,6 +180,8 @@ export const LoggingOnlyScopeField: React.FC<{
   mode: unknown;
   directionalScopeSupported: boolean;
 }> = ({ control, mode, directionalScopeSupported }) => {
+  const scopeChoice = useWatch({ control, name: "logging_only_scope_choice" });
+  const continueDisabled = scopeChoice === "input" || scopeChoice === "output";
   if (!modeIncludesLoggingOnly(mode)) return null;
 
   return (
@@ -201,7 +209,8 @@ export const LoggingOnlyScopeField: React.FC<{
         {(fieldControl) => (
           <Switch
             id={fieldControl.id}
-            checked={fieldControl.value === true}
+            checked={!continueDisabled && fieldControl.value === true}
+            disabled={continueDisabled}
             onCheckedChange={fieldControl.onChange}
             aria-invalid={fieldControl["aria-invalid"]}
             aria-describedby={fieldControl["aria-describedby"]}

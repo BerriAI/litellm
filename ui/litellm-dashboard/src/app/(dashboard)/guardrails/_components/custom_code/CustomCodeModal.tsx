@@ -488,7 +488,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 Continue observing the response after a flagged request
               </span>
               <Switch
-                checked={loggingOnlyContinue}
+                checked={loggingOnlyScopeChoice === "default" && loggingOnlyContinue}
+                disabled={loggingOnlyScopeChoice !== "default"}
                 onCheckedChange={setLoggingOnlyContinue}
                 aria-label="Continue observing the response after a flagged request"
               />

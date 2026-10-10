@@ -17,6 +17,7 @@ import {
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
+  effectiveLoggingOnlyContinue,
   modeIncludesLoggingOnly,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
@@ -496,7 +497,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       if (modeIncludesLoggingOnly(values.mode) && loggingOnlyScope !== null) {
         guardrailData.litellm_params.logging_only_scope = loggingOnlyScope;
       }
-      if (modeIncludesLoggingOnly(values.mode) && values.logging_only_continue_on_input_failure === true) {
+      if (
+        modeIncludesLoggingOnly(values.mode) &&
+        effectiveLoggingOnlyContinue(
+          values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
+          values.logging_only_continue_on_input_failure,
+        )
+      ) {
         guardrailData.litellm_params.logging_only_continue_on_input_failure = true;
       }
 

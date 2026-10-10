@@ -296,8 +296,15 @@ describe("guardrail_info_helpers", () => {
       });
       expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "both" }, "input", true)).toEqual({
         logging_only_scope: "input",
-        logging_only_continue_on_input_failure: true,
+        logging_only_continue_on_input_failure: false,
       });
+      expect(
+        getLoggingOnlyScopeUpdate(
+          { logging_only_scope: "input", logging_only_continue_on_input_failure: true },
+          "input",
+          false,
+        ),
+      ).toEqual({});
       expect(getLoggingOnlyScopeUpdate({ logging_only_continue_on_input_failure: true }, "default", true)).toEqual({});
       expect(getLoggingOnlyScopeUpdate({ logging_only_continue_on_input_failure: true }, "default", false)).toEqual({
         logging_only_scope: null,
@@ -309,6 +316,12 @@ describe("guardrail_info_helpers", () => {
       expect(loggingOnlyContinueFromParams({ logging_only_scope: "both" })).toBe(true);
       expect(loggingOnlyContinueFromParams({ logging_only_continue_on_input_failure: true })).toBe(true);
       expect(loggingOnlyContinueFromParams({ logging_only_scope: "input" })).toBe(false);
+      expect(
+        loggingOnlyContinueFromParams({ logging_only_scope: "input", logging_only_continue_on_input_failure: true }),
+      ).toBe(false);
+      expect(
+        loggingOnlyContinueFromParams({ logging_only_scope: "both", logging_only_continue_on_input_failure: false }),
+      ).toBe(true);
       expect(loggingOnlyContinueFromParams({ logging_only_continue_on_input_failure: false })).toBe(false);
       expect(loggingOnlyContinueFromParams(undefined)).toBe(false);
       expect(loggingOnlyContinueFromParams(null)).toBe(false);
