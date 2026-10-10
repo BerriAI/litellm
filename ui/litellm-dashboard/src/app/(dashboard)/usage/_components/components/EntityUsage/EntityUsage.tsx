@@ -157,7 +157,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
-  const scopedTagOptions = useScopedTagOptions({
+  const scopedTagOptionsInput = {
     entityType,
     selectedTeamIds,
     selectedTags,
@@ -165,7 +165,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     accessToken,
     startTime,
     endTime,
-  });
+  };
+  const scopedTagOptions = useScopedTagOptions(scopedTagOptionsInput);
 
   const request = useMemo<DailyActivityRequest | null>(
     () =>

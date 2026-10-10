@@ -1472,9 +1472,7 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText("Team Multi Select"));
 
       await waitFor(() => {
-        expect(mockTagDailyActivityCall).toHaveBeenCalledWith(
-          expect.objectContaining({ teamIds: ["team-1"] }),
-        );
+        expect(mockTagDailyActivityCall).toHaveBeenCalledWith(expect.objectContaining({ teamIds: ["team-1"] }));
       });
       await waitFor(() => {
         expect(mockTagListCall).toHaveBeenCalledWith(
@@ -1513,9 +1511,7 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByRole("radio", { name: "Team" }));
 
       await waitFor(() => {
-        expect(mockTagDailyActivityCall.mock.lastCall?.[0]).toEqual(
-          expect.objectContaining({ groupBy: "team" }),
-        );
+        expect(mockTagDailyActivityCall.mock.lastCall?.[0]).toEqual(expect.objectContaining({ groupBy: "team" }));
       });
       expect(await screen.findByText(TEAM_NOTE)).toBeInTheDocument();
       expect(screen.getAllByText("Team Alpha").length).toBeGreaterThan(0);
@@ -1693,12 +1689,17 @@ describe("EntityUsage", () => {
 
       const list = await screen.findByRole("list", { name: "tag options" });
       await waitFor(() => {
-        expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["cc-shared", "Café ☕"]);
+        expect(
+          within(list)
+            .getAllByRole("listitem")
+            .map((item) => item.textContent),
+        ).toEqual(["cc-shared", "Café ☕"]);
       });
-      expect(within(list).getAllByRole("listitem").map((item) => item.getAttribute("data-value"))).toEqual([
-        "cc-shared",
-        "Café ☕",
-      ]);
+      expect(
+        within(list)
+          .getAllByRole("listitem")
+          .map((item) => item.getAttribute("data-value")),
+      ).toEqual(["cc-shared", "Café ☕"]);
     });
 
     it("sends group_by=tag, renders tag-name rows under Spend Per Tag, and shows the note", async () => {
