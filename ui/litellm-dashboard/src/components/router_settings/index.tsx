@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
+import { RouterSettingsSource, isOwnedByConfig } from "./ConfigOwned";
 
 interface RouterSettingsProps {
   accessToken: string | null;
@@ -24,6 +25,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
+  const [routerSettingsSource, setRouterSettingsSource] = useState<RouterSettingsSource>({});
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -43,6 +45,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       }));
     });
     getRouterSettingsCall(accessToken).then((data) => {
+      setRouterSettingsSource(data.source ?? {});
       if (data.fields) {
         // Build metadata map for easy lookup
         const fieldsMap: { [key: string]: any } = {};
@@ -128,7 +131,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     const updatedVariables = Object.fromEntries(
       Object.entries(settingsToUpdate)
         .map(([key, value]) => {
-          if (tabOwnedKeys.has(key)) {
+          if (tabOwnedKeys.has(key) || isOwnedByConfig(routerSettingsSource, key)) {
             return null;
           }
           if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {
@@ -186,6 +189,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         routerFieldsMetadata={routerFieldsMetadata}
         availableRoutingStrategies={availableRoutingStrategies}
         routingStrategyDescriptions={routingStrategyDescriptions}
+        routerSettingsSource={routerSettingsSource}
       />
 
       {/* Actions - Sticky at bottom */}
