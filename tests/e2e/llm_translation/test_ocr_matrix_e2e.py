@@ -80,9 +80,9 @@ def logger(monkeypatch: pytest.MonkeyPatch) -> RecordingLogger:
     return recorder
 
 
-TESTS_DIR: Final = Path(__file__).resolve().parents[2]
-PDF_PATH: Final = TESTS_DIR / "llm_translation" / "fixtures" / "dummy.pdf"
-PNG_PATH: Final = Path(__file__).resolve().parent / "fixtures" / "ocr_matrix_image.png"
+FIXTURES_DIR: Final = Path(__file__).resolve().parent / "fixtures"
+PDF_PATH: Final = FIXTURES_DIR / "dummy.pdf"
+PNG_PATH: Final = FIXTURES_DIR / "ocr_matrix_image.png"
 PINNED_CDN: Final = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0"
 PDF_URL: Final = f"{PINNED_CDN}/tests/llm_translation/fixtures/dummy.pdf"
 PNG_URL: Final = f"{PINNED_CDN}/tests/image_gen_tests/test_image.png"
