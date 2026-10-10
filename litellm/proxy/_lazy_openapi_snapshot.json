@@ -11672,6 +11672,32 @@
               "description": "Will mask response content if guardrail makes any changes",
               "title": "Mask Response Content"
             },
+            "max_concurrent_decision_calls": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+              "title": "Max Concurrent Decision Calls"
+            },
+            "max_input_chars": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "title": "Max Input Chars"
+            },
             "model": {
               "anyOf": [
                 {
@@ -11971,7 +11997,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Also implemented by guardrail='decision_model'.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -12513,6 +12539,43 @@
           "title": "CreateGuardrailRequest",
           "type": "object"
         },
+        "DecisionModelCheck": {
+          "description": "One predicate the decision model scores the request or response against.",
+          "properties": {
+            "action": {
+              "default": "block",
+              "enum": [
+                "block",
+                "log"
+              ],
+              "title": "Action",
+              "type": "string"
+            },
+            "instructions": {
+              "minLength": 1,
+              "title": "Instructions",
+              "type": "string"
+            },
+            "name": {
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "threshold": {
+              "default": 0.7,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Threshold",
+              "type": "number"
+            }
+          },
+          "required": [
+            "name",
+            "instructions"
+          ],
+          "title": "DecisionModelCheck",
+          "type": "object"
+        },
         "GUARDRAIL_DEFINITION_LOCATION": {
           "enum": [
             "db",
@@ -12844,6 +12907,13 @@
                 }
               ],
               "title": "Content Filter Settings"
+            },
+            "decision_model_providers": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Decision Model Providers",
+              "type": "array"
             },
             "pii_entity_categories": {
               "items": {
@@ -13506,10 +13576,17 @@
                   "$ref": "#/components/schemas/BedrockChecksConfigModel"
                 },
                 {
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionModelCheck"
+                  },
+                  "type": "array"
+                },
+                {
                   "type": "null"
                 }
               ],
-              "description": "Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier."
+              "description": "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate checks a decision_model guardrail scores for guardrail='decision_model'",
+              "title": "Checks"
             },
             "chunk_budget_chars": {
               "default": 25000,
@@ -13640,6 +13717,18 @@
               ],
               "description": "Python-like code containing the apply_guardrail function for custom guardrail logic",
               "title": "Custom Code"
+            },
+            "decision_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For guardrail='decision_model': the Decisions-API model that scores each check",
+              "title": "Decision Model"
             },
             "deepkeep_firewall_id": {
               "anyOf": [
@@ -14102,6 +14191,32 @@
               ],
               "description": "Will mask response content if guardrail makes any changes",
               "title": "Mask Response Content"
+            },
+            "max_concurrent_decision_calls": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+              "title": "Max Concurrent Decision Calls"
+            },
+            "max_input_chars": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "title": "Max Input Chars"
             },
             "metadata": {
               "anyOf": [

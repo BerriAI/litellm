@@ -96,6 +96,7 @@ import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_pl
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
+import type { DecisionTestBody } from "@/app/(dashboard)/guardrails/_components/decision_model/decisionModelQuestion";
 import { fetchClient } from "@/lib/http/api";
 import { toAgent, toAgentCard, type Agent, type AgentsResponse } from "./agents/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
@@ -6129,6 +6130,9 @@ export const applyGuardrail = async (
     throw error;
   }
 };
+
+export const decisionsTestCall = async (accessToken: string, requestBody: DecisionTestBody, signal?: AbortSignal) =>
+  apiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
 
 interface TestCustomCodeGuardrailRequest {
   custom_code: string;
