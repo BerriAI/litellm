@@ -13,7 +13,7 @@ class DecisionModelCheck(LiteLLMBaseModel):
 
     name: str = Field(min_length=1)
     instructions: str = Field(min_length=1)
-    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     action: Literal["block", "log"] = "block"
 
     @field_validator("instructions")

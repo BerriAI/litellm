@@ -12551,7 +12551,7 @@
               "type": "string"
             },
             "threshold": {
-              "default": 0.5,
+              "default": 0.7,
               "maximum": 1.0,
               "minimum": 0.0,
               "title": "Threshold",

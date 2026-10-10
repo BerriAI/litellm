@@ -22,6 +22,7 @@ import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { asText, GuardrailField, labelWithHint, requiredRule, type GuardrailFormControl } from "../GuardrailFormField";
 import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
 import DecisionTestSection from "./DecisionTestSection";
+import { DEFAULT_DECISION_THRESHOLD } from "./decisionModelQuestion";
 
 export interface DecisionModelFieldsProps {
   accessToken: string | null;
@@ -75,7 +76,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   const [customName, setCustomName] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
   const [customAction, setCustomAction] = useState<"block" | "log">("block");
-  const [customThreshold, setCustomThreshold] = useState(0.5);
+  const [customThreshold, setCustomThreshold] = useState(DEFAULT_DECISION_THRESHOLD);
   const [customNameTaken, setCustomNameTaken] = useState(false);
   const selectedModel = asText(useWatch({ control, name: "decision_model" }));
 
@@ -101,7 +102,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
     setCustomName("");
     setCustomInstructions("");
     setCustomAction("block");
-    setCustomThreshold(0.5);
+    setCustomThreshold(DEFAULT_DECISION_THRESHOLD);
   };
 
   const removeCheck = (name: string) => onChecksChange(checks.filter((check) => check.name !== name));

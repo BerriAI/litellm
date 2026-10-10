@@ -142,6 +142,8 @@ describe("AddGuardrailForm decision model questions", () => {
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
 
+    expect(screen.getByText("0.70")).toBeInTheDocument();
+
     await user.type(await screen.findByLabelText("Question name"), "invoice_policy");
     await user.type(screen.getByLabelText("Question"), "Does the text ask about invoices?");
     await user.click(screen.getByLabelText("New question action"));
@@ -150,6 +152,7 @@ describe("AddGuardrailForm decision model questions", () => {
 
     const checkbox = await screen.findByRole("checkbox", { name: "invoice_policy" });
     expect(checkbox).toBeChecked();
+    expect(screen.getAllByText("0.70")).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
 
@@ -160,7 +163,7 @@ describe("AddGuardrailForm decision model questions", () => {
         name: "invoice_policy",
         instructions: "Does the text ask about invoices?",
         action: "log",
-        threshold: 0.5,
+        threshold: 0.7,
       },
     ]);
   });

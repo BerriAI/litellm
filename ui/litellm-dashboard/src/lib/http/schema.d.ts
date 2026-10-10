@@ -31840,7 +31840,7 @@ export interface components {
             name: string;
             /**
              * Threshold
-             * @default 0.5
+             * @default 0.7
              */
             threshold: number;
         };

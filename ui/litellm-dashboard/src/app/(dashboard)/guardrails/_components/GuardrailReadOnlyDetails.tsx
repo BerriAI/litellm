@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { DEFAULT_DECISION_THRESHOLD } from "./decision_model/decisionModelQuestion";
 import { GuardrailModeRows } from "./GuardrailModeDisplay";
 import { GuardrailStreamScopeDetail } from "./StreamScopeFields";
 import ToolPermissionRulesEditor, { type ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
@@ -33,7 +34,7 @@ const DecisionModelSection = ({
           <span className="w-24 text-right">
             <Badge variant="secondary">{check.action ?? "block"}</Badge>
           </span>
-          <span className="w-24 text-right">{check.threshold ?? 0.5}</span>
+          <span className="w-24 text-right">{check.threshold ?? DEFAULT_DECISION_THRESHOLD}</span>
         </div>
       ))}
     </div>

@@ -119,6 +119,8 @@ export function runTestShortcutLabel(platform?: string): string {
   return /mac/i.test(hint) ? "⌘+Enter" : "Ctrl+Enter";
 }
 
+export const DEFAULT_DECISION_THRESHOLD = 0.7;
+
 export const DECISION_TEST_HISTORY_CAP = 20;
 
 export function prependTestRun(runs: readonly DecisionTestRun[], run: DecisionTestRun): DecisionTestRun[] {
