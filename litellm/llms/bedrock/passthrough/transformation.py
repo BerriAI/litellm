@@ -92,7 +92,7 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
 def _build_logged_response(
     chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj"
 ) -> Optional["CostResponseTypes"]:
-    from litellm.main import stream_chunk_builder
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 
     if len(chunks) == 0:
         return None
