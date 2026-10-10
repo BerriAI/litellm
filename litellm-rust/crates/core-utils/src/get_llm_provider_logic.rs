@@ -30,6 +30,8 @@ pub enum LlmProviders {
     Openai,
     #[strum(serialize = "openai_like")]
     OpenaiLike,
+    #[strum(serialize = "openrouter")]
+    Openrouter,
     #[strum(serialize = "reducto")]
     Reducto,
     #[strum(serialize = "vertex_ai")]

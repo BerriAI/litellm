@@ -13,6 +13,9 @@
   - Retain complete boundary arguments, opaque values, aliases, omitted/default distinctions and deliberate copies. Preserve the deployment-hook kwargs view
   - Before `pre_call`, re-alias every body key whose value equals the caller's argument to the caller's own object, resolved through `litellm_host_python::lookup`
   - Retain body/header roots from `pre_call` to `post_call`. In-place mutation reaches the wire, envelope field replacement is visible to later callbacks only
+- `result_ready` projects `ExecutionFacts` onto the `Logging` record and decides nothing itself
+  - `Cost::Reported` becomes `model_call_details["provider_reported_cost"]`, which `_response_cost_calculator` returns ahead of its estimate. `CacheHit` and `Deferred` write no cost key, the calculator's existing cache-hit and estimation paths cover them
+  - Never write `response_cost` here. The calculator owns that key and later Python paths overwrite it
 - Success and failure handlers receive the exact selected public response or exception
   - A failure-handler error cannot suppress the other eligible family or replace the mapped provider error. A cancellation ends the call with no further dispatch
   - Dispatch errors never replay provider work or trigger the opposite outcome. The proxy releases deferred success at most once

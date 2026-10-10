@@ -9,6 +9,7 @@ use litellm_llms::{
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     github_copilot::messages::transformation::COPILOT_MESSAGES_CONFIG,
+    openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -25,6 +26,7 @@ pub(crate) enum MessagesProvider {
     Deepseek,
     Edenai,
     GithubCopilot,
+    Openrouter,
     VertexAi,
 }
 
@@ -37,6 +39,7 @@ impl MessagesProvider {
             Self::Deepseek => LlmProviders::Deepseek,
             Self::Edenai => LlmProviders::Edenai,
             Self::GithubCopilot => LlmProviders::GithubCopilot,
+            Self::Openrouter => LlmProviders::Openrouter,
             Self::VertexAi => LlmProviders::VertexAi,
         }
         .into()
@@ -50,6 +53,7 @@ impl MessagesProvider {
             Self::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
             Self::Edenai => &EDENAI_MESSAGES_CONFIG,
             Self::GithubCopilot => &COPILOT_MESSAGES_CONFIG,
+            Self::Openrouter => &OPENROUTER_MESSAGES_CONFIG,
             Self::VertexAi => &VERTEX_ANTHROPIC_MESSAGES_CONFIG,
         }
     }
@@ -67,6 +71,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::GithubCopilot if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::GithubCopilot)
         }
+        LlmProviders::Openrouter => Some(MessagesProvider::Openrouter),
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::VertexAi)
         }
@@ -95,7 +100,9 @@ mod tests {
     #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
     #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
     #[case::deepseek("deepseek", MessagesProvider::Deepseek)]
+    #[case::edenai("edenai", MessagesProvider::Edenai)]
     #[case::github_copilot("github_copilot", MessagesProvider::GithubCopilot)]
+    #[case::openrouter("openrouter", MessagesProvider::Openrouter)]
     #[case::vertex_ai("vertex_ai", MessagesProvider::VertexAi)]
     fn provider_round_trips_through_its_python_name(
         #[case] name: &str,

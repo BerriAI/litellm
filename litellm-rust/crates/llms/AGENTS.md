@@ -31,6 +31,12 @@ A provider adapter may explicitly reuse another provider's transformation helper
 - Provider directories own provider behavior. API formats and their public data contracts are independent of the provider that originated them
 - Shared `base_llm` contracts must not import provider implementations or provider-specific transformation policy
 - Config traits represent actual provider contracts. Use composition and existing helpers instead of recreating inheritance with unnecessary traits or delegation layers
+- One config struct per provider per format, `pub struct <Provider><Format>Config; impl Base<Format>Config for ...`, mirroring the Python class. Never collapse providers into one struct parameterized by data
+  - Behavior two providers share is a plain function each impl calls, kept with the policy it belongs to: Anthropic-compatible hosts (Eden AI, OpenRouter) delegate to `openai_like/messages/transformation.rs` for the key and base environment, bearer credential with caller forwarding, billing block removal and portable cache hints
+  - The provider directory stays `src/<provider>/<format>/` even when the provider serves one format today, because most serve several
+- A provider that reports what it billed implements `reported_cost` and nothing else about accounting
+  - Read the figure through the provider's typed extension in `litellm-llms-types::providers::<provider>` (`OpenRouterUsage`, `EdenAIResponseExtension`), whose `BilledAmount` field already rejects anything that is not a finite, non-negative number
+  - The route settles the cost, the host records it. Configs never write to logging state or compute a price
 - Providers choose authentication and header policy. Shared auth and HTTP infrastructure apply those decisions
 - Generic configuration lookup belongs in the existing settings utilities, not in a provider directory
 - Closures are idiomatic Rust, but a `Vec<ContentBlock> -> Vec<ContentBlock>` helper is not automatically a useful abstraction

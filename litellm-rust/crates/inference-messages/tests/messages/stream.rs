@@ -337,6 +337,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
 #[case::edenai("edenai")]
+#[case::openrouter("openrouter")]
 #[tokio::test]
 async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     call: MessagesCall,

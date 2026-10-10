@@ -1,8 +1,8 @@
 #[path = "live/support.rs"]
 mod support;
 
-#[path = "live/edenai.rs"]
-mod edenai;
+#[path = "live/compatible_hosts.rs"]
+mod compatible_hosts;
 
 #[path = "live/github_copilot.rs"]
 mod github_copilot;

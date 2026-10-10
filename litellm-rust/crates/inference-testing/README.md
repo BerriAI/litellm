@@ -14,7 +14,7 @@ Completion checks text and usage. Streaming consumes SSE to completion and check
 
 Messages setup and assertions live in `inference-messages/tests/live/support.rs`. Provider modules under `tests/live/` select their payloads and tool policy. The shared helpers consume streams completely and reconstruct text, thinking signatures and tool arguments for the follow-up request
 
-The initial provider cases are `vertex_ai`, `edenai` and `github_copilot`. A registered ignored case is available coverage, not evidence that it passed against that provider
+The initial provider cases are `vertex_ai`, `edenai`, `openrouter` and `github_copilot`. A registered ignored case is available coverage, not evidence that it passed against that provider
 
 Run one provider's cases explicitly
 
@@ -29,10 +29,11 @@ For Vertex AI, set `LITELLM_LIVE_MESSAGES_VERTEX_AI_MODEL` to a Claude model pub
 
 Vertex AI cases live in `inference-messages/tests/live/vertex_ai.rs`. They cover plain and system messages, text streaming, and complete and streaming tool round trips. Tool cases use automatic selection because current Claude models reject forced `tool_choice`. Each case still requires a tool call, checks its arguments, and sends the tool result back
 
-For EdenAI, set `LITELLM_LIVE_MESSAGES_EDENAI_MODEL` and `EDENAI_API_KEY`, and select `edenai`. EdenAI requires a production token for live coverage, because sandbox tokens return dummy responses
+For OpenRouter, set `LITELLM_LIVE_MESSAGES_OPENROUTER_MODEL` and `OPENROUTER_API_KEY`, and select `compatible_hosts` with the provider's case name. EdenAI is selected the same way
 
-EdenAI cases live in `inference-messages/tests/live/edenai.rs`. They cover system messages, portable cache hints, provider-reported cost handoff, text streaming, and complete and streaming tool round trips. The cost assertion compares the public response with the execution facts instead of pinning a vendor price
-EdenAI tool cases use automatic selection because current Claude models reject forced `tool_choice`. The test still requires a tool call and verifies its arguments and follow-up response
+Anthropic-compatible host cases live in `inference-messages/tests/live/compatible_hosts.rs`, with EdenAI and OpenRouter as `#[values]` of every case. They cover system messages, cache hints, provider-reported cost handoff, text streaming, and complete and streaming tool round trips. The cost assertion reads the amount from the public response through the provider's own config and compares it with the settled execution facts instead of pinning a vendor price
+EdenAI and OpenRouter tool cases use automatic selection because current Claude models reject forced `tool_choice`. Each test requires a tool call and verifies its arguments and follow-up response
+
 
 For GitHub Copilot, set `LITELLM_LIVE_MESSAGES_GITHUB_COPILOT_MODEL` to `github_copilot/<enabled-claude-model>`, a current model enabled on the account. Copilot uses the existing device login under `~/.config/litellm/github_copilot`, or `GITHUB_COPILOT_TOKEN_DIR`. It acquires and refreshes the inference session through the production Rust authentication service. Merely appearing in Copilot's `/models` response does not mean a model's policy is enabled
 
