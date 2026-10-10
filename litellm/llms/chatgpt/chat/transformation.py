@@ -23,6 +23,9 @@ class ChatGPTConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def api_base_without_login(self) -> str:
+        return self.authenticator.get_api_base()
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
@@ -30,7 +33,7 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = self.authenticator.get_api_base()
+        dynamic_api_base: Final = self.api_base_without_login()
         try:
             dynamic_api_key: Final = self.authenticator.get_access_token()
         except GetAccessTokenError as e:
@@ -40,6 +43,15 @@ class ChatGPTConfig(OpenAIConfig):
                 message=str(e),
             )
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
+
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
 
     def validate_environment(
         self,

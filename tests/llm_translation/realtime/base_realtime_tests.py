@@ -178,7 +178,7 @@ class BaseRealtimeTest(ABC):
         2. Initial event is received
         3. Messages are properly forwarded
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
@@ -217,13 +217,6 @@ class BaseRealtimeTest(ABC):
                 f"exception: {type(caught_exception).__name__}: {caught_exception}"
             )
 
-        # Skip on transient connection failures
-        if (
-            not websocket_client.connection_successful
-            and websocket_client.close_code is not None
-        ):
-            pytest.skip(f"Transient connection failure: {'; '.join(error_details)}")
-
         # Assertions
         assert (
             websocket_client.connection_successful
@@ -248,7 +241,7 @@ class BaseRealtimeTest(ABC):
         Test realtime connection with explicit query parameters.
         Verifies that query params are properly passed to the backend.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
@@ -310,7 +303,7 @@ class BaseRealtimeTest(ABC):
         if self.should_skip():
             pytest.skip(self.get_skip_reason())
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # Create a custom websocket client that sends a message
         class InteractiveWebSocketClient(RealTimeWebSocketClient):
@@ -446,17 +439,3 @@ class BaseRealtimeTest(ABC):
 
         assert websocket_client.connection_successful, "Failed to establish connection"
         assert websocket_client.sent_user_message, "Failed to send user message"
-
-    def test_query_params_construction(self):
-        """Test that query params are constructed correctly"""
-        from litellm.types.realtime import RealtimeQueryParams
-
-        # Strip provider prefix from model name
-        model_name = self.get_model()
-        if "/" in model_name:
-            model_name = model_name.split("/", 1)[1]
-
-        query_params: RealtimeQueryParams = {"model": model_name}
-
-        assert "model" in query_params
-        assert query_params["model"] == model_name

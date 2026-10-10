@@ -107,7 +107,7 @@ impl OutboundRequest {
         self.timeout
     }
 
-    pub async fn send(self, client: &reqwest::Client) -> Result<reqwest::Response, reqwest::Error> {
+    pub async fn send(self, client: &crate::Client) -> Result<reqwest::Response, reqwest::Error> {
         let builder = with_headers(
             client.post(&self.url).body(self.body),
             &self.headers,

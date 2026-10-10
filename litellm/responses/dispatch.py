@@ -1,17 +1,22 @@
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge.catalog import Context, Delivery, Route
-from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
-from litellm.rust_bridge.public_call import bind, optional_bool, optional_mapping, optional_str, signature
+from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.public_call import (
+    NativeCall,
+    bind,
+    native_call,
+    native_call_hook,
+    optional_str,
+    signature,
+)
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
     NATIVE_RESPONSES,
-    LiteLLMResponsesRequest,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -44,32 +49,21 @@ _ARESPONSES: Final = signature(_PYTHON_ARESPONSES)
 
 def _public_request(
     legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> LiteLLMResponsesRequest | None:
+) -> NativeCall | None:
     fields: Final = bind(legacy, args, kwargs)
     if fields is None:
         return None
     model: Final = fields.get("model")
-    extra: Final = optional_mapping(fields.get("kwargs")) or MappingProxyType({})
     if not isinstance(model, str):
         return None
-    return LiteLLMResponsesRequest(
-        model=model,
-        input=fields.get("input"),
-        stream=optional_bool(fields.get("stream")),
-        api_key=optional_str(extra.get("api_key")),
-        api_base=optional_str(extra.get("api_base")) or optional_str(extra.get("base_url")),
-        custom_llm_provider=optional_str(fields.get("custom_llm_provider")),
-        extra_headers=optional_mapping(fields.get("extra_headers")),
-        kwargs=extra,
-    )
+    return native_call(legacy, args, kwargs)
 
 
-def _context(request: LiteLLMResponsesRequest) -> Context:
-    return Context(
+def _context(request: NativeCall) -> RouteContext:
+    return RouteContext(
         Route.RESPONSES,
-        provider=request.custom_llm_provider,
-        model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
+        provider=optional_str(request.resolved.get("custom_llm_provider")),
+        model=str(request.resolved["model"]),
     )
 
 
@@ -97,7 +91,7 @@ def responses(
         kwargs,
         python=python,
         binding=NATIVE_RESPONSES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 
@@ -108,7 +102,7 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
         kwargs,
         python=python,
         binding=NATIVE_ARESPONSES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 

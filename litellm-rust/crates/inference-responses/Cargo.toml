@@ -1,0 +1,32 @@
+[package]
+name = "litellm-inference-responses"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+futures-util.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
+litellm-cache-response.workspace = true
+litellm-host.workspace = true
+litellm-http.workspace = true
+litellm-inference.workspace = true
+litellm-llms.workspace = true
+litellm-llms-types.workspace = true
+litellm-secrets.workspace = true
+reqwest.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true, features = ["sync"] }
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+litellm-cache.workspace = true
+litellm-cache-memory.workspace = true
+litellm-host-native.workspace = true
+litellm-inference-testing.workspace = true
+litellm-tracing.workspace = true
+rstest.workspace = true
+wiremock.workspace = true

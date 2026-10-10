@@ -1,4 +1,9 @@
+from typing import Final
+
 from litellm.proxy._types import LitellmUserRoles
+
+SSO_SESSIONS_TARGET: Final = "sso_sessions"
+CLI_SSO_SESSIONS_TARGET: Final = "cli_sso_sessions"
 
 
 def check_is_admin_only_access(ui_access_mode: str | dict) -> bool:

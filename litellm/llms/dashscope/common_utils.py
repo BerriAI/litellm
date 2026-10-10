@@ -103,7 +103,7 @@ def missing_dashscope_family_key_message(custom_llm_provider: str) -> str:
         )
     if custom_llm_provider == "qwen_ai_platform":
         return (
-            "Missing API key for Qwen AI Platform. Set QWEN_AI_PLATFORM_API_KEY or "
+            "Missing API key for Qianwen AI Platform. Set QWEN_AI_PLATFORM_API_KEY or "
             "DASHSCOPE_API_KEY environment variable or pass api_key parameter."
         )
     return "Missing API key for DashScope. Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."

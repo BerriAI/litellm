@@ -2,6 +2,8 @@ import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import { expectUnrestrictedDashboard, setInvitedUserPassword } from "./helpers/userOnboarding";
+import { hideLiteAdmin } from "./helpers/navigation";
+import { masterKey as getMasterKey } from "./helpers/traffic";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -21,7 +23,7 @@ async function globalSetup() {
   // enable_projects_ui setting is on, and the seeded DB starts with it off.
   // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
   // the admin UI toggle does; the projects migration smoke needs the link.
-  const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+  const masterKey = getMasterKey();
   const api = await request.newContext();
   const settingsRes = await api.patch(`${UI_BASE_URL}${rootPath}/update/ui_settings`, {
     headers: { Authorization: `Bearer ${masterKey}` },
@@ -74,6 +76,9 @@ async function globalSetup() {
       const dismiss = page.getByText("Don't ask me again");
       if (await dismiss.isVisible({ timeout: 1_500 }).catch(() => false)) {
         await dismiss.click();
+      }
+      if (role === Role.ProxyAdmin) {
+        await hideLiteAdmin(page);
       }
       // The login flow stores a post-login return URL in the litellm_return_url
       // cookie. If the snapshot captures it before the app consumes it, every

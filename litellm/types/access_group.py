@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class AccessGroupCreateRequest(BaseModel):
+class AccessGroupCreateRequest(LiteLLMBaseModel):
     access_group_name: str
     description: str | None = None
     access_model_names: list[str] | None = None
@@ -13,7 +13,7 @@ class AccessGroupCreateRequest(BaseModel):
     assigned_key_ids: list[str] | None = None
 
 
-class AccessGroupUpdateRequest(BaseModel):
+class AccessGroupUpdateRequest(LiteLLMBaseModel):
     access_group_name: str | None = None
     description: str | None = None
     access_model_names: list[str] | None = None
@@ -23,14 +23,14 @@ class AccessGroupUpdateRequest(BaseModel):
     assigned_key_ids: list[str] | None = None
 
 
-class AccessGroupResource(BaseModel):
+class AccessGroupResource(LiteLLMBaseModel):
     """A resource referenced by an access group. `name` is null when the id no longer resolves or has no alias."""
 
     id: str
     name: str | None
 
 
-class AccessGroupResponse(BaseModel):
+class AccessGroupResponse(LiteLLMBaseModel):
     access_group_id: str
     access_group_name: str
     description: str | None = None

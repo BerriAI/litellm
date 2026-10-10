@@ -6,9 +6,6 @@
     "start_time",
     "asynchronous"
   ],
-  "check_limits": [
-    "kwargs"
-  ],
   "finalize": [
     "response",
     "logger",
@@ -76,11 +73,6 @@
   ],
   "custom_pricing_fields": [],
   "is_internal_call": [],
-  "credential_list": [],
-  "warn_unknown_credential": [
-    "name",
-    "loaded"
-  ],
   "before_deployment_call": [
     "kwargs",
     "call_type"
@@ -96,7 +88,8 @@
     "call_type"
   ],
   "stream_opened": [
-    "logger"
+    "logger",
+    "head"
   ],
   "stream_success": [
     "logger",

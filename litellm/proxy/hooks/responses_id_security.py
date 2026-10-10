@@ -40,7 +40,7 @@ _UNMANAGED_RESPONSE_ID_DETAIL: Final = (
 _PROXY_ADMIN_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value})
 
 
-def _proxy_general_settings() -> Mapping[str, Any]:
+def _proxy_general_settings() -> Mapping[str, object]:
     from litellm.proxy.proxy_server import general_settings
 
     return general_settings
@@ -88,7 +88,7 @@ def _rewrite_advertised_id(
     if not isinstance(payload_id, str):
         return event
 
-    rewritten: Final = {**payload, "id": rewrite(payload_id)}  # mutable-ok: pydantic cannot serialize a frozen map
+    rewritten: Final = {**payload, "id": rewrite(payload_id)}
     setattr(event, "response", rewritten)
     return event
 
@@ -107,7 +107,7 @@ def _is_responses_api_create_route(request_route: str | None) -> bool:
 class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
-        general_settings_reader: Callable[[], Mapping[str, Any]] = _proxy_general_settings,
+        general_settings_reader: Callable[[], Mapping[str, object]] = _proxy_general_settings,
         signing_key_reader: Callable[[], str | None] = _proxy_signing_key,
     ) -> None:
         self._general_settings_reader: Final = general_settings_reader
@@ -307,7 +307,7 @@ class ResponsesIDSecurity(CustomLogger):
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
-    ) -> Any:
+    ) -> LLMResponseTypes:
         """
         Queue response IDs for batch processing instead of writing directly to DB.
 

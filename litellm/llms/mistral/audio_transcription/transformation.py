@@ -147,5 +147,5 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if "language" in response_json:
             response["language"] = response_json["language"]
 
-        response._hidden_params = response_json
+        response.hidden_params = response_json
         return response

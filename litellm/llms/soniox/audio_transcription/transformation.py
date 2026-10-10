@@ -260,7 +260,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         # Stash the raw Soniox payload so power-users can read tokens, segments,
         # speaker/language data, etc.
-        response._hidden_params.update(
+        response.hidden_params.update(
             {
                 "soniox_raw": {
                     "transcription": transcription_meta,
@@ -269,3 +269,11 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             }
         )
         return response
+
+    def build_response_from_payload(
+        self,
+        payload: dict[str, object],  # mutable-ok: mirrors override contract
+        model_response: TranscriptionResponse | None = None,
+        response_format: str | None = None,
+    ) -> TranscriptionResponse:
+        return self._build_response_from_payload(payload, model_response, response_format)

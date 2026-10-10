@@ -2,20 +2,34 @@ from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_router_logger
-from litellm.types.router import RoutingGroup, RoutingStrategy
+from litellm.types.router import DeploymentTypedDict, RoutingGroup, RoutingStrategy
+
+
+def apply_routing_group_priority(
+    group: RoutingGroup, member: str, deployment: DeploymentTypedDict
+) -> DeploymentTypedDict:
+    if group.routing_strategy != "priority" or group.model_priorities is None:
+        return deployment
+    prioritized: Final[DeploymentTypedDict] = {
+        **deployment,
+        "litellm_params": {**deployment["litellm_params"], "order": group.model_priorities[member]},
+    }
+    return prioritized
+
+
+VALID_ROUTING_STRATEGIES: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))
 
 
 def validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
     if routing_strategy is None:
         return
 
-    valid_strategy_strings: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))
-    is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+    is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in VALID_ROUTING_STRATEGIES
     is_valid_enum: Final = isinstance(routing_strategy, RoutingStrategy)
     if not is_valid_string and not is_valid_enum:
         raise ValueError(
             f"Invalid routing_strategy: '{routing_strategy}'. "
-            f"Valid options: {list(valid_strategy_strings)}. "
+            f"Valid options: {list(VALID_ROUTING_STRATEGIES)}. "
             f"Check 'router_settings.routing_strategy' in your config.yaml "
             f"or the 'routing_strategy' parameter if using the Router SDK directly."
         )
@@ -42,10 +56,18 @@ def parse_routing_groups(
         raise ValueError(f"routing_groups: group names must be unique, duplicate group_name '{min(duplicate_names)}'.")
 
     for group in groups:
-        validate_routing_strategy(group.routing_strategy)
+        if group.routing_strategy != "priority":
+            validate_routing_strategy(group.routing_strategy)
 
     owners_by_model: Final = tuple(
-        (model_name, tuple(group.group_name for group in groups if model_name in group.models))
+        (
+            model_name,
+            tuple(
+                group.group_name
+                for group in groups
+                if group.routing_strategy != "priority" and model_name in group.models
+            ),
+        )
         for model_name in dict.fromkeys(model_name for group in groups for model_name in group.models)
     )
     conflicts: Final = tuple(

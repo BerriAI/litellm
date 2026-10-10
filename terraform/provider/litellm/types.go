@@ -25,6 +25,16 @@ type ModelResponse struct {
 	Additional    map[string]interface{} `json:"additional"`
 }
 
+// ModelInfoPatch is the body for PATCH /model/{id}/update; display_name is sent even when empty so it can be cleared.
+type ModelInfoPatch struct {
+	ModelInfo ModelInfoPatchFields `json:"model_info"`
+}
+
+type ModelInfoPatchFields struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
 // ModelRequest represents a request to create or update a model.
 type ModelRequest struct {
 	ModelName     string                 `json:"model_name"`
@@ -108,18 +118,20 @@ type LiteLLMParams struct {
 
 // ModelInfo represents information about a model.
 type ModelInfo struct {
-	ID        string `json:"id"`
-	DBModel   bool   `json:"db_model"`
-	BaseModel string `json:"base_model"`
-	Tier      string `json:"tier"`
-	Mode      string `json:"mode"`
-	TeamID    string `json:"team_id,omitempty"`
+	ID          string `json:"id"`
+	DBModel     bool   `json:"db_model"`
+	BaseModel   string `json:"base_model"`
+	Tier        string `json:"tier"`
+	Mode        string `json:"mode"`
+	TeamID      string `json:"team_id,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // Key represents a LiteLLM API key.
 type Key struct {
 	Key                      string                 `json:"key,omitempty"`
 	TokenID                  string                 `json:"token_id,omitempty"`
+	KeyType                  string                 `json:"key_type,omitempty"`
 	Models                   []string               `json:"models"`
 	Spend                    float64                `json:"spend,omitempty"`
 	MaxBudget                *float64               `json:"max_budget,omitempty"`
@@ -276,13 +288,15 @@ type VectorStoreInfoRequest struct {
 type JWTKeyMappingRequest struct {
 	JWTClaimName  string `json:"jwt_claim_name"`
 	JWTClaimValue string `json:"jwt_claim_value"`
-	Key           string `json:"key"`
+	Key           string `json:"key,omitempty"`
+	Token         string `json:"token,omitempty"`
 	Description   string `json:"description,omitempty"`
 }
 
 type JWTKeyMappingUpdateRequest struct {
 	ID          string `json:"id"`
 	Key         string `json:"key,omitempty"`
+	Token       string `json:"token,omitempty"`
 	Description string `json:"description"`
 	IsActive    bool   `json:"is_active"`
 }

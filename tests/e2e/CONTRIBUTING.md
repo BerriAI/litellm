@@ -13,10 +13,10 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 ## Running the tests locally
 
-1. Create a `.env` file in this directory with the provider keys the example models use, plus the master key and the Postgres/Redis coordinates your config reads back:
+1. Generate a master key with `export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"`. Create a `.env` file in this directory with the provider keys the example models use and the Postgres/Redis coordinates your config reads back:
 
    ```bash
-   LITELLM_MASTER_KEY="sk-1234"
+   LITELLM_MASTER_KEY="sk-<your-master-key>"
    DATABASE_URL="postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
    REDIS_HOST="localhost"
    REDIS_PORT="6379"
@@ -64,7 +64,7 @@ The suites run against a live proxy, so bring one up first by running the litell
 
    For the opt-in browser profile, start the existing IdP first, then run `.github/e2e-stack/oidc-profile.sh "$PROXY_BASE_URL" <server-command>`. The wrapper creates a confidential client with an exact `/sso/callback` redirect and S256 PKCE, passes the client secret only through the child process environment, and removes the client on exit. It uses the existing generic OIDC handler with `GENERIC_USER_ID_ATTRIBUTE=sub`. Preserve the IdP's PostgreSQL data across restarts
 
-   `tests/e2e/ui/playwright.oidc.config.ts` uses an already running OIDC stack and separate storage/output files. Supply `E2E_OIDC_UI_URL`, `JWT_ISSUER`, `E2E_OIDC_USERNAME` and `E2E_OIDC_PASSWORD` for a seeded actor. Its setup follows the real login and callback path. The current Python canary qualifies browser-client configuration and token/userinfo identity mapping; browser journey specs under `ui/oidc/` are a separate coverage step
+   `tests/e2e/ui/playwright.oidc.config.ts` uses an already running OIDC stack and separate storage/output files. Supply `E2E_OIDC_UI_URL`, `JWT_ISSUER`, `E2E_OIDC_USERNAME` and `E2E_OIDC_PASSWORD` for a seeded actor. Its setup follows the real login and callback path. The current Python canary qualifies browser-client configuration and token/userinfo identity mapping. The specs under `ui/oidc/` drive a real dashboard SSO login and a real `lite login`, so start the proxy with `EXPERIMENTAL_UI_LOGIN=true` and at least one model it can actually serve. The CLI spec runs `lite` from `PATH` unless `E2E_LITE_CLI` names another executable, and it gives the CLI a temporary `HOME` with the keyring disabled so your own login is never touched. The main `playwright.config.ts` ignores `oidc/`
 
    Every successful IdP create immediately registers cleanup, including partial setup failures. Cleanup failures emit warnings. Tokens are minted on demand, and the expiration test waits relative to the token's actual `exp` with a bounded clock-drift check. To check first-attempt behavior locally, run both files with `--reruns 0`:
 
@@ -73,12 +73,12 @@ The suites run against a live proxy, so bring one up first by running the litell
      uv run pytest tests/e2e/other/test_jwt_auth_e2e.py tests/e2e/management/test_jwt_management_e2e.py --reruns 0 -v
    ```
 
-   Buildkite runs this suite against a Keycloak deployed beside the ephemeral stack by project-releaser. It fetches the realm from the test-runner revision even when it reuses a gateway image from another commit. The GitHub Actions changed-test stack starts the same digest-pinned Keycloak through `.github/e2e-stack/start-idp.sh`, imports the checked-out realm, and exports the IdP URL and credentials in `stack.env`. Both runners configure issuer/audience validation and store the realm, keys and users in a separate schema in the stack's PostgreSQL, so replacing Keycloak preserves token validity. Both wait for realm discovery before running tests. Losing the whole ephemeral database invalidates the stack. Keycloak skips imports into an existing realm, so changes to the realm export require a fresh stack (or deliberately replacing the local data volume). A stack without it fails the JWT tests rather than skipping them
+   Buildkite runs this suite against a Keycloak deployed beside the ephemeral stack by project-releaser. It fetches the realm from the test-runner revision even when it reuses a gateway image from another commit. The runner configures issuer/audience validation and stores the realm, keys and users in a separate schema in the stack's PostgreSQL, so replacing Keycloak preserves token validity. It waits for realm discovery before running tests. Losing the whole ephemeral database invalidates the stack. Keycloak skips imports into an existing realm, so changes to the realm export require a fresh stack (or deliberately replacing the local data volume). A stack without it fails the JWT tests rather than skipping them
 
-4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
+4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`). The suites' client dependencies (the provider SDKs, websockets) live in the `e2e-dev` dependency group; `make bootstrap` installs it, and naming the group on the run keeps the command working from any environment state:
 
    ```bash
-   uv run pytest tests/e2e/llm_translation/ -v
+   uv run --group e2e-dev pytest tests/e2e/llm_translation/ -v
    ```
 
    The browser tests in the `management/` suite drive the dashboard the proxy serves at `/ui` through playwright, an optional dependency behind `importorskip` (the suite's API tests run without it). It lives in the `e2e-dev` dependency group; install it along with its browser:
@@ -103,19 +103,30 @@ Alternatively, start the proxy with `STORE_PROMPTS_IN_SPEND_LOGS=true litellm --
 
 A couple of logging destinations are configured on the proxy rather than by the test. The Weave tests scope their callback to the key they create, but litellm builds the `weave_otel` logger from `WANDB_API_KEY` and `WANDB_PROJECT_ID` before it applies the per-key vars, so the proxy needs both in its own environment or the key-scoped callback never initializes and nothing ships
 
-### The pull request check
+### Secret manager lanes
 
-Every same-repository PR that adds, modifies, or renames a `tests/e2e/**/test_*.py` file runs those changed files three times. A change to the harness itself, meaning a root-level `tests/e2e/*.py` file or `pytest.ini`, `tests/e2e/gateway/`, `.github/e2e-stack/`, or the workflow, also runs the `access_control` suite and both JWT suites as canaries, because those files have no test of their own that exercises the stack. `.github/e2e-stack/select_tests.py` applies both rules. The stack config at `tests/e2e/gateway/stage_mirror_ci_config.yml` must declare every model the selected suites use; a missing one shows up as a failed test id in the public log. The suite's own single rerun for network errors and 5xx responses (see `pytest.ini`) applies on every pass, so a transport blip does not fail the check while a race inside a test still does. The stage-mirror stack has a control-plane backend, two gateways behind nginx, Postgres, Keycloak, Jaeger, and TLS cluster-mode Valkey. Realm-only edits also trigger these canaries. The stack exports every gateway address in `LITELLM_PROXY_REPLICA_URLS`, so model registration waits until each gateway lists the new model rather than whichever one the load balancer answered from. Documentation, deleted-file, and application-only changes do not start the stack or request environment approval. The `ui/`, `claude_code/`, and `load/` directories, `batches/test_managed_files_enforcement_e2e.py`, `llm_translation/realtime/test_realtime_pipecat_audio_e2e.py`, and `guardrails/test_presidio_masking_e2e.py` remain outside this check because they use separate tooling or need a differently configured stack: the pipecat audio suite skips itself at import time unless the NLTK `punkt_tab` data is installed, and the presidio suite fails without the analyzer and anonymizer services this stack does not start. The Redis chaos test under `load/` needs a proxy it can pause the Redis of on the same host (`gateway/redis_chaos_ci_config.yml`), which `.github/workflows/test-e2e-redis-chaos.yml` boots, and which the Buildkite `e2e-redis-chaos` step in project-releaser runs co-located with Postgres and Valkey in one pod; it is deselected unless `E2E_REDIS_CHAOS` is set
+`key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. The backends are `hashicorp_vault` and `cyberark` (CyberArk Conjur). `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. `secret_manager/backend.sh` runs any backend in Docker and writes its env, so every lane runs the same way locally:
 
-Every selected file must execute at least one passing test in each pass, and any test failure, collection error, or entirely skipped or deselected file fails the check. A file whose tests are all marked skip therefore cannot pass this check, so unskip at least one of them, or add the file to `UNSUPPORTED` in `select_tests.py` with the reason, before changing one. A failed pass stops the run. The public log prints pytest's one-line summary for each pass, including the rerun count, and names each failed or errored test as `classname::name`, so a retried network error or a failing test is visible without the raw output. The final `e2e-changed-tests` job succeeds only when no supported test files changed or the approved run completed all three passes. Fork PRs with selected tests fail this gate until a maintainer brings the reviewed change onto a same-repository branch
+```bash
+bash tests/e2e/secret_manager/backend.sh up cyberark
+(set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
+  LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
+(set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
+  uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v)
+bash tests/e2e/secret_manager/backend.sh down cyberark
+```
 
-Repository admins must require the `e2e-changed-tests` status check for merging and configure the `e2e-changed` environment with required reviewers, self-review disabled, and admin bypass disabled. Each push cancels the previous run; a new run that selects tests needs a fresh approval. Reviewers must inspect the entire executable PR diff, including application code, dependencies, tests, and workflow helpers, before approving the exact revision. Approved code executes with provider credentials, so environment approval is a trust decision about that code
+`E2E_SECRET_MANAGER_PORT` moves the manager off its usual port (8200 for Vault, 8080 for Conjur), and `E2E_SECRET_MANAGER_DIR` moves the env files. Keep that directory private, because both files hold a working admin credential. Keep `OPENAI_API_KEY` out of the proxy's environment. The tests copy the runner's key into the manager under a fresh name per test, so a passing call proves the key came through the manager rather than the `os.environ` fallback `get_secret` takes when the manager errors
 
-Credentials come from the existing AWS Secrets Manager secrets in us-east-1, `litellm-e2e-changed-provider-keys` and `litellm-e2e-changed-license`. The OIDC role must trust only `repo:BerriAI/litellm:environment:e2e-changed` with audience `sts.amazonaws.com` and have read access only to these secrets. The short-lived reader credentials are scoped to the fetch step. Provider credentials must cover the selected suites, including Datadog credentials when logging or MCP tests need them; missing credentials fail the run. `up.sh` refuses to start without `DD_API_KEY`, because the stack's gateway config enables the Datadog callback for every run and a gateway booted without the key fails readiness. Keep provider credentials dedicated to this lane with only the permissions those tests need
+A backend declares what it supports in its `SecretBackend.capabilities`, and a test that needs something not every backend does carries `@pytest.mark.requires_capability(...)`, so it is deselected, not failed or skipped, on the lanes that lack it. CyberArk has no `deletes_stored_keys`, because the proxy's delete answers `not_supported` and Conjur keeps the key, so the delete test runs only on the Vault lane
 
-Fetched values of eight characters or more are masked before use, while shorter values such as flags stay unmasked because masking a one-character value would blank every matching digit in the log, and credential files and raw output are private to the runner. Public logs contain selected file names, counts, pytest's summary line, failed test ids, and pass status; raw pytest output, reports, and stack logs are not uploaded or printed. The workflow removes them and the credential files during cleanup. To diagnose a failed pass, reproduce the selected files locally with the appropriate credentials and inspect the local logs
+To add a backend, leave the tests and markers alone and add:
 
-To reproduce the CI topology on a dedicated machine, `bash .github/e2e-stack/up.sh` reads `tests/e2e/.env`, writes `stack.env` under `${E2E_STACK_DIR:-/tmp/litellm-e2e-stack}`, and `bash .github/e2e-stack/down.sh` stops it. Keep this directory private and remove its credential files and logs after use
+1. `secret_manager/secret_store_<system>.py`: a `SecretStore` (`write`, `read` returning None when absent, idempotent `destroy`) over the manager's own API through `e2e_http`'s external helpers, read from `E2E_<SYSTEM>_*` env vars, and a `SecretBackend` whose `system` is the litellm `KeyManagementSystem` value and whose `capabilities` lists what it supports
+2. its entry in `secret_backends.BACKENDS`
+3. `gateway/secret_manager_<system>_ci_config.yml`, a copy of an existing lane's with only `key_management_system` changed
+4. an `up_<system>` function in `secret_manager/backend.sh` that starts the manager and writes `proxy.env` and `tests.env`
+5. a CI step that runs `backend.sh up <system>` (or the same containers as sidecars), boots the proxy with `proxy.env` and a license, and runs pytest with `tests.env`
 
 ### Record and replay
 
@@ -184,7 +195,7 @@ If a step is missing, the test is not done. That is the whole pattern
 
 ## Style: lay the pattern down in a class
 
-Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test; each method is one behavior. Think of it as documenting the contract, with the rough intent being
+Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test. Each method is one behavior. Think of it as documenting the contract, with the rough intent being
 
 ```python
 # pseudo-code to convey intent
@@ -200,11 +211,13 @@ class TestPromptCompression:
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
 
-That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from; it creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
+That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from. It creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
 
-## Use the shared transport; never touch requests directly
+## Use the shared transport, never touch requests directly
 
 Every HTTP call goes through the shared transport, never through `requests.*` in a test. `e2e_http.py` is the only module permitted to call `requests.*`, and that is enforced in CI by `tests/code_coverage_tests/check_e2e_no_raw_requests.py`. A test that imports requests will fail the check
+
+One deliberate exception: LLM-endpoint calls in `llm_translation/` go through the real provider SDKs (OpenAI, Anthropic) via the suite's `sdk` fixture (`llm_translation/sdk_clients.py`), because that is what customers actually run against the proxy (LIT-4577). Management routes and endpoints no official SDK covers stay on the shared transport, and raw HTTP client imports remain banned either way
 
 The shape is layered so tests stay declarative
 
@@ -214,15 +227,15 @@ The shape is layered so tests stay declarative
 
 Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `ProxyClient` (as `.proxy`) and adds suite-specific routes. Cleanup runs through that same `ProxyClient`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
-Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
+Request and response bodies are typed pydantic models in `models.py`. Only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself lives in `tests/e2e_harness/` and runs without a proxy (`LITELLM_MASTER_KEY=sk-harness uv run pytest tests/e2e_harness`). A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Pre-commit steps
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py` or `tests/e2e_harness/**/*.py`
 
 2. Add the models your test needs to the config your local proxy loads
 
@@ -230,7 +243,7 @@ Before you push
 
    ```bash
    litellm --config <your-e2e-config>.yml --port 4000
-   uv run pytest tests/e2e/<your_suite>/ -v
+   uv run --group e2e-dev pytest tests/e2e/<your_suite>/ -v
    ```
 
 4. Capture screenshots of the test run and attach them to the PR as proof
@@ -247,4 +260,56 @@ The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthr
 
 Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
 
-Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage
+Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the provider-edge and fixture tests at the root of `tests/e2e_harness/` with `--noconftest -o "pythonpath=tests/e2e tests/e2e_harness"`; they need only synthetic HTTP providers and temporary fixture storage
+
+
+## MCP OAuth happy path
+
+`test_mcp_oauth_happy_path_e2e.py` runs one shared scenario with four variants:
+aggregate gateway SSO and explicitly configured per-server JWT, each directly
+against Linear and through the live provider edge. The edge forwards to real
+Linear without replay and compares the forwarded bearer to the encrypted
+canonical user/server credential. This observes the forwarding boundary, not
+Linear's internal logs. Direct variants independently exercise discovery
+
+Use the existing database preparation, Prisma generation and Keycloak setup.
+Build and stage the dashboard from the tested checkout as in the UI runner.
+Provide `DATABASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_LICENSE`,
+and the `E2E_KEYCLOAK_*` settings. Capture a test-account Linear login using
+`mcp/linear_session_capture.py` and set `E2E_LINEAR_STORAGE_STATE` to that private
+file. The test workspace must contain a team. Do not publish browser state or
+raw test/proxy output
+
+```bash
+E2E_MCP_OAUTH_LIVE=1 E2E_FIXTURE_MODE=live E2E_PROVIDER_CACHE=0 \
+  uv run --no-sync pytest tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py \
+  --rootdir=. --reruns 0
+```
+
+The test starts and restarts its own source-built proxy on a free loopback port,
+retaining its database and SSO client but no Redis or process-local cache. It
+does not restart an existing proxy or clear shared databases. Gateway login,
+consent, immediate list/call and post-restart reconnect must all succeed. The
+aggregate client never injects a gateway header; the explicitly labeled JWT
+variant configures `x-litellm-api-key` for the first consent and reconnects with
+only its gateway JWT after restart
+
+`.github/workflows/test-mcp-oauth-e2e.yml` automatically requests a run for
+same-repository pull requests changing MCP, gateway authentication/SSO, consent
+UI, dependencies or the relevant E2E harness/workflow paths. It retains manual
+`workflow_dispatch` for targeted verification. The four cases run in the
+protected `e2e-changed` environment after its normal deployment approval;
+reviewers should approve and inspect this separate OAuth check when it appears.
+Fork pull requests do not run this credentialed job; use a reviewed
+same-repository branch for their verification. The workflow's path-filtered
+check is not configured here as a globally required branch-protection check.
+Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret there and retain the existing E2E license/AWS role configuration. A missing or
+expired session fails the job; collection, deselection and skips are not passes.
+No LLM call is needed
+
+Coverage remains limited to authorization-code OAuth over HTTP. M2M, OBO,
+PKCE passthrough, static/BYOK, ID-JAG, forwarding, SigV4 and stdio are outside this
+scenario; consult the registry and LIT-3559 for their existing coverage and gaps.
+LIT-4506 owns broader isolation/failure regressions. LIT-7737 retains ownership
+of dependency/Python compatibility and its matrix; this test reuses its delivered
+environment and does not change dependency constraints or compatibility gates

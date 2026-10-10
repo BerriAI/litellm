@@ -26,9 +26,8 @@ from ..authenticator import get_access_token
 from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -81,9 +80,17 @@ class GigaChatConfig(BaseConfig):
         repetition_penalty: float | None = None,
         profanity_check: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        config_params: Final[Mapping[str, float | int | bool | None]] = MappingProxyType(
+            {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "repetition_penalty": repetition_penalty,
+                "profanity_check": profanity_check,
+            }
+        )
+        for key, value in config_params.items():
+            if value is not None:
                 setattr(self.__class__, key, value)
         # Instance variables for current request context
         self._current_credentials: str | None = None
@@ -129,7 +136,7 @@ class GigaChatConfig(BaseConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns list
         """Return list of supported OpenAI parameters."""
-        return [  # mutable-ok: base class contract returns list
+        return [
             "stream",
             "temperature",
             "top_p",
@@ -188,7 +195,7 @@ class GigaChatConfig(BaseConfig):
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
 
-                    function_def = {  # mutable-ok: request payload for httpx
+                    function_def = {
                         "name": schema_name,
                         "description": f"Output structured response: {schema_name}",
                         "parameters": schema,
@@ -203,7 +210,7 @@ class GigaChatConfig(BaseConfig):
                         ),
                         function_def,
                     ]
-                    optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
+                    optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
 
         return optional_params
@@ -408,7 +415,7 @@ class GigaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: tiktoken.Encoding | None,
+        encoding: Tokenizer | None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

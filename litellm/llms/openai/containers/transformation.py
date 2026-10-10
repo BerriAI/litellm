@@ -1,10 +1,11 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -165,11 +166,12 @@ class OpenAIContainerConfig(BaseContainerConfig):
             provider="openai",
         )
 
-        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
-            container_obj._hidden_params = {}
-        if "additional_headers" not in container_obj._hidden_params:
-            container_obj._hidden_params["additional_headers"] = {}
-        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
+        container_hidden_params: Final = get_or_create_hidden_params(container_obj)
+        container_hidden_params.setdefault("additional_headers", {})
+        container_additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+            "dict[str, object]", container_hidden_params["additional_headers"]
+        )
+        container_additional_headers["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj
 

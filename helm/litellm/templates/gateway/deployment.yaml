@@ -7,6 +7,9 @@ metadata:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
+  {{- if and (not .Values.gateway.hpa.enabled) (not (kindIs "invalid" .Values.gateway.replicaCount)) }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
   {{- with .Values.gateway.strategy }}
   strategy:
     {{- toYaml . | nindent 4 }}
@@ -52,6 +55,7 @@ spec:
               containerPort: 4000
               protocol: TCP
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH

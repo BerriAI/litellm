@@ -3,7 +3,10 @@ use std::{
     time::Duration,
 };
 
-use litellm_core_utils::settings::{Layer, Lookup, merge};
+use litellm_core_utils::{
+    serde_compat::parse_str_bool,
+    settings::{Layer, Lookup, merge},
+};
 
 use crate::proxy::EnvironmentProxies;
 
@@ -16,9 +19,9 @@ pub enum SslVerify {
 
 impl SslVerify {
     pub fn parse(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "true" => Self::Enabled,
-            "false" => Self::Disabled,
+        match parse_str_bool(value) {
+            Some(true) => Self::Enabled,
+            Some(false) => Self::Disabled,
             _ => Self::CaBundle(PathBuf::from(value)),
         }
     }
@@ -152,9 +155,7 @@ impl HttpSettings {
         Self {
             ssl_verify: merged.ssl_verify,
             ssl_cert_file: merged.ssl_cert_file,
-            ssl_certificate: merged
-                .ssl_certificate
-                .filter(|path| !path.as_os_str().is_empty()),
+            ssl_certificate: merged.ssl_certificate,
             ssl_security_level: merged.ssl_security_level.filter(|level| !level.is_empty()),
             ssl_ecdh_curve: merged.ssl_ecdh_curve.filter(|curve| !curve.is_empty()),
             force_ipv4: merged.force_ipv4.unwrap_or(defaults.force_ipv4),
@@ -287,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_environment_values_clear_the_setting_like_python_truthiness() {
+    fn empty_certificate_is_retained_for_validation_while_empty_tuning_is_absent() {
         let configured = HttpSettingsLayer {
             ssl_certificate: Some("/configured/client.pem".into()),
             ssl_security_level: Some("configured".into()),
@@ -300,7 +301,7 @@ mod tests {
             ("SSL_ECDH_CURVE", ""),
         ]));
         let settings = HttpSettings::from_layers([environment, configured]);
-        assert_eq!(settings.ssl_certificate, None);
+        assert_eq!(settings.ssl_certificate, Some(PathBuf::new()));
         assert_eq!(settings.ssl_security_level, None);
         assert_eq!(settings.ssl_ecdh_curve, None);
     }

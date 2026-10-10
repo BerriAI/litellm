@@ -1,5 +1,5 @@
 import ssl
-from collections.abc import Callable
+from collections.abc import AsyncIterable, Callable, Iterable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
@@ -18,7 +18,7 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
     get_ssl_configuration,
 )
 from litellm.types.llms.openai import FileTypes
@@ -26,9 +26,8 @@ from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProv
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -61,7 +60,7 @@ class BaseLLMAIOHTTPHandler:
         # Create a transport using AsyncHTTPHandler's logic
         try:
             ssl_config: Final = get_ssl_configuration()
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+            self.transport = AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             )
@@ -95,7 +94,7 @@ class BaseLLMAIOHTTPHandler:
         transport: Final = self.transport or self._get_or_create_transport()
         if transport is not None and hasattr(transport, "_get_valid_client_session"):
             try:
-                return transport._get_valid_client_session()
+                return transport.get_valid_client_session()
             except RuntimeError:
                 pass
 
@@ -212,7 +211,7 @@ class BaseLLMAIOHTTPHandler:
         litellm_params: dict,
         stream: bool = False,
         files: dict | None = None,
-        content: Any = None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
         params: dict | None = None,
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error
@@ -268,7 +267,7 @@ class BaseLLMAIOHTTPHandler:
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         client: ClientSession | None = None,
     ):
@@ -402,7 +401,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
 
@@ -443,7 +442,7 @@ class BaseLLMAIOHTTPHandler:
         client: HTTPHandler | None = None,
     ) -> tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
         stream = True
@@ -626,7 +625,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
 

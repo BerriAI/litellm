@@ -18,9 +18,9 @@ litellm/proxy/_experimental/mcp_server/
   mcp_server_manager.py      # upstream server registry, clients, tool routing  [PR7: _create_mcp_client swaps resolve_mcp_auth -> resolve_credentials]
   auth/
     user_api_key_auth_mcp.py # LiteLLM admission auth and MCP request headers
-    token_exchange.py        # OAuth token exchange handling                    [unchanged; V1TokenExchangeAdapter delegates here]
+    token_exchange.py        # OAuth token exchange handling                    [unchanged, V1TokenExchangeAdapter delegates here]
     litellm_auth_handler.py  # authenticated-user adapter for MCP sessions
-  client_allowlist.py        # gateway-level client application allowlist (mcp_allowed_clients); leaf module, no litellm.proxy imports
+  client_allowlist.py        # gateway-level client application allowlist (mcp_allowed_clients), a leaf module with no litellm.proxy imports
   outbound_credentials/      # NEW — typed upstream-credential resolution (resolve_credentials + arms)
     __init__.py              # public surface: resolve_credentials, the configs, CredError
     result.py                # Ok | Error union (pure stdlib)
@@ -28,13 +28,13 @@ litellm/proxy/_experimental/mcp_server/
     httpx_auth.py            # NoOpAuth, StaticHeaderAuth (every mode -> one httpx.Auth)
     resolver.py              # resolve_credentials(): exhaustive per-mode match + assert_never
     seams.py                 # injected Protocols (one per cache-touching mode)
-    v1_adapters.py           # v1-backed seam bodies; delegate to auth/oauth2/db owners
+    v1_adapters.py           # v1-backed seam bodies that delegate to auth/oauth2/db owners
     adapter.py               # to_subject / to_server_spec / raise_public (v1 <-> v2 boundary)
   discoverable_endpoints.py  # MCP OAuth metadata, authorize, token, callback
   byok_oauth_endpoints.py    # BYOK OAuth UI/API flow
   oauth_utils.py             # redirect URI and proxy base URL validation
-  oauth2_token_cache.py      # OAuth2 and per-user token resolution/cache        [PR7: resolve_mcp_auth removed; cache class stays, V1OAuth2CacheAdapter delegates to async_get_token]
-  db.py                      # MCP server, credential, env var, submission DB access  [unchanged; V1ByokStore delegates to _get_byok_credential / get_user_credential]
+  oauth2_token_cache.py      # OAuth2 and per-user token resolution/cache        [PR7: resolve_mcp_auth removed, cache class stays, V1OAuth2CacheAdapter delegates to async_get_token]
+  db.py                      # MCP server, credential, env var, submission DB access  [unchanged, V1ByokStore delegates to _get_byok_credential / get_user_credential]
   toolset_db.py              # MCP toolset DB access
   rest_endpoints.py          # proxy REST facade for listing/calling MCP tools   [PR7: 7-arm only — pass identity + inbound token down instead of mcp_auth_header]
   openapi_to_mcp_generator.py# OpenAPI spec to MCP tool generation
@@ -60,7 +60,7 @@ module materially harder to understand.
 ## Implementation Rules
 
 - Preserve the boundary between LiteLLM admission auth and upstream MCP auth.
-  Admission belongs in `auth/user_api_key_auth_mcp.py`; upstream token exchange,
+  Admission belongs in `auth/user_api_key_auth_mcp.py`. Upstream token exchange,
   delegated auth, per-user OAuth, BYOK, and raw header forwarding belong in the
   dedicated OAuth/header modules.
 - Treat `none`, bearer/API key, OAuth, OAuth token exchange, delegated upstream
@@ -89,14 +89,19 @@ module materially harder to understand.
 
 ## Tests
 
-Mirror this package under `tests/test_litellm/proxy/_experimental/mcp_server/`.
+Mirror this package under `tests/unit/proxy/_experimental/mcp_server/`.
 For regressions, extend the existing mapped test file instead of creating a new
 one. Use subdirectories that match the implementation path, such as
-`auth/test_token_exchange.py` for `auth/token_exchange.py` and
+`auth/test_token_endpoint_auth.py` for `auth/token_endpoint_auth.py` and
 `guardrail_translation/test_mcp_guardrail_handler.py` for
 `guardrail_translation/handler.py`.
 
 Use `tests/mcp_tests/` only when extending an existing broader MCP integration
 scenario that already lives there. Route, auth, tool listing, tool execution,
 OAuth, sampling, elicitation, DB, and dashboard-session changes should have
-focused coverage in the mirrored `tests/test_litellm/...` path first.
+focused coverage in the mirrored `tests/unit/proxy/...` path first.
+
+The environment-backed constants in `utils.py` (`LITELLM_MCP_SERVER_NAME`,
+`LITELLM_MCP_SERVER_DESCRIPTION`, `MCP_TOOL_PREFIX_SEPARATOR`) are read once at
+import time. Tests that override those variables must reload the module, as
+`test_mcp_server_identity_env.py` does, or they assert against stale values.

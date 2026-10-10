@@ -228,7 +228,7 @@ class PassthroughGuardrailHandler:
             Dict of guardrail names to run (format: {guardrail_name: True}), or None
         """
         from litellm.proxy.litellm_pre_call_utils import (
-            _add_guardrails_from_key_or_team_metadata,
+            add_guardrails_from_key_or_team_metadata,
         )
 
         # Normalize config to dict format (handles both list and dict)
@@ -252,7 +252,7 @@ class PassthroughGuardrailHandler:
 
         # Add org/team/key level guardrails using shared helper
         temp_data: Final[dict[str, Any]] = {"metadata": {}}
-        _add_guardrails_from_key_or_team_metadata(
+        add_guardrails_from_key_or_team_metadata(
             key_metadata=user_api_key_dict.metadata,
             team_metadata=user_api_key_dict.team_metadata,
             data=temp_data,
