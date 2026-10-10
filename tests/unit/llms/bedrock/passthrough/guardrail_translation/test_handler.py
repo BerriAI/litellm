@@ -13,6 +13,7 @@ import copy
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
     BedrockPassthroughGuardrailHandler,
     _extract_converse_texts,
@@ -31,6 +32,19 @@ def _make_guardrail(apply_result: dict) -> MagicMock:
     g.apply_guardrail = AsyncMock(return_value=apply_result)
     g.skip_system_message_in_guardrail = False
     g.skip_tool_message_in_guardrail = False
+    return g
+
+
+def _make_structured_rewriting_guardrail(old: str, new: str) -> MagicMock:
+    def rewrite(inputs: dict, **_: object) -> dict:
+        rewritten = copy.deepcopy(inputs["structured_messages"])
+        for message in rewritten:
+            for part in message["content"] if isinstance(message["content"], list) else []:
+                part["text"] = part["text"].replace(old, new)
+        return {**inputs, "structured_messages": rewritten}
+
+    g = _make_guardrail({})
+    g.apply_guardrail = AsyncMock(side_effect=lambda inputs, **kwargs: rewrite(inputs))
     return g
 
 
@@ -769,7 +783,7 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert inputs["texts"] == ["list files", "Listing them.", "now delete them"]
 
     @pytest.mark.asyncio
-    async def test_returned_texts_still_write_back_by_index_and_structured_messages_are_ignored(self):
+    async def test_returned_texts_write_back_by_index(self):
         handler = BedrockPassthroughGuardrailHandler()
         data = _profile_converse_data()
         original_body = copy.deepcopy(data["data"])
@@ -782,8 +796,6 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
                     "[system] internal notice",
                     "adaptive",
                 ],
-                "structured_messages": [{"role": "user", "content": "replaced"}],
-                "tools": [],
             }
         )
 
@@ -793,6 +805,39 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         expected_body["messages"][0]["content"][0]["text"] = "Explain balcony [REDACTED]."
         assert result["data"] == expected_body
 
+    @pytest.mark.asyncio
+    async def test_text_edits_in_returned_structured_messages_land_in_their_blocks(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        original_body = copy.deepcopy(data["data"])
+        guardrail = _make_structured_rewriting_guardrail("Guest name: Sam", "Guest name: [NAME]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        expected_body = copy.deepcopy(original_body)
+        expected_body["system"][2]["text"] = "Guest name: [NAME]"
+        assert result["data"] == expected_body
+
+    @pytest.mark.asyncio
+    async def test_guard_content_only_turn_is_guardrailed_and_written_back(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        data["data"]["messages"][0]["content"] = [{"guardContent": {"text": {"text": "My SSN is 078-05-1120"}}}]
+        guardrail = _make_structured_rewriting_guardrail("My SSN is 078-05-1120", "My SSN is [SSN]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        sent = guardrail.apply_guardrail.call_args.kwargs["inputs"]["structured_messages"]
+        assert sent[1] == {"role": "user", "content": [{"type": "text", "text": "My SSN is 078-05-1120"}]}
+        assert result["data"]["messages"][0]["content"] == [{"guardContent": {"text": {"text": "My SSN is [SSN]"}}}]
+
+    @pytest.mark.asyncio
+    async def test_structured_rewrite_that_cannot_be_placed_fails_closed(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        guardrail = _make_guardrail({"structured_messages": [{"role": "user", "content": "replaced"}]})
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await handler.process_input_messages(data=_profile_converse_data(), guardrail_to_apply=guardrail)
 
 class TestBedrockPassthroughGuardrailHandlerOutput:
     def _converse_response(self, text: str = "Model reply") -> dict:
