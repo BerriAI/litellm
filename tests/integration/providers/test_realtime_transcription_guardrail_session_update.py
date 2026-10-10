@@ -83,7 +83,7 @@ CREATED_TYPES: Final = frozenset({"session.created", "transcription_session.crea
 TRANSCRIPT_COMPLETED: Final = "conversation.item.input_audio_transcription.completed"
 RESPONSE_DONE: Final = "response.done"
 GUARDRAIL_VIOLATION: Final = ("guardrail_violation", "content_policy_violation")
-MISSING_TURN_DETECTION_TYPE: Final = ("invalid_request_error", "missing_required_parameter")
+SESSION_TYPE_MISMATCH: Final = ("invalid_request_error", "invalid_parameter")
 INVALID_SESSION_VALUE: Final = ("invalid_request_error", "invalid_value")
 FIVE_KB: Final = "x" * 5120
 UNAUTHENTICATED_STATUS: Final = 403
@@ -104,11 +104,6 @@ BETA_TRANSCRIPTION_UPDATE: Final[dict[str, JsonValue]] = {
     "input_audio_transcription": {"model": TRANSCRIBE_MODEL},
 }
 VOICE_UPDATE: Final[dict[str, JsonValue]] = {"type": "realtime", "instructions": "answer briefly"}
-VOICE_UPDATE_FORWARDED: Final[dict[str, JsonValue]] = {
-    "type": "realtime",
-    "instructions": "answer briefly",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
-}
 RE_ENABLE_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": True}}},
@@ -123,9 +118,9 @@ CLIENT_DECLARED_TRANSCRIPTION: Final[dict[str, JsonValue]] = {
 }
 CLIENT_DECLARED_TRANSCRIPTION_FORWARDED: Final[dict[str, JsonValue]] = {
     "type": "transcription",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
-TURN_DETECTION_TYPE_MISSING: Final = "Missing required parameter: 'session.audio.input.turn_detection.type'."
+REALTIME_UPDATE_REFUSED: Final = "Passing a transcription session update to a realtime session is not allowed."
 GA_INJECTED_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
@@ -907,19 +902,18 @@ def test_voice_session_keeps_the_injected_update_and_the_clean_transcript_flows(
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             RESPONSE_DONE,
         ), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE,), session
-        assert session.error_messages == (TURN_DETECTION_TYPE_MISSING,), session
+        assert session.errors == (), session
         assert _sent_types(observed) == (
             "session.update",
             "session.update",
             "input_audio_buffer.commit",
             "response.create",
         ), _sent(observed)
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE_FORWARDED), _session_updates(observed)
+        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE), _session_updates(observed)
         rows: Final = _spend_rows(key, 1)
         assert rows[0]["call_type"] == "_arealtime", rows
 
@@ -934,7 +928,7 @@ def test_voice_session_blocked_transcript_is_refused_through_the_backend(guardra
         )
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
         assert session.types[-1] == RESPONSE_DONE, session
         assert _sent_types(observed) == (
             "session.update",
@@ -944,7 +938,7 @@ def test_voice_session_blocked_transcript_is_refused_through_the_backend(guardra
             "conversation.item.create",
             "response.create",
         ), _sent(observed)
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE_FORWARDED), _session_updates(observed)
+        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE), _session_updates(observed)
 
 
 def test_voice_session_cannot_re_enable_auto_response_with_a_later_update(guardrail_proxy: OwnedProxy) -> None:
@@ -956,10 +950,10 @@ def test_voice_session_cannot_re_enable_auto_response_with_a_later_update(guardr
         session: Final = _talk(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.types[-1] == RESPONSE_DONE, session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE,), session
+        assert session.errors == (), session
         assert _session_updates(observed) == (
             GA_INJECTED_UPDATE,
-            VOICE_UPDATE_FORWARDED,
+            VOICE_UPDATE,
             RE_ENABLE_FORWARDED,
         ), _session_updates(observed)
 
@@ -973,8 +967,8 @@ def test_client_declared_transcription_type_does_not_bypass_the_voice_guardrail(
         session: Final = _talk(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames, seconds=20)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
-        assert session.error_messages[0] == TURN_DETECTION_TYPE_MISSING, session
+        assert session.errors == (SESSION_TYPE_MISMATCH, GUARDRAIL_VIOLATION), session
+        assert session.error_messages[0] == REALTIME_UPDATE_REFUSED, session
         assert session.types[-1] == RESPONSE_DONE, session
         assert _sent_types(observed) == (
             "session.update",
@@ -1215,8 +1209,8 @@ def test_opt_in_guardrail_gates_a_voice_session_on_an_opted_out_key(guardrail_pr
         )
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE_FORWARDED), _session_updates(observed)
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
+        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE), _session_updates(observed)
 
 
 def test_opt_in_guardrail_leaves_a_transcription_session_alone_on_an_opted_out_key(guardrail_proxy: OwnedProxy) -> None:
@@ -1705,12 +1699,11 @@ def test_voice_session_guardrail_raising_runtime_error_closes_with_the_same_prox
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             "error",
             "closed",
         ), session
-        assert session.errors[0] == MISSING_TURN_DETECTION_TYPE, session
         _assert_closed_by_a_proxy_failure(session)
         assert _sent_types(observed) == ("session.update", "session.update", "input_audio_buffer.commit"), _sent(
             observed
@@ -1728,8 +1721,8 @@ def test_voice_session_guardrail_raising_value_error_is_voiced_through_the_backe
             (_step(VOICE_UPDATE_FRAME, COMMIT, until=RESPONSE_DONE),),
         )
         assert session.transcripts == (blocked,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
-        assert session.error_messages[1] == f"{VALUE_ERROR_WORD} is not allowed", session
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
+        assert session.error_messages == (f"{VALUE_ERROR_WORD} is not allowed",), session
         assert session.types[-1] == RESPONSE_DONE, session
         assert _sent_types(observed) == (
             "session.update",
@@ -1752,7 +1745,7 @@ def test_voice_session_second_violation_under_end_session_after_n_fails_closes_a
             (_step(VOICE_UPDATE_FRAME, COMMIT, until=RESPONSE_DONE), _step(COMMIT, until="closed")),
         )
         assert session.transcripts == (blocked, blocked), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION, GUARDRAIL_VIOLATION), session
+        assert session.errors == (GUARDRAIL_VIOLATION, GUARDRAIL_VIOLATION), session
         assert session.types[-1] == "closed", session
         assert session.close_code == GUARDRAIL_END_CLOSE, session
         assert _sent_types(observed) == (
@@ -1936,7 +1929,7 @@ def test_non_string_transcript_field_closes_a_voice_session_with_the_same_proxy_
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             "error",
             "closed",
