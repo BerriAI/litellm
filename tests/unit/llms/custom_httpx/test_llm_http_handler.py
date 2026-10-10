@@ -5,6 +5,8 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -18,6 +20,9 @@ from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -351,6 +356,89 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
     hook_litellm_params = transform_kwargs["litellm_params"]
     assert hook_litellm_params.get(_ACTIVE_KEY) is True
     assert hook_litellm_params.get(_SANDBOX_KEY)
+
+
+class _AgenticLoopKwargsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_kwargs: Mapping[str, object] = MappingProxyType({})
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        self.seen_kwargs = MappingProxyType(dict(kwargs))
+        return False, {}
+
+
+class _SentRequestRecorder:
+    def __init__(self) -> None:
+        self.body: Mapping[str, object] = MappingProxyType({})
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.body = MappingProxyType(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "gpt-4o",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+
+def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_non_streaming_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sent: Final = _SentRequestRecorder()
+    recorder: Final = _AgenticLoopKwargsRecorder()
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
+    )
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what is new in litellm?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "stream": True,
+            "stream_options": {"include_obfuscation": True},
+            "tools": [{"type": "web_search"}],
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test",
+            api_base="https://example.openai.azure.com",
+            api_version="2025-04-01-preview",
+            stream_options={"include_obfuscation": True},
+        ),
+        logging_obj=logging_obj,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(sent.respond))),
+    )
+
+    assert sent.body["stream"] is False
+    assert "stream_options" not in sent.body
+    assert "stream_options" not in recorder.seen_kwargs
 
 
 @pytest.mark.asyncio

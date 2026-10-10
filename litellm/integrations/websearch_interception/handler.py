@@ -40,8 +40,12 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     RESPONSES_AGENTIC_SURFACE,
+    WEBSEARCH_CONVERTED_STREAM_KEY,
+    WEBSEARCH_INTERCEPTION_PREFIX,
+    WEBSEARCH_STREAM_OPTIONS_KEY,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    as_converted_stream,
 )
 from litellm.types.integrations.websearch_interception import (
     AnthropicSearchQuery,
@@ -489,8 +493,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            kwargs["stream"] = False
-            kwargs["_websearch_interception_converted_stream"] = True
+            return as_converted_stream(kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
 
         return kwargs
 
@@ -511,8 +514,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            converted_kwargs["stream"] = False
-            converted_kwargs["_websearch_interception_converted_stream"] = True
+            return as_converted_stream(converted_kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
 
         return converted_kwargs
 
@@ -670,7 +672,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: Converting stream=True to stream=False")
             kwargs["stream"] = False
-            kwargs["_websearch_interception_converted_stream"] = True
+            kwargs[WEBSEARCH_CONVERTED_STREAM_KEY] = True
+            if "stream_options" in kwargs:
+                kwargs[WEBSEARCH_STREAM_OPTIONS_KEY] = kwargs["stream_options"]
+                del kwargs["stream_options"]
 
         return kwargs
 

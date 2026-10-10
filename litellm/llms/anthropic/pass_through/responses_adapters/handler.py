@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Coroutine, Mapping
 from typing import Final, TypeAlias
 
 import litellm
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
@@ -126,7 +127,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = frozenset(("anthropic_messages",))
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
