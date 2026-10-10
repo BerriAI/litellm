@@ -18,6 +18,7 @@ from pydantic import JsonValue
 
 _GUARDRAIL_ID: Final = "synthetic-attachment-guard"
 _APPLY_PATH: Final = f"/guardrail/{_GUARDRAIL_ID}/version/DRAFT/apply"
+_CHECKS_PATH: Final = "/guardrail-checks/invoke"
 _BEDROCK_MODEL: Final = "anthropic.claude-3-haiku-20240307-v1:0"
 _SSN: Final = "123-45-6789"
 _ENDPOINTS: Final = ("chat", "messages", "responses", "converse")
@@ -40,6 +41,7 @@ def _b64(raw: bytes) -> str:
 class _Rig:
     strict: Gateway
     lenient: Gateway
+    checks: Gateway
     policy: Wire
     upstream: Wire
     outage: threading.Event
@@ -60,6 +62,8 @@ def _blocked(assessment: Mapping[str, JsonValue]) -> Reply:
 
 def _guardrail(outage: threading.Event) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
+        if request.target == _CHECKS_PATH:
+            return Reply(body=json.dumps({"results": {}}).encode())
         assert request.target == _APPLY_PATH, request.target
         if outage.is_set():
             return Reply(status=500, body=b'{"message":"synthetic guardrail outage"}')
@@ -149,7 +153,9 @@ def _upstream(request: Request) -> Reply:
     )
 
 
-def _config(directory: Path, name: str, policy: Wire, upstream: Wire, skip_unscannable: bool) -> Path:
+def _config(
+    directory: Path, name: str, policy: Wire, upstream: Wire, skip_unscannable: bool, checks: bool = False
+) -> Path:
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration["litellm_settings"] = {}
     configuration["model_list"] = [
@@ -180,6 +186,11 @@ def _config(directory: Path, name: str, policy: Wire, upstream: Wire, skip_unsca
             },
         },
     ]
+    target: Final[dict[str, JsonValue]] = (
+        {"checks": {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}}}
+        if checks
+        else {"guardrailIdentifier": _GUARDRAIL_ID, "guardrailVersion": "DRAFT"}
+    )
     configuration["guardrails"] = [
         {
             "guardrail_name": f"bedrock-attachments-{name}",
@@ -188,8 +199,7 @@ def _config(directory: Path, name: str, policy: Wire, upstream: Wire, skip_unsca
                 "mode": "pre_call",
                 "default_on": True,
                 "skip_unscannable_attachments": skip_unscannable,
-                "guardrailIdentifier": _GUARDRAIL_ID,
-                "guardrailVersion": "DRAFT",
+                **target,
                 "aws_region_name": "us-east-1",
                 "aws_access_key_id": "AKIASYNTHETICGUARDRAIL",
                 "aws_secret_access_key": "synthetic-guardrail-secret",
@@ -216,8 +226,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         owned_proxy(
             shared, directory, {}, config=_config(directory, "lenient", policy, upstream, True), workers=2
         ) as lenient,
+        owned_proxy(
+            shared, directory, {}, config=_config(directory, "checks", policy, upstream, False, checks=True), workers=2
+        ) as checks,
     ):
-        yield _Rig(strict, lenient, policy, upstream, outage)
+        yield _Rig(strict, lenient, checks, policy, upstream, outage)
 
 
 @pytest.fixture(autouse=True)
@@ -409,6 +422,28 @@ def test_a_converse_guard_content_threat_image_is_scanned_and_blocked(rig: _Rig)
     assert response.status_code == 400, response.text
     assert "VIOLENCE" in response.text, response.text
     assert _forwarded(rig.upstream) == []
+
+
+@pytest.mark.parametrize("endpoint", _ENDPOINTS)
+def test_checks_mode_refuses_an_image_without_calling_bedrock(rig: _Rig, endpoint: str) -> None:
+    response: Final = _send(rig.checks, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
+
+    assert response.status_code == 400, response.text
+    assert "cannot scan 1 attachment(s) (image)" in response.text, response.text
+    assert list(rig.policy.drain()) == []
+    assert _forwarded(rig.upstream) == []
+
+
+def test_checks_mode_sends_a_converse_text_document_to_invoke_guardrail_checks(rig: _Rig) -> None:
+    note: Final = f"The meeting is at noon {uuid.uuid4().hex}"
+    response: Final = _send(rig.checks, "converse", _converse_text_document({"text": note}))
+
+    assert response.status_code == 200, response.text
+    calls: Final = list(rig.policy.drain())
+    assert [call.target for call in calls] == [_CHECKS_PATH]
+    assert note in calls[0].body.decode()
+    (forwarded,) = _forwarded(rig.upstream)
+    assert note in json.dumps(forwarded)
 
 
 @pytest.mark.parametrize(
