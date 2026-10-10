@@ -573,7 +573,11 @@ class Cache:
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
-    def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
+    def _add_namespace_to_cache_key(
+        self,
+        hash_hex: str,
+        **kwargs: object,  # kwargs-ok: cache request metadata is extensible
+    ) -> str:
         """
         If a redis namespace is provided, add it to the cache key
 
@@ -584,18 +588,27 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        dynamic_cache_control: Final[DynamicCacheControl] = kwargs.get("cache", {})
-        metadata_sources: Final = tuple(
-            source
+        cache_value: Final = kwargs.get("cache")
+        dynamic_cache_control: Final[Mapping[str, object]] = (
+            cast(Mapping[str, object], cache_value)  # cast-ok: runtime Mapping check establishes the cache shape
+            if isinstance(cache_value, Mapping)
+            else {}
+        )
+        litellm_params_value: Final = kwargs.get("litellm_params")
+        litellm_params: Final[Mapping[str, object]] = (
+            cast(  # cast-ok: runtime Mapping check establishes metadata shape
+                Mapping[str, object], litellm_params_value
+            )
+            if isinstance(litellm_params_value, Mapping)
+            else {}
+        )
+        metadata_sources: Final[tuple[Mapping[str, object], ...]] = tuple(
+            cast(Mapping[str, object], source)  # cast-ok: runtime Mapping check establishes metadata shape
             for source in (
                 kwargs.get("metadata"),
                 kwargs.get("litellm_metadata"),
-                (kwargs.get("litellm_params") or {}).get("metadata")
-                if isinstance(kwargs.get("litellm_params"), Mapping)
-                else None,
-                (kwargs.get("litellm_params") or {}).get("litellm_metadata")
-                if isinstance(kwargs.get("litellm_params"), Mapping)
-                else None,
+                litellm_params.get("metadata"),
+                litellm_params.get("litellm_metadata"),
             )
             if isinstance(source, Mapping)
         )
@@ -610,7 +623,7 @@ class Cache:
         for metadata in metadata_sources:
             auth_object: object | None = metadata.get("user_api_key_auth")
             if isinstance(auth_object, UserAPIKeyAuth):
-                identity_fields: Final = {
+                identity_fields = {
                     "api_key": getattr(auth_object, "api_key", None),
                     "team_id": getattr(auth_object, "team_id", None),
                     "project_id": getattr(auth_object, "project_id", None),
@@ -622,15 +635,24 @@ class Cache:
                 identity = json.dumps(identity_fields, sort_keys=True, default=str, separators=(",", ":"))
                 authenticated_namespace = "caller:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
                 break
+        requested_namespace_value: Final = dynamic_cache_control.get("namespace")
+        requested_namespace: Final[str | None] = (
+            requested_namespace_value if isinstance(requested_namespace_value, str) else None
+        )
+        metadata_namespace_value: Final = next(
+            iter(metadata_sources),
+            cast(Mapping[str, object], {}),  # cast-ok: empty mapping is the typed fallback
+        ).get("redis_namespace")
+        metadata_namespace: Final[str | None] = (
+            metadata_namespace_value if isinstance(metadata_namespace_value, str) else None
+        )
         namespace: Final[str | None] = (
             ":".join(value for value in (self.namespace, authenticated_namespace) if isinstance(value, str) and value)
             if authenticated_namespace is not None
-            else dynamic_cache_control.get("namespace")
-            or next(iter(metadata_sources), {}).get("redis_namespace")
-            or self.namespace
+            else requested_namespace or metadata_namespace or self.namespace
         )
         if namespace:
-            hash_hex = f"{namespace}:{hash_hex}"
+            hash_hex = f"{namespace}:{hash_hex}"  # rebind-ok: namespace prefix is the final cache key representation
         verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
