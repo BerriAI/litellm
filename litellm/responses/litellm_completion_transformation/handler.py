@@ -130,6 +130,14 @@ class LiteLLMCompletionTransformationHandler:
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
+            # Open a deferred provider stream here, so an error on its opening request (e.g. a
+            # 503 before the first chunk) raises inside the Router's retry and fallback loop
+            # instead of on the first iteration, after the Router has already returned.
+            if (
+                litellm_completion_response.completion_stream is None
+                and litellm_completion_response.make_call is not None
+            ):
+                await litellm_completion_response.fetch_stream()
             return LiteLLMCompletionStreamingIterator(
                 model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
