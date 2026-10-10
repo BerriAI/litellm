@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import { decisionsTestCall } from "@/components/networking";
 import {
@@ -12,7 +11,25 @@ import {
   type DecisionTestVerdict,
 } from "./decisionModelQuestion";
 
-export interface DecisionQuestionTestProps {
+export interface DecisionQuestionTestButtonProps {
+  name: string;
+  open: boolean;
+  onToggle: () => void;
+}
+
+export const DecisionQuestionTestButton: React.FC<DecisionQuestionTestButtonProps> = ({ name, open, onToggle }) => (
+  <button
+    type="button"
+    aria-label={`Test ${name}`}
+    aria-expanded={open}
+    onClick={onToggle}
+    className="inline-flex items-center rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent"
+  >
+    Test
+  </button>
+);
+
+export interface DecisionQuestionTestPanelProps {
   accessToken: string | null;
   model: string;
   name: string;
@@ -28,7 +45,7 @@ const OUTCOME_LABELS: Record<string, string> = {
   refused: "Refused",
 };
 
-const DecisionQuestionTest: React.FC<DecisionQuestionTestProps> = ({
+export const DecisionQuestionTestPanel: React.FC<DecisionQuestionTestPanelProps> = ({
   accessToken,
   model,
   name,
@@ -36,7 +53,6 @@ const DecisionQuestionTest: React.FC<DecisionQuestionTestProps> = ({
   action,
   threshold,
 }) => {
-  const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [verdict, setVerdict] = useState<DecisionTestVerdict | null>(null);
   const [loading, setLoading] = useState(false);
@@ -75,43 +91,31 @@ const DecisionQuestionTest: React.FC<DecisionQuestionTestProps> = ({
   const outcomeLabel = !loading && outcome !== null && outcome !== "error" ? OUTCOME_LABELS[outcome] : null;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger
-        aria-label={`Test ${name}`}
-        className="inline-flex items-center rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent"
-      >
-        Test
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mt-2 space-y-2">
-          <Textarea
-            aria-label={`Try an input for ${name}`}
-            rows={2}
-            placeholder="Try an input"
-            className="w-full resize-none"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-          />
-          {!model && <p className="m-0 text-xs text-muted-foreground">Select a decision model to test this question</p>}
-          {model && !input.trim() && (
-            <p className="m-0 text-xs text-muted-foreground">Type an input to test this question</p>
+    <div data-slot="decision-question-test-panel" className="mt-3 space-y-2">
+      <Textarea
+        aria-label={`Try an input for ${name}`}
+        rows={2}
+        placeholder="Try an input"
+        className="w-full resize-none"
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+      />
+      {!model && <p className="m-0 text-xs text-muted-foreground">Select a decision model to test this question</p>}
+      {model && !input.trim() && (
+        <p className="m-0 text-xs text-muted-foreground">Type an input to test this question</p>
+      )}
+      {loading && <p className="m-0 text-xs text-muted-foreground">Testing…</p>}
+      {errorMessage && <p className="m-0 text-xs text-destructive">{errorMessage}</p>}
+      {outcomeLabel && (
+        <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap text-xs">
+          {probability !== null && (
+            <span className="text-muted-foreground">
+              p={probability.toFixed(2)} vs threshold {threshold.toFixed(2)}
+            </span>
           )}
-          {loading && <p className="m-0 text-xs text-muted-foreground">Testing…</p>}
-          {errorMessage && <p className="m-0 text-xs text-destructive">{errorMessage}</p>}
-          {outcomeLabel && (
-            <div className="flex items-center gap-2 text-xs">
-              {probability !== null && (
-                <span className="text-muted-foreground">
-                  p={probability.toFixed(2)} vs threshold {threshold.toFixed(2)}
-                </span>
-              )}
-              <Badge variant={outcome === "pass" ? "secondary" : "default"}>{outcomeLabel}</Badge>
-            </div>
-          )}
+          <Badge variant={outcome === "pass" ? "secondary" : "default"}>{outcomeLabel}</Badge>
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+      )}
+    </div>
   );
 };
-
-export default DecisionQuestionTest;

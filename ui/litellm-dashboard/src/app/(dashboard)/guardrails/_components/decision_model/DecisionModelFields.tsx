@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { asText, GuardrailField, labelWithHint, requiredRule, type GuardrailFormControl } from "../GuardrailFormField";
 import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
-import DecisionQuestionTest from "./DecisionQuestionTest";
+import { DecisionQuestionTestButton, DecisionQuestionTestPanel } from "./DecisionQuestionTest";
 
 export interface DecisionModelFieldsProps {
   accessToken: string | null;
@@ -54,9 +54,11 @@ const ThresholdSlider: React.FC<{
       value={[value]}
       onValueChange={(next) => onChange(Array.isArray(next) ? next[0] ?? 0 : next)}
       disabled={disabled}
-      className="min-w-16 flex-1"
+      className="min-w-[120px] flex-1"
     />
-    <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">{value.toFixed(2)}</span>
+    <span className="w-9 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
+      {value.toFixed(2)}
+    </span>
   </div>
 );
 
@@ -75,6 +77,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   const [customAction, setCustomAction] = useState<"block" | "log">("block");
   const [customThreshold, setCustomThreshold] = useState(0.5);
   const [customNameTaken, setCustomNameTaken] = useState(false);
+  const [openTests, setOpenTests] = useState<ReadonlySet<string>>(new Set());
   const selectedModel = asText(useWatch({ control, name: "decision_model" }));
 
   const selectedNames = new Set(checks.map((check) => check.name));
@@ -103,6 +106,14 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   };
 
   const removeCheck = (name: string) => onChecksChange(checks.filter((check) => check.name !== name));
+
+  const toggleTest = (name: string) =>
+    setOpenTests((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   return (
     <div className="space-y-5">
@@ -245,13 +256,10 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     />
                   </div>
                   <div className="flex w-16 justify-end">
-                    <DecisionQuestionTest
-                      accessToken={accessToken}
-                      model={selectedModel}
+                    <DecisionQuestionTestButton
                       name={check.name}
-                      instructions={check.instructions}
-                      action={check.action}
-                      threshold={check.threshold}
+                      open={openTests.has(check.name)}
+                      onToggle={() => toggleTest(check.name)}
                     />
                   </div>
                   <div className="flex w-10 justify-end">
@@ -266,6 +274,16 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     </Button>
                   </div>
                 </div>
+                {openTests.has(check.name) && (
+                  <DecisionQuestionTestPanel
+                    accessToken={accessToken}
+                    model={selectedModel}
+                    name={check.name}
+                    instructions={check.instructions}
+                    action={check.action}
+                    threshold={check.threshold}
+                  />
+                )}
               </div>
             );
           })}

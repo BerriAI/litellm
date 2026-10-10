@@ -232,7 +232,11 @@ describe("AddGuardrailForm decision model questions", () => {
     await pickTypesafeModel(user);
     await addQuestion(user, "invoice_policy", "Does the text ask about invoices?");
 
-    fireEvent.click(screen.getByRole("button", { name: "Test invoice_policy" }));
+    const testButton = screen.getByRole("button", { name: "Test invoice_policy" });
+    fireEvent.click(testButton);
+    const testPanel = document.querySelector('[data-slot="decision-question-test-panel"]');
+    expect(testPanel).not.toBeNull();
+    expect(testButton.parentElement?.contains(testPanel)).toBe(false);
     fireEvent.change(await screen.findByLabelText("Try an input for invoice_policy"), {
       target: { value: "please invoice me" },
     });

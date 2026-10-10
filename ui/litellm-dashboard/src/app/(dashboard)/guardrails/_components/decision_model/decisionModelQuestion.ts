@@ -19,16 +19,6 @@ export function decisionModelsForProvider(groups: readonly DecisionModelGroup[],
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-export function decisionProviderOfModel(
-  groups: readonly DecisionModelGroup[],
-  model: string,
-  allowedProviders: readonly string[],
-): string | null {
-  const group = groups.find((entry) => entry.model_group === model);
-  const provider = group?.providers?.find((candidate) => allowedProviders.includes(candidate));
-  return provider ?? null;
-}
-
 export interface DecisionTestBody {
   model: string;
   input: string;
