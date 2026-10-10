@@ -1,5 +1,8 @@
+import builtins
+import importlib.util
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +11,30 @@ import pytest
 
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.proxy_server import ProxyStartupEvent
+
+
+def test_importing_module_does_not_require_redis(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_import: Final = builtins.__import__
+
+    def import_without_redis(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "redis" or name.startswith("redis."):
+            raise ModuleNotFoundError("No module named 'redis'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_redis)
+    module_path: Final = Path(__file__).parents[5] / "litellm/proxy/db/db_transaction_queue/redis_update_buffer.py"
+    spec: Final = importlib.util.spec_from_file_location("redis_update_buffer_without_redis", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+
+    module: Final = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
 
 
 @pytest.fixture
