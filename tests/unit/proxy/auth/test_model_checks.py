@@ -426,6 +426,19 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
     }
 
 
+def test_scaleway_wildcard_expands_to_models_in_cost_map():
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model: Final = "scaleway/regression-test-model"
+    litellm.add_known_models(model_cost_map={model: {"litellm_provider": "scaleway", "mode": "chat"}})
+    try:
+        assert model in get_known_models_from_wildcard(wildcard_model="scaleway/*")
+    finally:
+        litellm.scaleway_models.discard(model)
+        litellm.add_known_models(model_cost_map={})
+
+
 def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
     """Regression test for #30358.
 

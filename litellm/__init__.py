@@ -681,6 +681,7 @@ snowflake_models: Set = set()
 gradient_ai_models: Set = set()
 llama_models: Set = set()
 nscale_models: Set = set()
+scaleway_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
 aiml_models: Set = set()
@@ -880,6 +881,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
             nscale_models.add(key)
+        elif value.get("litellm_provider") == "scaleway":
+            scaleway_models.add(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.add(key)
         elif value.get("litellm_provider") == "voyage":
@@ -1115,6 +1118,7 @@ model_list = list(
     | llama_models
     | featherless_ai_models
     | nscale_models
+    | scaleway_models
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
@@ -1224,6 +1228,7 @@ def _build_models_by_provider() -> dict:
         "gradient_ai": gradient_ai_models,
         "meta_llama": llama_models,
         "nscale": nscale_models,
+        "scaleway": scaleway_models,
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
