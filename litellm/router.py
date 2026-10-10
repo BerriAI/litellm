@@ -12498,6 +12498,15 @@ class Router:
         ]
         return [{**DeploymentTypedDict(**m), "model_name": model_name} for m in matches]
 
+    def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
+        """The deployments routing serves ``model`` from through a wildcard: the most specific
+        proxy-wide pattern matching it, else ``team_id``'s own pattern, never both."""
+        proxy_wide: Final[Sequence[Mapping[str, object]]] = self.pattern_router.get_deployments_by_pattern(model=model)
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        if proxy_wide or team_router is None:
+            return proxy_wide
+        return team_router.get_deployments_by_pattern(model=model)
+
     def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
@@ -13107,19 +13116,9 @@ class Router:
             if team_deployments:
                 return model, team_deployments
 
-        pattern_deployments = self.pattern_router.get_deployments_by_pattern(
-            model=model,
-        )
-
-        if pattern_deployments:
-            return model, pattern_deployments
-
-        if request_team_id is not None and request_team_id in self.team_pattern_routers:
-            pattern_deployments = self.team_pattern_routers[request_team_id].get_deployments_by_pattern(
-                model=model,
-            )
-            if pattern_deployments:
-                return model, pattern_deployments
+        wildcard_deployments: Final = self.wildcard_route_deployments(model, request_team_id)
+        if wildcard_deployments:
+            return model, list(wildcard_deployments)
 
         if self.default_deployment is not None:
             # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)

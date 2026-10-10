@@ -7908,6 +7908,37 @@ async def test_naming_the_shared_deployment_directly_draws_on_the_same_ceiling_a
 
 
 @pytest.mark.asyncio
+async def test_naming_the_shared_deployment_by_id_draws_on_its_ceiling_beside_a_catch_all_wildcard(monkeypatch):
+    """The router serves a deployment id before any wildcard, so a proxy-wide `*` route that also
+    matches the id string does not let a team that spent its share keep going under the id."""
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+    catch_all = {
+        "model_name": "*",
+        "litellm_params": {"model": "azure/*", "api_key": "sk-open", "api_base": "https://open.example"},
+        "model_info": {"id": "open-catch-all"},
+    }
+    router = Router(model_list=[*_shared_ptu_router("test-model").model_list, catch_all])
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=_two_thirds_of_a_ptu_minute(), call_type="acompletion"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=key,
+                cache=cache,
+                data={**_two_thirds_of_a_ptu_minute(), "model": "shared-ptu"},
+                call_type="acompletion",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_team_ptu" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_every_name_a_wildcard_route_serves_draws_on_its_shared_deployments_ceiling(monkeypatch):
     """A shared deployment listed under a wildcard serves every name the pattern matches, so a
     team that spent its share under one of those names cannot keep going under another."""

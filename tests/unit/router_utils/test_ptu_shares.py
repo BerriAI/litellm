@@ -52,8 +52,12 @@ def _single_team(model: str = "azure/gpt-4.1") -> dict:
 _OPEN: Final = {"model_name": "gpt-4.1-ptu", "litellm_params": {"model": "azure/gpt-4.1"}, "model_info": {"id": "open"}}
 
 
+def _no_wildcard_route(_: str) -> tuple[()]:
+    return ()
+
+
 def _unaliased_ceiling(deployments: list[dict], team_id: str, requested_model: str) -> PTUTeamCeiling | None:
-    return team_ptu_ceiling(deployments, deployments, team_id, requested_model)
+    return team_ptu_ceiling(deployments, deployments, team_id, requested_model, _no_wildcard_route)
 
 
 def test_a_team_holding_a_share_keeps_the_shared_deployment():
@@ -204,11 +208,11 @@ def test_alias_and_routing_group_copies_do_not_split_a_deployments_ceiling():
     ahead of its own rows, so every name still resolves to the deployment's group."""
     shared: Final = _shared()
     listed: Final = [{**shared, "model_name": "ptu-alias"}, {**shared, "model_name": "ptu-routing-group"}, shared]
-    by_group: Final = team_ptu_ceiling(listed, [shared], "team-a", "gpt-4.1-ptu")
+    by_group: Final = team_ptu_ceiling(listed, [shared], "team-a", "gpt-4.1-ptu", _no_wildcard_route)
     assert by_group is not None
     assert by_group.model_group == "gpt-4.1-ptu"
     for name in ("shared", "azure/gpt-4.1", "ptu-routing-group"):
-        assert team_ptu_ceiling(listed, [shared], "team-a", name) == by_group
+        assert team_ptu_ceiling(listed, [shared], "team-a", name, _no_wildcard_route) == by_group
 
 
 def test_a_provider_model_draws_on_the_group_where_the_team_holds_its_share():

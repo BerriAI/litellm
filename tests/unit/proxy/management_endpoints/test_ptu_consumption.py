@@ -194,6 +194,43 @@ def test_rows_keyed_by_a_name_a_wildcard_route_serves_are_sized_by_its_shared_de
     assert attached.results[0].breakdown.model_groups["ptu-chat"].metrics.ptu_hours == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize(
+    ("catch_all_routes", "expected_ptu_hours"), [(False, 1.0), (True, 0.0)], ids=["team-wildcard", "behind-catch-all"]
+)
+def test_a_teams_wildcard_reservation_reads_ptu_hours_only_while_the_router_serves_from_it(
+    monkeypatch, catch_all_routes, expected_ptu_hours
+):
+    """The router tries the proxy-wide wildcards before a team's own, so a team's `ptu-*`
+    reservation behind an open `*` route never serves `ptu-chat`, and its row reads no PTU-hours."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    reservation: Final = {
+        "model_name": "ptu-team-r",
+        "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-r", "api_base": "https://r.example"},
+        "model_info": {
+            "id": "reserved-r",
+            "base_model": "azure/gpt-4.1",
+            "team_id": "team-r",
+            "team_public_model_name": "ptu-*",
+            "ptu_count": 50,
+            "cost_per_ptu_per_hour": 1.0,
+            "ptu_effective_from": "2026-01-01T00:00:00Z",
+        },
+    }
+    catch_all: Final = {
+        "model_name": "*",
+        "litellm_params": {"model": "azure/*", "api_key": "sk-open", "api_base": "https://open.example"},
+        "model_info": {"id": "open-catch-all"},
+    }
+    router: Final = Router(model_list=[reservation, *([catch_all] if catch_all_routes else [])])
+    one_hour: Final = _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0))
+
+    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", {"ptu-chat": one_hour})), router, "team-r")
+
+    assert attached.results[0].breakdown.model_groups["ptu-chat"].metrics.ptu_hours == pytest.approx(
+        expected_ptu_hours
+    )
+
+
 def _mixed_ptu_router() -> Router:
     """One group split between team-a on a gpt-4.1 PTU deployment and team-b on a gpt-5.5 one,
     beside an open pay-as-you-go deployment of gpt-4.1 in its own group."""

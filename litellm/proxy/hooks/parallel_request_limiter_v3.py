@@ -144,13 +144,11 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return None
     return team_ptu_ceiling(
-        (
-            *(llm_router.get_model_list() or ()),
-            *(llm_router.get_model_list(model_name=model_group, team_id=team_id) or ()),
-        ),
+        llm_router.get_model_list() or (),
         llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # Router.model_list is a bare list
         team_id,
         model_group,
+        lambda name: llm_router.wildcard_route_deployments(name, team_id),
     )
 
 

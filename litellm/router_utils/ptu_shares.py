@@ -6,9 +6,9 @@ model's Azure sizing row, so the proxy enforces the split instead of an operator
 converting PTUs to ``model_tpm_limit``.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Generic, TypeVar
+from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.litellm_core_utils.ptu_pricing import parsed_ptu_shares, ptu_terms
 from litellm.llms.azure.ptu_capacity import (
@@ -20,6 +20,7 @@ from litellm.llms.azure.ptu_capacity import (
 from litellm.router_utils.common_utils import team_may_use_deployment
 
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+WildcardRoute: TypeAlias = Callable[[str], Sequence[Mapping[str, object]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,22 +73,24 @@ def team_ptu_ceiling(
     deployments: Sequence[Mapping[str, object]],
     team_id: str,
     requested_model: str,
+    wildcard_route: WildcardRoute,
 ) -> PTUTeamCeiling | None:
     """The per-minute normalized-token ceiling ``team_id``'s shares on the group serving
     ``requested_model`` add up to, else None when the team holds no share on a deployment with
     a known sizing row.
 
-    ``listed_rows`` is every row the router lists a name under, alias, routing-group, and
-    wildcard-match copies included, and ``deployments`` is the router's own deployments. A name resolves to the
-    deployments behind it, so a group, a routing group, a deployment id, and a provider model
-    all count against the one ceiling of the group whose shared deployment the team can be
-    served from.
+    ``listed_rows`` is every row the router lists a name under, alias and routing-group copies
+    included, ``deployments`` is the router's own deployments, and ``wildcard_route`` gives the
+    deployments the wildcard route serving a name routes it to. A name resolves to the
+    deployments behind it, so a group, a routing group, a deployment id, a wildcard-matched
+    name, and a provider model all count against the one ceiling of the group whose shared
+    deployment the team can be served from.
 
     Two shared deployments of different models in one group are weighted by the larger
     output and cached-input ratios, which over-counts those tokens on the cheaper one rather
     than under-counting them on the dearer one.
     """
-    model_group: Final = _model_group_of(listed_rows, deployments, team_id, requested_model)
+    model_group: Final = _model_group_of(listed_rows, deployments, team_id, requested_model, wildcard_route)
     priced: Final = tuple(
         (shares[team_id], capacity)
         for deployment in model_group_deployments(deployments, model_group)
@@ -125,11 +128,9 @@ def _deployment_id(deployment: Mapping[str, object]) -> object:
     return model_info.get("id") if is_str_keyed_mapping(model_info) else None
 
 
-def _names_deployment(deployment: Mapping[str, object], name: str) -> bool:
+def _provider_model(deployment: Mapping[str, object]) -> object:
     litellm_params: Final = deployment.get("litellm_params")
-    return _deployment_id(deployment) == name or (
-        is_str_keyed_mapping(litellm_params) and litellm_params.get("model") == name
-    )
+    return litellm_params.get("model") if is_str_keyed_mapping(litellm_params) else None
 
 
 def _deployment_model_group(deployment: Mapping[str, object]) -> str | None:
@@ -141,16 +142,32 @@ def _deployment_model_group(deployment: Mapping[str, object]) -> str | None:
     return model_name if isinstance(model_name, str) else None
 
 
-def routed_deployments(
-    listed_rows: Sequence[Mapping[str, object]], deployments: Sequence[Mapping[str, object]], requested_model: str
+def _deployments_with_ids(
+    deployments: Sequence[Mapping[str, object]], rows: Sequence[Mapping[str, object]]
 ) -> tuple[Mapping[str, object], ...]:
-    """The router's own deployments behind ``requested_model``: those of the rows listed under it
-    when it names a group, else the one it names by id or by provider model, the way the router
-    falls back to them."""
-    listed_ids: Final = frozenset(_deployment_id(row) for row in model_group_deployments(listed_rows, requested_model))
-    if listed_ids:
-        return tuple(deployment for deployment in deployments if _deployment_id(deployment) in listed_ids)
-    return tuple(deployment for deployment in deployments if _names_deployment(deployment, requested_model))
+    ids: Final = frozenset(_deployment_id(row) for row in rows)
+    return tuple(deployment for deployment in deployments if _deployment_id(deployment) in ids)
+
+
+def routed_deployments(
+    listed_rows: Sequence[Mapping[str, object]],
+    deployments: Sequence[Mapping[str, object]],
+    requested_model: str,
+    wildcard_route: WildcardRoute,
+) -> tuple[Mapping[str, object], ...]:
+    """The router's own deployments behind ``requested_model``, in the order the router resolves a
+    name: those of the rows listed under it when it names a group, else the one it names by id,
+    else those of the one wildcard route that serves it, else the ones it names by provider model."""
+    listed: Final = _deployments_with_ids(deployments, model_group_deployments(listed_rows, requested_model))
+    if listed:
+        return listed
+    by_id: Final = tuple(deployment for deployment in deployments if _deployment_id(deployment) == requested_model)
+    if by_id:
+        return by_id
+    wildcard: Final = _deployments_with_ids(deployments, wildcard_route(requested_model))
+    if wildcard:
+        return wildcard
+    return tuple(deployment for deployment in deployments if _provider_model(deployment) == requested_model)
 
 
 def _model_group_of(
@@ -158,10 +175,13 @@ def _model_group_of(
     deployments: Sequence[Mapping[str, object]],
     team_id: str,
     requested_model: str,
+    wildcard_route: WildcardRoute,
 ) -> str:
     """The group of the deployment behind ``requested_model`` this team can be served from, one
     holding its share first."""
-    servable: Final = team_servable_deployments(routed_deployments(listed_rows, deployments, requested_model), team_id)
+    servable: Final = team_servable_deployments(
+        routed_deployments(listed_rows, deployments, requested_model, wildcard_route), team_id
+    )
     return next(
         (group for deployment in servable if (group := _deployment_model_group(deployment)) is not None),
         requested_model,
