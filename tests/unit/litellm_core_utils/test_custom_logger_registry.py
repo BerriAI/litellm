@@ -1,6 +1,8 @@
 import asyncio
 import importlib
 import os
+import subprocess
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Final, Literal
@@ -423,3 +425,41 @@ def test_lazy_proxy_callback_classes_resolve_in_registry_lookups(
     assert CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name) is proxy_class
     assert CustomLoggerRegistry.get_callback_str_from_class_type(proxy_class) == callback_name
     assert CustomLoggerRegistry.get_all_callback_strs_from_class_type(proxy_class) == [callback_name]
+
+
+def test_registry_import_leaves_proxy_rate_limiter_modules_unloaded() -> None:
+    loaded: Final = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, litellm.litellm_core_utils.custom_logger_registry; "
+            "print(sorted(m for m in sys.modules if m.startswith('litellm.proxy.hooks.dynamic_rate_limiter')))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    assert loaded == "[]"
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "module_path"),
+    (
+        ("PROXY_DynamicRateLimitHandler", "litellm.proxy.hooks.dynamic_rate_limiter"),
+        ("_PROXY_DynamicRateLimitHandler", "litellm.proxy.hooks.dynamic_rate_limiter"),
+        ("PROXY_DynamicRateLimitHandlerV3", "litellm.proxy.hooks.dynamic_rate_limiter_v3"),
+        ("_PROXY_DynamicRateLimitHandlerV3", "litellm.proxy.hooks.dynamic_rate_limiter_v3"),
+    ),
+)
+def test_legacy_rate_limiter_exports_resolve_to_proxy_objects(legacy_name: str, module_path: str) -> None:
+    registry_module: Final = importlib.import_module("litellm.litellm_core_utils.custom_logger_registry")
+
+    assert getattr(registry_module, legacy_name) is getattr(importlib.import_module(module_path), legacy_name)
+
+
+def test_registry_module_still_raises_for_unknown_attributes() -> None:
+    registry_module: Final = importlib.import_module("litellm.litellm_core_utils.custom_logger_registry")
+
+    with pytest.raises(AttributeError):
+        getattr(registry_module, "PROXY_NotARealHandler")
