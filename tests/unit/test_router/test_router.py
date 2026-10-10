@@ -9,9 +9,10 @@ import os
 import sys
 import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import FrameType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -949,6 +950,132 @@ def test_arouter_test_team_model():
 
     result = router.map_team_model(team_model_name="test-model", team_id="test-team")
     assert result is not None
+
+
+def test_map_team_model_tolerates_concurrent_deployment_removal():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "internal-team-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {
+                    "id": "deployment-1",
+                    "team_id": "team-1",
+                    "team_public_model_name": "public-model",
+                },
+            }
+        ],
+    )
+    source_lines, first_line = inspect.getsourcelines(Router.get_all_deployments)
+    lookup_line: Final = first_line + next(
+        index
+        for index, line in enumerate(source_lines)
+        if "model = self.model_list[idx]" in line
+    )
+    paused: Final = threading.Event()
+    resume: Final = threading.Event()
+
+    def trace_reader(
+        frame: FrameType, event: str, _arg: object
+    ) -> Callable[[FrameType, str, object], object] | None:
+        if (
+            frame.f_code is Router.get_all_deployments.__code__
+            and event == "line"
+            and frame.f_lineno == lookup_line
+            and not paused.is_set()
+        ):
+            paused.set()
+            if not resume.wait(timeout=10):
+                raise TimeoutError("reader was not resumed")
+        return trace_reader
+
+    def resolve_model() -> str | None:
+        sys.settrace(trace_reader)
+        try:
+            return router.map_team_model("public-model", "team-1")
+        finally:
+            sys.settrace(None)
+
+    executor: Final = ThreadPoolExecutor(max_workers=1)
+    with executor:
+        reader: Final = executor.submit(resolve_model)
+        try:
+            assert paused.wait(timeout=10), "reader did not reach indexed lookup"
+            assert router.delete_deployment("deployment-1") is not None
+        finally:
+            resume.set()
+
+        assert reader.result(timeout=10) is None
+
+
+def test_team_model_lookup_prefers_team_deployment_after_stale_index():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "public-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "global-deployment"},
+            },
+            {
+                "model_name": "unrelated-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "unrelated-deployment"},
+            },
+            {
+                "model_name": "internal-team-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {
+                    "id": "team-deployment",
+                    "team_id": "team-1",
+                    "team_public_model_name": "public-model",
+                },
+            },
+        ],
+    )
+    assert router.delete_deployment("unrelated-deployment") is not None
+
+    # This stale index is the snapshot a concurrent reader may retain.
+    router.team_model_to_deployment_indices[("team-1", "public-model")] = [2]
+
+    result: Final = router.get_all_deployments("public-model", team_id="team-1")
+    assert [model["model_info"]["id"] for model in result] == ["team-deployment"]
+    aliased_result: Final = router.get_all_deployments(
+        "public-model", model_alias="mapped-public-model", team_id="team-1"
+    )
+    assert [model["model_name"] for model in aliased_result] == ["mapped-public-model"]
+    scanned_result: Final = router._scan_current_deployments(
+        model_name="public-model", team_id="team-1"
+    )
+    assert [model["model_info"]["id"] for model in scanned_result] == ["team-deployment"]
+
+
+def test_get_all_deployments_preserves_survivor_from_stale_model_name_index():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model-a",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "model-b",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "deployment-b"},
+            },
+        ],
+    )
+    assert router.delete_deployment("deployment-a") is not None
+
+    # This stale index is the snapshot a concurrent reader may retain.
+    router.model_name_to_deployment_indices["model-b"] = [1]
+
+    result: Final = router.get_all_deployments("model-b")
+    assert [model["model_info"]["id"] for model in result] == ["deployment-b"]
+
+    aliased_result: Final = router.get_all_deployments("model-b", model_alias="public-model-b")
+    assert len(aliased_result) == 1
+    assert aliased_result[0]["model_name"] == "public-model-b"
+    assert aliased_result[0]["model_info"]["id"] == "deployment-b"
 
 
 def test_team_model_has_alternatives():
