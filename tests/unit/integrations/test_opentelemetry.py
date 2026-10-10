@@ -407,7 +407,7 @@ def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
 
 
 @pytest.mark.parametrize("recording", [True, False])
-def test_seed_request_identity_checks_server_span_recording(recording: bool) -> None:
+def test_seed_request_identity_checks_server_span_recording(recording: bool) -> None:  # test-quality-ok: the hosted proxy fixture covers end-to-end behavior; this isolates both lifecycle branches
     logger = OpenTelemetryV2()
     server_span = MagicMock()
     server_span.is_recording.return_value = recording
