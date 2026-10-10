@@ -15,16 +15,20 @@ describe("EntityReference", () => {
     expect(screen.queryByText("team-123")).not.toBeInTheDocument();
   });
 
-  it("keeps the raw id reachable as a tooltip when a name is shown", async () => {
+  it("shows the full name and the raw id together in the tooltip", async () => {
     const user = userEvent.setup();
-    render(<EntityReference id="team-123" name="Review Team" />);
-    await user.hover(screen.getByText("Review Team"));
+    const longName = "Review Team " + "x".repeat(200);
+    render(<EntityReference id="team-123" name={longName} />);
+    const triggers = screen.getAllByText(longName);
+    await user.hover(triggers[0]);
+    const tips = await screen.findAllByText(longName);
+    expect(tips.length).toBeGreaterThan(1);
     expect(await screen.findByText("team-123")).toBeInTheDocument();
   });
 
   it("caps the named trigger at the container width so long names truncate", () => {
     const { container } = render(<EntityReference id="team-123" name="Review Team" />);
-    expect(container.querySelector("span")).toHaveClass("max-w-full");
+    expect(container.querySelector("span")).toHaveClass("max-w-[min(100%,16rem)]");
   });
 
   it("falls back to the raw id in mono when there is no name", () => {
