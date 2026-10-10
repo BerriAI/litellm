@@ -295,11 +295,152 @@ class TestVertexAIRerankTransform:
         assert len(result.results) == 2
         assert result.results[0]["index"] == 1  # Converted back to 0-based index
         assert result.results[0]["relevance_score"] == 0.98
+        assert (
+            result.results[0]["document"]["text"]
+            == "The sky appears blue due to a phenomenon called Rayleigh scattering."
+        )
         assert result.results[1]["index"] == 0
         assert result.results[1]["relevance_score"] == 0.64
+        assert (
+            result.results[1]["document"]["text"]
+            == "A canvas stretched across the day, Where sunlight learns to dance and play."
+        )
 
         # Verify metadata
         assert result.meta["billed_units"]["search_units"] == 1
+
+    def test_transform_rerank_response_return_documents_true_populates_document_text(self):
+        """Test that return_documents=True populates document with {'text': record['content']}."""
+        response_data = {
+            "records": [
+                {
+                    "id": "1",
+                    "score": 0.95,
+                    "title": "Doc 1",
+                    "content": "Content of document 1",
+                },
+                {
+                    "id": "0",
+                    "score": 0.80,
+                    "title": "Doc 0",
+                    "content": "Content of document 0",
+                },
+            ]
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_data
+        mock_response.text = json.dumps(response_data)
+        mock_logging = MagicMock()
+        model_response = RerankResponse()
+
+        # Test with optional_params={"return_documents": True}
+        result = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            optional_params={"return_documents": True},
+        )
+
+        assert len(result.results) == 2
+        assert result.results[0]["index"] == 1
+        assert result.results[0]["relevance_score"] == 0.95
+        assert result.results[0]["document"] == {"text": "Content of document 1"}
+        assert result.results[0]["document"]["text"] == "Content of document 1"
+
+        assert result.results[1]["index"] == 0
+        assert result.results[1]["relevance_score"] == 0.80
+        assert result.results[1]["document"] == {"text": "Content of document 0"}
+        assert result.results[1]["document"]["text"] == "Content of document 0"
+
+    def test_transform_rerank_response_return_documents_false_omits_document_text(self):
+        """Test that return_documents=False does not populate document field."""
+        response_data = {
+            "records": [
+                {
+                    "id": "1",
+                    "score": 0.95,
+                    "title": "Doc 1",
+                    "content": "Content of document 1",
+                },
+                {
+                    "id": "0",
+                    "score": 0.80,
+                    "title": "Doc 0",
+                    "content": "Content of document 0",
+                },
+            ]
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_data
+        mock_response.text = json.dumps(response_data)
+        mock_logging = MagicMock()
+        model_response = RerankResponse()
+
+        # Test with optional_params={"return_documents": False}
+        result = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            optional_params={"return_documents": False},
+        )
+
+        assert len(result.results) == 2
+        assert result.results[0]["index"] == 1
+        assert result.results[0]["relevance_score"] == 0.95
+        assert "document" not in result.results[0]
+
+        assert result.results[1]["index"] == 0
+        assert result.results[1]["relevance_score"] == 0.80
+        assert "document" not in result.results[1]
+
+        # Test with request_data={"ignoreRecordDetailsInResponse": True}
+        result_request_data = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={"ignoreRecordDetailsInResponse": True},
+        )
+        assert "document" not in result_request_data.results[0]
+        assert "document" not in result_request_data.results[1]
+
+        # Test with litellm_params={"return_documents": True}
+        result_litellm_params = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            litellm_params={"return_documents": True},
+        )
+        assert result_litellm_params.results[0]["document"]["text"] == "Content of document 1"
+
+        # Test with request_data={"return_documents": True}
+        result_req_data_true = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={"return_documents": True},
+        )
+        assert result_req_data_true.results[0]["document"]["text"] == "Content of document 1"
+
+        # Test with records missing content
+        no_content_response_data = {"records": [{"id": "0", "score": 0.9}]}
+        mock_no_content = MagicMock(spec=httpx.Response)
+        mock_no_content.json.return_value = no_content_response_data
+        mock_no_content.text = json.dumps(no_content_response_data)
+        result_no_content = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_no_content,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            optional_params={"return_documents": True},
+        )
+        assert "document" not in result_no_content.results[0]
 
     def test_transform_rerank_response_with_ignore_record_details(self):
         """Test response transformation when ignoreRecordDetailsInResponse=true."""
