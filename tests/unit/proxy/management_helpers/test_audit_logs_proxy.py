@@ -15,13 +15,11 @@ import time
 # this file is to test litellm/proxy
 
 import asyncio
-import logging
 
 load_dotenv()
 
 import pytest
 import litellm
-from litellm._logging import verbose_proxy_logger
 
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
@@ -36,12 +34,10 @@ from litellm.proxy.proxy_server import (
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
 from litellm.proxy.management_helpers.audit_logs import (
-    _pending_audit_tasks,
     create_audit_log_for_update,
     drain_audit_tasks,
     get_audit_log_changed_by,
@@ -53,6 +49,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 import json
+from tests._master_key import MASTER_KEY
 
 
 def test_get_audit_log_changed_by_prefers_authenticated_user():
@@ -231,7 +228,7 @@ async def test_create_audit_log_in_db(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "premium_user", True)
     setattr(litellm, "store_audit_logs", True)
 
@@ -465,23 +462,33 @@ async def test_drain_audit_tasks_captures_tasks_queued_during_drain():
 
 @pytest.mark.asyncio
 async def test_create_audit_log_for_update_does_not_track_when_logging_disabled():
-    with (
-        patch("litellm.store_audit_logs", False),
-        patch("litellm.proxy.management_helpers.audit_logs.is_audit_logging_enabled", return_value=False),
-    ):
-        request_data: Final = LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by="test-user",
-            table_name=LitellmTableNames.KEY_TABLE_NAME,
-            object_id="test-obj",
-            action="updated",
-            updated_values="{}",
-            before_value="{}",
+    release_caller: Final = asyncio.Event()
+
+    async def _caller_that_outlives_the_audit_call() -> None:
+        await create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by="test-user",
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                object_id="test-obj",
+                action="updated",
+                updated_values="{}",
+                before_value="{}",
+            )
         )
-        current_tracked_before: Final = len(_pending_audit_tasks)
-        await create_audit_log_for_update(request_data=request_data)
-        assert len(_pending_audit_tasks) == current_tracked_before
+        await release_caller.wait()
+
+    with patch("litellm.store_audit_logs", False):
+        caller: Final = asyncio.create_task(_caller_that_outlives_the_audit_call())
+        await asyncio.sleep(0)
+        started: Final = time.monotonic()
+        await drain_audit_tasks(timeout=1.0)
+        elapsed: Final = time.monotonic() - started
+        release_caller.set()
+        await caller
+
+    assert elapsed < 0.5
 
 
 @pytest.mark.asyncio
@@ -523,10 +530,3 @@ async def test_hook_spawn_with_io_delay_drained_before_shutdown():
         assert hook_task.done()
         assert len(writes) == 1
         assert writes[0]["object_id"] == "token-hook"
-
-
-def test_drain_audit_tasks_default_timeout():
-    import inspect
-
-    sig: Final = inspect.signature(drain_audit_tasks)
-    assert sig.parameters["timeout"].default == 5.0

@@ -728,14 +728,16 @@ describe("userListCall search serialization", () => {
   const mockOkFetch = () => {
     const emptyPage = { users: [], total: 0, page: 1, page_size: 25, total_pages: 0 };
     const body = JSON.stringify(emptyPage);
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: vi.fn().mockResolvedValue(body) } as any);
-    global.fetch = mockFetch as any;
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(body, { headers: { "Content-Type": "application/json" } }));
+    global.fetch = mockFetch;
     return mockFetch;
   };
 
   const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
     const [url] = mockFetch.mock.calls.at(-1) ?? [];
-    return new URL(url as string, "http://example.com").searchParams;
+    return new URL((url as Request).url).searchParams;
   };
 
   it("sends the combined search term as search, not user_email", async () => {
@@ -822,5 +824,67 @@ describe("userFilterUICall", () => {
     const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://localhost");
     expect(parsed.pathname).toContain("/user/filter/ui");
     expect(parsed.searchParams.get("search")).toBe("svc");
+  });
+});
+
+describe("schema-bound dashboard responses", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps null plugin metadata and source maps from the API", async () => {
+    const plugin = {
+      id: "plugin-1",
+      name: "test-skill",
+      enabled: true,
+      version: null,
+      description: null,
+      created_at: null,
+      updated_at: null,
+      keywords: null,
+      author: null,
+      source: { source: "github", repo: "org/repo" },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ plugins: [plugin], count: 1 }))));
+    const result = await Networking.getClaudeCodePluginsList("explicit-token");
+    expect(result.plugins[0]).toEqual(plugin);
+  });
+
+  it("validates agent metadata at the HTTP boundary", async () => {
+    const agent = {
+      agent_id: "agent-1",
+      agent_name: "agent",
+      enabled: true,
+      execution_mode: "autonomous",
+      identity_managed: false,
+      jwt_auth_configured: false,
+      agent_card_params: {},
+      litellm_params: { model: 42 },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([agent]))));
+    await expect(Networking.getAgentsList("explicit-token")).rejects.toThrow();
+  });
+
+  it("keeps nullable user fields without asserting they are strings", async () => {
+    const user = { user_id: "user-1", user_email: null, user_role: null, created_at: null };
+    const page = { users: [user], total: 1, page: 1, page_size: 25, total_pages: 1 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(page))));
+    const result = await Networking.userListCall("explicit-token");
+    expect(result.users[0]).toEqual(user);
+  });
+});
+
+describe("modelCostMap", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the catalog-only map when catalogOnly is set and the full map otherwise", async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({})));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await Networking.modelCostMap(true);
+    await Networking.modelCostMap();
+
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/public\/litellm_model_cost_map\?catalog_only=true$/);
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/public\/litellm_model_cost_map$/);
   });
 });

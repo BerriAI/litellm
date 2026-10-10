@@ -1,15 +1,20 @@
-from collections.abc import Iterable
-from unittest.mock import AsyncMock, MagicMock
+import json
+from collections.abc import Iterable, Iterator
+from typing import ClassVar, Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
-    get_guardrail_initializer_from_hooks,
     GuardrailRegistry,
     InMemoryGuardrailHandler,
+    get_guardrail_initializer_from_hooks,
+    parse_tolerant_litellm_params,
 )
-from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams, LoggingOnlyScope, Mode
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 def test_get_guardrail_initializer_from_hooks():
@@ -153,6 +158,43 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
         assert len(handler.IN_MEMORY_GUARDRAILS) == 2
     finally:
         registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
+
+
+def test_initialize_guardrail_treats_invalid_stored_scope_as_both():
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    guardrail_type: Final = "invalid_stored_scope_test"
+
+    def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks(litellm_params.mode),
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    try:
+        handler: Final = InMemoryGuardrailHandler()
+        guardrail: Final = Guardrail(
+            guardrail_id="invalid-stored-scope",
+            guardrail_name="invalid-stored-scope",
+            litellm_params={
+                "guardrail": guardrail_type,
+                "mode": "pre_call",
+                "default_on": True,
+                "stream_scope": "sometimes",
+            },
+        )
+
+        parsed_guardrail: Final = handler.initialize_guardrail(guardrail=guardrail, source="db")
+        callback: Final = handler.guardrail_id_to_custom_guardrail["invalid-stored-scope"]
+
+        assert parsed_guardrail["litellm_params"].stream_scope is None
+        assert callback is not None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+        assert callback.should_run_guardrail(data={"stream": True}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
 
 
 def _register_mode_following_initializer(guardrail_type: str):
@@ -400,6 +442,178 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     assert handler.get_source("collide") == "db"
 
 
+def test_sync_guardrail_from_db_reject_flag_keeps_callback_order_on_noop_update():
+    """
+    The PUT endpoint syncs the whole object with reject_invalid_logging_only_scope=True.
+    That strictness must not force a teardown + re-append of an unchanged guardrail:
+    initialize_guardrail appends the rebuilt callback at the END of litellm.callbacks,
+    so a description-only PUT would reorder guardrails and change which one wins
+    between a BLOCK and a MASK guardrail over the same content.
+    """
+    import litellm
+
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    sentinel: Final = CustomGuardrail(
+        guardrail_name="order-sentinel",
+        supported_event_hooks=[GuardrailEventHooks.pre_call],
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+        assert original is not None
+        litellm.callbacks.append(sentinel)
+        index_before = litellm.callbacks.index(original)
+
+        handler.sync_guardrail_from_db(
+            guardrail=_mode_following_db_row("123", "pre_call", "description-only edit"),
+            reject_invalid_logging_only_scope=True,
+        )
+
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert litellm.callbacks.index(original) == index_before
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_sync_guardrail_from_db_reject_flag_still_rejects_invalid_unchanged_scope():
+    """
+    A PUT sends the whole object, so an unchanged row that already carries an
+    invalid logging_only_scope (tolerated at load) must still be rejected on the
+    strict sync path, without rebuilding the live callback.
+    """
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    row: Final = Guardrail(
+        guardrail_id="123",
+        guardrail_name="mode-following",
+        litellm_params={
+            "guardrail": "mode_following_test",
+            "mode": "pre_call",
+            "default_on": True,
+            "logging_only_scope": "input",
+        },
+        guardrail_info={},
+    )
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=row, source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+        assert original is not None
+        assert original.logging_only_scope is None  # tolerated at load
+
+        with pytest.raises(ValueError, match="logging_only_scope is set"):
+            handler.sync_guardrail_from_db(guardrail=row, reject_invalid_logging_only_scope=True)
+
+        # Rejected without touching the live instance.
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+@pytest.fixture
+def rotation_handler() -> Iterator[InMemoryGuardrailHandler]:
+    registry_module = _register_mode_following_initializer("rotation_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        yield InMemoryGuardrailHandler()
+    finally:
+        registry_module.guardrail_initializer_registry.pop("rotation_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def _rotation_row(litellm_params: dict[str, object] | LitellmParams) -> Guardrail:
+    return Guardrail(guardrail_id="rotated", guardrail_name="mode-following", litellm_params=litellm_params)
+
+
+_LOADED_PARAMS = {"guardrail": "rotation_test", "mode": "pre_call", "default_on": True, "api_key": "gk-loaded"}
+
+
+def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_db_params_do_not_decrypt(rotation_handler):
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(_LOADED_PARAMS)), source="db")
+    live_instance = rotation_handler.guardrail_id_to_custom_guardrail["rotated"]
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row({**_LOADED_PARAMS, "api_key": "litellm_enc::sealed-under-the-new-key"})
+    )
+
+    assert rotation_handler.guardrail_id_to_custom_guardrail["rotated"] is live_instance
+    assert rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"].api_key == "gk-loaded"
+
+
+def test_sync_guardrail_from_db_applies_other_edits_and_keeps_the_loaded_value_that_does_not_decrypt(
+    rotation_handler,
+):
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(_LOADED_PARAMS)), source="db")
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row({**_LOADED_PARAMS, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"})
+    )
+
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.mode == "post_call"
+    assert synced_params.api_key == "gk-loaded"
+    live_instance = rotation_handler.guardrail_id_to_custom_guardrail["rotated"]
+    assert live_instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+
+
+def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_an_undecryptable_param_has_no_loaded_value(
+    rotation_handler,
+):
+    loaded_params = {key: value for key, value in _LOADED_PARAMS.items() if key != "api_key"}
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(loaded_params)), source="db")
+    live_instance = rotation_handler.guardrail_id_to_custom_guardrail["rotated"]
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row({**loaded_params, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"})
+    )
+
+    assert rotation_handler.guardrail_id_to_custom_guardrail["rotated"] is live_instance
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.mode == "pre_call"
+    assert synced_params.api_key is None
+
+
+def test_sync_guardrail_from_db_keeps_the_loaded_value_when_a_patch_passes_litellm_params_as_a_model(
+    rotation_handler,
+):
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(_LOADED_PARAMS)), source="db")
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row(LitellmParams(**{**_LOADED_PARAMS, "default_on": False, "api_key": "litellm_enc::sealed"}))
+    )
+
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.default_on is False
+    assert synced_params.api_key == "gk-loaded"
+
+
+def test_sync_guardrail_from_db_applies_an_edit_to_a_guardrail_loaded_with_an_undecryptable_value(
+    rotation_handler,
+):
+    stale_params = {**_LOADED_PARAMS, "api_key": "litellm_enc::stale"}
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(stale_params)), source="db")
+
+    rotation_handler.sync_guardrail_from_db(_rotation_row({**stale_params, "mode": "post_call", "default_on": False}))
+
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.mode == "post_call"
+    assert synced_params.default_on is False
+    assert synced_params.api_key == "litellm_enc::stale"
+
+
 def _db_litellm_params() -> dict:
     """
     Shape produced by GuardrailRegistry.get_all_guardrails_from_db: litellm_params
@@ -433,6 +647,49 @@ def test_unchanged_db_params_do_not_register_as_changed():
 
     new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=dict(raw))
     assert handler._has_guardrail_params_changed(gid, new) is False
+
+
+def test_db_poll_does_not_reinitialize_config_guardrail_without_default_on():
+    handler = InMemoryGuardrailHandler()
+    guardrail_id: Final = "config-default-on-guardrail"
+    guardrail_name: Final = "config-default-on-guardrail"
+    params: Final = {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "logging_only_scope": "Input",
+        "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+    }
+    callback_lists: Final = _all_callback_lists()
+    callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+
+    try:
+        existing: Final = handler.initialize_guardrail(
+            guardrail=Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_name,
+                litellm_params=params,
+            ),
+            source="config",
+        )
+        assert existing is not None
+        assert existing["litellm_params"].default_on is False
+        assert existing["litellm_params"].logging_only_scope is None
+
+        synced: Final = handler.sync_guardrail_from_db(
+            Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_name,
+                litellm_params=params,
+            )
+        )
+
+        assert synced is existing
+        assert handler.IN_MEMORY_GUARDRAILS[guardrail_id] is existing
+        assert handler._sources[guardrail_id] == "db"
+    finally:
+        handler.delete_in_memory_guardrail(guardrail_id)
+        for callback_list, snapshot in zip(callback_lists, callback_snapshots):
+            callback_list[:] = snapshot
 
 
 def test_changed_db_params_register_as_changed():
@@ -470,6 +727,24 @@ def test_unnormalizable_db_params_register_as_changed_without_raising():
     malformed = {**raw, "default_on": "not-a-bool-xyz"}
     new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=malformed)
     assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def test_invalid_scope_literal_db_params_compare_equal_after_normalization():
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "77777777-7777-7777-7777-777777777777"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**{**raw, "logging_only_scope": None}),
+    )
+    new = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params={**raw, "logging_only_scope": "Input"},
+    )
+
+    assert handler._has_guardrail_params_changed(gid, new) is False
 
 
 def _all_callback_lists():
@@ -548,7 +823,7 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
 
     def distinct_runner_instances() -> int:
         seen = set()
-        for callback in litellm.logging_callback_manager._get_all_callbacks():
+        for callback in litellm.logging_callback_manager.get_all_callbacks():
             if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == name:
                 seen.add(id(callback))
         return len(seen)
@@ -932,6 +1207,250 @@ class TestScanOnlyToolResultsInitRefusal:
             )
 
 
+class _LoggingOnlyScopeSupportedGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: str,
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+class _LoggingOnlyScopeUnsupportedGuardrail(_LoggingOnlyScopeSupportedGuardrail):
+    async def async_logging_hook(
+        self,
+        kwargs: dict[str, object],
+        result: object,
+        call_type: str,
+    ) -> tuple[dict[str, object], object]:
+        return kwargs, result
+
+
+class _LoggingOnlyScopeNativeGuardrail(_LoggingOnlyScopeSupportedGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+
+def _invalid_scope_content_filter_guardrail() -> Guardrail:
+    return Guardrail(
+        guardrail_id="invalid-scope-content-filter-test",
+        guardrail_name="invalid-scope-content-filter",
+        litellm_params={
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "logging_only_scope": "Input",
+            "blocked_words": [{"keyword": "pineapple", "action": "BLOCK"}],
+        },
+    )
+
+
+class TestLoggingOnlyScopeValidation:
+    @pytest.mark.parametrize(
+        ("scope", "expected_scope"),
+        (("input", "input"), ("Input", None)),
+    )
+    def test_tolerant_parser_preserves_default_on_constructor_coercion(
+        self, scope: str, expected_scope: str | None
+    ) -> None:
+        params: Final = {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "logging_only_scope": scope,
+            "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+        }
+
+        parsed: Final = parse_tolerant_litellm_params(params, "test-content-filter")
+        expected: Final = LitellmParams(**{**params, "logging_only_scope": expected_scope}).model_dump()
+
+        assert parsed.default_on is False
+        assert parsed.model_dump() == expected
+
+    def _initialize(
+        self,
+        mode: str | list[str] | Mode,
+        scope: LoggingOnlyScope | None,
+        callback_type: type[CustomGuardrail] = _LoggingOnlyScopeSupportedGuardrail,
+        reject_invalid_logging_only_scope: bool = False,
+        assert_registered: bool = False,
+    ) -> CustomGuardrail:
+        import litellm
+        from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+        guardrail_type: Final = "logging_only_scope_test"
+        created_callbacks: Final[list[CustomGuardrail]] = []
+
+        def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+            supported_event_hooks: Final = (
+                [GuardrailEventHooks.logging_only] if callback_type.use_native_lifecycle_hooks else None
+            )
+            callback: Final = callback_type(
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params.mode,
+                default_on=True,
+                supported_event_hooks=supported_event_hooks,
+            )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+            created_callbacks.append(callback)
+            return callback
+
+        registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+        lists: Final = _all_callback_lists()
+        snapshots: Final = [list(callback_list) for callback_list in lists]
+        try:
+            handler: Final = InMemoryGuardrailHandler()
+            result: Final = handler.initialize_guardrail(
+                guardrail={
+                    "guardrail_name": "logging-only-scope-guardrail",
+                    "litellm_params": {
+                        "guardrail": guardrail_type,
+                        "mode": mode,
+                        "logging_only_scope": scope,
+                    },
+                },
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
+            assert result is not None
+            callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+            assert callback is not None
+            if assert_registered:
+                assert callback in lists[0]
+            return callback
+        except ValueError:
+            callback: Final = created_callbacks[0]
+            assert all(callback not in callback_list for callback_list in lists)
+            raise
+        finally:
+            for callback_list, snapshot in zip(lists, snapshots):
+                callback_list[:] = snapshot
+            registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
+
+    def test_scope_without_logging_only_mode_is_ignored_at_load(self) -> None:
+        callback: Final = self._initialize(mode="pre_call", scope="input", assert_registered=True)
+
+        assert callback.logging_only_scope is None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+
+    def test_scope_without_logging_only_mode_is_rejected_for_api_writes(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_scope is set") as exc_info:
+            self._initialize(mode="pre_call", scope="input", reject_invalid_logging_only_scope=True)
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_scope is set, but mode does not include "
+            "logging_only, so it would never apply. Add logging_only to mode or remove logging_only_scope."
+        )
+
+    @pytest.mark.parametrize(
+        "mode",
+        (
+            "logging_only",
+            ["pre_call", "logging_only"],
+            Mode(tags={"audit": "logging_only"}, default="pre_call"),
+        ),
+    )
+    def test_scope_accepts_logging_only_in_supported_mode_forms(self, mode: str | list[str] | Mode) -> None:
+        callback: Final = self._initialize(mode=mode, scope="input")
+
+        assert callback.logging_only_scope == "input"
+
+    def test_directional_scope_is_ignored_at_load_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="input",
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+            assert_registered=True,
+        )
+
+        assert callback.logging_only_scope is None
+
+    def test_directional_scope_rejected_for_api_writes_when_guardrail_owns_logging_hook(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_scope='input' is not supported") as exc_info:
+            self._initialize(
+                mode="logging_only",
+                scope="input",
+                callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_scope='input' is not supported by this "
+            "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
+        )
+
+    def test_both_scope_accepted_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="both",
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+        )
+
+        assert callback.logging_only_scope == "both"
+
+    def test_output_scope_accepted_for_native_lifecycle_guardrail(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="output",
+            callback_type=_LoggingOnlyScopeNativeGuardrail,
+        )
+
+        assert callback.logging_only_scope == "output"
+
+    def test_invalid_scope_fails_litellm_params_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope="request")
+
+    def test_invalid_scope_literal_keeps_content_filter_registered_and_blocking(self) -> None:
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+
+        handler: Final = InMemoryGuardrailHandler()
+        callback_lists: Final = _all_callback_lists()
+        callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+        guardrail: Final = _invalid_scope_content_filter_guardrail()
+
+        try:
+            result: Final = handler.initialize_guardrail(guardrail=guardrail, source="config")
+            assert result is not None
+            callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+            assert isinstance(callback, ContentFilterGuardrail)
+            assert callback in litellm.callbacks
+            assert callback.logging_only_scope is None
+            assert callback.event_hook == GuardrailEventHooks.pre_call
+            assert callback._check_blocked_words("pineapple") is not None
+        finally:
+            handler.delete_in_memory_guardrail(guardrail["guardrail_id"])
+            for callback_list, snapshot in zip(callback_lists, callback_snapshots):
+                callback_list[:] = snapshot
+
+    def test_invalid_scope_literal_is_rejected_for_strict_initialization_without_callback_leakage(self) -> None:
+        handler: Final = InMemoryGuardrailHandler()
+        callback_lists: Final = _all_callback_lists()
+        callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+
+        with pytest.raises(ValueError, match="logging_only_scope"):
+            handler.initialize_guardrail(
+                guardrail=_invalid_scope_content_filter_guardrail(),
+                source="config",
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert all(callback_list == snapshot for callback_list, snapshot in zip(callback_lists, callback_snapshots))
+
+    def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_tolerant_litellm_params(
+                {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                    "logging_only_scope": "Input",
+                    "default_on": "not-a-bool",
+                },
+                "invalid-scope-content-filter",
+            )
+
+
 @pytest.mark.asyncio
 async def test_update_guardrail_in_db_raises_when_row_missing():
     prisma_client = MagicMock()
@@ -949,6 +1468,41 @@ async def test_update_guardrail_in_db_raises_when_row_missing():
             ),
             prisma_client=prisma_client,
         )
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_persists_raw_sparse_params_verbatim():
+    """
+    After a rejected PATCH, the endpoint rolls back by writing the stored row's
+    raw litellm_params through update_guardrail_in_db. A raw dict must be
+    persisted exactly as stored — a legacy 4-key row stays a 4-key row — instead
+    of being round-tripped through LitellmParams.model_dump(), which materializes
+    every field default and rewrites a row the admin never wrote.
+    """
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(
+        return_value={"guardrail_id": "legacy-row", "guardrail_name": "legacy-one"}
+    )
+    legacy_params: Final = {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "guardrail_name": "legacy-one",
+        "blocked_words": [{"keyword": "x", "action": "BLOCK"}],
+    }
+
+    await GuardrailRegistry().update_guardrail_in_db(
+        guardrail_id="legacy-row",
+        guardrail=Guardrail(
+            guardrail_id="legacy-row",
+            guardrail_name="legacy-one",
+            litellm_params=legacy_params,
+            guardrail_info={},
+        ),
+        prisma_client=prisma_client,
+    )
+
+    persisted: Final = prisma_client.db.litellm_guardrailstable.update.call_args.kwargs["data"]
+    assert json.loads(persisted["litellm_params"]) == legacy_params
 
 
 def test_reinitialize_guardrail_restores_previous_on_failure():
@@ -1086,3 +1640,261 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def test_configure_callback_scoping_copies_stream_scope_when_constructor_omits_it():
+    from litellm.proxy.guardrails.guardrail_registry import _configure_callback_scoping
+
+    class _CtorWithoutStreamScope(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(
+                guardrail_name="scoped",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+            )
+
+    instance = _CtorWithoutStreamScope()
+    params = LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="streaming")
+    _configure_callback_scoping(instance, "scoped", params)
+
+    assert instance.stream_scope_default == "streaming"
+    assert instance.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+    assert instance.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+
+def test_configure_callback_scoping_tolerates_a_custom_logger_callback():
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.guardrails.guardrail_registry import _configure_callback_scoping
+
+    callback: Final = CustomLogger()
+    _configure_callback_scoping(callback, "logger-backed", LitellmParams(guardrail="custom", mode="pre_call"))  # pyright: ignore[reportArgumentType]  # module-path guardrails may be plain CustomLogger
+    assert "stream_scope_by_hook" not in vars(callback)
+
+
+_ENCRYPTED_PREFIX = "litellm_enc::"
+
+
+class _Row(dict[str, object]):
+    def __getattr__(self, name: str) -> object:
+        return self[name]
+
+
+def _stored_params(create_or_update_mock: AsyncMock) -> dict[str, object]:
+    import json
+
+    return json.loads(create_or_update_mock.call_args.kwargs["data"]["litellm_params"])
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_to_db_encrypts_sensitive_params_at_rest(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.create = AsyncMock(return_value=_Row(guardrail_id="g-1"))
+
+    await GuardrailRegistry().add_guardrail_to_db(
+        guardrail=Guardrail(
+            guardrail_name="vendor",
+            litellm_params=LitellmParams(
+                guardrail="generic_guardrail_api",
+                mode="pre_call",
+                api_key="vendor-secret-key",
+                api_base="http://vendor.example",
+                aws_secret_access_key="aws-secret",
+                custom_headers={"Authorization": "Bearer header-secret", "x-tenant": "t1"},
+            ),
+        ),
+        prisma_client=prisma_client,
+    )
+
+    stored = _stored_params(prisma_client.db.litellm_guardrailstable.create)
+    for leaked in ("vendor-secret-key", "aws-secret", "header-secret"):
+        assert leaked not in str(stored)
+    assert stored["api_key"].startswith(_ENCRYPTED_PREFIX)
+    assert stored["aws_secret_access_key"].startswith(_ENCRYPTED_PREFIX)
+    assert stored["custom_headers"]["Authorization"].startswith(_ENCRYPTED_PREFIX)
+    assert stored["custom_headers"]["x-tenant"] == "t1"
+    assert stored["guardrail"] == "generic_guardrail_api"
+    assert stored["mode"] == "pre_call"
+    assert stored["api_base"] == "http://vendor.example"
+
+
+@pytest.mark.asyncio
+async def test_get_all_guardrails_from_db_decrypts_new_rows_and_reads_legacy_plaintext(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import encrypt_guardrail_litellm_params
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    encrypted_row = _Row(
+        guardrail_id="g-new",
+        guardrail_name="new",
+        litellm_params=encrypt_guardrail_litellm_params(
+            {"guardrail": "generic_guardrail_api", "mode": "pre_call", "api_key": "new-key"}
+        ),
+    )
+    legacy_row = _Row(
+        guardrail_id="g-legacy",
+        guardrail_name="legacy",
+        litellm_params={"guardrail": "generic_guardrail_api", "mode": "pre_call", "api_key": "legacy-key"},
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[encrypted_row, legacy_row])
+
+    guardrails = await GuardrailRegistry.get_all_guardrails_from_db(prisma_client=prisma_client)
+
+    assert [g["litellm_params"]["api_key"] for g in guardrails] == ["new-key", "legacy-key"]
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_encrypts_and_returns_decrypted_row(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    prisma_client = MagicMock()
+
+    async def _update(where, data):
+        import json
+
+        return _Row(
+            guardrail_id=where["guardrail_id"],
+            guardrail_name="vendor",
+            litellm_params=json.loads(data["litellm_params"]),
+        )
+
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(side_effect=_update)
+
+    result = await GuardrailRegistry().update_guardrail_in_db(
+        guardrail_id="g-1",
+        guardrail=Guardrail(
+            guardrail_name="vendor",
+            litellm_params={"guardrail": "generic_guardrail_api", "mode": "pre_call", "api_key": "rotated-key"},
+        ),
+        prisma_client=prisma_client,
+    )
+
+    assert _stored_params(prisma_client.db.litellm_guardrailstable.update)["api_key"].startswith(_ENCRYPTED_PREFIX)
+    assert result["litellm_params"]["api_key"] == "rotated-key"
+
+
+def test_encrypt_guardrail_litellm_params_does_not_double_encrypt(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    params = {
+        "api_key": "k",
+        "default_on": True,
+        "auth_token": None,
+        "extra_headers": [{"x-api-key": "list-secret", "x-tenant": "t1"}],
+    }
+    encrypted = encrypt_guardrail_litellm_params(params)
+
+    assert encrypted["extra_headers"][0]["x-api-key"].startswith(_ENCRYPTED_PREFIX)
+    assert encrypted["extra_headers"][0]["x-tenant"] == "t1"
+    assert encrypt_guardrail_litellm_params(encrypted) == encrypted
+    assert decrypt_guardrail_litellm_params(encrypted) == params
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_master_key_reencrypts_under_the_new_key(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master")
+    stored = encrypt_guardrail_litellm_params({"guardrail": "bedrock", "mode": "pre_call", "api_key": "vendor-key"})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[_Row(guardrail_id="g-1", updated_at="2026-09-28T00:00:00Z", litellm_params=stored)]
+    )
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
+
+    rows_updated = await GuardrailRegistry.rotate_guardrail_params_master_key(
+        prisma_client=prisma_client, new_master_key="sk-new-master"
+    )
+
+    rotated = _stored_params(prisma_client.db.litellm_guardrailstable.update_many)
+    assert rows_updated == 1
+    assert prisma_client.db.litellm_guardrailstable.update_many.call_args.kwargs["where"] == {
+        "guardrail_id": "g-1",
+        "updated_at": "2026-09-28T00:00:00Z",
+    }
+    assert rotated["api_key"] != stored["api_key"]
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master")
+    assert decrypt_guardrail_litellm_params(rotated)["api_key"] == "vendor-key"
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_keeps_salt_key_encryption_when_salt_key_is_set(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    stored = encrypt_guardrail_litellm_params({"guardrail": "bedrock", "api_key": "vendor-key"})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[_Row(guardrail_id="g-1", updated_at="t1", litellm_params=stored)]
+    )
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
+
+    await GuardrailRegistry.rotate_guardrail_params_master_key(prisma_client=prisma_client, new_master_key="sk-new")
+
+    rotated = _stored_params(prisma_client.db.litellm_guardrailstable.update_many)
+    assert decrypt_guardrail_litellm_params(rotated)["api_key"] == "vendor-key"
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_retries_a_row_edited_during_rotation(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master")
+    snapshot = _Row(
+        guardrail_id="g-1", updated_at="t1", litellm_params=encrypt_guardrail_litellm_params({"api_key": "old-key"})
+    )
+    edited = _Row(
+        guardrail_id="g-1", updated_at="t2", litellm_params=encrypt_guardrail_litellm_params({"api_key": "edited-key"})
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[snapshot])
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=edited)
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(side_effect=[0, 1])
+
+    rows_updated = await GuardrailRegistry.rotate_guardrail_params_master_key(
+        prisma_client=prisma_client, new_master_key="sk-new-master"
+    )
+
+    last_call = prisma_client.db.litellm_guardrailstable.update_many.call_args
+    assert rows_updated == 1
+    assert last_call.kwargs["where"] == {"guardrail_id": "g-1", "updated_at": "t2"}
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master")
+    assert decrypt_guardrail_litellm_params(_stored_params(prisma_client.db.litellm_guardrailstable.update_many)) == {
+        "api_key": "edited-key"
+    }
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(monkeypatch):
+    from litellm.constants import GUARDRAIL_ROTATION_ATTEMPTS
+    from litellm.proxy.guardrails.guardrail_registry import encrypt_guardrail_litellm_params
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master")
+    row = _Row(guardrail_id="g-1", updated_at="t1", litellm_params=encrypt_guardrail_litellm_params({"api_key": "k"}))
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[row])
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=0)
+
+    rows_updated = await GuardrailRegistry.rotate_guardrail_params_master_key(
+        prisma_client=prisma_client, new_master_key="sk-new-master"
+    )
+
+    assert rows_updated == 0
+    assert prisma_client.db.litellm_guardrailstable.update_many.await_count == GUARDRAIL_ROTATION_ATTEMPTS
+    assert prisma_client.db.litellm_guardrailstable.find_unique.await_count == GUARDRAIL_ROTATION_ATTEMPTS - 1

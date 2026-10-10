@@ -10,8 +10,10 @@ from typing import Final
 
 import jsonschema
 import pytest
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
@@ -43,6 +45,127 @@ def committed_schema() -> dict:
 @pytest.fixture(scope="module")
 def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
+
+
+class _CopilotEndpointRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    mode: str
+    max_input_tokens: int
+    max_output_tokens: int
+    max_tokens: int
+    supported_endpoints: tuple[str, ...]
+
+
+class _CopilotThinkingCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    supports_reasoning: bool | None = None
+    supports_adaptive_thinking: bool | None = None
+    supports_legacy_thinking: bool | None = None
+    thinking_always_on: bool | None = None
+
+
+def _copilot_endpoint_rows(path: Path) -> Mapping[str, _CopilotEndpointRow]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType(
+        {
+            key: _CopilotEndpointRow.model_validate(value)
+            for key, value in prices.items()
+            if key.startswith("github_copilot/") and isinstance(value, dict) and "supported_endpoints" in value
+        }
+    )
+
+
+def _thinking_capabilities(prices: Mapping[str, JsonValue], key: str) -> _CopilotThinkingCapabilities:
+    return _CopilotThinkingCapabilities.model_validate(prices[key])
+
+
+def _github_copilot_catalog_rows(path: Path) -> Mapping[str, JsonValue]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType({key: value for key, value in prices.items() if key.startswith("github_copilot/")})
+
+
+_THINKING_KEYS: Final[tuple[str, ...]] = (
+    "supports_reasoning",
+    "supports_adaptive_thinking",
+    "supports_legacy_thinking",
+    "thinking_always_on",
+)
+
+
+def _anthropic_counterpart(key: str) -> str:
+    return key.removeprefix("github_copilot/").removesuffix("-fast").replace(".", "-")
+
+
+@pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
+def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
+    assert rows, f"No GitHub Copilot endpoint rows found in {path}"
+    assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
+        key: (
+            "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
+            row.max_output_tokens,
+        )
+        for key, row in rows.items()
+    }
+
+
+def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
+    assert _github_copilot_catalog_rows(PRICES_PATH) == _github_copilot_catalog_rows(BACKUP_PRICES_PATH)
+
+
+def test_github_copilot_rows_resolve_through_get_model_info() -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
+    assert {
+        key: (litellm.get_model_info(key)["mode"], litellm.get_model_info(key)["max_input_tokens"]) for key in rows
+    } == {key: (row.mode, row.max_input_tokens) for key, row in rows.items()}
+
+
+def test_github_copilot_rows_keep_the_reasoning_flag_their_family_fallback_supplies() -> None:
+    reasoning_rows: Final = tuple(
+        key
+        for key in _copilot_endpoint_rows(PRICES_PATH)
+        if (match_capability_generalizations(key) or {}).get("supports_reasoning") is True
+    )
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    assert reasoning_rows
+    assert {key: _thinking_capabilities(prices, key).supports_reasoning for key in reasoning_rows} == dict.fromkeys(
+        reasoning_rows, True
+    )
+    assert {key: litellm.get_model_info(key).get("supports_reasoning") for key in reasoning_rows} == dict.fromkeys(
+        reasoning_rows, True
+    )
+    assert {
+        key: resolve_supported_reasoning_efforts(
+            litellm.get_model_info(key),
+            deployment_is_mapped=True,
+        )
+        != ()
+        for key in reasoning_rows
+    } == dict.fromkeys(reasoning_rows, True)
+
+
+def test_github_copilot_messages_claude_rows_keep_their_anthropic_thinking_capabilities() -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    claude_rows: Final = tuple(
+        key
+        for key, row in _copilot_endpoint_rows(PRICES_PATH).items()
+        if key.startswith("github_copilot/claude-") and "/v1/messages" in row.supported_endpoints
+    )
+    assert claude_rows
+    assert {key: _thinking_capabilities(prices, key) for key in claude_rows} == {
+        key: _thinking_capabilities(prices, _anthropic_counterpart(key)) for key in claude_rows
+    }
+    assert {
+        key: tuple(litellm.get_model_info(key).get(thinking_key) for thinking_key in _THINKING_KEYS)
+        for key in claude_rows
+    } == {
+        key: tuple(
+            litellm.get_model_info(_anthropic_counterpart(key)).get(thinking_key) for thinking_key in _THINKING_KEYS
+        )
+        for key in claude_rows
+    }
 
 
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):
@@ -230,6 +353,56 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
     )
+
+
+# Azure Foundry GPT-6.1 Sol announcement, 2026-09-29: https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-6-1-sol-in-microsoft-foundry-advanced-intelligence-optimized-for/4560811
+AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_charge_the_global_web_search_price(prices: dict, region: str):
+    global_search_cost = prices["azure/gpt-6.1-sol"]["search_context_cost_per_query"]
+    assert global_search_cost
+    assert prices[f"azure/{region}/gpt-6.1-sol"].get("search_context_cost_per_query") == global_search_cost
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_price_requests_at_the_regional_premium(region: str):
+    premium = AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM[region]
+    usage = {"prompt_tokens": 300_000, "completion_tokens": 1_000, "cache_read_input_tokens": 100_000}
+
+    def total_cost(model: str) -> float:
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model,
+            custom_llm_provider="azure",
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cache_read_input_tokens=usage["cache_read_input_tokens"],
+        )
+        return prompt_cost + completion_cost
+
+    global_cost = total_cost("azure/gpt-6.1-sol")
+    assert global_cost > 0
+    assert total_cost(f"azure/{region}/gpt-6.1-sol") == pytest.approx(global_cost * premium)
+
+
+# https://ai.google.dev/gemini-api/docs/models/deep-research-preview-04-2026
+@pytest.mark.parametrize("model", ["gemini/deep-research-preview-04-2026", "gemini/deep-research-max-preview-04-2026"])
+def test_gemini_deep_research_previews_accept_the_documented_input_window(prices: dict, model: str):
+    assert prices[model]["max_input_tokens"] == 1_048_576
+    assert prices[model]["max_output_tokens"] == 65_536
+
+
+# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
+    {"gemini-3.6-flash": "2026-11-19", "gemini-3.7-flash": "2027-01-28"}
+)
+
+
+@pytest.mark.parametrize("model", sorted(VERTEX_GEMINI_FLASH_RETIREMENT_DATES))
+@pytest.mark.parametrize("prefix", ["", "vertex_ai/"])
+def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: dict, model: str, prefix: str):
+    assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")

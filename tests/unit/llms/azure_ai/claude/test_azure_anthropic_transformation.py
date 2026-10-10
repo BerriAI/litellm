@@ -30,7 +30,7 @@ class TestAzureAnthropicConfig:
         api_key = "test-api-key"
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result = config.validate_environment(
@@ -59,7 +59,7 @@ class TestAzureAnthropicConfig:
         api_key = "test-api-key"
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result = config.validate_environment(
@@ -87,7 +87,7 @@ class TestAzureAnthropicConfig:
         api_key = "provided-api-key"
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "provided-api-key"}
             config.validate_environment(
@@ -113,7 +113,7 @@ class TestAzureAnthropicConfig:
         litellm_params = {"api_key": "test-api-key"}
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             with patch.object(config, "get_anthropic_headers", return_value={}):
@@ -139,7 +139,7 @@ class TestAzureAnthropicConfig:
         litellm_params = {"api_key": "test-api-key"}
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             with patch.object(config, "get_anthropic_headers", return_value={}):
@@ -163,7 +163,7 @@ class TestAzureAnthropicConfig:
         litellm_params = {"api_key": "test-api-key"}
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {
                 "api-key": "test-api-key",
@@ -255,7 +255,7 @@ class TestAzureAnthropicConfig:
         headers = {"api-key": "test-key"}
 
         with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-key"}
             result = config.transform_request(
@@ -484,4 +484,3 @@ def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_mo
         "role": "system",
         "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
     }
-

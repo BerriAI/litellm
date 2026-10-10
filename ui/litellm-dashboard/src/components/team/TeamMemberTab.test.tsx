@@ -578,7 +578,7 @@ describe("TeamMembersComponent", () => {
       POST.mockRejectedValue(new Error("Cannot reset your own spend. Ask a proxy admin."));
       renderEditableTab();
 
-      await user.click(screen.getByTestId("reset-member-spend"));
+      await user.click(within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"));
       const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
       await user.click(within(dialog).getByRole("button", { name: "Reset" }));
 
@@ -591,7 +591,7 @@ describe("TeamMembersComponent", () => {
       const user = userEvent.setup();
       renderEditableTab();
 
-      await user.click(screen.getByTestId("reset-member-spend"));
+      await user.click(within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"));
       const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
       await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
@@ -599,31 +599,47 @@ describe("TeamMembersComponent", () => {
       expect(POST).not.toHaveBeenCalled();
     });
 
-    it("only offers the reset on members that have current cycle spend", () => {
+    it("disables the reset with a reason on members that have no current cycle spend", async () => {
+      const user = userEvent.setup();
       renderEditableTab();
 
-      expect(
-        within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"),
-      ).toBeVisible();
-      expect(
-        within(screen.getByRole("row", { name: /user2@test\.com/ })).queryByTestId("reset-member-spend"),
-      ).not.toBeInTheDocument();
+      const resetButton = within(screen.getByRole("row", { name: /user2@test\.com/ })).getByTestId(
+        "reset-member-spend",
+      );
+      await user.hover(resetButton);
+      expect(await screen.findByText("No current cycle spend to reset")).toBeInTheDocument();
+
+      await user.click(resetButton);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("hides the reset on the caller's own row for a team admin, since the backend rejects it", () => {
+    it("disables the reset with a reason on the caller's own row for a team admin, since the backend rejects it", async () => {
+      const user = userEvent.setup();
       vi.mocked(useAuthorized).mockReturnValue({ userId: "user1@test.com", userRole: "Internal User" } as never);
       vi.mocked(isProxyAdminRole).mockReturnValue(false);
       renderEditableTab();
 
-      expect(screen.queryByTestId("reset-member-spend")).not.toBeInTheDocument();
+      const resetButton = within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId(
+        "reset-member-spend",
+      );
+      await user.hover(resetButton);
+      expect(await screen.findByText("Ask a proxy admin to reset your own spend")).toBeInTheDocument();
+
+      await user.click(resetButton);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("shows the reset on the caller's own row for a proxy admin", () => {
+    it("allows the reset on the caller's own row for a proxy admin", async () => {
+      const user = userEvent.setup();
       vi.mocked(useAuthorized).mockReturnValue({ userId: "user1@test.com", userRole: "Admin" } as never);
       vi.mocked(isProxyAdminRole).mockReturnValue(true);
       renderEditableTab();
 
-      expect(screen.getByTestId("reset-member-spend")).toBeVisible();
+      await user.click(within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"));
+
+      expect(await screen.findByRole("dialog", { name: "Reset Team Member Spend" })).toHaveTextContent(
+        "user1@test.com",
+      );
     });
   });
 

@@ -246,9 +246,9 @@ def _is_assistants(req):
 
 
 def _metadata_var_name(req):
-    from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+    from litellm.proxy.litellm_pre_call_utils import get_metadata_variable_name
 
-    return _get_metadata_variable_name(req)
+    return get_metadata_variable_name(req)
 
 
 def _vector_store_id_in_path(req):

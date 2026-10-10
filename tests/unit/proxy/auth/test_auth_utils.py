@@ -4,18 +4,22 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
-from typing import Optional
+from collections.abc import Callable
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
+    _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
     custom_auth_common_checks_warning,
+    get_customer_user_header_from_mapping,
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
@@ -30,6 +34,247 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
+from litellm.router import Router
+from litellm.types.utils import oauth_token_exchange_litellm_params
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+        "token_exchange_audience",
+    ],
+)
+def test_token_exchange_settings_in_request_body_are_rejected(field: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ) as error:
+        is_request_body_safe(
+            request_body={"model": "microsoft_365_copilot/chat", field: "attacker-chosen"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="microsoft_365_copilot/chat",
+            route="/v1/chat/completions",
+        )
+
+    assert field in str(error.value)
+
+
+def test_model_opt_in_cannot_allow_a_token_exchange_endpoint_in_a_request_body() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "microsoft_365_copilot/chat",
+                "litellm_params": {
+                    "model": "microsoft_365_copilot/chat",
+                    "configurable_clientside_auth_params": ["token_exchange_endpoint"],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
+        is_request_body_safe(
+            request_body={
+                "model": "microsoft_365_copilot/chat",
+                "token_exchange_endpoint": "https://identity.example.com/token",
+            },
+            general_settings={},
+            llm_router=router,
+            model="microsoft_365_copilot/chat",
+        )
+
+
+@pytest.mark.parametrize(
+    "param",
+    sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS | set(oauth_token_exchange_litellm_params)),
+)
+def test_every_server_owned_identity_param_is_refused_from_a_request_body(param: str):
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", param: "attacker-chosen"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
+        {"model": "claude-sonnet-5", "litellm_params": {"litellm_credential_name": "admin-wif"}},
+    ],
+    ids=["top_level", "nested_litellm_params"],
+)
+def test_a_request_body_cannot_pick_a_federated_identity_by_credential_name(monkeypatch, body: dict):
+    """Naming a federated credential moves the token exchange onto that credential's federation rule
+    and organization just as sending the fields inline does, so the ban on the inline form has to
+    cover the reference too."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-wif",
+                credential_values={
+                    "anthropic_federation_rule_id": "fdrl_admin",
+                    "anthropic_organization_id": "org-admin",
+                },
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="names a credential configured for workload identity federation or OAuth token exchange",
+    ):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+        )
+
+
+def test_a_request_body_may_still_name_a_credential_that_does_not_federate(monkeypatch):
+    """Only federation makes a credential a deployment decision. An ordinary named credential stays
+    usable from a request body, so the ban must read what the credential holds, not its presence."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="plain-key",
+                credential_values={"api_key": "sk-plain"},
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "litellm_credential_name": "plain-key"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+        )
+        is True
+    )
+
+
+@pytest.fixture
+def federated_credential(monkeypatch):
+    """A stored credential that federates, so a body naming it is the reference the ban targets."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-wif",
+                credential_values={
+                    "anthropic_federation_rule_id": "fdrl_admin",
+                    "anthropic_organization_id": "org-admin",
+                },
+                credential_info={"custom_llm_provider": "anthropic"},
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/model/new",
+        "/model/update",
+        "/model/delete",
+        "/model/f38d7ce5-7966-42f2-bd06-67ea74aeb76b/update",
+        "/health/test_connection",
+    ],
+)
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
+        {"model": "claude-sonnet-5", "litellm_params": {"litellm_credential_name": "admin-wif"}},
+    ],
+    ids=["top_level", "nested_litellm_params"],
+)
+def test_configuring_a_deployment_may_name_a_federated_credential(federated_credential, route: str, body: dict):
+    """Attaching a federated credential to a deployment is the decision the ban tells the caller to
+    make, and ModelManagementAuthChecks._reject_non_admin_wif_write is what judges it: it lets a
+    proxy admin through and refuses everyone else with a 403. Refusing the name here first would
+    leave no API or Admin UI path to configure federation at all."""
+    assert (
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        None,
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/model/info",
+        "/model/f38d7ce5-7966-42f2-bd06-67ea74aeb76b/update/extra",
+    ],
+)
+def test_a_call_still_cannot_pick_a_federated_identity_by_credential_name(federated_credential, route: str | None):
+    """The exemption covers the deployment-management routes and nothing that shares their prefix,
+    so a call still cannot move its token exchange onto a federated credential by naming it."""
+    with pytest.raises(
+        ValueError,
+        match="names a credential configured for workload identity federation or OAuth token exchange",
+    ):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "litellm_credential_name": "admin-wif"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("route", ["/model/new", "/model/f38d7ce5-7966-42f2-bd06-67ea74aeb76b/update"])
+def test_configuring_a_deployment_still_cannot_carry_federation_fields_inline(route: str):
+    """Only the credential reference is exempt. Federation fields typed straight into a body stay
+    refused everywhere, since a stored credential is the surface an admin has to go through."""
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5", "anthropic_federation_rule_id": "fdrl_attacker"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-5",
+            route=route,
+        )
 
 
 class TestCustomAuthCommonChecksWarning:
@@ -185,9 +430,7 @@ class TestGetKeyModelRpmLimit:
         """Should fall back to team metadata when key metadata exists but has no model_rpm_limit."""
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-123",
-            metadata={
-                "some_other_key": "value"
-            },  # Has metadata, but not model_rpm_limit
+            metadata={"some_other_key": "value"},  # Has metadata, but not model_rpm_limit
             team_metadata={"model_rpm_limit": {"gpt-4": 50}},
         )
         result = get_key_model_rpm_limit(user_api_key_dict)
@@ -269,9 +512,7 @@ class TestGetKeyModelTpmLimit:
         """Should fall back to team metadata when key metadata exists but has no model_tpm_limit."""
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-123",
-            metadata={
-                "some_other_key": "value"
-            },  # Has metadata, but not model_tpm_limit
+            metadata={"some_other_key": "value"},  # Has metadata, but not model_tpm_limit
             team_metadata={"model_tpm_limit": {"gpt-4": 5000}},
         )
         result = get_key_model_tpm_limit(user_api_key_dict)
@@ -382,9 +623,7 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
         request_body = {"user": "body-user"}
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers=headers
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers=headers)
         assert result == "header-customer"
 
     def test_should_fall_back_to_body_when_no_standard_header(self):
@@ -393,9 +632,7 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
         request_body = {"user": "body-user"}
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers=headers
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers=headers)
         assert result == "body-user"
 
 
@@ -437,8 +674,7 @@ def test_get_model_from_request_enforces_when_builtin_handler_dispatched():
     enforced. Same request path as above, but dispatched to a non-pass-through
     endpoint: the model must NOT be suppressed."""
 
-    def builtin_chat_completions():
-        ...
+    def builtin_chat_completions(): ...
 
     assert (
         get_model_from_request(
@@ -461,6 +697,30 @@ def test_get_model_from_request_no_request_extracts_model():
         )
         == "gpt-4o"
     )
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("laya", "english"), ("laya", "multilingual"), ("laya", "typed-decisions"),
+    ("bespoke", "nimble-latest"), ("bespoke", "bespokelabs/Bespoke-Nimble-9B"),
+])
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_oss_native_model_uses_the_classifier_permission_identity(provider: str, model: str, suffix: str) -> None:
+    assert get_model_from_request(
+        request_data={"model": model}, route=f"/{provider}/v1/systemone{suffix}"
+    ) == f"{provider}/{model}"
+
+
+@pytest.mark.parametrize("provider", ["laya", "bespoke"])
+@pytest.mark.parametrize("model", [None, "", "auto", "laya/english", "bespoke/nimble-latest", "unknown", ["english"], 7])
+def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(provider: str, model: object) -> None:
+    with pytest.raises(HTTPException) as denied:
+        get_model_from_request(request_data={"model": model}, route=f"/{provider}/v1/systemone")
+    assert denied.value.status_code == 400
+
+
+def test_laya_model_normalization_does_not_change_other_provider_routes() -> None:
+    assert get_model_from_request(request_data={"model": "jev-latest"}, route="/typesafe/v1/systemone") == "jev-latest"
+    assert get_model_from_request(request_data={}, route="/laya/health") is None
 
 
 def _cache_prediction_router():
@@ -512,7 +772,7 @@ def _cache_prediction_auth_app(
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, LitellmUserRoles, ProxyException
     from litellm.proxy.auth import auth_checks
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.management_endpoints import prompt_cache_prediction as endpoint
     from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 
@@ -535,7 +795,7 @@ def _cache_prediction_auth_app(
         )
         return token
 
-    monkeypatch.setattr(auth, "_user_api_key_auth_builder", authenticate)
+    monkeypatch.setattr(auth, "user_api_key_auth_builder", authenticate)
     monkeypatch.setattr(auth, "get_user_object", AsyncMock(return_value=user))
     team = LiteLLM_TeamTableCachedObj(team_id=team_id, models=token.team_models) if team_id else None
     monkeypatch.setattr(auth, "get_team_object", AsyncMock(return_value=team))
@@ -550,7 +810,7 @@ def _cache_prediction_auth_app(
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     logging = ProxyLogging(user_api_key_cache=DualCache())
-    logging.proxy_hook_mapping["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3(
+    logging.proxy_hook_mapping["parallel_request_limiter"] = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(dual_cache=DualCache())
     )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
@@ -991,9 +1251,7 @@ def test_get_model_from_request_extracts_unified_file_id_models():
         "litellm_proxy:application/octet-stream;unified_id,test-id;"
         "target_model_names,model-a,model-b;llm_output_file_id,file-provider-id"
     )
-    encoded_unified_file_id = (
-        base64.urlsafe_b64encode(raw_unified_file_id.encode()).decode().rstrip("=")
-    )
+    encoded_unified_file_id = base64.urlsafe_b64encode(raw_unified_file_id.encode()).decode().rstrip("=")
 
     assert get_model_from_request(
         request_data={"file_id": encoded_unified_file_id},
@@ -1053,9 +1311,7 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         model_id="veo-3.1-generate-001",
     )
     llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = (
-        "gcp/google/veo-3.1-generate-001"
-    )
+    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
 
     assert (
         get_model_from_request(
@@ -1065,9 +1321,7 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
-        "veo-3.1-generate-001"
-    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
 
 
 _BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
@@ -1098,9 +1352,7 @@ def _encode_managed_id(decoded: str) -> str:
     return base64.urlsafe_b64encode(decoded.encode()).decode().rstrip("=")
 
 
-_MANAGED_BATCH_ID = _encode_managed_id(
-    f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123"
-)
+_MANAGED_BATCH_ID = _encode_managed_id(f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123")
 _MANAGED_BATCH_OUTPUT_FILE_ID = _encode_managed_id(
     f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123;"
     "llm_output_file_id:provider-file-456"
@@ -1176,9 +1428,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         model_id="veo-3.1-generate-001",
     )
     llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = (
-        "gcp/google/veo-3.1-generate-001"
-    )
+    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
 
     assert (
         get_model_from_request(
@@ -1188,9 +1438,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
-        "veo-3.1-generate-001"
-    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
 
 
 def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
@@ -1328,8 +1576,8 @@ def test_abbreviate_api_key():
 
 def test_abbreviate_api_key_short_key_is_fully_masked():
     """Regression test for LIT-4355: for keys shorter than the enforced minimum,
-    showing the last 4 characters can reveal the entire key (sk-1234 -> sk-...1234)."""
-    assert abbreviate_api_key("sk-1234") == "sk-..."
+    showing the last 4 characters can reveal the entire key (sk-9876 -> sk-...1234)."""
+    assert abbreviate_api_key("sk-9876") == "sk-..."
     assert abbreviate_api_key("sk-test-1234") == "sk-..."
     assert abbreviate_api_key("") == "sk-..."
 
@@ -1337,9 +1585,7 @@ def test_abbreviate_api_key_short_key_is_fully_masked():
 def test_get_customer_user_header_returns_none_when_no_customer_role():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
     result = get_customer_user_header_from_mapping(mappings)
     assert result is None
 
@@ -1392,9 +1638,7 @@ def test_get_end_user_id_returns_id_from_user_header_mappings():
         ),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
     ):
-        result = get_end_user_id_from_request_body(
-            request_body={}, request_headers=headers
-        )
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
 
     assert result == "1234"
 
@@ -1420,9 +1664,7 @@ def test_get_end_user_id_returns_first_customer_header_when_multiple_mappings_ex
         ),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
     ):
-        result = get_end_user_id_from_request_body(
-            request_body={}, request_headers=headers
-        )
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
 
     assert result == "user-456"
 
@@ -1443,9 +1685,7 @@ def test_get_end_user_id_returns_none_when_no_customer_role_in_mappings():
         ),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
     ):
-        result = get_end_user_id_from_request_body(
-            request_body={}, request_headers=headers
-        )
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
 
     assert result is None
 
@@ -1463,9 +1703,7 @@ def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
         ),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
     ):
-        result = get_end_user_id_from_request_body(
-            request_body={}, request_headers=headers
-        )
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
 
     assert result == "user-legacy"
 
@@ -1609,9 +1847,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         }
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result == "alice@example.com"
 
@@ -1621,9 +1857,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         }
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result is None
 
@@ -1636,19 +1870,14 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         """
         import litellm
 
-        blob = (
-            '{"device_id":"d5abe9199ee7759a","account_uuid":"",'
-            '"session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
-        )
+        blob = '{"device_id":"d5abe9199ee7759a","account_uuid":"","session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
         request_body = {"user": blob}
 
         original = litellm.validate_end_user_id_in_db
         litellm.validate_end_user_id_in_db = False
         try:
             with patch("litellm.proxy.proxy_server.general_settings", {}):
-                result = get_end_user_id_from_request_body(
-                    request_body=request_body, request_headers={}
-                )
+                result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
         finally:
             litellm.validate_end_user_id_in_db = original
 
@@ -1659,8 +1888,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
         request_body = {
             "user": (
-                '{"device_id":"d5abe9199ee7759a","account_uuid":"",'
-                '"session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+                '{"device_id":"d5abe9199ee7759a","account_uuid":"","session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
             ),
         }
 
@@ -1668,9 +1896,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         litellm.validate_end_user_id_in_db = True
         try:
             with patch("litellm.proxy.proxy_server.general_settings", {}):
-                result = get_end_user_id_from_request_body(
-                    request_body=request_body, request_headers={}
-                )
+                result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
         finally:
             litellm.validate_end_user_id_in_db = original
 
@@ -1680,9 +1906,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         request_body = {"user": "alice@example.com"}
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result == "alice@example.com"
 
@@ -1694,9 +1918,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         request_body = {"user": codex_id}
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result == codex_id
 
@@ -1704,9 +1926,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         request_body = {"user": 12345}
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result == "12345"
 
@@ -1717,9 +1937,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         }
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result == "alice@example.com"
 
@@ -1729,9 +1947,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         }
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result is None
 
@@ -1741,9 +1957,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         }
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result is None
 
@@ -1751,9 +1965,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
         request_body = {"user": "   ", "safety_identifier": "alice@example.com"}
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
 
         assert result == "alice@example.com"
 
@@ -1772,16 +1984,12 @@ class TestGetEndUserIdDropsMalformedBodyValues:
             ),
             patch("litellm.proxy.proxy_server.general_settings", general_settings),
         ):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers=headers
-            )
+            result = get_end_user_id_from_request_body(request_body=request_body, request_headers=headers)
 
         assert result == "alice@example.com"
 
 
-def _make_deployment_dict(
-    model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None
-) -> dict:
+def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
     """Helper to build a minimal deployment dict as returned by router.get_model_list."""
     litellm_params: dict = {"model": model_name}
     if tpm is not None:
@@ -1801,9 +2009,7 @@ class TestDeploymentDefaultRpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1", rpm=200)
-        ]
+        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 200}
@@ -1815,9 +2021,7 @@ class TestDeploymentDefaultRpmLimit:
             metadata={"model_rpm_limit": {"model1": 10}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1", rpm=200)
-        ]
+        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 10}
@@ -1837,9 +2041,7 @@ class TestDeploymentDefaultRpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1", rpm=200)
-        ]
+        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict)
         assert result is None
@@ -1900,9 +2102,7 @@ class TestDeploymentDefaultTpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1", tpm=100)
-        ]
+        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 100}
@@ -1914,9 +2114,7 @@ class TestDeploymentDefaultTpmLimit:
             metadata={"model_tpm_limit": {"model1": 20}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1", tpm=100)
-        ]
+        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 20}
@@ -1936,9 +2134,7 @@ class TestDeploymentDefaultTpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
-            _make_deployment_dict("model1", tpm=100)
-        ]
+        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict)
         assert result is None
@@ -2089,7 +2285,7 @@ class TestCheckCompleteCredentialsBlocksSSRF:
             "litellm.proxy.auth.auth_utils.validate_url",
             side_effect=SSRFError(f"blocked: {blocked_url}"),
         ):
-            with pytest.raises(ValueError, match='is rejected by the SSRF guard') as exc_info:
+            with pytest.raises(ValueError, match="is rejected by the SSRF guard") as exc_info:
                 check_complete_credentials(
                     {
                         "model": "gpt-4",
@@ -2229,6 +2425,51 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "self-hosted.example.com:50051"
         assert "use_ssl" not in out
 
+    def test_clears_oauth_token_exchange_fields_for_other_provider_base_overrides(self):
+        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+        oauth_values: Final = {
+            "token_exchange_audience": "https://graph.microsoft.com",
+            "token_exchange_endpoint": "https://identity.example.com/token",
+            "token_exchange_profile": "jwt_bearer_obo",
+            "token_exchange_scope": "https://graph.microsoft.com/.default",
+            "client_id": "copilot-client",
+            "client_secret": "copilot-secret",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "model": "openai/gpt-4o",
+                "api_base": "https://admin.example.com/v1",
+                **oauth_values,
+            },
+            request_kwargs={"api_base": "https://caller.example.com/v1"},
+        )
+
+        assert all(field not in out for field in oauth_values)
+
+    def test_clears_oauth_token_exchange_fields_for_microsoft_365_copilot_base_overrides(self):
+        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+        oauth_values: Final = {
+            "token_exchange_audience": "https://graph.microsoft.com",
+            "token_exchange_endpoint": "https://identity.example.com/token",
+            "token_exchange_profile": "jwt_bearer_obo",
+            "token_exchange_scope": "https://graph.microsoft.com/.default",
+            "client_id": "copilot-client",
+            "client_secret": "copilot-secret",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "model": "microsoft_365_copilot/chat",
+                "api_base": "https://graph.microsoft.com/beta",
+                **oauth_values,
+            },
+            request_kwargs={"api_base": "https://caller.example.com/v1"},
+        )
+
+        assert out["api_base"] == "https://caller.example.com/v1"
+        assert all(field not in out for field in oauth_values)
+
     def test_caller_resupplied_value_overrides_admin_value_on_base_override(self):
         # When the caller redirects ``api_base`` and *also* supplies their
         # own value for one of the admin fields (e.g. ``organization``),
@@ -2256,6 +2497,67 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         )
         assert out["organization"] == "org-attacker"
         assert out["extra_body"] == {"attacker": "value"}
+
+    def test_per_user_oauth_credential_survives_base_override(self):
+        # Fail-closed: a caller-redirected api_base must not drop
+        # litellm_credential_name / github_copilot_auth_type off a per-user
+        # deployment, which would flip the call to shared mode and send the
+        # admin's Copilot token to the attacker's host. Keeping them is safe
+        # because per-user mode ignores the caller api_base anyway.
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+        from litellm.types.utils import CredentialItem
+
+        with patch.object(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-cred",
+                    credential_values={"github_copilot_auth_type": "per_user_oauth"},
+                    credential_info={},
+                )
+            ],
+        ):
+            out = get_dynamic_litellm_params(
+                litellm_params={
+                    "model": "github_copilot/gpt-4o",
+                    "litellm_credential_name": "copilot-cred",
+                    "github_copilot_auth_type": "per_user_oauth",
+                },
+                request_kwargs={"api_base": "https://attacker.example"},
+            )
+        assert out["litellm_credential_name"] == "copilot-cred"
+        assert out["github_copilot_auth_type"] == "per_user_oauth"
+        assert out["api_base"] == "https://attacker.example"
+
+    def test_shared_oauth_credential_name_is_cleared_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+        from litellm.types.utils import CredentialItem
+
+        with patch.object(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-cred",
+                    credential_values={"github_copilot_auth_type": "shared"},
+                    credential_info={},
+                )
+            ],
+        ):
+            out = get_dynamic_litellm_params(
+                litellm_params={
+                    "model": "github_copilot/gpt-4o",
+                    "litellm_credential_name": "copilot-cred",
+                    "github_copilot_auth_type": "shared",
+                },
+                request_kwargs={"api_base": "https://attacker.example"},
+            )
+        assert "github_copilot_auth_type" not in out
 
     def test_field_echo_does_not_preserve_admin_value(self):
         # Regression: a caller that echoes an admin-config field name with
@@ -2451,9 +2753,7 @@ class TestIsRequestBodySafeBlocksFallbackSmuggle:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    "fallbacks": [
-                        {"gpt-4": [{"model": "byok", "api_base": "https://my-byok.example"}]}
-                    ],
+                    "fallbacks": [{"gpt-4": [{"model": "byok", "api_base": "https://my-byok.example"}]}],
                 },
                 general_settings={"allow_client_side_credentials": True},
                 llm_router=None,
@@ -2473,9 +2773,7 @@ class TestIsRequestBodySafeBlocksFallbackSmuggle:
                 "always-fail": [
                     {
                         "model": "x",
-                        fallback_field: [
-                            {"x": [{"model": "deepseek-chat", "api_base": "http://attacker"}]}
-                        ],
+                        fallback_field: [{"x": [{"model": "deepseek-chat", "api_base": "http://attacker"}]}],
                     }
                 ]
             }
@@ -2645,7 +2943,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         ],
     )
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
-        with pytest.raises(ValueError, match='Rejected Request') as exc:
+        with pytest.raises(ValueError, match="Rejected Request") as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: "https://attacker.example"},
                 general_settings={},
@@ -2666,7 +2964,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         # on the blocklist into an SSRF / credential-exfil hole. Verify
         # that supplying an api_key (alongside the banned param) does NOT
         # bypass the gate — it can only be opened by an admin opt-in.
-        with pytest.raises(ValueError, match='Rejected Request') as exc:
+        with pytest.raises(ValueError, match="Rejected Request") as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2750,6 +3048,40 @@ class TestIsRequestBodySafeBlocksClaudePlatformWorkspaceOverride:
             )
             is True
         )
+
+
+class TestIsRequestBodySafeBlocksFireworksForwardUserId:
+    @pytest.mark.parametrize("value", [True, False])
+    @pytest.mark.parametrize(
+        "body_for",
+        [
+            pytest.param(lambda value: {"fireworks_forward_user_id": value}, id="root"),
+            pytest.param(lambda value: {"extra_body": {"fireworks_forward_user_id": value}}, id="extra_body"),
+            pytest.param(lambda value: {"metadata": {"fireworks_forward_user_id": value}}, id="metadata"),
+        ],
+    )
+    def test_fireworks_forward_user_id_in_request_body_is_rejected(
+        self, body_for: Callable[[bool], dict[str, object]], value: bool
+    ) -> None:
+        with pytest.raises(ValueError, match="fireworks_forward_user_id"):
+            is_request_body_safe(
+                request_body={"model": "fireworks-model", "user": "someone-else", **body_for(value)},
+                general_settings={},
+                llm_router=None,
+                model="fireworks-model",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_fireworks_forward_user_id(self) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "fireworks-model", "fireworks_forward_user_id": False},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="fireworks-model",
+            )
+            is True
+        )
+
 
 class TestIsRequestBodySafeBlocksRustOptIn:
     """``rust`` hands the whole call to the Rust core, which signs and sends
@@ -3115,11 +3447,7 @@ class TestIsRequestBodySafeNestedConfig:
         when nested."""
         with pytest.raises(ValueError, match="langfuse_host"):
             is_request_body_safe(
-                request_body={
-                    "litellm_embedding_config": {
-                        "langfuse_host": "https://attacker.example.com"
-                    }
-                },
+                request_body={"litellm_embedding_config": {"langfuse_host": "https://attacker.example.com"}},
                 general_settings={},
                 llm_router=None,
                 model="milvus-store",
@@ -3130,11 +3458,7 @@ class TestIsRequestBodySafeNestedConfig:
         keep the existing escape hatch — same UX as for root-level."""
         assert (
             is_request_body_safe(
-                request_body={
-                    "litellm_embedding_config": {
-                        "api_base": "https://my-azure.example.com"
-                    }
-                },
+                request_body={"litellm_embedding_config": {"api_base": "https://my-azure.example.com"}},
                 general_settings={"allow_client_side_credentials": True},
                 llm_router=None,
                 model="milvus-store",
@@ -3247,7 +3571,7 @@ class TestObservabilityCallbackBans:
         ],
     )
     def test_observability_field_in_request_body_root_is_rejected(self, field):
-        with pytest.raises(ValueError, match='Rejected Request') as exc:
+        with pytest.raises(ValueError, match="Rejected Request") as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: "attacker-value"},
                 general_settings={},
@@ -3271,13 +3595,11 @@ class TestObservabilityCallbackBans:
             "user_api_key_auth_metadata",
         ],
     )
-    def test_observability_field_in_metadata_dict_is_rejected(
-        self, metadata_key, field
-    ):
+    def test_observability_field_in_metadata_dict_is_rejected(self, metadata_key, field):
         # Verifies the metadata walk: a value smuggled inside ``metadata``
         # or ``litellm_metadata`` is just as dangerous as the same field
         # at the body root, and must hit the same gate.
-        with pytest.raises(ValueError, match='Rejected Request') as exc:
+        with pytest.raises(ValueError, match="Rejected Request") as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -3312,13 +3634,11 @@ class TestObservabilityCallbackBans:
         )
 
     def test_observability_field_in_litellm_params_metadata_is_rejected(self):
-        with pytest.raises(ValueError, match='Rejected Request: turn_off_message_logging is not allowed') as exc:
+        with pytest.raises(ValueError, match="Rejected Request: turn_off_message_logging is not allowed") as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    "litellm_params": {
-                        "metadata": {"turn_off_message_logging": False}
-                    },
+                    "litellm_params": {"metadata": {"turn_off_message_logging": False}},
                 },
                 general_settings={},
                 llm_router=None,
@@ -3330,22 +3650,18 @@ class TestObservabilityCallbackBans:
         "metadata_key",
         ["metadata", "litellm_metadata"],
     )
-    def test_observability_field_in_json_string_metadata_is_rejected(
-        self, metadata_key
-    ):
+    def test_observability_field_in_json_string_metadata_is_rejected(self, metadata_key):
         # Multipart/form-data and ``extra_body`` callers send metadata as a
         # JSON-encoded string. The bouncer parses it before applying the
         # banned-params check so the JSON-string path can't smuggle past
         # the ``isinstance(dict)`` guard.
         import json
 
-        with pytest.raises(ValueError, match='Rejected Request: langfuse_host is not allowed in request') as exc:
+        with pytest.raises(ValueError, match="Rejected Request: langfuse_host is not allowed in request") as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
-                    metadata_key: json.dumps(
-                        {"langfuse_host": "https://attacker.example"}
-                    ),
+                    metadata_key: json.dumps({"langfuse_host": "https://attacker.example"}),
                 },
                 general_settings={},
                 llm_router=None,
@@ -3412,7 +3728,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
         lambda model, param, request_body_value, llm_router: param == "api_base",
     )
 
-    with pytest.raises(ValueError, match='Rejected Request: langfuse_host is not allowed in request') as exc:
+    with pytest.raises(ValueError, match="Rejected Request: langfuse_host is not allowed in request") as exc:
         is_request_body_safe(
             request_body={
                 "model": "gpt-4",
@@ -3452,8 +3768,7 @@ def test_observability_ban_covers_canonical_supported_callback_params():
         )
     for param in _request_blocked_callback_params:
         assert param in banned, (
-            f"{param} is in _request_blocked_callback_params but is not banned "
-            "at the proxy request-body boundary."
+            f"{param} is in _request_blocked_callback_params but is not banned at the proxy request-body boundary."
         )
 
 
@@ -3483,7 +3798,7 @@ class TestPricingInjectionBlocked:
         ],
     )
     def test_pricing_field_rejected_by_default(self, field, value):
-        with pytest.raises(ValueError, match='Rejected Request') as exc:
+        with pytest.raises(ValueError, match="Rejected Request") as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: value},
                 general_settings={},
@@ -3551,9 +3866,7 @@ class TestGetRequestRouteTemplate:
 
     def test_exception_returns_none(self):
         req = MagicMock()
-        type(req).scope = property(
-            lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
-        )
+        type(req).scope = property(lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
         assert get_request_route_template(req) is None
 
 
@@ -3606,9 +3919,7 @@ class TestGetKeyTagRateLimits:
     """Tests for get_key_tag_rpm_limit."""
 
     def test_reads_tag_rpm_limit_from_metadata(self):
-        key = UserAPIKeyAuth(
-            api_key="sk-123", metadata={"tag_rpm_limit": {"cell-1": 5}}
-        )
+        key = UserAPIKeyAuth(api_key="sk-123", metadata={"tag_rpm_limit": {"cell-1": 5}})
         assert get_key_tag_rpm_limit(key) == {"cell-1": 5}
 
     def test_returns_none_when_unset(self):
@@ -3671,12 +3982,8 @@ class TestIsRequestBodySafeChecksBracketNotationMetadata:
     def test_bracket_notation_matches_json_encoding_for_deeper_nesting(self):
         """A value nested below the first level is treated the same either way:
         the check descends one level into metadata, for both encodings."""
-        deep_bracket = {
-            "litellm_metadata[spend_logs_metadata][langfuse_host]": "https://example.invalid"
-        }
-        deep_json = {
-            "litellm_metadata": {"spend_logs_metadata": {"langfuse_host": "https://example.invalid"}}
-        }
+        deep_bracket = {"litellm_metadata[spend_logs_metadata][langfuse_host]": "https://example.invalid"}
+        deep_json = {"litellm_metadata": {"spend_logs_metadata": {"langfuse_host": "https://example.invalid"}}}
         kwargs = dict(general_settings={}, llm_router=None, model="gpt-4")
         assert is_request_body_safe(request_body=deep_bracket, **kwargs) is True
         assert is_request_body_safe(request_body=deep_json, **kwargs) is True
@@ -3725,9 +4032,7 @@ class TestHasUserSetupSso:
     def test_true_for_saml_metadata_url(self, monkeypatch):
         from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
-        monkeypatch.setenv(
-            "SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml"
-        )
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml")
         assert has_user_setup_sso() is True
 
     def test_true_for_saml_metadata_xml(self, monkeypatch):
@@ -3942,3 +4247,348 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+
+@pytest.mark.parametrize(
+    "allowed_param, input_value, should_return_true",
+    [
+        ("api_base", {"api_base": "http://dummy.com"}, True),
+        (
+            {"api_base": "https://api.openai.com/v1"},
+            {"api_base": "https://api.openai.com/v1"},
+            True,
+        ),  # should return True
+        (
+            {"api_base": "https://api.openai.com/v1"},
+            {"api_base": "https://api.anthropic.com/v1"},
+            False,
+        ),  # should return False
+        (
+            {"api_base": "^https://litellm.*direct\.fireworks\.ai/v1$"},
+            {"api_base": "https://litellm-dev.direct.fireworks.ai/v1"},
+            True,
+        ),
+        (
+            {"api_base": "^https://litellm.*novice\.fireworks\.ai/v1$"},
+            {"api_base": "https://litellm-dev.direct.fireworks.ai/v1"},
+            False,
+        ),
+    ],
+)
+def test_configurable_clientside_parameters(
+    allowed_param, input_value, should_return_true
+):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dummy-model",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "dummy-key",
+                    "configurable_clientside_auth_params": [allowed_param],
+                },
+            }
+        ]
+    )
+    resp = _allow_model_level_clientside_configurable_parameters(
+        model="dummy-model",
+        param="api_base",
+        request_body_value=input_value["api_base"],
+        llm_router=router,
+    )
+    print(resp)
+    assert resp == should_return_true
+
+
+def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixed_roles():
+    mappings: Final[list[dict[str, str]]] = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+    assert get_customer_user_header_from_mapping(mappings) == ["x-openwebui-user-email"]
+
+
+def test_get_customer_user_header_from_mapping_no_customer_returns_none():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result is None
+
+    # Also support a single mapping dict
+    single_mapping = {
+        "header_name": "X-Only-Internal",
+        "litellm_user_role": "internal_user",
+    }
+    result = get_customer_user_header_from_mapping(single_mapping)
+    assert result is None
+
+
+def test_get_internal_user_header_from_mapping_returns_internal_header():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert result == "X-OpenWebUI-User-Id"
+
+
+def test_get_internal_user_header_from_mapping_no_internal_returns_none():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
+    ]
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert result is None
+
+    # Also support single mapping dict
+    single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
+        single_mapping
+    )
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "request_data, expected_model",
+    [
+        (
+            {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
+            ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
+        ),
+        ({"target_model_names": "gpt-3.5-turbo"}, ["gpt-3.5-turbo"]),
+        (
+            {"model": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
+            ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
+        ),
+        ({"model": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
+    ],
+)
+def test_get_model_from_request(request_data, expected_model):
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+
+    request_data = {
+        "target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"
+    }
+    route = "/openai/deployments/gpt-3.5-turbo"
+    model = get_model_from_request(request_data, "/v1/files")
+    assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
+
+
+@pytest.mark.parametrize(
+    "request_data, route, expected_model",
+    [
+        # Vertex AI passthrough URL patterns
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+            "gemini-1.5-pro",
+        ),
+        (
+            {},
+            "/vertex_ai/v1beta1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.0-pro:streamGenerateContent",
+            "gemini-1.0-pro",
+        ),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/asia-southeast1/publishers/google/models/gemini-2.0-flash:generateContent",
+            "gemini-2.0-flash",
+        ),
+        # Model without method suffix (no colon) - should still extract
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro",
+            "gemini-pro",  # Should match even without colon
+        ),
+        # Request body model takes precedence over URL
+        (
+            {"model": "gpt-4o"},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+            "gpt-4o",
+        ),
+        # Non-vertex route should not extract from vertex pattern
+        ({}, "/openai/v1/chat/completions", None),
+        # Azure deployment pattern should still work
+        ({}, "/openai/deployments/my-deployment/chat/completions", "my-deployment"),
+        # Custom model_name with slashes (e.g., gcp/google/gemini-2.5-flash)
+        # This is the NVIDIA P0 bug fix - regex should capture full model name including slashes
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent",
+            "gcp/google/gemini-2.5-flash",
+        ),
+        # Another custom model_name with slashes
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:generateContent",
+            "gcp/google/gemini-3-flash-preview",
+        ),
+        # Model name with single slash
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/custom/model:generateContent",
+            "custom/model",
+        ),
+    ],
+)
+def test_get_model_from_request_vertex_ai_passthrough(
+    request_data, route, expected_model
+):
+    """Test that get_model_from_request correctly extracts Vertex AI model from URL"""
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+
+    model = get_model_from_request(request_data, route)
+    assert model == expected_model
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["github_copilot_auth_type", "user_provider_credentials", "github_copilot_user_session"],
+)
+def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> None:
+    """The per-user Copilot mode is decided by the stored credential's values and the caller's
+    connection by proxy-injected secret_fields; a body-supplied value could only spoof either."""
+    with pytest.raises(ValueError, match="Rejected Request") as error:
+        is_request_body_safe(
+            request_body={"model": "github_copilot/gpt-4o", field: "attacker-chosen"},
+            general_settings={},
+            llm_router=None,
+            model="github_copilot/gpt-4o",
+        )
+
+    assert field in str(error.value)
+
+
+def test_get_end_user_id_from_request_body_always_returns_str():
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    request_body: Final = {"user": 123}
+    end_user_id: Final = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
+    assert end_user_id == "123"
+    assert isinstance(end_user_id, str)
+
+
+@pytest.mark.parametrize(
+    "headers, general_settings_config, request_body, expected_user_id",
+    [
+        (
+            {"X-User-ID": "header-user-123"},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "header-user-123",
+        ),
+        (
+            {},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"X-User-ID": "header-user-123"},
+            {},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"X-Custom-User": "header-only-user"},
+            {"user_header_name": "X-Custom-User"},
+            {"model": "gpt-4"},
+            "header-only-user",
+        ),
+        (
+            {"X-User-ID": ""},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"x-user-id": "lowercase-header-user"},
+            {"user_header_name": "x-user-id"},
+            {"user": "body-user-456"},
+            "lowercase-header-user",
+        ),
+        (
+            {"X-User-ID": "header-user-123"},
+            {"user_header_name": None},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"X-User-ID": "header-user-123"},
+            {"user_header_name": 123},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {},
+            {"user_header_name": "X-User-ID"},
+            {"litellm_metadata": {"user": "litellm-user-789"}},
+            "litellm-user-789",
+        ),
+        (
+            {},
+            {"user_header_name": "X-User-ID"},
+            {"metadata": {"user_id": "metadata-user-999"}},
+            "metadata-user-999",
+        ),
+        (
+            {"X-User-ID": "header-priority"},
+            {"user_header_name": "X-User-ID"},
+            {
+                "user": "body-user",
+                "litellm_metadata": {"user": "litellm-user"},
+                "metadata": {"user_id": "metadata-user"},
+            },
+            "header-priority",
+        ),
+        (
+            {"x-user-id": "lowercase-header-user"},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "lowercase-header-user",
+        ),
+    ],
+)
+def test_get_end_user_id_from_request_body_with_user_header_name(
+    headers, general_settings_config, request_body, expected_user_id
+):
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = headers
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings_config):
+        end_user_id: Final = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
+        assert end_user_id == expected_user_id
+
+
+def test_get_end_user_id_from_request_body_no_user_found():
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {"X-Other-Header": "some-value"}
+
+    general_settings_config: Final = {"user_header_name": "X-User-ID"}
+
+    request_body: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings_config):
+        end_user_id: Final = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
+        assert end_user_id is None
+
+
+def test_get_end_user_id_from_request_body_backwards_compatibility():
+    cases: Final = (
+        ({"user": "test-user-123"}, "test-user-123"),
+        ({"litellm_metadata": {"user": "litellm-user-456"}}, "litellm-user-456"),
+        ({"metadata": {"user_id": "metadata-user-789"}}, "metadata-user-789"),
+        ({"model": "gpt-4"}, None),
+    )
+    for request_body, expected_end_user_id in cases:
+        assert get_end_user_id_from_request_body(request_body) == expected_end_user_id

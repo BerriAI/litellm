@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm import LlmProviders
 from litellm.llms.gigachat.embedding.transformation import (
@@ -340,3 +341,63 @@ class TestGetErrorClass:
         assert isinstance(error, GigaChatEmbeddingError)
         assert error.status_code == 400
         assert error.message == "embedding failed"
+
+
+def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
+    return GigaChatEmbeddingConfig().transform_embedding_response(
+        model="Embeddings",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=MagicMock(),
+        api_key="test-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+
+def test_transform_embedding_response_moves_per_item_usage_into_the_response_usage():
+    response = _transform(
+        httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "Embeddings",
+                "data": [
+                    {"object": "embedding", "index": 0, "embedding": [0.1, 2], "usage": {"prompt_tokens": 3}},
+                    {"object": "embedding", "index": 1, "embedding": [0.5], "usage": {"prompt_tokens": 4}},
+                ],
+                "unknown": "ignored",
+            },
+        )
+    )
+
+    assert response.model_dump() == {
+        "model": "Embeddings",
+        "data": [
+            {"object": "embedding", "index": 0, "embedding": [0.1, 2]},
+            {"object": "embedding", "index": 1, "embedding": [0.5]},
+        ],
+        "object": "list",
+        "usage": {
+            "completion_tokens": 0,
+            "prompt_tokens": 7,
+            "total_tokens": 7,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+@pytest.mark.parametrize("body", [b"null", b"[]", b"7"])
+def test_transform_embedding_response_body_that_is_not_an_object_raises_type_error(body: bytes):
+    with pytest.raises(TypeError):
+        _transform(httpx.Response(200, content=body))
+
+
+def test_transform_embedding_response_invalid_envelope_field_is_reported_by_name():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(httpx.Response(200, json={"data": [], "model": 5}))
+
+    assert exc_info.value.title == "EmbeddingResponse"
+    assert [error["loc"] for error in exc_info.value.errors()] == [("model",)]

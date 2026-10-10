@@ -8,9 +8,11 @@ API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/reference/res
 from __future__ import annotations
 
 import types
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -21,6 +23,8 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class GigaChatEmbeddingError(BaseLLMException):
@@ -165,7 +169,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "total_tokens": total_tokens,
         }
 
-        return EmbeddingResponse(**response_json)
+        return EmbeddingResponse.model_validate(_JSON_OBJECT.validate_python(response_json))
 
     def validate_environment(
         self,

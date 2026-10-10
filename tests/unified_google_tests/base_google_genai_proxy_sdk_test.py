@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from tests._master_key import MASTER_KEY
+
 try:
     from google import genai
     from google.genai import types
@@ -14,7 +16,6 @@ try:
 except ImportError:
     GOOGLE_GENAI_SDK_AVAILABLE = False
 
-MASTER_KEY = "sk-unified-google-tests-4f9b2c7d8e1a"
 PROMPT = "Reply with only the single word: pong"
 
 

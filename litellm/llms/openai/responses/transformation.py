@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -13,7 +13,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
@@ -24,16 +24,20 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
+from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
+_RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -46,9 +50,10 @@ _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
+_PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 
 
-class _ReasoningSupportEntry(BaseModel):
+class _ReasoningSupportEntry(LiteLLMBaseModel):
     litellm_provider: str | None = None
     supports_reasoning: bool | None = None
 
@@ -152,10 +157,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _supports_reasoning_param(model: str) -> bool:
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
         try:
-            info: Final = _get_model_info_helper(
+            info: Final = get_model_info_helper(
                 model=model.split("/")[-1], custom_llm_provider=LlmProviders.OPENAI.value
             )
         except Exception:
@@ -317,7 +322,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
         litellm_params: GenericLiteLLMParams,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
-        validated_input: Final = self._validate_input_param(input)
+        validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
             model=model, input=validated_input, tools=tools
         )
@@ -389,6 +394,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     filter_value_from_dict(cast(dict, tool), "cache_control")
 
         return input, tools
+
+    def _drop_bridge_minted_reasoning_items(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+        if self.custom_llm_provider not in _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING or not isinstance(input, list):
+            return input
+        replayable_items: Final = [item for item in input if not is_litellm_minted_reasoning_item(item)]
+        return cast("ResponseInputParam", replayable_items)  # cast-ok: the surviving items keep their shape
 
     def _drop_foreign_tool_call_item_ids(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         if self.custom_llm_provider not in _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS or not isinstance(input, list):
@@ -538,7 +549,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     )
 
                 # Create ResponseReasoningItem object from the item data
-                reasoning_item: Final = ResponseReasoningItem(**item_data)
+                reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
 
                 # Convert back to dict with exclude_none=True to exclude None fields
                 dict_reasoning_item: Final = reasoning_item.model_dump(exclude_none=True)
@@ -567,8 +578,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
-            raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
+            raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers: Final = dict(raw_response.headers)
@@ -582,8 +593,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
@@ -591,7 +602,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
         headers.setdefault("Content-Type", "application/json")
         workload_identity_config: Final = (
-            resolve_openai_workload_identity_config(api_key=api_key, api_base=litellm_params.api_base)
+            resolve_openai_workload_identity_config(
+                api_key=api_key,
+                api_base=litellm_params.api_base,
+                litellm_params=litellm_params.model_dump(include=set(OPENAI_WIF_KWARGS_KEYS)),
+            )
             if self.custom_llm_provider is LlmProviders.OPENAI
             else None
         )
@@ -826,8 +841,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_response_headers)
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
 
         return response
 
@@ -908,8 +923,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
 
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
 
         return response
 
@@ -963,8 +978,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
-            raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
+            raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers: Final = dict(raw_response.headers)
@@ -978,7 +993,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
 
         return response

@@ -5,7 +5,7 @@ Functions to create audit logs for LiteLLM Proxy
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Final, TypeVar, cast
+from typing import Final, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -124,6 +124,16 @@ def _build_audit_log_payload(
     )
 
 
+def _audit_log_task_done_callback(task: asyncio.Task) -> None:
+    """Log exceptions from audit log callback tasks so they don't slip through silently."""
+    try:
+        exc: Final = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
+
+
 _T: Final = TypeVar("_T")
 
 
@@ -134,53 +144,28 @@ class AuditTaskRegistry:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
 
     def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
-        task_object: Final[asyncio.Task[object]] = cast(asyncio.Task[object], task)  # cast-ok: task covariance
-        if task_object.done() or task_object in self._pending_tasks:
+        if task.done() or task in self._pending_tasks:
             return task
-        self._pending_tasks.add(task_object)
-        task_object.add_done_callback(self._on_task_done)
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._on_task_done)
         return task
 
     def _on_task_done(self, task: asyncio.Task[object]) -> None:
         self._pending_tasks.discard(task)
-        try:
-            exc: Final = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is not None:
-            verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
+        _audit_log_task_done_callback(task)
 
     async def drain(self, timeout: float = 5.0) -> None:
-        deadline: Final = asyncio.get_running_loop().time() + timeout
+        loop: Final = asyncio.get_running_loop()
+        deadline: Final = loop.time() + timeout
         while self._pending_tasks:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                timed_out_count = len(self._pending_tasks)
-                self._pending_tasks.clear()
-                verbose_proxy_logger.warning("Timed out draining %d audit tasks on shutdown", timed_out_count)
-                break
-            tasks = tuple(self._pending_tasks)
-            try:
-                _, pending = await asyncio.wait(tasks, timeout=remaining)
-                if pending:
-                    for task in pending:
-                        self._pending_tasks.discard(task)
-                    verbose_proxy_logger.warning("Timed out draining %d audit tasks on shutdown", len(pending))
-                    break
-            except Exception as e:
-                verbose_proxy_logger.warning("Error draining audit tasks on shutdown: %s", e)
-                break
-
-    def clear(self) -> None:
-        self._pending_tasks.clear()
+            _, pending = await asyncio.wait(tuple(self._pending_tasks), timeout=max(deadline - loop.time(), 0))
+            if pending:
+                self._pending_tasks.difference_update(pending)
+                verbose_proxy_logger.warning("Timed out draining %d audit tasks on shutdown", len(pending))
+                return
 
 
 _audit_task_registry: Final = AuditTaskRegistry()
-_pending_audit_tasks: Final = _audit_task_registry._pending_tasks
-
-
-def _audit_log_task_done_callback(task: asyncio.Task[object]) -> None:
-    _audit_task_registry._on_task_done(task)
 
 
 def track_audit_task(task: asyncio.Task[_T]) -> asyncio.Task[_T]:

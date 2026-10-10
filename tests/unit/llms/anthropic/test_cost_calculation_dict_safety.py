@@ -5,7 +5,6 @@ being either a ``dict`` or a ``ServerToolUse`` pydantic instance.
 See https://github.com/BerriAI/litellm/issues/26153.
 """
 
-
 import pytest
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests
@@ -54,7 +53,8 @@ def test_get_cost_for_anthropic_web_search_with_dict_server_tool_use():
     info = _make_model_info(cost_per_query=0.01)
 
     cost = get_cost_for_anthropic_web_search(
-        model_info=info, usage=usage  # type: ignore[arg-type]
+        model_info=info,
+        usage=usage,  # type: ignore[arg-type]
     )
 
     assert cost == pytest.approx(0.03)
@@ -65,7 +65,8 @@ def test_get_cost_for_anthropic_web_search_with_pydantic_server_tool_use():
     info = _make_model_info(cost_per_query=0.01)
 
     cost = get_cost_for_anthropic_web_search(
-        model_info=info, usage=usage  # type: ignore[arg-type]
+        model_info=info,
+        usage=usage,  # type: ignore[arg-type]
     )
 
     assert cost == pytest.approx(0.03)
@@ -76,7 +77,8 @@ def test_get_cost_for_anthropic_web_search_with_none_server_tool_use():
     info = _make_model_info(cost_per_query=0.01)
 
     cost = get_cost_for_anthropic_web_search(
-        model_info=info, usage=usage  # type: ignore[arg-type]
+        model_info=info,
+        usage=usage,  # type: ignore[arg-type]
     )
 
     assert cost == 0.0

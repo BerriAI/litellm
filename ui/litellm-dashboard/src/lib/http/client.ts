@@ -27,19 +27,33 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Send browser cookies with the request; needed for cookie-authenticated proxy routes. */
   credentials?: RequestCredentials;
+  redirect?: RequestRedirect;
 }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** The server's `Retry-After` delay, when it sent one. */
+  readonly retryAfterMs: number | null;
 
-  constructor(message: string, status: number, body: unknown) {
+  constructor(message: string, status: number, body: unknown, retryAfterMs: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 }
+
+/** `Retry-After` as milliseconds; the header is whole seconds or an HTTP date. */
+export const retryAfterMs = (headers?: Headers): number | null => {
+  const header = headers?.get("retry-after");
+  if (header === null || header === undefined) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+};
 
 /**
  * Best-effort extraction of a human-readable message from a proxy error body.
@@ -139,11 +153,11 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
   async function fetchChecked(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<Response> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials } = options;
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials, redirect } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { Accept: "application/json" };
     if (rawBody === undefined) {
       headers["Content-Type"] = "application/json";
     }
@@ -155,7 +169,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       Object.assign(headers, extraHeaders);
     }
 
-    const init: RequestInit = { method, headers, signal, credentials };
+    const init: RequestInit = { method, headers, signal, credentials, redirect };
     if (rawBody !== undefined) {
       init.body = rawBody;
     } else if (body !== undefined) {
@@ -175,7 +189,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         message = raw || `HTTP ${response.status}`;
       }
       onError?.(message);
-      throw new ApiError(message, response.status, errorBody);
+      throw new ApiError(message, response.status, errorBody, retryAfterMs(response.headers));
     }
 
     return response;
@@ -184,7 +198,13 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
     const response = await fetchChecked(method, path, options);
     const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    if (!text) return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      const type = response.headers.get("content-type") ?? "an unknown content type";
+      throw new ApiError(`Expected JSON from ${path} but the server returned ${type}`, response.status, text);
+    }
   }
 
   async function getBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
