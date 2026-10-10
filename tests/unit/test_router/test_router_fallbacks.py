@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
@@ -601,3 +602,407 @@ def test_async_fallbacks(caplog, respx_mock: respx.MockRouter, monkeypatch):
     ]
 
     assert captured_logs[-3:] == expected_logs
+
+
+def _migration_fallback_router(
+    fallbacks: list[dict[str, list[str]]] | None = None,
+    default_fallbacks: list[str] | None = None,
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/backup",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+            },
+        ],
+        fallbacks=fallbacks if fallbacks is not None else [{"primary": ["backup"]}],
+        default_fallbacks=default_fallbacks,
+        num_retries=0,
+    )
+
+
+def _migration_chat_response(model: str, content: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-fallback-migration",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+    )
+
+
+def _migration_unavailable_response(status_code: int = 503) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        json={
+            "error": {
+                "message": "primary unavailable",
+                "type": "server_error",
+                "code": "service_unavailable",
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_static_fallback_routes_after_service_unavailable(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _migration_fallback_router()
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(),
+            _migration_chat_response("backup", "served by backup"),
+        )
+    )
+
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "fallback prompt"}]
+    )
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("primary", "backup")
+    assert response.choices[0].message.content == "served by backup"
+
+
+def test_dynamic_fallback_routes_sync_request(respx_mock: respx.MockRouter) -> None:
+    router: Final = _migration_fallback_router(fallbacks=[])
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(),
+            _migration_chat_response("backup", "served by backup"),
+        )
+    )
+
+    response: Final = router.completion(
+        model="primary",
+        messages=[{"role": "user", "content": "fallback prompt"}],
+        fallbacks=[{"primary": ["backup"]}],
+    )
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("primary", "backup")
+    assert response.choices[0].message.content == "served by backup"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_fallback_routes_async_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _migration_fallback_router(fallbacks=[])
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(),
+            _migration_chat_response("backup", "served by backup"),
+        )
+    )
+
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "fallback prompt"}],
+        fallbacks=[{"primary": ["backup"]}],
+    )
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("primary", "backup")
+    assert response.choices[0].message.content == "served by backup"
+
+
+@pytest.mark.asyncio
+async def test_disable_fallbacks_stops_after_primary_error(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _migration_fallback_router()
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        return_value=_migration_unavailable_response()
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "fallback prompt"}],
+            disable_fallbacks=True,
+        )
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_preserves_original_messages(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _migration_fallback_router()
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(),
+            _migration_chat_response("backup", "served by backup"),
+        )
+    )
+    messages: Final = [{"role": "user", "content": "preserve this prompt"}]
+
+    await router.acompletion(model="primary", messages=messages)
+
+    outbound_messages: Final = tuple(json.loads(call.request.content)["messages"] for call in route.calls)
+    assert outbound_messages == (messages, messages)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_embedding_fallback_routes_after_primary_error(
+    sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-embedding",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+                "model_info": {"id": "primary-embedding-deployment"},
+            },
+            {
+                "model_name": "backup-embedding",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+                "model_info": {"id": "backup-embedding-deployment"},
+            },
+        ],
+        fallbacks=[{"primary-embedding": ["backup-embedding"]}],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/embeddings").mock(
+        side_effect=(
+            _migration_unavailable_response(401),
+            httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                    "model": "text-embedding-3-small",
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            ),
+        )
+    )
+
+    if sync_mode:
+        response: Final = router.embedding(model="primary-embedding", input="fallback prompt")
+    else:
+        response: Final = await router.aembedding(model="primary-embedding", input="fallback prompt")
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("text-embedding-3-small", "text-embedding-3-small")
+    assert len(response.data) == 1
+    assert response._hidden_params["model_id"] == "backup-embedding-deployment"
+    assert route.call_count == 2
+
+
+def test_model_id_fallback_returns_selected_deployment(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+                "model_info": {"id": "primary-deployment"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/backup",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+                "model_info": {"id": "deployment-123"},
+            }
+        ],
+        fallbacks=[{"primary": ["deployment-123"]}],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(),
+            _migration_chat_response("backup", "fallback by deployment id"),
+        )
+    )
+
+    response: Final = router.completion(
+        model="primary",
+        messages=[{"role": "user", "content": "fallback prompt"}],
+    )
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+
+    assert response._hidden_params["model_id"] == "deployment-123"
+    assert outbound_models == ("primary", "backup")
+
+
+@pytest.mark.asyncio
+async def test_default_fallback_serves_after_primary_error(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _migration_fallback_router(fallbacks=[], default_fallbacks=["backup"])
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(),
+            _migration_chat_response("backup", "served by default fallback"),
+        )
+    )
+
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "fallback prompt"}]
+    )
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("primary", "backup")
+    assert response.choices[0].message.content == "served by default fallback"
+
+
+def test_usage_based_routing_falls_back_after_rpm_exhaustion() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+                "model_info": {"id": deployment_id},
+                "rpm": rpm,
+            }
+            for model_name, deployment_id, rpm in (
+                ("primary", "1", 1),
+                ("backup", "2", 1),
+                ("limited", "3", 0),
+                ("available", "4", 10),
+            )
+        ],
+        fallbacks=[
+            {"primary": ["backup"]},
+            {"backup": ["limited"]},
+            {"limited": ["available"]},
+        ],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+    responses: Final = tuple(
+        router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "usage-based fallback"}],
+            mock_response="fallback response",
+        )
+        for _ in range(11)
+    )
+
+    assert responses[0]._hidden_params["model_id"] == "1"
+    assert responses[-1]._hidden_params["model_id"] == "4"
+
+
+@pytest.mark.asyncio
+async def test_fallback_request_does_not_retry_primary_when_retries_are_disabled(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        return_value=_migration_unavailable_response()
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "retry control"}]
+        )
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_default_and_model_fallbacks_do_not_repeat_failed_models(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _migration_fallback_router(default_fallbacks=["primary"])
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            _migration_unavailable_response(401),
+            _migration_unavailable_response(),
+            _migration_chat_response("primary", "unexpected repeat"),
+        )
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "fallback prompt"}]
+        )
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("primary", "backup")
+
+
+@pytest.mark.asyncio
+async def test_unknown_default_fallback_raises_after_primary_failure(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router: Final = _migration_fallback_router(fallbacks=[], default_fallbacks=["missing"])
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        return_value=_migration_unavailable_response()
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "fallback prompt"}]
+        )
+
+    assert route.call_count == 1
+    assert "missing" in str(exc_info.value)

@@ -25,6 +25,8 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import APIConnectionError, Router
+from litellm.main import acompletion as python_acompletion
+from litellm.main import completion as python_completion
 from litellm.caching import RedisCache, RedisClusterCache
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -60,6 +62,7 @@ from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
+    _is_cooldown_required,
     async_get_cooldown_deployments,
     get_cooldown_deployments,
 )
@@ -19367,6 +19370,12 @@ async def test_router_max_parallel_requests_admits_the_cap_and_rejects_the_rest_
     assert outcomes.count("ok") == 2
     assert outcomes.count("rejected:429") == 8
     assert route.call_count == 2
+    assert frozenset(call.request.headers["authorization"] for call in route.calls) == (
+        frozenset({"Bearer first-test-key", "Bearer second-test-key"})
+    )
+    assert frozenset(call.request.headers["authorization"] for call in route.calls) == (
+        frozenset({"Bearer first-test-key", "Bearer second-test-key"})
+    )
     assert tracker.peak == 2
     assert tracker.current == 0
 
@@ -25121,3 +25130,1045 @@ def test_reset_custom_routing_strategy():
     assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_bad_models(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "model unavailable",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "fallback unavailable",
+                        "type": "authentication_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+        )
+    )
+
+    with pytest.raises(Exception, match="All fallback attempts failed"):
+        await python_acompletion(
+            model="openai/first",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            fallbacks=["openai/second"],
+        )
+
+    assert len(route.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_basic(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "model unavailable",
+                        "type": "authentication_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "second",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "fallback answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "fallback answer"
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_empty_list(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            404,
+            json={
+                "error": {
+                    "message": "model unavailable",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "model_not_found",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(litellm.NotFoundError, match="model unavailable"):
+        await python_acompletion(
+            model="openai/first",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            fallbacks=[],
+        )
+
+    assert len(route.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_none_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                500,
+                json={
+                    "error": {
+                        "message": "temporary failure",
+                        "type": "server_error",
+                        "param": None,
+                        "code": "server_error",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "second",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "recovered answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "recovered answer"
+    assert len(route.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_with_dict_config(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": "invalid key",
+                        "type": "authentication_error",
+                        "param": None,
+                        "code": "invalid_api_key",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "first",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "authenticated answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="invalid-key",
+        fallbacks=[{"api_key": "fallback-key"}],
+    )
+
+    assert response.choices[0].message.content == "authenticated answer"
+    assert tuple(call.request.headers["authorization"] for call in route.calls) == (
+        "Bearer invalid-key",
+        "Bearer fallback-key",
+    )
+
+
+def test_completion_fallbacks_sync(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "model unavailable",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "second",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "sync fallback answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = python_completion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "sync fallback answer"
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")
+
+
+def test_model_alias_map_resolves_the_outbound_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_alias_map", {"test-alias": "openai/resolved-model"})
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-alias",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "resolved-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "resolved"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = python_completion(
+        model="test-alias",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+    )
+
+    assert response.model == "resolved-model"
+    assert json.loads(route.calls[0].request.content)["model"] == "resolved-model"
+
+
+def test_multiple_deployments_route_to_a_configured_model(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    def _deployment_response(request: httpx.Request) -> httpx.Response:
+        request_body: Final = json.loads(request.content)
+        requested_model: Final = str(request_body["model"])
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-deployment",
+                "object": "chat.completion",
+                "created": 1,
+                "model": requested_model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": f"deployment response for {requested_model}"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_deployment_response
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-group",
+                "litellm_params": {"model": "openai/first", "api_key": "test-key"},
+                "model_info": {"id": "first"},
+            },
+            {
+                "model_name": "test-group",
+                "litellm_params": {"model": "openai/second", "api_key": "test-key"},
+                "model_info": {"id": "second"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="test-group",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    model_id: Final = str(response._hidden_params["model_id"])
+    assert model_id in ("first", "second")
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["model"] == model_id
+    assert response.choices[0].message.content == f"deployment response for {model_id}"
+
+
+@pytest.mark.asyncio
+async def test_custom_routing_uses_the_strategy_selected_deployment(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(f"{FAKE_OPENAI_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-custom-routing",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "very-special-endpoint",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "custom deployment response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = _create_custom_routing_router()
+    router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
+
+    response: Final = await router.acompletion(
+        model="azure-model",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response.choices[0].message.content == "custom deployment response"
+    assert response._hidden_params["model_id"] == "very-special-endpoint"
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["model"] == "very-special-endpoint"
+
+
+def _chunk3_chat_response(content: str = "scripted reply") -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-chunk3",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+        },
+    )
+
+
+def _chunk3_chat_stream_response(content: str = "streamed reply") -> httpx.Response:
+    return httpx.Response(
+        200,
+        text=(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-chunk3-stream",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": content},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            + "\n\ndata: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-chunk3-stream",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+            )
+            + "\n\ndata: [DONE]\n\n"
+        ),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+def test_router_deployment_typing_routes_typed_deployment() -> None:
+    deployment: Final = DeploymentTypedDict(
+        model_name="typed-model",
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "mock_response": "typed deployment response",
+        },
+        model_info={"id": "typed-id"},
+    )
+    router: Final = Router(model_list=[deployment], num_retries=0)
+
+    response: Final = router.completion(
+        model="typed-model",
+        messages=[{"role": "user", "content": "typed deployment"}],
+    )
+
+    assert response.choices[0].message.content == "typed deployment response"
+    assert response._hidden_params["model_id"] == "typed-id"
+
+
+def test_router_retries_transient_server_error(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(
+        side_effect=[
+            httpx.Response(500, json={"error": {"message": "temporary failure"}}),
+            _chunk3_chat_response("recovered"),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "retry-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=1,
+    )
+
+    response: Final = router.completion(
+        model="retry-model",
+        messages=[{"role": "user", "content": "retry once"}],
+    )
+
+    assert response.choices[0].message.content == "recovered"
+    assert route.call_count == 2
+
+
+def test_router_authentication_error_is_not_swallowed(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(
+        side_effect=[
+            httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": "first invalid key",
+                        "type": "authentication_error",
+                    }
+                },
+            ),
+            httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": "last invalid key",
+                        "type": "authentication_error",
+                    }
+                },
+            ),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "auth-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "first-test-key",
+                },
+            },
+            {
+                "model_name": "auth-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "second-test-key",
+                },
+            },
+        ],
+        num_retries=1,
+    )
+
+    with pytest.raises(openai.AuthenticationError, match="last invalid key"):
+        router.completion(
+            model="auth-model",
+            messages=[{"role": "user", "content": "auth failure"}],
+        )
+
+    assert route.call_count == 2
+
+
+def test_router_does_not_log_model_list_api_key_after_auth_failure(
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caplog.set_level("DEBUG")
+    api_key: Final = "sensitive-router-test-key"
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401,
+            json={"error": {"message": "invalid api key", "type": "authentication_error"}},
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "auth-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": api_key,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(openai.AuthenticationError):
+        router.completion(
+            model="auth-model",
+            messages=[{"role": "user", "content": "auth failure"}],
+        )
+
+    assert "invalid api key" in caplog.text
+    assert api_key not in caplog.text
+
+
+def test_router_reads_api_key_from_model_list(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(side_effect=[_chunk3_chat_response(), _chunk3_chat_stream_response()])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "keyed-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "model-list-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="keyed-model",
+        messages=[{"role": "user", "content": "key from model list"}],
+    )
+    stream: Final = router.completion(
+        model="keyed-model",
+        messages=[{"role": "user", "content": "stream key from model list"}],
+        stream=True,
+    )
+    streamed_content: Final = "".join(
+        chunk.choices[0].delta.content or "" for chunk in stream
+    )
+
+    assert response.choices[0].message.content == "scripted reply"
+    assert streamed_content == "streamed reply"
+    assert route.call_count == 2
+    assert tuple(call.request.headers["authorization"] for call in route.calls) == (
+        "Bearer model-list-key",
+        "Bearer model-list-key",
+    )
+
+
+def test_router_calls_requested_specific_deployment(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(return_value=_chunk3_chat_response())
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "specific-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+                "model_info": {"id": "specific-id"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "specific deployment"}],
+        specific_deployment=True,
+    )
+
+    assert response.choices[0].message.content == "scripted reply"
+    assert response._hidden_params["model_id"] == "specific-id"
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_router_context_window_error_uses_configured_fallback(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(
+        side_effect=[
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 16385 tokens",
+                        "type": "invalid_request_error",
+                        "code": "context_length_exceeded",
+                    }
+                },
+            ),
+            _chunk3_chat_response("fallback response"),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "openai/gpt-4.1-mini",
+                    "api_key": "test-key",
+                },
+            },
+        ],
+        context_window_fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "context fallback"}],
+    )
+
+    assert response.choices[0].message.content == "fallback response"
+    assert route.call_count == 2
+    assert tuple(
+        json.loads(call.request.content)["model"] for call in route.calls
+    ) == ("gpt-4o-mini", "gpt-4.1-mini")
+
+
+def test_router_function_calling_sends_tools_and_returns_tool_call(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-tools",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-weather",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city":"Boston"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 3,
+                    "total_tokens": 8,
+                },
+            },
+        )
+    )
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "tools-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="tools-model",
+        messages=[{"role": "user", "content": "weather in Boston"}],
+        tools=tools,
+    )
+
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert json.loads(route.calls[0].request.content)["tools"] == tools
+
+
+@pytest.mark.asyncio
+async def test_router_openai_completion_supports_sync_async_and_streaming(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(
+        side_effect=[
+            _chunk3_chat_response("async reply"),
+            _chunk3_chat_response("sync reply"),
+            _chunk3_chat_stream_response("async stream"),
+            _chunk3_chat_stream_response("sync stream"),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    async_response: Final = await router.acompletion(
+        model="openai-model",
+        messages=[{"role": "user", "content": "async"}],
+    )
+    sync_response: Final = router.completion(
+        model="openai-model",
+        messages=[{"role": "user", "content": "sync"}],
+    )
+    async_stream: Final = await router.acompletion(
+        model="openai-model",
+        messages=[{"role": "user", "content": "async stream"}],
+        stream=True,
+    )
+    async_stream_chunks: Final = tuple([chunk async for chunk in async_stream])
+    async_stream_content: Final = "".join(
+        chunk.choices[0].delta.content or "" for chunk in async_stream_chunks
+    )
+    sync_stream: Final = router.completion(
+        model="openai-model",
+        messages=[{"role": "user", "content": "sync stream"}],
+        stream=True,
+    )
+    sync_stream_content: Final = "".join(
+        chunk.choices[0].delta.content or "" for chunk in sync_stream
+    )
+
+    assert async_response.choices[0].message.content == "async reply"
+    assert sync_response.choices[0].message.content == "sync reply"
+    assert async_stream_content == "async stream"
+    assert sync_stream_content == "sync stream"
+    assert route.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_router_moderation_returns_provider_result(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/moderations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "modr-chunk3",
+                "model": "omni-moderation-latest",
+                "results": [
+                    {
+                        "flagged": False,
+                        "categories": {"sexual": False, "violence": False},
+                        "category_scores": {"sexual": 0.0, "violence": 0.0},
+                    }
+                ],
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "moderation-model",
+                "litellm_params": {
+                    "model": "omni-moderation-latest",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = await router.amoderation(
+        model="moderation-model", input="safe scripted text"
+    )
+
+    assert response.results[0].flagged is False
+    assert json.loads(route.calls[0].request.content)["input"] == "safe scripted text"
+
+
+def test_router_anthropic_key_comes_from_model_list(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-chunk3",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5-20251001",
+                "content": [{"type": "text", "text": "anthropic reply"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 2, "output_tokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5-20251001",
+                    "api_key": "model-list-anthropic-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="anthropic-model",
+        messages=[{"role": "user", "content": "key check"}],
+    )
+
+    assert response.choices[0].message.content == "anthropic reply"
+    assert route.calls[0].request.headers["x-api-key"] == "model-list-anthropic-key"
+
+
+def test_router_does_not_cool_down_api_connection_errors() -> None:
+    router: Final = Router()
+
+    assert not _is_cooldown_required(
+        litellm_router_instance=router,
+        model_id="connection-deployment",
+        exception_status=500,
+        exception_str="litellm.APIConnectionError: connection refused",
+    )
+
+
+def test_router_preserves_provider_rate_limit_error(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": "scripted rate limit",
+                    "type": "rate_limit_error",
+                    "code": "rate_limit_exceeded",
+                }
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "rate-limit-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        router.completion(
+            model="rate-limit-model",
+            messages=[{"role": "user", "content": "preserve provider error"}],
+        )
+
+    assert raised.value.status_code == 429
+
+
+def test_router_completion_with_model_id_routes_to_deployment() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": "deployment response",
+                },
+                "model_info": {"id": "deployment-123"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="deployment-123",
+        messages=[{"role": "user", "content": "route by deployment id"}],
+    )
+
+    assert response.choices[0].message.content == "deployment response"
+    assert response._hidden_params["model_id"] == "deployment-123"

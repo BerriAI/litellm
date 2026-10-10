@@ -245,6 +245,24 @@ async def test_service_logger_db_monitoring_failure():
         assert actual_payload.error == "Database connection failed"
 
 
+@pytest.mark.asyncio
+async def test_completion_with_caching_bad_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    service_logger: Final = ServiceLogging(mock_testing=True)
+    service_logger.prometheusServicesLogger.mock_testing = True
+    await service_logger.async_service_failure_hook(
+        service=ServiceTypes.REDIS,
+        duration=0.1,
+        error=ConnectionError("Redis connection failed"),
+        call_type="get_cache",
+    )
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+    assert service_logger.mock_testing_async_success_hook == 0
+    assert service_logger.prometheusServicesLogger.mock_testing_failure_calls == 1
+    assert service_logger.prometheusServicesLogger.mock_testing_success_calls == 0
+
+
 def test_get_metric_existing():
     """Test _get_metric when metric exists. _get_metric should return the metric object"""
     pl = PrometheusServicesLogger()

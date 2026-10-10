@@ -1,9 +1,11 @@
 import asyncio
+import base64
 import gzip
 import json
 import logging
 import os
 import sys
+import uuid
 import zlib
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import ExitStack, contextmanager
@@ -51,6 +53,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
     resolve_llm_passthrough_timeout,
     resolve_pass_through_request_timeout,
+    set_env_variables_in_header,
     websocket_passthrough_request,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -2980,6 +2983,89 @@ async def test_pass_through_request_preserves_target_query_without_client_query(
         incoming_query="",
     )
     assert dict(wire_url.params) == {"alt": "sse"}
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_without_configured_headers_preserves_no_authorization(
+    tmp_path, monkeypatch
+):
+    proxy = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/no-configured-headers", "target": "http://upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+
+    response, upstream_requests = await _send_through_proxy("/no-configured-headers", {})
+
+    assert response.status_code == 200
+    assert len(upstream_requests) == 1
+    assert str(upstream_requests[0].url) == "http://upstream.test/api"
+    assert "authorization" not in upstream_requests[0].headers
+
+
+@pytest.mark.asyncio
+async def test_langfuse_pass_through_headers_resolve_environment_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public-key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret-key")
+
+    headers: Final = await set_env_variables_in_header(
+        {
+            "LANGFUSE_PUBLIC_KEY": "os.environ/LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY": "os.environ/LANGFUSE_SECRET_KEY",
+        }
+    )
+
+    assert headers == {"Authorization": "Basic " + base64.b64encode(b"public-key:secret-key").decode("ascii")}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path, monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
+
+    proxy = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/rpm-rerank", "target": "http://upstream.test/rerank", "auth": True}
+        ],
+        db_pass_through_endpoints=[],
+        master_key=MASTER_KEY,
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        ProxyLogging(user_api_key_cache=user_api_key_cache),
+    )
+    proxy_server.proxy_logging_obj._init_litellm_callbacks()
+
+    keys = tuple(f"sk-test-{uuid.uuid4().hex}" for _ in range(2))
+    for key in keys:
+        user_api_key_cache.set_cache(
+            key=hash_token(key),
+            value=UserAPIKeyAuth(
+                token=hash_token(key),
+                rpm_limit=1,
+                metadata={"allowed_passthrough_routes": ["/rpm-rerank"]},
+            ),
+        )
+
+    responses = tuple(
+        [
+            await _send_through_proxy("/rpm-rerank", {"Authorization": f"Bearer {key}"})
+            for key in (keys[0], keys[0], keys[1])
+        ]
+    )
+
+    assert tuple(response.status_code for response, _ in responses) == (200, 429, 200)
+    assert tuple(len(requests) for _, requests in responses) == (1, 0, 1)
 
 
 @pytest.mark.asyncio
