@@ -169,7 +169,7 @@ def test_images_are_unsupported_by_a_default_systemone_provider() -> None:
         model="jev-latest", request=ir, custom_llm_provider="typesafe"
     )
 
-    assert isinstance(body, UnsupportedDecisionsRequest)
+    assert body == UnsupportedDecisionsRequest(reason="image input is not supported by this Decisions provider")
 
 
 def test_systemone_images_normalize_to_data_urls_in_order() -> None:
@@ -187,8 +187,11 @@ def test_systemone_images_normalize_to_data_urls_in_order() -> None:
 
     body: Final = ir_to_systemone_request("clef", ir, supports_images=True)
 
-    assert isinstance(body, Mapping)
-    assert body["images"] == ["data:image/png;base64,AA==", "data:image/jpeg;base64,BB=="]
+    assert body == {
+        "model": "clef",
+        **_SYSTEMONE_REQUEST,
+        "images": ["data:image/png;base64,AA==", "data:image/jpeg;base64,BB=="],
+    }
 
 
 def test_systemone_images_are_unsupported_by_a_default_systemone_provider() -> None:
@@ -196,7 +199,9 @@ def test_systemone_images_are_unsupported_by_a_default_systemone_provider() -> N
         _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "images": ["data:image/png;base64,AA=="]})
     )
 
-    assert isinstance(ir_to_systemone_request("jev-latest", ir), UnsupportedDecisionsRequest)
+    assert ir_to_systemone_request("jev-latest", ir) == UnsupportedDecisionsRequest(
+        reason="image input is not supported by this Decisions provider"
+    )
 
 
 def test_a_request_without_images_sends_no_images_key() -> None:
@@ -204,7 +209,7 @@ def test_a_request_without_images_sends_no_images_key() -> None:
 
     body: Final = ir_to_systemone_request("clef", ir, supports_images=True)
 
-    assert "images" not in body
+    assert body == {"model": "clef", **_SYSTEMONE_REQUEST}
 
 
 def test_the_largest_openai_request_accepted_translates_to_a_valid_systemone_request() -> None:

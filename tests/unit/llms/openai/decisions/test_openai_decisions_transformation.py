@@ -201,9 +201,11 @@ def test_a_systemone_request_without_images_stays_a_string_input() -> None:
         }
     )
 
-    body: Final = ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request))
-
-    assert body["input"] == "Screen cracked"
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == {
+        "model": "gpt-6-luna",
+        "input": "Screen cracked",
+        "questions": [{"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"}],
+    }
 
 
 def test_systemone_questions_without_instructions_become_valid_openai_questions() -> None:
