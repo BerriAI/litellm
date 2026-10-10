@@ -11,7 +11,7 @@ import {
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import SystemOneUI from "./SystemOneUI";
+import SystemOneUI, { NOUL_HELP } from "./SystemOneUI";
 import type { SystemOneResponse } from "./lib/schemas";
 import type { OpenAIDecisionsResponse } from "./lib/openAIDecisions";
 
@@ -920,6 +920,22 @@ describe("SystemOneUI integration", () => {
       fireEvent.blur(field);
     }
 
+    it("explains noul on hover in the banner and on the answer type option", async () => {
+      const user = userEvent.setup();
+      render(<SystemOneUI accessToken="session-key" />);
+
+      await user.hover(screen.getByText("noul", { selector: "span.cursor-help" }));
+      expect(await screen.findByText(NOUL_HELP)).toBeInTheDocument();
+
+      question("has_repro_steps").getByRole("combobox", { name: "Answer type" }).focus();
+      await user.keyboard("{ArrowDown}");
+      expect(await screen.findByRole("option", { name: "noul" })).toHaveAttribute(
+        "title",
+        "noul is a yes / no question",
+      );
+      expect(screen.getByRole("option", { name: "Choice" })).not.toHaveAttribute("title");
+    });
+
     it("sends a choice and a yes/no question built in the form without opening JSON", async () => {
       const user = userEvent.setup();
       render(<SystemOneUI accessToken="session-key" />);
@@ -941,7 +957,7 @@ describe("SystemOneUI integration", () => {
       fill(question("team").getByRole("textbox", { name: "Description of infra" }), "Deploys");
 
       await user.click(screen.getByRole("button", { name: "Add question" }));
-      await pickAnswerType(user, "question_1", "Yes / no");
+      await pickAnswerType(user, "question_1", "noul");
       rename(question("question_1").getByRole("textbox", { name: "Question name" }), "urgent");
       fill(question("urgent").getByRole("textbox", { name: "Instructions" }), "Is this blocking users?");
       fill(question("urgent").getByRole("textbox", { name: "Yes means" }), "Nobody can log in");
