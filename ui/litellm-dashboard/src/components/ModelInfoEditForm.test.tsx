@@ -96,10 +96,23 @@ describe("ModelInfoEditForm existing-credentials picker", () => {
     expect(onSubmit.mock.calls[1][0].litellm_credential_name).toBeNull();
   });
 
-  it("shows the attached credential's display name when not editing", () => {
+  it("shows the attached credential's display name with its credential name beneath when not editing", () => {
     renderForm({ isEditing: false, litellmParams: { model: "gpt-4o", litellm_credential_name: "openai-main" } });
 
     expect(screen.getByText("Main OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("openai-main")).toBeInTheDocument();
+  });
+
+  it("shows the selected credential's name under the picker only when its label differs", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderForm({ litellmParams: { model: "gpt-4o", litellm_credential_name: "openai-main" } });
+
+    const picker = await screen.findByPlaceholderText("Select or search for existing credentials");
+    expect(picker).toHaveValue("Main OpenAI");
+    expect(screen.getByText("openai-main")).toBeInTheDocument();
+
+    await user.click(picker);
+    await user.click(await screen.findByRole("option", { name: "None" }));
     expect(screen.queryByText("openai-main")).not.toBeInTheDocument();
   });
 
@@ -108,7 +121,7 @@ describe("ModelInfoEditForm existing-credentials picker", () => {
       isEditing: false,
       litellmParams: { model: "gpt-4o", litellm_credential_name: "not-listed" },
     });
-    expect(screen.getByText("not-listed")).toBeInTheDocument();
+    expect(screen.getAllByText("not-listed")).toHaveLength(1);
     unmount();
 
     renderForm({ isEditing: false });
