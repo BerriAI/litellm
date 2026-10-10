@@ -23,6 +23,7 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 _TEAM_PROVIDER_KEY: Final = "team-openai-key"
 _REGISTRY_PROVIDER_KEY: Final = "registry-openai-key"
+_ENVIRONMENT_OPENAI_KEY: Final = "environment-openai-key"
 _TEAM_ID: Final = "team-a"
 _TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
 _REGISTRY_OPENAI_BASE: Final = "https://registry-openai.example/v1"
@@ -613,6 +614,29 @@ def test_rag_query_managed_store_without_credentials_uses_team_provider_credenti
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_without_a_team_deployment_keeps_the_environment_openai_credentials(
+    client_internal_user: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_internal_user,
+        retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+        managed_stores=(),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_ENVIRONMENT_OPENAI_KEY}"
 
 
 @pytest.mark.usefixtures("httpx_transport")

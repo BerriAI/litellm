@@ -226,6 +226,7 @@ def _team_provider_credentials(
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             custom_llm_provider=_TEAM_CREDENTIAL_PROVIDER,
+            include_accessible_deployments=False,
         )
         or {}
     )

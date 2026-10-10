@@ -476,6 +476,8 @@ def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
+    *,
+    include_accessible_deployments: bool = True,
 ) -> dict | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
@@ -488,6 +490,7 @@ def get_team_provider_credentials(
        global one.
     2. Fallback: any deployment the caller is granted access to for this
        provider, expanding wildcard routes and the all-proxy-models sentinel.
+       Skipped when ``include_accessible_deployments`` is False.
 
     Credential lookup is scoped to both the team's allowlist and the key's own
     model allowlist (``user_api_key_dict.models``), so neither a team nor a
@@ -556,6 +559,9 @@ def get_team_provider_credentials(
             credentials = _provider_credentials(deployment_id)
             if credentials is not None:
                 return credentials
+
+    if not include_accessible_deployments:
+        return None
 
     # 2. Fall back to deployments the caller is allowed to access. The key's
     #    effective allowlist (sentinels and access groups already expanded by
