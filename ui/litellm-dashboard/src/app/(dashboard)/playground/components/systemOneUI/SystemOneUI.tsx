@@ -4,6 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
@@ -17,8 +18,10 @@ import {
   decisionsExample,
   openAIDecisionsExample,
 } from "./lib/example";
+import { formFromJson, formIssues, formToJson, type DecisionsForm as DecisionsFormValue } from "./lib/form";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
 import type { DecisionEndpoint, PlaygroundRequest } from "./lib/schemas";
+import DecisionsForm from "./DecisionsForm";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
 import ResponseView from "./ResponseView";
@@ -85,8 +88,16 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const endpoint: DecisionEndpoint =
     chosenEndpoint ?? (decisionModels.length > 0 ? "/v1/decisions" : "/typesafe/v1/systemone");
   const [drafts, setDrafts] = useState<Partial<Record<DecisionEndpoint, string>>>({});
+  const [forms, setForms] = useState<Partial<Record<DecisionEndpoint, DecisionsFormValue>>>({});
+  const [editor, setEditor] = useState<"form" | "json">("form");
   const examplePayload = examplePayloadFor(endpoint, decisionModels[0] ?? PLACEHOLDER_DECISION_MODEL);
   const rawPayload = drafts[endpoint] ?? examplePayload;
+  const parsedForm = useMemo(() => formFromJson(rawPayload), [rawPayload]);
+  const form = forms[endpoint] ?? (parsedForm.ok ? parsedForm.form : undefined);
+  const activeEditor = editor === "form" && form !== undefined ? "form" : "json";
+  const formOnlyIssues = activeEditor === "form" && form !== undefined ? formIssues(form, endpoint) : [];
+  const formUnavailableReason =
+    editor === "form" && !parsedForm.ok && forms[endpoint] === undefined ? parsedForm.reason : null;
   const activeController = useRef<AbortController | null>(null);
   const validation = useMemo(() => validateSystemOnePayload(rawPayload, endpoint), [rawPayload, endpoint]);
   const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
@@ -120,13 +131,30 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     }
   }
 
+  function handleFormChange(next: DecisionsFormValue) {
+    clearRequestState();
+    setChosenEndpoint(endpoint);
+    setForms((current) => ({ ...current, [endpoint]: next }));
+    setDrafts((current) => ({ ...current, [endpoint]: formToJson(next, endpoint) }));
+  }
+
+  function handleJsonChange(value: string) {
+    setForms((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== endpoint)));
+    handlePayloadChange(value);
+  }
+
   function handleResetExample() {
     clearRequestState();
     setChosenEndpoint(endpoint);
     setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== endpoint)));
+    setForms((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== endpoint)));
   }
 
   function handleModelPick(model: string | null) {
+    if (activeEditor === "form" && form !== undefined) {
+      handleFormChange({ ...form, model: model ?? undefined });
+      return;
+    }
     const next = model === null ? undefined : withPayloadModel(rawPayload, model);
     if (next !== undefined) {
       handlePayloadChange(next);
@@ -233,20 +261,39 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             )}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" onClick={handleResetExample} disabled={rawPayload === examplePayload}>
+            <span className="text-sm font-medium text-muted-foreground">Editor</span>
+            <Tabs
+              value={activeEditor}
+              onValueChange={(value) => {
+                if (value === "form" || value === "json") {
+                  setEditor(value);
+                }
+              }}
+            >
+              <TabsList aria-label="Request editor">
+                <TabsTrigger value="form">Form</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <Button variant="outline" onClick={handleResetExample} disabled={drafts[endpoint] === undefined}>
               <RotateCcw />
               Reset example
             </Button>
-            <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
-              <Code />
-              Format JSON
-            </Button>
+            {activeEditor === "json" && (
+              <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
+                <Code />
+                Format JSON
+              </Button>
+            )}
             {isLoading && (
               <Button variant="outline" onClick={clearRequestState}>
                 Cancel request
               </Button>
             )}
-            <Button onClick={handleSend} disabled={!validation.isValid || isLoading || !effectiveApiKey}>
+            <Button
+              onClick={handleSend}
+              disabled={!validation.isValid || formOnlyIssues.length > 0 || isLoading || !effectiveApiKey}
+            >
               {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
               Send
             </Button>
@@ -269,8 +316,22 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       </section>
 
       <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="Decisions request editor">
-          <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
+        <section className="flex min-h-96 flex-col gap-2 xl:min-h-0" aria-label="Decisions request editor">
+          {formUnavailableReason !== null && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {formUnavailableReason}. Showing JSON instead
+            </p>
+          )}
+          {activeEditor === "form" && form !== undefined ? (
+            <DecisionsForm
+              form={form}
+              endpoint={endpoint}
+              issues={[...formOnlyIssues, ...validation.issues.map((issue) => issue.message)]}
+              onChange={handleFormChange}
+            />
+          ) : (
+            <JsonEditor value={rawPayload} onChange={handleJsonChange} validation={validation} />
+          )}
         </section>
         <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
           <ResponseView
@@ -280,7 +341,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             error={systemOne.error?.message}
             isLoading={isLoading}
           />
-          <QuestionBreakdown payload={validation.payload} />
+          {activeEditor === "json" && <QuestionBreakdown payload={validation.payload} />}
         </section>
       </div>
     </div>
