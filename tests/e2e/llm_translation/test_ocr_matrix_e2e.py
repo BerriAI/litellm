@@ -209,20 +209,46 @@ class Case:
     def id(self) -> str:
         return f"{self.provider.id}-{self.credential.id}-{self.auth}-{self.document.id}-{self.call}"
 
-    def bind_credentials(self, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, str]:
+    def bind_credentials(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> Mapping[str, object]:
         values: Final = {secret: os.environ.get(secret.source_env) for secret in self.credential.secrets}
         missing: Final = tuple(secret.source_env for secret, value in values.items() if not value)
         if missing:
             pytest.skip(f"{', '.join(missing)} not set")
         for env_var in self.provider.env_vars:
             monkeypatch.delenv(env_var, raising=False)
+        if self.provider == VERTEX_MISTRAL:
+            monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         if self.auth == "explicit":
-            return {secret.kwarg: value for secret, value in values.items() if value}
+            return {
+                secret.kwarg: (
+                    _STRING_KEYED.validate_json(value)
+                    if secret.kwarg == "vertex_credentials"
+                    else value
+                )
+                for secret, value in values.items()
+                if value
+            }
+        if self.credential == VERTEX_SERVICE_ACCOUNT:
+            credential_json: Final = next(
+                value
+                for secret, value in values.items()
+                if secret.kwarg == "vertex_credentials" and value
+            )
+            credential: Final = _STRING_KEYED.validate_json(credential_json)
+            credential_path: Final = tmp_path / "vertex_credentials.json"
+            credential_path.write_bytes(_STRING_KEYED.dump_json(credential))
+            monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credential_path))
+            for secret, value in values.items():
+                if secret.kwarg != "vertex_credentials":
+                    monkeypatch.setenv(secret.env, value or "")
+            return {}
         for secret, value in values.items():
             monkeypatch.setenv(secret.env, value or "")
         return {}
 
-    async def run(self, credentials: Mapping[str, str]) -> OCRResponse:
+    async def run(self, credentials: Mapping[str, object]) -> OCRResponse:
         kwargs: Final = {**self.provider.params, **credentials}
         document: Final = self.document.build()
         try:
@@ -291,8 +317,13 @@ def _assert_logged(logged: LoggedCall, response: OCRResponse, model: str, logged
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
-async def test_ocr(case: Case, monkeypatch: pytest.MonkeyPatch, logger: RecordingLogger) -> None:
-    credentials: Final = case.bind_credentials(monkeypatch)
+async def test_ocr(
+    case: Case,
+    monkeypatch: pytest.MonkeyPatch,
+    logger: RecordingLogger,
+    tmp_path: Path,
+) -> None:
+    credentials: Final = case.bind_credentials(monkeypatch, tmp_path)
     response: Final = await case.run(credentials)
     _assert_ocr_response(response, case.provider.model, case.document.expected_text)
     _assert_logged(await logger.wait_for_call(), response, case.provider.model, response.model, case.call)

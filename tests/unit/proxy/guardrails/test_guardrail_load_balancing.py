@@ -35,14 +35,11 @@ class MockGuardrail(CustomGuardrail):
 @pytest.mark.asyncio
 async def test_proxy_logging_pre_call_hook_load_balancing():
     """Test that async_pre_call_hook load balances across multiple guardrails."""
-    # Reset call count
     MockGuardrail.call_count = 0
 
-    # Create two mock guardrails with same name
     guardrail_1 = MockGuardrail(guardrail_name="content-filter", guardrail_id="g1")
     guardrail_2 = MockGuardrail(guardrail_name="content-filter", guardrail_id="g2")
 
-    # Create router with multiple guardrails of same name
     guardrail_list = [
         {
             "guardrail_name": "content-filter",
@@ -68,16 +65,13 @@ async def test_proxy_logging_pre_call_hook_load_balancing():
         guardrail_list=guardrail_list,
     )
 
-    # Create ProxyLogging instance
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
-    # Add guardrail to litellm.callbacks so it gets picked up
     original_callbacks = litellm.callbacks.copy()
     litellm.callbacks = [guardrail_1]
 
     try:
         with patch("litellm.proxy.proxy_server.llm_router", router):
-            # Call pre_call_hook 50 times
             for _ in range(50):
                 await proxy_logging.pre_call_hook(
                     user_api_key_dict=MagicMock(),
@@ -85,15 +79,12 @@ async def test_proxy_logging_pre_call_hook_load_balancing():
                     call_type="completion",
                 )
 
-            # Both guardrails should have been called (load balanced)
             assert guardrail_1.calls > 0, "Guardrail 1 should have been called"
             assert guardrail_2.calls > 0, "Guardrail 2 should have been called"
 
-            # Total calls should be 50
             total = guardrail_1.calls + guardrail_2.calls
             assert total == 50, f"Expected 50 total calls, got {total}"
 
-            # Verify reasonable distribution (not all to one)
             min_calls = min(guardrail_1.calls, guardrail_2.calls)
             assert (
                 min_calls >= 10
