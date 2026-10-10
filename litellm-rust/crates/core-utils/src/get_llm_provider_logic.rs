@@ -24,6 +24,8 @@ pub enum LlmProviders {
     Edenai,
     #[strum(serialize = "github_copilot")]
     GithubCopilot,
+    #[strum(serialize = "minimax")]
+    Minimax,
     #[strum(serialize = "mistral")]
     Mistral,
     #[strum(serialize = "openai")]
