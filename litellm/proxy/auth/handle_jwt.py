@@ -75,7 +75,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
-from litellm.types.proxy.auth.user_api_key_auth import is_jwt
+from litellm.types.proxy.auth.user_api_key_auth import is_jwt as is_jwt_token
 
 from .auth_checks import (
     TeamNotFoundError,
@@ -277,7 +277,7 @@ class JWTHandler:
 
     @staticmethod
     def is_jwt(token: str | None) -> bool:
-        return is_jwt(token=token)
+        return is_jwt_token(token=token)
 
     @staticmethod
     def get_unverified_claims(token: str) -> dict | None:
