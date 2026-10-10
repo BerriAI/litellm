@@ -285,7 +285,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """
         if isinstance(value, dict) and value.get("type") == "semantic_vad" and "create_response" not in value:
             return AutomaticActivityDetection()
-        if isinstance(value, dict) and value.get("create_response") is False:
+        if "create_response" in value and value["create_response"] is False:
             return AutomaticActivityDetection(disabled=True)
 
         automatic_activity_dection: Final = AutomaticActivityDetection()
