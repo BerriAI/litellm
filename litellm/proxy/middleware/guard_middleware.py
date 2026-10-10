@@ -30,7 +30,9 @@ Design constraints honored here:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 
@@ -74,7 +76,7 @@ def _build_guard_config() -> SecurityConfig:
     """Build the SecurityConfig from the LITELLM_GUARD_* environment variables."""
     from guard import SecurityConfig
 
-    kwargs: dict[str, Any] = {
+    kwargs: dict[str, object] = {
         "enable_rate_limiting": True,
         "rate_limit": _env_int("LITELLM_GUARD_RATE_LIMIT", 100),
         "rate_limit_window": _env_int("LITELLM_GUARD_RATE_LIMIT_WINDOW", 60),
@@ -124,12 +126,12 @@ class GuardMiddleware:
     admits flows through guard's pipeline and then the normal proxy stack.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self._guard_asgi: Any = None
+        self._guard_asgi: ASGIApp | None = None
         self._guard_failed = False
 
-    def _ensure_guard(self, scope: Any) -> bool:
+    def _ensure_guard(self, scope: Scope) -> bool:
         if self._guard_asgi is not None or self._guard_failed:
             return not self._guard_failed
         try:
@@ -148,7 +150,7 @@ class GuardMiddleware:
             )
             return False
 
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not guard_enabled():
             await self.app(scope, receive, send)
             return
