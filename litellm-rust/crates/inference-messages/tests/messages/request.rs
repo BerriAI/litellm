@@ -835,3 +835,38 @@ async fn provider_validation_runs_before_caller_parameter_removal(
     );
     assert!(received(&upstream).await.is_empty());
 }
+
+#[rstest]
+#[tokio::test]
+async fn edenai_preserves_native_thinking_and_strips_billing_and_cache_extensions(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+    let thinking = json!({"type": "enabled", "budget_tokens": 512, "native_field": true});
+    run_message(MessagesCall {
+        custom_llm_provider: Some("edenai".into()),
+        api_base: Some(format!("{}/v3", upstream.uri())),
+        api_key: Some("eden-key".into()),
+        extra_headers: headers([("Anthropic-Beta", "unregistered-native-beta")]),
+        ..with_fields(call, json!({
+            "thinking": thinking, "temperature": 0.25,
+            "system": [{"type": "text", "text": "x-anthropic-billing-header: hidden"},
+                       {"type": "text", "text": "keep", "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global"}}],
+        }))
+    }).await;
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/v3/v1/messages");
+    assert_eq!(sent.header("authorization"), Some("Bearer eden-key"));
+    assert_eq!(
+        sent.header("anthropic-beta"),
+        Some("unregistered-native-beta")
+    );
+    assert_eq!(
+        sent.json(),
+        json!({
+            "model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}],
+            "thinking": thinking, "temperature": 0.25,
+            "system": [{"type": "text", "text": "keep", "cache_control": {"type": "ephemeral"}}],
+        })
+    );
+}

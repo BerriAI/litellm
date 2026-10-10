@@ -43,6 +43,10 @@ pub trait BaseMessagesConfig: Sync {
         Ok(response)
     }
 
+    fn reported_cost(&self, _response: &MessagesResponse) -> Option<serde_json::Number> {
+        None
+    }
+
     fn secret_names(&self) -> &'static [&'static str];
 
     /// Shapes the forwarded headers and names the credential, the way Python's

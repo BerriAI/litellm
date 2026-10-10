@@ -7,7 +7,7 @@ mod types;
 
 use futures_util::FutureExt;
 use litellm_auth::AuthServices;
-use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
+use litellm_host::interceptors::{Cost, ExecutionFacts, Interceptors, ResultSource};
 
 use litellm_inference::{caching::CallCache, context::CallContext};
 use litellm_secrets::source::SecretSource;
@@ -87,6 +87,7 @@ impl MessagesRoute {
                 &request.wire,
             );
             let identity = request.identity.clone();
+            let config = request.provider.config();
             let (output, source) = match cache.lookup().await {
                 Some(hit) => hit,
                 None => (
@@ -94,9 +95,14 @@ impl MessagesRoute {
                     ResultSource::Provider,
                 ),
             };
+            let reported = match &output {
+                MessagesCallResponse::Complete(response) => config.reported_cost(response),
+                MessagesCallResponse::Stream { .. } => None,
+            };
             context
                 .result_ready(ExecutionFacts {
                     provider: identity,
+                    cost: Cost::settle(&source, reported),
                     source: source.clone(),
                 })
                 .await?;

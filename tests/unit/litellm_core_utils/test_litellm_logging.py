@@ -4496,6 +4496,103 @@ def test_process_hidden_params_recalculates_cost_after_failure_handler_zero():
     assert slo.get("response_cost", 0) > 0
 
 
+@pytest.mark.parametrize("reported_cost", [0.0, 0.37])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_provider_reported_cost_reaches_metadata_and_spend(reported_cost: float, cache_hit: bool) -> None:
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model="native-test",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost",
+        function_id="reported-cost",
+    )
+    logging_obj.update_from_kwargs(kwargs={}, optional_params={})
+    logging_obj._provider_reported_cost = reported_cost
+    logging_obj.model_call_details.update({"cache_hit": cache_hit, "litellm_params": {}})
+    response: Final = ModelResponse(
+        id="reported-cost",
+        model="native-test",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+    )
+    expected: Final = 0.0 if cache_hit else reported_cost
+    assert logging_obj.response_cost_calculator(response) == expected
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == expected
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == expected
+
+
+@pytest.mark.parametrize("pricing_policy", ["reported", "custom", "base"])
+@pytest.mark.parametrize("reported_cost", [None, 0.0, 0.37])
+@pytest.mark.parametrize("additional_cost", [0.0, 0.12])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_reported_cost_respects_configured_pricing_and_additional_charges(
+    monkeypatch: pytest.MonkeyPatch,
+    pricing_policy: Literal["reported", "custom", "base"],
+    reported_cost: float | None,
+    additional_cost: float,
+    cache_hit: bool,
+) -> None:
+    pricing_model: Final = "anthropic/reported-cost-pricing-test"
+    input_rate: Final = 0.002
+    output_rate: Final = 0.004
+    prompt_tokens: Final = 10
+    completion_tokens: Final = 5
+    monkeypatch.setitem(
+        litellm.model_cost,
+        pricing_model,
+        {"input_cost_per_token": input_rate, "output_cost_per_token": output_rate, "litellm_provider": "anthropic"},
+    )
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model=pricing_model,
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost-pricing",
+        function_id="reported-cost-pricing",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs={},
+        optional_params={"provider_reported_cost": 0.0, "_provider_reported_cost": 0.0},
+        litellm_params={
+            **({"base_model": pricing_model} if pricing_policy == "base" else {}),
+            "metadata": {
+                "model_info": {
+                    "id": pricing_model,
+                    **(
+                        {"input_cost_per_token": input_rate, "output_cost_per_token": output_rate}
+                        if pricing_policy == "custom"
+                        else {}
+                    ),
+                }
+            }
+        }
+    )
+    logging_obj.model_call_details.update(
+        {"additional_response_cost": additional_cost, "cache_hit": cache_hit}
+    )
+    logging_obj._provider_reported_cost = reported_cost
+    response: Final = ModelResponse(
+        model=pricing_model,
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+    base_cost: Final = (
+        prompt_tokens * input_rate + completion_tokens * output_rate
+        if pricing_policy != "reported" or reported_cost is None
+        else reported_cost
+    )
+    expected: Final = 0.0 if cache_hit else base_cost + additional_cost
+    assert logging_obj.response_cost_calculator(response) == pytest.approx(expected)
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(expected)
+
+
 def test_process_hidden_params_preserves_zero_cost_in_hidden_params():
     """Pass-through handlers often set response_cost on result._hidden_params (including 0)."""
     from datetime import datetime
