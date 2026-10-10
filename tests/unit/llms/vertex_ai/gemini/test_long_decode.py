@@ -42,6 +42,15 @@ HOP_2_TRUNCATED: Final = {
 }
 
 
+HOP_END_FINISH_REASONS: Final = ("MAX_TOKENS", "CONTINUATION")
+
+
+def _ending_with(body: Mapping[str, object], finish_reason: str) -> dict[str, object]:
+    candidates: Final = body["candidates"]
+    assert isinstance(candidates, list)
+    return {**body, "candidates": [{**candidates[0], "finishReason": finish_reason}, *candidates[1:]]}
+
+
 def _replay(hops: Sequence[httpx.Response], sent: list[dict[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
@@ -58,11 +67,14 @@ def _sse(*chunks: Mapping[str, object]) -> httpx.Response:
     )
 
 
+@pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_unary_long_decode_resends_the_original_request_with_the_token_and_bills_every_hop(is_async: bool):
+async def test_unary_long_decode_resends_the_original_request_with_the_token_and_bills_every_hop(
+    is_async: bool, hop_end: str
+):
     sent: Final[list[dict[str, object]]] = []
-    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2))
+    hops: Final = (httpx.Response(200, json=_ending_with(HOP_1, hop_end)), httpx.Response(200, json=HOP_2))
     kwargs: Final = {"model": MODEL, "messages": list(MESSAGES), "max_tokens": 100_000, "api_key": "fake-gemini-key"}
 
     response: Final = (
@@ -81,16 +93,20 @@ async def test_unary_long_decode_resends_the_original_request_with_the_token_and
     assert response.usage.prompt_tokens_details.cached_tokens == 9
 
 
+@pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
 @pytest.mark.parametrize(
     "max_tokens, expected_requests, expected_token",
     [(None, 1, "dG9rLTE="), (30, 1, "dG9rLTE="), (50, 2, "dG9rLTI=")],
 )
 @pytest.mark.asyncio
 async def test_unary_long_decode_stops_at_the_callers_cap_and_returns_the_token_to_resume(
-    max_tokens: int | None, expected_requests: int, expected_token: str
+    max_tokens: int | None, expected_requests: int, expected_token: str, hop_end: str
 ):
     sent: Final[list[dict[str, object]]] = []
-    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_TRUNCATED))
+    hops: Final = (
+        httpx.Response(200, json=_ending_with(HOP_1, hop_end)),
+        httpx.Response(200, json=_ending_with(HOP_2_TRUNCATED, hop_end)),
+    )
 
     response: Final = await litellm.acompletion(
         model=MODEL,
@@ -141,14 +157,17 @@ async def test_continuation_token_param_is_sent_at_the_top_level_of_generate_con
     assert "continuation_token" not in json.dumps(sent[0])
 
 
-def _stream_hops() -> tuple[httpx.Response, httpx.Response]:
+def _stream_hops(hop_end: str = "MAX_TOKENS") -> tuple[httpx.Response, httpx.Response]:
     return (
         _sse(
             {"candidates": [{"content": {"role": "model", "parts": [{"text": "hel"}]}}]},
-            {
-                "candidates": [{**HOP_1["candidates"][0], "content": {"role": "model", "parts": [{"text": "lo"}]}}],
-                "usageMetadata": HOP_1["usageMetadata"],
-            },
+            _ending_with(
+                {
+                    "candidates": [{**HOP_1["candidates"][0], "content": {"role": "model", "parts": [{"text": "lo"}]}}],
+                    "usageMetadata": HOP_1["usageMetadata"],
+                },
+                hop_end,
+            ),
         ),
         _sse(HOP_2),
     )
@@ -184,12 +203,15 @@ def _delta_fields(chunks: list) -> list[Mapping[str, object]]:
     ]
 
 
+@pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish_and_summed_usage(is_async: bool):
+async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish_and_summed_usage(
+    is_async: bool, hop_end: str
+):
     sent: Final[list[dict[str, object]]] = []
 
-    chunks: Final = await _collect_stream(is_async, _stream_hops(), sent)
+    chunks: Final = await _collect_stream(is_async, _stream_hops(hop_end), sent)
 
     assert sent[1] == {**sent[0], "continuationToken": "dG9rLTE="}
     assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "hello world"

@@ -38,6 +38,8 @@ _CONCATENATED_USAGE_DETAILS: Final = (
 
 HOP_FAILURES: Final = (VertexAIError, httpx.HTTPError, Timeout)
 
+CONTINUABLE_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", "CONTINUATION"})
+
 LongDecodeHops: TypeAlias = tuple[GenerateContentResponseBody, ...]
 AsyncHopPost: TypeAlias = Callable[[RequestBody], Awaitable[httpx.Response]]
 SyncHopPost: TypeAlias = Callable[[RequestBody], httpx.Response]
@@ -71,7 +73,7 @@ def _first_candidate(body: GenerateContentResponseBody) -> Candidates | None:
 
 
 def output_tokens_of(usage: UsageMetadata) -> int:
-    return usage.get("totalTokenCount", 0) - usage.get("promptTokenCount", 0) - usage.get("toolUsePromptTokenCount", 0)
+    return usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
 
 
 def next_hop_token(
@@ -83,7 +85,7 @@ def next_hop_token(
     if output_cap is None:
         return None
     candidate: Final = _first_candidate(body)
-    if candidate is None or candidate.get("finishReason") != "MAX_TOKENS":
+    if candidate is None or candidate.get("finishReason") not in CONTINUABLE_FINISH_REASONS:
         return None
     token: Final = candidate.get("continuationToken")
     hop_tokens: Final = output_tokens_of(hop_usage)
