@@ -5726,7 +5726,7 @@ def completion(
         optional_params = get_optional_params(
             **optional_param_args,
             **non_default_params,
-            responses_api_bridge_allowed=not skip_responses_api_bridge,
+            _litellm_responses_api_bridge_allowed=not skip_responses_api_bridge,
         )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
@@ -5887,7 +5887,7 @@ def completion(
                 {
                     **optional_param_args,
                     **non_default_params,
-                    "responses_api_bridge_allowed": not skip_responses_api_bridge,
+                    "_litellm_responses_api_bridge_allowed": not skip_responses_api_bridge,
                 }
             )
         )

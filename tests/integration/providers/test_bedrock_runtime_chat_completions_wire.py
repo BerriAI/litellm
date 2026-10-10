@@ -8,7 +8,7 @@ from urllib.parse import quote
 import httpx
 import openai
 import pytest
-from integration._support.bedrock_runtime_peer import answer, respond, target_of
+from integration._support.bedrock_runtime_peer import NATIVE_RESPONSES, answer, respond, target_of
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.sigv4 import signature
@@ -152,6 +152,19 @@ def _spend_row(identity: str) -> dict[str, JsonValue]:
             'SELECT model_group, status, prompt_tokens, completion_tokens, api_base FROM "LiteLLM_SpendLogs"'
             " WHERE request_id=%s",
             (identity,),
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    return rows[0]
+
+
+def _only_spend_row_of(model: str) -> dict[str, JsonValue]:
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT model_group, status, prompt_tokens, completion_tokens, api_base FROM "LiteLLM_SpendLogs"'
+            " WHERE model_group=%s",
+            (model,),
         ),
         lambda found: len(found) == 1,
         seconds=70,
@@ -387,17 +400,44 @@ def test_json_schema_response_format_is_forwarded_natively(gateway: Gateway) -> 
         assert _spend_row(f"chatcmpl-{marker}") == _success_row(model, f"{wire.url}{NATIVE_TARGET}")
 
 
-def test_tools_while_reasoning_keep_converse(gateway: Gateway) -> None:
+def test_tools_while_reasoning_are_bridged_to_native_responses(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
         response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high")
         payload: Final = _payload(response)
+        assert payload["id"] == f"resp_upstream_{marker}", response.text
+        choices: Final = payload["choices"]
+        assert isinstance(choices, list) and len(choices) == 1, response.text
+        assert choices[0]["finish_reason"] == "stop", response.text
+        assert choices[0]["message"]["content"] == answer(marker), response.text
+        body: Final = _body(_converse_request(wire, NATIVE_RESPONSES))
+        assert body["model"] == GPT, body
+        assert body["reasoning"] == {"effort": "high"}, body
+        assert [(tool["type"], tool["name"], tool["parameters"]) for tool in body["tools"]] == [
+            ("function", "lookup_invoice", dict(TOOL_PARAMETERS))
+        ], body
+        assert _upstream_requests_mentioning(gateway, marker) == [], response.text
+        assert _only_spend_row_of(model) == {
+            **_success_row(model, f"{wire.url}{NATIVE_RESPONSES}"),
+            "prompt_tokens": 30,
+        }
+
+
+def test_tools_while_reasoning_with_a_name_openai_rejects_keep_converse(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    tool: Final = {**TOOL, "function": {**TOOL["function"], "name": "lookup invoice!"}}
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = _chat(gateway, model, marker, tools=[tool], reasoning_effort="high")
+        payload: Final = _payload(response)
         assert payload["choices"] == [
             {"finish_reason": "stop", "index": 0, "message": {"content": answer(marker), "role": "assistant"}}
         ], response.text
         body: Final = _body(_converse_request(wire))
-        assert body["toolConfig"] == {"tools": [CONVERSE_TOOL]}, body
+        assert body["toolConfig"] == {
+            "tools": [{"toolSpec": {**CONVERSE_TOOL["toolSpec"], "name": "lookup_invoice_"}}]
+        }, body
         assert body["additionalModelRequestFields"] == {"reasoning": {"effort": "high"}}, body
         assert _spend_row(str(payload["id"])) == _success_row(model, f"{wire.url}{CONVERSE_TARGET}")
 

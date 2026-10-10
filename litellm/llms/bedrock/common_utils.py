@@ -1031,13 +1031,27 @@ def _chat_completions_rejects_function_tools(model: str, request_params: Mapping
     )
 
 
+class _NamedFunction(TypedDict):
+    name: ReadOnly[str]
+
+
+class _FunctionTool(TypedDict):
+    type: ReadOnly[Literal["function"]]
+    function: ReadOnly[_NamedFunction]
+
+
+_FUNCTION_TOOLS_ADAPTER: Final = TypeAdapter(tuple[_FunctionTool, ...])
+_OPENAI_FUNCTION_NAME: Final = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
 def _function_tools_only(tools: object) -> bool:
     if not isinstance(tools, (list, tuple)):
         return False
     try:
-        return all(tool.get("type") == "function" for tool in _TOOL_DICTS_ADAPTER.validate_python(tools))
+        validated: Final = _FUNCTION_TOOLS_ADAPTER.validate_python(tools)
     except ValidationError:
         return False
+    return all(_OPENAI_FUNCTION_NAME.fullmatch(tool["function"]["name"]) for tool in validated)
 
 
 _EXTRA_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -1074,7 +1088,7 @@ def _chat_completions_unless_converse_needed(
         return "converse"
     if not _chat_completions_rejects_function_tools(model, request_params):
         return "chat_completions"
-    return "converse" if request_params.get("responses_api_bridge_allowed") is False else "responses"
+    return "converse" if request_params.get("_litellm_responses_api_bridge_allowed") is False else "responses"
 
 
 def bedrock_route_for_request(
