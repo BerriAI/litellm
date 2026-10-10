@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 
-from tests.integration._support.ordering import CaseTiming
-from tests.integration._support.sharding import ShardExecution, merged_timings, shard_errors
-from tests.integration.conftest import COLLECTED, IntegrationReportPlugin
+from tests.integration._support.sharding import ShardExecution, shard_errors
+from tests.integration.conftest import COLLECTED, IntegrationReportPlugin, _shard_files
 from tests.integration.conftest import INVENTORY as WORKER_INVENTORY
 
 INVENTORY: Final = ("test_owned.py::test_first", "test_owned.py::test_skipped", "test_owned.py::test_last")
@@ -46,10 +46,34 @@ def test_shard_qualification_retains_passes_and_skip_identities() -> None:
     assert shard_errors(executions, 2) == ()
 
 
+def test_a_selected_subset_can_leave_a_shard_empty_without_losing_the_inventory() -> None:
+    executions: Final = (_execution(0, INVENTORY), _execution(1, ()))
+    assert shard_errors(executions, 2) == ()
+    assert shard_errors((_execution(0, INVENTORY[:1]), _execution(1, ())), 2)
+
+
+def test_an_empty_assignment_is_distinct_from_no_assignment_or_a_missing_file(tmp_path: Path) -> None:
+    assignment: Final = tmp_path / "node-files.txt"
+    assert _shard_files(None) is None
+    with pytest.raises(pytest.UsageError, match="Cannot read"):
+        _shard_files(assignment)
+    assignment.write_text("")
+    assert _shard_files(assignment) == frozenset()
+
+
+@pytest.mark.parametrize("content", ("test_owned.py\ntest_owned.py\n", "test_owned.py\n\n", "\n"))
+def test_an_invalid_assignment_is_rejected_instead_of_running_extra_tests(tmp_path: Path, content: str) -> None:
+    assignment: Final = tmp_path / "node-files.txt"
+    assignment.write_text(content)
+    with pytest.raises(pytest.UsageError, match="duplicate or blank"):
+        _shard_files(assignment)
+
+
 @pytest.mark.parametrize(
     "executions",
     (
         (),
+        (_execution(0, (), inventory=()), _execution(1, (), inventory=())),
         (_execution(0, INVENTORY),),
         (_execution(0, INVENTORY[:2]), _execution(0, INVENTORY[2:])),
         (_execution(0, INVENTORY[:1]), _execution(1, INVENTORY[2:])),
@@ -68,34 +92,6 @@ def test_shard_qualification_rejects_lost_duplicate_foreign_or_failed_cases(
     executions: tuple[ShardExecution, ...],
 ) -> None:
     assert shard_errors(executions, 2)
-
-
-def test_timing_snapshot_includes_every_executed_pass_and_skip_once() -> None:
-    first: Final = CaseTiming(nodeid=INVENTORY[0], seconds=40.0)
-    skipped: Final = CaseTiming(nodeid=INVENTORY[1], seconds=0.0)
-    last: Final = CaseTiming(nodeid=INVENTORY[2], seconds=1.0)
-    executions: Final = (
-        _execution(0, INVENTORY[:2], skipped=INVENTORY[1:2]).model_copy(update={"timings": (first, skipped)}),
-        _execution(1, INVENTORY[2:]).model_copy(update={"timings": (last,)}),
-    )
-    assert shard_errors(executions, 2) == ()
-    assert merged_timings(executions) == tuple(sorted((first, skipped, last), key=lambda timing: timing.nodeid))
-
-
-@pytest.mark.parametrize(
-    "timings",
-    (
-        (),
-        (CaseTiming(nodeid=INVENTORY[0], seconds=1.0),),
-        (CaseTiming(nodeid=INVENTORY[0], seconds=1.0),) * 2,
-        (CaseTiming(nodeid="foreign", seconds=1.0), CaseTiming(nodeid=INVENTORY[1], seconds=0.0)),
-    ),
-)
-def test_incomplete_duplicate_or_foreign_measurements_cannot_seed_the_timing_cache(
-    timings: tuple[CaseTiming, ...],
-) -> None:
-    execution: Final = _execution(0, INVENTORY[:2]).model_copy(update={"timings": timings})
-    assert merged_timings((execution,)) == ()
 
 
 @dataclass(frozen=True, slots=True)

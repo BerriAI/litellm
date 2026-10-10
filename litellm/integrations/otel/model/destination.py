@@ -11,7 +11,7 @@ from urllib.parse import quote
 from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import OtelSpanScope
+from litellm.types.utils import OtelSpanScope, captures_span_content
 
 
 class OtelDestination(LiteLLMBaseModel):
@@ -50,6 +50,17 @@ class OtelDestination(LiteLLMBaseModel):
         default=None,
         description="Same, for the requests with a failed span in their tree; ``None`` forwards every one.",
     )
+    capture_message_content: str | None = Field(
+        default=None,
+        description=(
+            "An explicit mode overrides the global capture policy for this destination. "
+            "Omitted follows the global setting."
+        ),
+    )
+
+    def captures_content(self, default: str) -> bool:
+        setting: Final = self.capture_message_content
+        return captures_span_content(default if setting is None else setting)
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects.
@@ -64,9 +75,9 @@ class OtelDestination(LiteLLMBaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope`` and the sampling rates are left out on purpose: they decide which
-        spans reach the processor, not how the processor exports them, so a full and an
-        ``llm_only`` view of the same account share one exporter.
+        ``span_scope``, the sampling rates and ``capture_message_content`` are left out on
+        purpose: they decide which spans reach the processor and what they carry, not how
+        the processor exports them, so two views of the same account share one exporter.
         """
         return (
             self.endpoint,
