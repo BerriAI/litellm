@@ -1689,8 +1689,12 @@ async def test_azure_ai_decision_requires_api_base_before_http(
 async def test_clef_omni_media_reaches_upstream_in_both_formats(
     respx_mock: respx.MockRouter, async_mode: bool, openai_format: bool, model: str
 ) -> None:
-    audio: Final = ["data:audio/wav;base64,YQ==", {"content_type": "audio/mpeg", "base64": "Yg=="}]
-    videos: Final = ["data:video/mp4;base64,Yw==", {"content_type": "video/webm", "base64": "ZA=="}]
+    audio: Final = [
+        "data:audio/wav;base64,YQ==",
+        {"content_type": "audio/mpeg", "base64": "Yg=="},
+        "data:audio/webm;codecs=opus;base64,ZQ==",
+    ]
+    videos: Final = ["data:video/mp4;base64,Yw==", {"content_type": "video/webm;codecs=vp9", "base64": "ZA=="}]
     route: Final = respx_mock.post("https://example.com/ai/run/@cf/cloudflare/clef-omni").respond(
         200,
         json={
