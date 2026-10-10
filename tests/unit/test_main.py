@@ -3348,6 +3348,86 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
 
 
+@pytest.mark.parametrize("trailer_choices", [[], [{"text": None, "index": 0, "logprobs": None, "finish_reason": None}]])
+def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_usage(trailer_choices):
+    """vLLM-style include_usage stream: finish_reason arrives on a text-less chunk, then a
+    usage-only trailer. The rebuilt response must keep both, including the provider's token
+    details, instead of reading chunks[-1] and recounting the prompt from `messages`."""
+    from litellm.main import stream_chunk_builder_text_completion
+    from litellm.types.utils import TextCompletionResponse
+
+    def chunk(choices, **extra):
+        return TextCompletionResponse(
+            id="cmpl-1", object="text_completion", created=1, model="my-model", choices=choices, **extra
+        )
+
+    chunks = [
+        chunk([{"text": "Hello", "index": 0, "logprobs": None, "finish_reason": None}]),
+        chunk([{"text": " world", "index": 0, "logprobs": None, "finish_reason": None}]),
+        chunk([{"text": "", "index": 0, "logprobs": None, "finish_reason": "length"}]),
+        chunk(
+            trailer_choices,
+            usage={
+                "prompt_tokens": 7,
+                "completion_tokens": 2,
+                "total_tokens": 9,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            },
+        ),
+    ]
+
+    response = stream_chunk_builder_text_completion(chunks=chunks, messages=None)
+
+    assert response.choices[0].text == "Hello world"
+    assert response.choices[0].finish_reason == "length"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (7, 2, 9)
+    assert response.usage.prompt_tokens_details.cached_tokens == 4
+
+
+def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks():
+    from litellm.types.utils import TextChoices
+
+    def chunk(choices, **extra):
+        return {"id": "cmpl-1", "object": "text_completion", "created": 1, "model": "my-model", "choices": choices, **extra}
+
+    chunks = [
+        chunk([TextChoices(text="Hello", index=0)]),
+        chunk([TextChoices(text=" world", index=0, finish_reason="stop")]),
+        chunk([], usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}),
+    ]
+
+    response = litellm.stream_chunk_builder(chunks)
+
+    assert response.id == "cmpl-1"
+    assert response.choices[0].text == "Hello world"
+    assert response.choices[0].finish_reason == "stop"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (3, 2, 5)
+
+
+def test_stream_chunk_builder_text_completion_survives_uncountable_prompt():
+    from litellm.main import stream_chunk_builder_text_completion
+    from litellm.types.utils import TextCompletionResponse
+
+    chunks = [
+        TextCompletionResponse(
+            id="cmpl-1",
+            object="text_completion",
+            created=1,
+            model="my-model",
+            choices=[{"text": "Hello world", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+        )
+    ]
+
+    response = stream_chunk_builder_text_completion(
+        chunks=chunks, messages=[{"role": "user", "content": [{"type": "not-a-content-type"}]}]
+    )
+
+    assert response.choices[0].text == "Hello world"
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.completion_tokens > 0
+    assert response.usage.total_tokens == response.usage.completion_tokens
+
+
 def test_completion_forwards_store_and_prompt_cache_key_to_openai():
     """
     Regression test for https://github.com/BerriAI/litellm/issues/33184

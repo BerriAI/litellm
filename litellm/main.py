@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import datetime
 import inspect
+import itertools
 import json
 import os
 import random
@@ -8966,36 +8967,51 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
-    id: Final = chunks[0]["id"]
-    object: Final = chunks[0]["object"]
-    created: Final = chunks[0]["created"]
-    model: Final = chunks[0]["model"]
-    system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
-    finish_reason: Final = chunks[-1]["choices"][0]["finish_reason"]
-    logprobs: Final = chunks[-1]["choices"][0]["logprobs"]
-
-    content_list: Final = []
-    for chunk in chunks:
-        choices = chunk["choices"]
-        for choice in choices:
-            if choice is not None and hasattr(choice, "text") and choice.get("text") is not None:
-                _choice = choice.get("text")
-                content_list.append(_choice)
-
-    # Combine the "content" strings into a single string || combine the 'function' strings into a single string
-    combined_content: Final = "".join(content_list)
-
+def _prompt_tokens_or_zero(model: str, messages: Sequence | None) -> int:
     try:
-        prompt_tokens = token_counter(model=model, messages=messages)
+        return token_counter(model=model, messages=messages)
     except Exception:  # don't allow this failing to block a complete streaming response from being returned
         print_verbose("token_counter failed, assuming prompt tokens is 0")
-        prompt_tokens = 0
-    completion_tokens: Final = token_counter(
-        model=model,
-        text=combined_content,
-        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+        return 0
+
+
+def _recount_text_completion_usage(model: str, messages: Sequence | None, text: str) -> Usage:
+    prompt_tokens: Final = _prompt_tokens_or_zero(model, messages)
+    completion_tokens: Final = token_counter(model=model, text=text, count_response_tokens=True)
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
     )
+
+
+def stream_chunk_builder_text_completion(
+    chunks: Sequence[TextCompletionResponse], messages: Sequence | None = None
+) -> TextCompletionResponse:
+    id: Final = chunks[0].id
+    object: Final = chunks[0].object
+    created: Final = chunks[0].created
+    model: Final = chunks[0].model
+    system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
+    # With stream_options.include_usage the last chunk is a usage-only trailer, and some providers
+    # (e.g. vLLM) send finish_reason on a text-less chunk before it, so scan rather than read chunks[-1].
+    chunks_with_choices: Final = [chunk for chunk in chunks if chunk.choices]
+    finish_reason: Final = next(
+        (c.choices[0].finish_reason for c in reversed(chunks_with_choices) if c.choices[0].finish_reason),
+        None,
+    )
+    logprobs: Final = chunks_with_choices[-1].choices[0].logprobs if chunks_with_choices else None
+
+    all_choices: Final = itertools.chain.from_iterable(chunk.choices for chunk in chunks)
+    combined_content: Final = "".join(choice.text for choice in all_choices if choice.text)
+
+    # Prefer the usage the provider reported (the include_usage trailer) over a local recount, which
+    # cannot see a text-completion prompt (it is not in `messages`) and so reports 0 prompt tokens.
+    provider_usage: Final = next(
+        (c.usage for c in reversed(chunks) if c.usage and c.usage.total_tokens),
+        None,
+    )
+    usage: Final = provider_usage or _recount_text_completion_usage(model or "", messages, combined_content)
 
     response: Final = {
         "id": id,
@@ -9011,11 +9027,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "usage": usage,
     }
     return TextCompletionResponse(**response)
 
@@ -9144,7 +9156,10 @@ def stream_chunk_builder(
         if first_chunk_with_choices is not None and isinstance(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
-            return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
+            text_chunks: Final = tuple(
+                c if isinstance(c, TextCompletionResponse) else TextCompletionResponse(**c) for c in chunks
+            )
+            return stream_chunk_builder_text_completion(chunks=text_chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
         # Initialize the response dictionary
