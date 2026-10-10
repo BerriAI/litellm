@@ -32,6 +32,7 @@ from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from prisma.client import TransactionManager
+    from typing_extensions import LiteralString
 
     from litellm.proxy.utils import PrismaClient
 
@@ -127,7 +128,7 @@ def select_partitions_to_drop(partitions: list[tuple[str, datetime | None]], cut
 _TX_COMMIT_SLACK: Final = timedelta(seconds=5)
 
 
-def _bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionManager":
+def bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionManager":
     """
     Open an interactive transaction that outlives the statement bound it
     carries. prisma's default 5s transaction timeout would close it mid
@@ -136,6 +137,12 @@ def _bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionM
     return cast(  # cast-ok: PrismaWrapper delegates tx via __getattr__ (untyped)
         "TransactionManager",
         prisma_client.db.tx(timeout=timedelta(milliseconds=timeout_ms) + _TX_COMMIT_SLACK),
+    )
+
+
+def trusted_sql(sql: str) -> "LiteralString":
+    return cast(  # cast-ok: identifiers come from constants or the catalog, values are bound as $n parameters
+        "LiteralString", sql
     )
 
 
@@ -162,7 +169,7 @@ class SpendLogsPartitionManager:
         try:
             async with (
                 db_span("check_spend_log_partitioning", "LiteLLM_SpendLogs"),
-                _bounded_tx(prisma_client, budget_ms) as tx,
+                bounded_tx(prisma_client, budget_ms) as tx,
             ):
                 await tx.execute_raw(f"SET LOCAL statement_timeout = {budget_ms}")
                 rows: Final = await tx.query_raw(
@@ -200,7 +207,7 @@ class SpendLogsPartitionManager:
         """
         async with (
             db_span("create_spend_log_partition", "LiteLLM_SpendLogs"),
-            _bounded_tx(prisma_client, timeout_ms) as tx,
+            bounded_tx(prisma_client, timeout_ms) as tx,
         ):
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
@@ -240,7 +247,7 @@ class SpendLogsPartitionManager:
     ) -> list[tuple[str, datetime | None]]:
         async with (
             db_span("list_spend_log_partitions", "LiteLLM_SpendLogs"),
-            _bounded_tx(prisma_client, timeout_ms) as tx,
+            bounded_tx(prisma_client, timeout_ms) as tx,
         ):
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             rows: Final = await tx.query_raw(

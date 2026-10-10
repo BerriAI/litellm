@@ -28,6 +28,8 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     RemainingTimeoutMs,
     SpendLogsPartitionManager,
+    bounded_tx,
+    trusted_sql,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -307,11 +309,15 @@ class SpendLogCleanup:
         fault, so the caller stops instead of retrying.
         """
         timeout_ms: Final = self._timeout_ms(deadline)
-        async with db_span("cleanup_expired_rows", table_name), prisma_client.db.tx() as tx:
-            await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
-            await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
-            deleted_result: Final = await tx.execute_raw(delete_sql, cutoff_date, self.batch_size)
-        return deleted_result if isinstance(deleted_result, int) else None
+        async with db_span("cleanup_expired_rows", table_name), bounded_tx(prisma_client, timeout_ms) as tx:
+            await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            await tx.execute_raw(trusted_sql(f"SET LOCAL lock_timeout = {timeout_ms}"))
+            deleted_result: Final = await tx.execute_raw(trusted_sql(delete_sql), cutoff_date, self.batch_size)
+        return (
+            deleted_result
+            if isinstance(deleted_result, int)  # pyright: ignore[reportUnnecessaryIsInstance]  # driver may return None
+            else None
+        )
 
     async def _count_remaining(
         self, prisma_client: PrismaClient, cutoff_date: Cutoff, table_name: str, time_column: str, deadline: float
@@ -331,11 +337,12 @@ class SpendLogCleanup:
                 LIMIT $2
             ) capped
             """
+        timeout_ms: Final = self._timeout_ms(deadline)
         try:
-            async with db_span("count_expired_rows", table_name), prisma_client.db.tx() as tx:
-                await tx.execute_raw(f"SET LOCAL statement_timeout = {self._timeout_ms(deadline)}")
+            async with db_span("count_expired_rows", table_name), bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
                 rows: Final = _REMAINING_ROWS.validate_python(
-                    await tx.query_raw(count_sql, cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
+                    await tx.query_raw(trusted_sql(count_sql), cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
                 )
         except Exception as e:  # noqa: BLE001 - an observability probe must never fail the cleanup run
             verbose_proxy_logger.warning("Could not count remaining %s rows: %s", table_name, e)
