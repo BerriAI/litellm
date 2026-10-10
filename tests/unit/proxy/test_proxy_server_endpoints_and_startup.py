@@ -10115,6 +10115,24 @@ def test_update_config_accepts_disjoint_routing_groups(_update_config_setup):
         restore()
 
 
+def test_update_config_validates_content_policy_fallbacks_like_fallbacks(_update_config_setup):
+    client, prisma, restore = _update_config_setup(initial_rows={"router_settings": {"num_retries": 2}})
+    rule: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano"]}]
+    malformed: Final = ("oops", 5, [1, 2], [{"gpt-5.4-mini": "gpt-5.4-nano"}], [{"gpt-5.4-mini": ["gpt-5.4-nano", 7]}])
+    try:
+        rejected: Final = tuple(
+            client.post("/config/update", json={"router_settings": {"content_policy_fallbacks": value}}).status_code
+            for value in malformed
+        )
+        assert rejected == (422,) * len(malformed)
+        assert prisma.db.litellm_config.rows["router_settings"] == {"num_retries": 2}
+        accepted: Final = client.post("/config/update", json={"router_settings": {"content_policy_fallbacks": rule}})
+        assert accepted.status_code == 200
+        assert prisma.db.litellm_config.rows["router_settings"] == {"num_retries": 2, "content_policy_fallbacks": rule}
+    finally:
+        restore()
+
+
 def test_update_config_env_var_round_trip_not_double_encrypted(_update_config_setup, monkeypatch):
     """Endpoint-level regression for the /config/update double-encryption bug.
 

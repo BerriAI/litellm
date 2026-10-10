@@ -2364,6 +2364,39 @@ def test_update_settings_model_group_alias_drops_cached_group_info():
     assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
 
 
+@pytest.mark.parametrize(
+    "fallback_kind, mock_testing_param",
+    [
+        ("fallbacks", "mock_testing_fallbacks"),
+        ("context_window_fallbacks", "mock_testing_context_fallbacks"),
+        ("content_policy_fallbacks", "mock_testing_content_policy_fallbacks"),
+    ],
+)
+async def test_update_settings_fallback_rule_of_every_kind_is_used_on_its_error(
+    fallback_kind: str, mock_testing_param: str
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    router.update_settings(**{fallback_kind: [{"primary": ["backup"]}]})
+
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "hi"}], **{mock_testing_param: True}
+    )
+    assert response.choices[0].message.content == "backup answered"
+
+
 _PAID_INPUT_COST_PER_TOKEN: Final = 3e-06
 _PAID_OUTPUT_COST_PER_TOKEN: Final = 1.5e-05
 

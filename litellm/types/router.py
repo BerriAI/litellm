@@ -183,6 +183,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
+    content_policy_fallbacks: Sequence[Mapping[str, Sequence[str]]] | None = None
     model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None
