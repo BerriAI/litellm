@@ -2860,26 +2860,25 @@ async def test_alist_input_items_surfaces_upstream_error_status():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_request(monkeypatch):
-    """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
-    the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
-    reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaudeMessagesConfig,
-    )
+@pytest.mark.parametrize("hash_header", (None, "x-amz-content-sha256", "X-Amz-Content-SHA256"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_request(
+    monkeypatch: pytest.MonkeyPatch, hash_header: str | None, stream: bool
+) -> None:
+    import hashlib
 
     for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
         monkeypatch.delenv(env_var, raising=False)
 
-    handler = BaseLLMHTTPHandler()
-    provider_config = AmazonAnthropicClaudeMessagesConfig()
-    litellm_params = GenericLiteLLMParams(
-        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
-        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    handler: Final = BaseLLMHTTPHandler()
+    provider_config: Final = AmazonAnthropicClaudeMessagesConfig()
+    litellm_params: Final = GenericLiteLLMParams(
+        aws_access_key_id="payload-hash-access",
+        aws_secret_access_key="payload-hash-secret",
         aws_region_name="us-east-1",
     )
-    request_url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
-    request_body = {
+    request_url: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    request_body: Final = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 100,
         "messages": [
@@ -2894,60 +2893,71 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
             {"role": "user", "content": "continue"},
         ],
     }
-    first_attempt_headers, signed_json_body = provider_config.sign_request(
-        headers={"Content-Type": "application/json"},
+    original_hash: Final = hashlib.sha256(json.dumps(request_body).encode()).hexdigest()
+    first_headers, signed_body = provider_config.sign_request(
+        headers={
+            "Content-Type": "application/json",
+            **({hash_header: original_hash} if hash_header is not None else {}),
+        },
         optional_params=dict(litellm_params),
         request_data=request_body,
         api_base=request_url,
         api_key=None,
-        stream=False,
+        stream=stream,
         fake_stream=False,
         model="test-model",
     )
+    posts: Final[list[httpx.Request]] = []  # mutable-ok: the injected transport records request order
 
-    posts: list = []
-    invalid_signature_response = httpx.Response(
-        400,
-        text='{"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}',
-        request=httpx.Request("POST", request_url),
-    )
-    ok_response = httpx.Response(200, json={"id": "msg_1"}, request=httpx.Request("POST", request_url))
+    def bedrock_peer(request: httpx.Request) -> httpx.Response:
+        posts.append(request)
+        body_hash: Final = hashlib.sha256(request.content).hexdigest()
+        if request.headers.get("x-amz-content-sha256", body_hash) != body_hash:
+            return httpx.Response(
+                403,
+                headers={"x-amzn-errortype": "SignatureDoesNotMatch"},
+                json={"message": "SignatureDoesNotMatch: payload hash does not match request bytes"},
+            )
+        if len(posts) == 1:
+            return httpx.Response(
+                400,
+                json={"message": "messages.1.content.0: Invalid `signature` in `thinking` block"},
+            )
+        return httpx.Response(200, json={"id": "msg_1"})
 
-    class FakeAsyncClient:
-        async def post(self, url, headers, data, stream=False, logging_obj=None, timeout=None):
-            posts.append({"headers": dict(headers), "data": data})
-            return invalid_signature_response if len(posts) == 1 else ok_response
-
-    logging_obj: Final = Mock(baseline_cache_context=None)
-    logging_obj.model_call_details = {}
-
-    response = await handler._async_post_anthropic_messages_with_http_error_retry(
-        async_httpx_client=FakeAsyncClient(),
-        request_url=request_url,
-        headers=dict(first_attempt_headers),
-        signed_json_body=signed_json_body,
-        request_body=request_body,
-        stream=False,
-        logging_obj=logging_obj,
-        provider_config=provider_config,
-        litellm_params=litellm_params,
-        api_key=None,
-        model="test-model",
-    )
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(bedrock_peer))
+    logging_obj: Final = Mock(baseline_cache_context=None, model_call_details={})
+    try:
+        response: Final = await handler._async_post_anthropic_messages_with_http_error_retry(
+            async_httpx_client=client,
+            request_url=request_url,
+            headers=first_headers,
+            signed_json_body=signed_body,
+            request_body=request_body,
+            stream=stream,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            litellm_params=litellm_params,
+            api_key=None,
+            model="test-model",
+        )
+        await response.aclose()
+    finally:
+        await client.close()
 
     assert response.status_code == 200
     assert len(posts) == 2
-    retry_payload = json.loads(posts[1]["data"])
-    retry_blocks = [
-        block
-        for message in retry_payload["messages"]
-        if isinstance(message.get("content"), list)
-        for block in message["content"]
-    ]
-    assert retry_blocks and all(block["type"] != "thinking" for block in retry_blocks)
-    retry_authorization = posts[1]["headers"]["Authorization"]
-    assert retry_authorization.startswith("AWS4-HMAC-SHA256")
-    assert retry_authorization != first_attempt_headers["Authorization"]
+    assert posts[0].content != posts[1].content
+    assert json.loads(posts[1].content) == {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 100,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            {"role": "user", "content": "continue"},
+        ],
+    }
+    assert posts[1].headers["authorization"] != posts[0].headers["authorization"]
 
 
 def test_aws_signing_overrides_only_fills_missing_credentials():
