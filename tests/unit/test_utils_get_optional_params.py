@@ -1,7 +1,11 @@
+import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import litellm
 import pytest
+import respx
 
 from litellm.utils import (
     get_optional_params,
@@ -10,6 +14,16 @@ from litellm.utils import (
     get_requester_metadata,
     validate_openai_optional_params,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+COHERE_CHAT_RESPONSE: Final = {
+    "id": "response-1",
+    "finish_reason": "COMPLETE",
+    "message": {"content": [{"type": "text", "text": "ok"}]},
+    "usage": {"billed_units": {"input_tokens": 1, "output_tokens": 1}},
+}
 
 
 def _check_additional_properties(schema):
@@ -1861,3 +1875,185 @@ def test_store_param_passed_through_openai_azure():
     )
     assert "store" in optional_params_false
     assert optional_params_false["store"] is False
+
+
+def test_cohere_drop_params_removes_unsupported_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    params: Final = get_optional_params(
+        model="command-r-plus-08-2024",
+        custom_llm_provider="cohere",
+        response_format={"type": "json_object"},
+        drop_params=True,
+    )
+    assert "response_format" not in params
+
+
+@pytest.mark.parametrize("drop_params", [False, None])
+def test_cohere_drop_params_rejects_unsupported_response_format(
+    drop_params: bool | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError):
+        get_optional_params(
+            model="command-r-plus-08-2024",
+            custom_llm_provider="cohere",
+            response_format={"type": "json_object"},
+            drop_params=drop_params,
+        )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_completion_drops_response_format_from_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
+    route.return_value = httpx.Response(200, json=COHERE_CHAT_RESPONSE)
+
+    litellm.completion(
+        model="cohere/command-r-plus-08-2024",
+        messages=[{"role": "user", "content": "hello"}],
+        response_format={"type": "json_object"},
+        drop_params=True,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert "response_format" not in request_body
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_completion_drops_parallel_tool_calls_from_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
+    route.return_value = httpx.Response(200, json=COHERE_CHAT_RESPONSE)
+
+    litellm.completion(
+        model="cohere/command-r-plus-08-2024",
+        messages=[{"role": "user", "content": "hello"}],
+        parallel_tool_calls=True,
+        drop_params=True,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert "parallel_tool_calls" not in request_body
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_completion_passes_extra_params_without_api_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
+    route.return_value = httpx.Response(200, json=COHERE_CHAT_RESPONSE)
+
+    litellm.completion(
+        model="cohere/command-r-plus-08-2024",
+        messages=[{"role": "user", "content": "hello"}],
+        custom_param="test",
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body["custom_param"] == "test"
+    assert "api_key" not in request_body
+
+
+def test_cohere_additional_drop_params_removes_only_selected_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    params: Final = get_optional_params(
+        model="command-r-plus-08-2024",
+        custom_llm_provider="cohere",
+        max_tokens=32,
+        response_format={"type": "json_object"},
+        additional_drop_params=["response_format"],
+    )
+
+    assert params["max_tokens"] == 32
+    assert "response_format" not in params
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_completion_applies_additional_drop_params_to_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
+    route.return_value = httpx.Response(200, json=COHERE_CHAT_RESPONSE)
+
+    litellm.completion(
+        model="cohere/command-r-plus-08-2024",
+        messages=[{"role": "user", "content": "hello"}],
+        response_format={"type": "json_object"},
+        additional_drop_params=["response_format"],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert "response_format" not in request_body
+    assert "additional_drop_params" not in request_body
+
+
+def test_get_optional_params_preserves_num_retries_as_max_retries() -> None:
+    params: Final = get_optional_params(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        max_retries=10,
+    )
+
+    assert params["max_retries"] == 10
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_responses_allowed_openai_params_are_sent(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses")
+    route.return_value = httpx.Response(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+    litellm.responses(
+        model="openai/gpt-5.6",
+        input="Hello",
+        max_output_tokens=100,
+        top_logprobs=10,
+        allowed_openai_params=["top_logprobs"],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body["top_logprobs"] == 10
+    assert request_body["max_output_tokens"] == 100
+
+
+def test_supports_system_message_merges_system_prompt_into_user_message() -> None:
+    messages: Final = [
+        {"role": "system", "content": "Listen here!"},
+        {"role": "user", "content": "Hello there!"},
+    ]
+
+    assert map_system_message_pt(messages=messages) == [{"role": "user", "content": "Listen here! Hello there!"}]
