@@ -10441,6 +10441,19 @@ class TestShouldInjectCostForRequest:
             is True
         )
 
+    @pytest.mark.parametrize(("protocol_supports_stream_options", "expected"), [(True, False), (False, True)])
+    def test_stream_options_without_include_usage_keeps_the_protocol_default(
+        self, monkeypatch, protocol_supports_stream_options, expected
+    ):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"stream_options": {}},
+                protocol_supports_stream_options=protocol_supports_stream_options,
+            )
+            is expected
+        )
+
     def test_missing_request_data_falls_back_to_protocol_default(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(None) is False

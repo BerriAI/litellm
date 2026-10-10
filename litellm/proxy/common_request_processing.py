@@ -4139,9 +4139,9 @@ class ProxyBaseLLMRequestProcessing:
         if not getattr(litellm, "include_cost_in_streaming_usage", False):
             return False
         stream_options: Final = None if request_data is None else request_data.get("stream_options")
-        if not isinstance(stream_options, Mapping):
+        if not isinstance(stream_options, Mapping) or "include_usage" not in stream_options:
             return not protocol_supports_stream_options
-        return "include_usage" in stream_options and stream_options["include_usage"] is True
+        return stream_options["include_usage"] is True
 
     @overload
     @staticmethod
