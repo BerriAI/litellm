@@ -113,7 +113,7 @@ describe("decisionProviderNames", () => {
     expect(decisionProviderNames(buildDecisionCatalog(COST_MAP))).toEqual([
       "OpenAI",
       "Perplexity",
-      "somevendor",
+      "Somevendor",
       "TypeSafe",
     ]);
   });

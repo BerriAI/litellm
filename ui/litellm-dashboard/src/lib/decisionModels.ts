@@ -76,7 +76,16 @@ export const isDecisionSelection = (
   (litellmProvider !== undefined && catalog.providers.get(litellmProvider)?.decisionOnly === true) ||
   selectedModels.some((model) => catalog.models.has(model));
 
+const titleCased = (slug: string): string =>
+  slug
+    .split(/[_-]/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+
+const providerDisplayName = (provider: string): string => {
+  const { displayName } = getProviderLogoAndName(provider);
+  return displayName === provider ? titleCased(provider) : displayName;
+};
+
 export const decisionProviderNames = (catalog: DecisionCatalog): readonly string[] =>
-  [...catalog.providers.keys()]
-    .map((provider) => getProviderLogoAndName(provider).displayName)
-    .sort((a, b) => a.localeCompare(b));
+  [...catalog.providers.keys()].map(providerDisplayName).sort((a, b) => a.localeCompare(b));
