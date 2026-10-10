@@ -119,15 +119,6 @@ test_paths:
 
 dockerfiles:
   - reason: >-
-      The dashboard container is a static Next.js export served by nginx, and the dashboard build
-      and lint workflows already exercise that output, so building the image adds no signal about it
-    paths:
-      - ui/Dockerfile
-  - reason: >-
-      An example image under cookbook/ that is documentation rather than a shipped artifact
-    paths:
-      - cookbook/litellm-ollama-docker-image/Dockerfile
-  - reason: >-
       The Rust gateway image compiles the whole workspace in release mode, which is too slow for
       a per-pull-request job while the gateway binary is still being assembled; the Rust lint,
       clippy, and compile jobs already cover the code it packages. Revisit when the gateway is

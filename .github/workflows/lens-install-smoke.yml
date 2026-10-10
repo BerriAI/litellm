@@ -32,13 +32,17 @@ jobs:
       matrix:
         include:
           - component: gateway
-            dockerfile: gateway/Dockerfile
+            dockerfile: Dockerfile
+            litellm_component: gateway
           - component: backend
-            dockerfile: backend/Dockerfile
+            dockerfile: Dockerfile
+            litellm_component: backend
           - component: ui
-            dockerfile: ui/Dockerfile
+            dockerfile: Dockerfile
+            litellm_component: ui
           - component: migrations
-            dockerfile: migrations/Dockerfile
+            dockerfile: Dockerfile
+            litellm_component: migrations
           - component: monolith
             dockerfile: Dockerfile
           - component: gateway
@@ -56,6 +60,7 @@ jobs:
       SOURCE_REF: ${{ matrix.baseline && inputs.gateway_baseline_ref || github.sha }}
       IMAGE_TAG: ${{ matrix.baseline && 'v0.0.0-lens-ci-baseline' || 'v0.0.0-lens-ci' }}
       CURRENT_REF: ${{ github.sha }}
+      LITELLM_COMPONENT: ${{ matrix.litellm_component }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -73,6 +78,10 @@ jobs:
         run: |
           docker build --build-arg "LITELLM_RELEASE_TAG=$IMAGE_TAG" \
             -f "$DOCKERFILE" -t "lens-ci-$COMPONENT:$IMAGE_TAG" .
+          if [[ -n "$LITELLM_COMPONENT" ]]; then
+            printf 'FROM lens-ci-%s:%s\nENV LITELLM_COMPONENT=%s\n' "$COMPONENT" "$IMAGE_TAG" "$LITELLM_COMPONENT" \
+              | docker build -t "lens-ci-$COMPONENT:$IMAGE_TAG" -
+          fi
       - name: Save the matching release image
         run: |
           docker save "lens-ci-$COMPONENT:$IMAGE_TAG" \

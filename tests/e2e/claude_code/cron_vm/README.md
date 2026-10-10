@@ -1,12 +1,12 @@
 # Render cron job for the Claude Code compatibility-matrix populator
 
 The populator runs daily as the Render cron job `litellm-compat-matrix`
-(Docker runtime, built from the `Dockerfile` in this directory) rather
+(Docker runtime; the image recipe is in [Image](#image) below) rather
 than as a GitHub Action or on a dedicated VM. Trade-offs:
 
-- ✅ No machine to keep on or patch. Render builds the image from this
-  directory on every push to `main` that touches `tests/e2e/**` and
-  runs it on the schedule.
+- ✅ No machine to keep on or patch. Render builds the image on every
+  push to `main` that touches `tests/e2e/**` and runs it on the
+  schedule.
 - ✅ Credentials live in Render env vars and secret files, scoped to
   this one service, instead of on a VM filesystem.
 - ✅ The publish token still uses the `mateo-berri` account, which is a
@@ -25,7 +25,6 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
 
 | File | Purpose |
 | --- | --- |
-| `Dockerfile` | The image Render builds: Debian bookworm-slim plus pinned, checksum-verified `gh` and `uv`, with this `tests/e2e/` tree copied to `/opt/litellm/tests/e2e/`. Runs as the non-root user `populator` (uid/gid 1000, which is what Render's secret files are readable by). |
 | `run_daily.sh` | The actual cron job. Resolves versions, clones the worktree, installs the Claude Code CLI under test, boots the proxy, runs pytest, builds the JSON, opens (or updates) a docs PR, sweeps stale compat-matrix PRs. |
 | `install_claude_code.sh` | Downloads one Claude Code release (`<version> <dest-dir>`) from the vendor's native release channel, verifies it against the sha256 in that release's `manifest.json`, and refuses a binary whose `--version` disagrees. Run by the cron and by the `compat-matrix-image` GitHub workflow. |
 | `build_matrix.py` | Tiny Python CLI that wraps `claude_code.matrix_builder.build_from_paths`. Exists only because the bash script needs *some* way to render the per-cell aggregation, and the builder is already Python. |
@@ -106,7 +105,7 @@ the same values if it ever has to be rebuilt.
 | Workspace | Litellm (the one that already builds the other litellm services) |
 | Type | Cron job, Docker runtime |
 | Repo / branch | `BerriAI/litellm` @ `main` |
-| Dockerfile path | `tests/e2e/claude_code/cron_vm/Dockerfile` |
+| Image | Built from the recipe under [Image](#image). Render only builds a Dockerfile that lives in the connected repo, and this repo ships exactly one Dockerfile (the LiteLLM image in its root), so the service has to point at a copy of the recipe kept with the service or at a prebuilt image |
 | Docker build context | `tests/e2e` (the repo root `.dockerignore` excludes `tests`, so the context has to start below it) |
 | Build filter | included paths `tests/e2e/**` |
 | Schedule | `0 6 * * *` (06:00 UTC daily) |
@@ -117,7 +116,7 @@ the same values if it ever has to be rebuilt.
 Render mounts secret files at `/etc/secrets/<name>`, which is where
 `CREDENTIALS_DIRECTORY` and `GOOGLE_APPLICATION_CREDENTIALS` in the env
 example point. Render also passes env vars to `docker build` as build
-args, which is why the `Dockerfile` declares no `ARG` that could ever
+args, which is why the image recipe declares no `ARG` that could ever
 be given a secret's name.
 
 Creating it through the API looks like this (fill `envVars` and
@@ -145,11 +144,57 @@ curl -fsS https://api.render.com/v1/services \
       "plan": "4c-16g",
       "region": "oregon",
       "envSpecificDetails": {
-        "dockerfilePath": "tests/e2e/claude_code/cron_vm/Dockerfile",
+        "dockerfilePath": "<path to the recipe below in the repo the service builds from>",
         "dockerContext": "tests/e2e"
       }
     }
   }'
+```
+
+## Image
+
+Debian bookworm-slim plus pinned, checksum-verified `gh` and `uv`, with
+this `tests/e2e/` tree copied to `/opt/litellm/tests/e2e/`. Runs as the
+non-root user `populator` (uid/gid 1000, which is what Render's secret
+files are readable by). This is the recipe the Render service builds;
+it lives with the service because the repo ships exactly one Dockerfile,
+the LiteLLM image in its root
+
+```dockerfile
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+
+ARG GH_VERSION=2.101.0
+ARG GH_SHA256=9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
+ARG UV_VERSION=0.10.9
+ARG UV_SHA256=20d79708222611fa540b5c9ed84f352bcd3937740e51aacc0f8b15b271c57594
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl git jq procps iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSLo /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+ && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gh.tar.gz -C /usr/local/bin --strip-components=2 "gh_${GH_VERSION}_linux_amd64/bin/gh" \
+ && rm /tmp/gh.tar.gz
+
+RUN curl -fsSLo /tmp/uv.tar.gz "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+ && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/uv.tar.gz -C /usr/local/bin --strip-components=1 uv-x86_64-unknown-linux-gnu/uv \
+ && rm /tmp/uv.tar.gz
+
+RUN groupadd --gid 1000 populator && useradd --uid 1000 --gid 1000 --create-home populator
+
+ENV HOME=/home/populator \
+    LITELLM_REPO=/opt/litellm \
+    DISABLE_AUTOUPDATER=1
+
+COPY --chown=populator:populator . /opt/litellm/tests/e2e/
+
+USER populator
+WORKDIR /home/populator
+CMD ["/opt/litellm/tests/e2e/claude_code/cron_vm/run_daily.sh"]
 ```
 
 ## Operating it
@@ -185,7 +230,7 @@ curl -fsS "https://api.render.com/v1/services/${CRON_ID}/deploys?limit=1" \
 # Build and run the image locally (docker on Apple silicon needs the
 # platform flag; the context is tests/e2e, see the table above).
 docker build --platform linux/amd64 \
-  -f tests/e2e/claude_code/cron_vm/Dockerfile -t compat-matrix tests/e2e
+  -f /path/to/compat-matrix.Dockerfile -t compat-matrix tests/e2e
 docker run --rm --platform linux/amd64 \
   --env-file litellm-compat-matrix.env -e SKIP_PUBLISH=1 \
   -v "$PWD/secrets:/etc/secrets:ro" compat-matrix
@@ -234,8 +279,8 @@ docker run --rm --platform linux/amd64 \
   A CLI release that breaks a cell shows up as a green→red flip, which
   withholds auto-merge on that day's docs PR for review. To rerun the
   matrix on one specific CLI, set `CLAUDE_CODE_VERSION` on the run.
-  `gh` and `uv` stay pinned in the `Dockerfile`; bump them in a PR with
-  the checksum from the release's `gh_<version>_checksums.txt` and the
+  `gh` and `uv` stay pinned in the image recipe; bump them with the
+  checksum from the release's `gh_<version>_checksums.txt` and the
   tarball's `.sha256` sidecar respectively.
 - **A local build on Apple silicon only proves the image assembles.**
   Under QEMU the Claude Code binary (a Bun executable) dies with
