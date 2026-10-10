@@ -17,11 +17,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
-from litellm.router_utils.cooldown_cache import CooldownCache
+from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -29,7 +30,17 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
+ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
+ROUTER_USAGE_TARGET: Final = "router_usage"
 _PREFETCH_SLOT: Final = "routing_read"
+
+
+def _routing_read_target(cooldown_keys: Sequence[str], usage_keys: Sequence[str]) -> str:
+    if not usage_keys:
+        return ROUTER_COOLDOWNS_TARGET
+    if not cooldown_keys:
+        return ROUTER_USAGE_TARGET
+    return ROUTER_COOLDOWNS_USAGE_TARGET
 
 
 async def _backfill_prefetched_cache(
@@ -114,7 +125,8 @@ class RoutingPrefetch:
         )
         if not due:
             return
-        result: Final = request.batch(redis_cache).mget(due)
+        with service_target(_routing_read_target(cooldown_due, usage_due)):
+            result: Final = request.batch(redis_cache).mget(due)
         prefetch: Final = RoutingPrefetch(
             keys=frozenset(keys), fetched=frozenset(due), result=result, reservations=reservations
         )
@@ -192,9 +204,10 @@ class RoutingReadBatch:
             (litellm_router_instance.cooldown_cache.cooldown_store, cooldown_keys),
             *(() if selector is None else ((selector.router_cache, list(usage_keys)),)),
         )
-        results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
-            reads, parent_otel_span=parent_otel_span
-        )
+        with service_target(_routing_read_target(cooldown_keys, usage_keys)):
+            results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
+                reads, parent_otel_span=parent_otel_span
+            )
         cooldown_results: Final = results[0]
         if selector is not None:
             usage_values: Final = results[1]

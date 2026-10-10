@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { Input } from "@/components/ui/input";
 

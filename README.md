@@ -90,6 +90,24 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 uv add litellm
 ```
 
+An independent `litellm-core` distribution provides the Python SDK with the same
+`import litellm` API and runtime dependencies. It has no optional extras, CLI entry
+points, or bundled dashboard. Install one SDK distribution per environment because
+`litellm` and `litellm-core` own overlapping Python files. Use `litellm` for the
+proxy, CLI, and optional extras
+
+Build and install core from this checkout while its release integration is pending:
+
+```shell
+python scripts/build_core_distribution.py --out-dir dist/core
+python -m pip install dist/core/litellm_core-*.whl
+```
+
+The builder requires Git, `uv` and the Rust build toolchain. It reads the release version
+from the root `pyproject.toml`, leaves source files unchanged, and produces a wheel
+and a self-contained sdist in `dist/core`. Run installation in a fresh environment
+without `litellm`
+
 ```python
 from litellm import completion
 import os
@@ -268,6 +286,31 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 
 </details>
 
+<details>
+<summary><b>Agents</b> - Run Claude Code, Codex, OpenCode or Deep Agents on any model (Python SDK)</summary>
+
+### Python SDK - Agents
+
+```python
+import litellm
+from litellm import Harness, sandbox
+
+result = litellm.agent(
+    Harness.CLAUDE_CODE,  # or Harness.CODEX, Harness.OPENCODE, Harness.DEEPAGENTS
+    "Find why tests/test_router.py is flaky and fix it.",
+    sandbox=sandbox.local("./repo"),
+    model="litellm_proxy/claude-sonnet-4-5",  # a model group on your AI Gateway
+)
+
+print(result.text, result.cost, [f.path for f in result.files])
+```
+
+Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call the agent makes goes through your AI Gateway, tagged `harness,claude_code`. Drop the `litellm_proxy/` prefix to call a provider directly. Install `starlette uvicorn` plus the agent's CLI (`claude`, `codex` or `opencode`), or `deepagents langchain-litellm` for Deep Agents.
+
+[**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
+
+</details>
+
 ### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
@@ -366,16 +409,18 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 | [Sambanova (`sambanova`)](https://docs.litellm.ai/docs/providers/sambanova) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [ScaleDown (`scaledown`)](https://docs.litellm.ai/docs/providers/scaledown) | ✅ |  |  |  |  |  |  |  |  |  |
 | [Snowflake (`snowflake`)](https://docs.litellm.ai/docs/providers/snowflake) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Strands Decider (`strands_decider`)](https://docs.litellm.ai/docs/providers) |  |  |  |  |  |  |  |  |  |  |
 | [Text Completion Codestral (`text-completion-codestral`)](https://docs.litellm.ai/docs/providers/codestral) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Text Completion OpenAI (`text-completion-openai`)](https://docs.litellm.ai/docs/providers/text_completion_openai) | ✅ | ✅ | ✅ |  |  | ✅ | ✅ | ✅ | ✅ |  |
 | [Together AI (`together_ai`)](https://docs.litellm.ai/docs/providers/togetherai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Topaz (`topaz`)](https://docs.litellm.ai/docs/providers/topaz) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Triton (`triton`)](https://docs.litellm.ai/docs/providers/triton-inference-server) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Typesafe Decisions API (`typesafe`)](https://docs.litellm.ai/docs/providers) |  |  |  |  |  |  |  |  |  |  |
 | [V0 (`v0`)](https://docs.litellm.ai/docs/providers/v0) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Vercel AI Gateway (`vercel_ai_gateway`)](https://docs.litellm.ai/docs/providers/vercel_ai_gateway) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [VLLM (`vllm`)](https://docs.litellm.ai/docs/providers/vllm) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Volcengine (`volcengine`)](https://docs.litellm.ai/docs/providers/volcano) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
-| [Voyage AI (`voyage`)](https://docs.litellm.ai/docs/providers/voyage) |  |  |  | ✅ |  |  |  |  |  |  |
+| [VoyageAI by MongoDB (`voyage`)](https://docs.litellm.ai/docs/providers/voyage) |  |  |  | ✅ |  |  |  |  |  |  |
 | [WandB Inference (`wandb`)](https://docs.litellm.ai/docs/providers/wandb_inference) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Watsonx Text (`watsonx_text`)](https://docs.litellm.ai/docs/providers/watsonx) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [xAI (`xai`)](https://docs.litellm.ai/docs/providers/xai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |

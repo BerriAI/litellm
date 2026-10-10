@@ -14,8 +14,10 @@ Covers two follow-up gaps to the unified rate-limit error work:
 """
 
 from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import litellm
 import pytest
 
 from litellm.exceptions import (
@@ -474,11 +476,13 @@ def test_should_ignore_non_int_v3_header_values(bad_value):
     )
 
 
-KEY_AND_TEAM_RATE_LIMIT_METRICS = (
+RATE_LIMIT_METRICS = (
     "litellm_api_key_rate_limit_allowed_metric",
     "litellm_api_key_rate_limit_used_metric",
     "litellm_team_rate_limit_allowed_metric",
     "litellm_team_rate_limit_used_metric",
+    "litellm_project_model_rate_limit_allowed_metric",
+    "litellm_project_model_rate_limit_used_metric",
 )
 
 
@@ -534,6 +538,8 @@ def _success_kwargs_with_rate_limit_headers(additional_headers: Mapping[str, obj
                 "user_api_key_alias": "key-alias",
                 "user_api_key_team_id": "team-id",
                 "user_api_key_team_alias": "team-alias",
+                "user_api_key_project_id": "project-id",
+                "user_api_key_project_alias": "project-alias",
                 "user_api_key_user_id": "u",
                 "user_api_key_user_email": "e@x.com",
                 "user_api_key_org_id": None,
@@ -628,6 +634,68 @@ async def test_should_emit_key_and_team_rate_limit_allowed_and_used_from_v3_head
 
 
 @pytest.mark.asyncio
+async def test_should_emit_project_model_rate_limit_allowed_and_used_from_v3_headers() -> None:
+    _clear_prometheus_registry()
+    try:
+        await _run_success_event(
+            {
+                "x-ratelimit-model_per_project-limit-requests": 100,
+                "x-ratelimit-model_per_project-remaining-requests": 99,
+                "x-ratelimit-model_per_project-limit-tokens": 10000,
+                "x-ratelimit-model_per_project-remaining-tokens": 9950,
+                "x-ratelimit-model_per_project_itpm-limit-tokens": 2000,
+                "x-ratelimit-model_per_project_itpm-remaining-tokens": 1900,
+                "x-ratelimit-model_per_project_otpm-limit-tokens": 3000,
+                "x-ratelimit-model_per_project_otpm-remaining-tokens": 2750,
+            }
+        )
+
+        project_requests: Final = (
+            ("project_alias", "project-alias"),
+            ("project_id", "project-id"),
+            ("rate_limit_type", "requests"),
+            ("requested_model", "anthropic-haiku-4-5"),
+        )
+        project_tokens: Final = (
+            ("project_alias", "project-alias"),
+            ("project_id", "project-id"),
+            ("rate_limit_type", "tokens"),
+            ("requested_model", "anthropic-haiku-4-5"),
+        )
+        project_input_tokens: Final = (
+            ("project_alias", "project-alias"),
+            ("project_id", "project-id"),
+            ("rate_limit_type", "input_tokens"),
+            ("requested_model", "anthropic-haiku-4-5"),
+        )
+        project_output_tokens: Final = (
+            ("project_alias", "project-alias"),
+            ("project_id", "project-id"),
+            ("rate_limit_type", "output_tokens"),
+            ("requested_model", "anthropic-haiku-4-5"),
+        )
+
+        assert _collected_samples("litellm_project_model_rate_limit_allowed_metric") == {
+            project_requests: 100,
+            project_tokens: 10000,
+            project_input_tokens: 2000,
+            project_output_tokens: 3000,
+        }
+        assert _collected_samples("litellm_project_model_rate_limit_used_metric") == {
+            project_requests: 1,
+            project_tokens: 50,
+            project_input_tokens: 100,
+            project_output_tokens: 250,
+        }
+        assert _collected_samples("litellm_api_key_rate_limit_allowed_metric") == {}
+        assert _collected_samples("litellm_api_key_rate_limit_used_metric") == {}
+        assert _collected_samples("litellm_team_rate_limit_allowed_metric") == {}
+        assert _collected_samples("litellm_team_rate_limit_used_metric") == {}
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
 async def test_should_emit_only_the_dimensions_the_limiter_enforced():
     """
     A key with only ``rpm_limit`` set and no team limits produces only the
@@ -702,6 +770,79 @@ async def test_should_drop_key_and_team_series_once_the_limiter_stops_reporting_
 
 
 @pytest.mark.asyncio
+async def test_should_drop_project_model_series_once_the_limiter_stops_reporting_a_limit() -> None:
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        await _run_success_event(
+            {
+                "x-ratelimit-model_per_project-limit-requests": 100,
+                "x-ratelimit-model_per_project-remaining-requests": 99,
+                "x-ratelimit-model_per_project-limit-tokens": 10000,
+                "x-ratelimit-model_per_project-remaining-tokens": 9950,
+                "x-ratelimit-model_per_project_itpm-limit-tokens": 2000,
+                "x-ratelimit-model_per_project_itpm-remaining-tokens": 1900,
+                "x-ratelimit-model_per_project_otpm-limit-tokens": 3000,
+                "x-ratelimit-model_per_project_otpm-remaining-tokens": 2750,
+            },
+            logger=logger,
+        )
+        await _run_success_event(
+            {
+                "x-ratelimit-model_per_project-limit-requests": 100,
+                "x-ratelimit-model_per_project-remaining-requests": 96,
+            },
+            logger=logger,
+        )
+
+        project_requests: Final = (
+            ("project_alias", "project-alias"),
+            ("project_id", "project-id"),
+            ("rate_limit_type", "requests"),
+            ("requested_model", "anthropic-haiku-4-5"),
+        )
+        assert _collected_samples("litellm_project_model_rate_limit_allowed_metric") == {
+            project_requests: 100,
+        }
+        assert _collected_samples("litellm_project_model_rate_limit_used_metric") == {
+            project_requests: 4,
+        }
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_project_model_rate_limit_allowed_uses_same_custom_project_alias_label_as_requests() -> None:
+    original_custom_labels: Final = litellm.custom_prometheus_metadata_labels
+    litellm.custom_prometheus_metadata_labels = ["metadata.user_api_key_project_alias"]
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        await _run_success_event(
+            {
+                "x-ratelimit-model_per_project-limit-requests": 100,
+                "x-ratelimit-model_per_project-remaining-requests": 99,
+            },
+            logger=logger,
+        )
+
+        allowed_samples: Final = _collected_samples("litellm_project_model_rate_limit_allowed_metric")
+        request_samples: Final = _collected_samples("litellm_proxy_total_requests_metric_total")
+        assert len(allowed_samples) == 1
+        assert len(request_samples) == 1
+        allowed_labels: Final = dict(next(iter(allowed_samples)))
+        request_labels: Final = dict(next(iter(request_samples)))
+        assert allowed_labels["metadata_user_api_key_project_alias"] == "project-alias"
+        assert (
+            allowed_labels["metadata_user_api_key_project_alias"]
+            == request_labels["metadata_user_api_key_project_alias"]
+        )
+    finally:
+        litellm.custom_prometheus_metadata_labels = original_custom_labels
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "additional_headers",
     [
@@ -710,16 +851,25 @@ async def test_should_drop_key_and_team_series_once_the_limiter_stops_reporting_
         {"x-ratelimit-api_key-limit-requests": 10},
         {"x-ratelimit-api_key-limit-requests": "10", "x-ratelimit-api_key-remaining-requests": "7"},
         {"x-ratelimit-team-limit-tokens": True, "x-ratelimit-team-remaining-tokens": 5},
+        {"x-ratelimit-model_per_project-limit-requests": 10},
+        {
+            "x-ratelimit-model_per_project-limit-requests": "10",
+            "x-ratelimit-model_per_project-remaining-requests": "7",
+        },
+        {
+            "x-ratelimit-model_per_project-limit-tokens": True,
+            "x-ratelimit-model_per_project-remaining-tokens": 5,
+        },
     ],
 )
-async def test_should_emit_no_key_or_team_rate_limit_series_without_a_complete_int_pair(
-    additional_headers,
-):
+async def test_should_emit_no_rate_limit_series_without_a_complete_int_pair(
+    additional_headers: Mapping[str, object] | None,
+) -> None:
     _clear_prometheus_registry()
     try:
         await _run_success_event(additional_headers)
 
-        for metric_name in KEY_AND_TEAM_RATE_LIMIT_METRICS:
+        for metric_name in RATE_LIMIT_METRICS:
             assert _collected_samples(metric_name) == {}, metric_name
     finally:
         _clear_prometheus_registry()

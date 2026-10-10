@@ -193,7 +193,8 @@ class TestEnvironment:
         assert "anthropic-version" not in merged
 
     def test_project_id_becomes_the_workspace_header(self):
-        assert self._validate({}, {"aws_bedrock_project_id": "proj_123"})["anthropic-workspace"] == "proj_123"
+        # header name from https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html, checked 2026-10-02
+        assert self._validate({}, {"aws_bedrock_project_id": "proj_123"})["anthropic-workspace-id"] == "proj_123"
 
 
 class TestRequestBody:

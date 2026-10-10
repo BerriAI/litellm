@@ -1143,7 +1143,7 @@ def test_gcp_iam_credential_provider_get_credentials():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         return_value="tok-1",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
@@ -1161,7 +1161,7 @@ def test_gcp_iam_credential_provider_caches_token():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         return_value="tok-cached",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
@@ -1184,7 +1184,7 @@ def test_gcp_iam_credential_provider_refreshes_on_expiry():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         side_effect=["tok-1", "tok-2"],
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
@@ -1210,7 +1210,7 @@ def test_gcp_iam_credential_provider_cache_shared_across_instances():
     service_account = "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         return_value="tok-shared",
     ) as mock_gen:
         p1 = GCPIAMCredentialProvider(service_account)

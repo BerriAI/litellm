@@ -195,7 +195,7 @@ async def test_route_request_returns_403_when_model_is_fully_blocked(monkeypatch
 
     with pytest.raises(litellm.PermissionDeniedError) as exc_info:
         await route_request(
-            data={"model": "gpt-4o"},
+            data={"model": "gpt-4o", "data_source_config": {"type": "custom"}, "testing_criteria": []},
             llm_router=router,
             user_model=None,
             route_type="acreate_eval",

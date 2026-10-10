@@ -28,7 +28,7 @@ class LLMCachingUnitTests(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_cache_completion(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         random_number = random.randint(
             1, 100000
@@ -142,7 +142,7 @@ class LLMCachingUnitTests(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_disk_cache_embedding(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         random_number = random.randint(
             1, 100000

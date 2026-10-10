@@ -4,14 +4,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.main import _CompletionDispatchContext, _CompletionDispatchResult
+    from litellm.types.completion import CompletionDispatchContext, _CompletionDispatchResult
 
 
 def complete_scaledown(
     base_llm_http_handler: "BaseLLMHTTPHandler",
     client: "HTTPHandler | AsyncHTTPHandler | None",
     encoding: "Tokenizer",
-    ctx: "_CompletionDispatchContext",
+    ctx: "CompletionDispatchContext",
 ) -> "_CompletionDispatchResult":
     """Send a ScaleDown completion through the shared HTTP handler.
 

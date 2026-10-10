@@ -150,6 +150,89 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
     return router.recorded_calls[0]["messages"][1]["content"]
 
 
+@pytest.mark.parametrize(
+    "tiers,config_default,explicit_default,expected",
+    (
+        ({"SIMPLE": "cheap-model", "MEDIUM": "mid-model"}, None, None, "mid-model"),
+        ({"SIMPLE": ["cheap-model"], "MEDIUM": ["mid-model", "strong-model"]}, None, None, "mid-model"),
+        ({"SIMPLE": ["cheap-model"], "MEDIUM": []}, None, None, "cheap-model"),
+        ({"SIMPLE": "cheap-model"}, None, None, "cheap-model"),
+        ({"MEDIUM": "mid-model"}, "cheap-model", None, "cheap-model"),
+        ({"MEDIUM": "mid-model"}, "cheap-model", "strong-model", "strong-model"),
+        ({"MEDIUM": "mid-model"}, None, "strong-model", "strong-model"),
+        ({}, "cheap-model", None, "cheap-model"),
+        ({}, None, "strong-model", "strong-model"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_preview_and_serving_share_default_model_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    tiers: Mapping[str, object],
+    config_default: str | None,
+    explicit_default: str | None,
+    expected: str,
+):
+    from litellm.router_utils.auto_router_model_naming import validate_complexity_router_config_write
+    from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
+
+    config: Final = {
+        "tiers": tiers,
+        "default_model": config_default,
+        "classifier_type": "llm",
+        "classifier_fallback": "default_model",
+        "classifier_llm_config": {"model": "unconfigured-classifier"},
+    }
+    assert validate_complexity_router_config_write(config) is None
+    verdict: Final = await auto_router_endpoints.validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(complexity_router_config=config), ADMIN
+    )
+    assert verdict.valid and verdict.error is None
+    serving: Final = _router()
+    serving.init_complexity_router_deployment(
+        Deployment(
+            model_name="default-parity",
+            litellm_params={
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": config,
+                "complexity_router_default_model": explicit_default,
+            },
+            model_info={"id": "default-parity"},
+        )
+    )
+    strategy: Final = serving.complexity_routers["default-parity"][0].strategy
+    assert strategy.config.default_model == expected
+    decision: Final = await strategy.async_pre_routing_hook(
+        model="default-parity", messages=[{"role": "user", "content": "hello"}], request_kwargs={}
+    )
+    assert decision is not None and decision.model == expected
+    monkeypatch.setattr(proxy_server, "llm_router", serving)
+    preview: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
+        data=AutoRouterRoutingTestRequest.model_validate(
+            {"prompt": "hello", "complexity_router_config": config, "default_model": explicit_default}
+        ),
+        user_api_key_dict=ADMIN,
+    )
+    assert preview.routed_model == expected
+    assert preview.routing_decision["cause"] == "default_model_fallback"
+
+
+@pytest.mark.asyncio
+async def test_preview_missing_unresolvable_default_is_a_config_error(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    with pytest.raises(HTTPException) as error:
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
+            data=_request(
+                "hello", tiers={}, classifier_type="llm", classifier_fallback="default_model",
+                classifier_llm_config={"model": "unconfigured-classifier"},
+            ),
+            user_api_key_dict=ADMIN,
+        )
+    assert error.value.status_code == 400
+    assert "requires a default model" in error.value.detail["error"]
+
+
 @pytest.mark.asyncio
 async def test_simple_prompt_routes_to_the_simple_tier(monkeypatch: pytest.MonkeyPatch):
     response = await _route("what is 2+2", monkeypatch)
@@ -195,12 +278,17 @@ async def test_escalation_keyword_bumps_the_classified_tier(monkeypatch: pytest.
     assert response.routing_decision["escalation_keyword"] == "ultrathink"
 
 
+@pytest.mark.parametrize("default_model,expected,configured", ((None, "mid-model", True), ("never-configured", "never-configured", False)))
 @pytest.mark.asyncio
-async def test_tier_model_missing_from_the_proxy_is_reported(monkeypatch: pytest.MonkeyPatch):
-    response = await _route("what is 2+2", monkeypatch, tiers={**TIERS, "SIMPLE": ["never-configured"]})
+async def test_tier_model_missing_from_the_proxy_is_reported(
+    monkeypatch: pytest.MonkeyPatch, default_model: str | None, expected: str, configured: bool
+):
+    response = await _route(
+        "what is 2+2", monkeypatch, tiers={**TIERS, "SIMPLE": ["never-configured"]}, default_model=default_model
+    )
 
-    assert response.routed_model == "never-configured"
-    assert response.routed_model_configured is False
+    assert response.routed_model == expected
+    assert response.routed_model_configured is configured
 
 
 @pytest.mark.asyncio
@@ -619,6 +707,18 @@ def test_classifier_plugin_is_not_settable_over_http():
         _request("what is 2+2", classifier_type="custom", classifier_plugin="my_module.instance")
 
 
+def _benchmark_db(rows: Sequence[Mapping[str, object]], recorded: float | None = None) -> SimpleNamespace:
+    """The joined benchmark statement returns the rows as given; any other statement is the Overall total."""
+    from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
+
+    total: Final = recorded if recorded is not None else sum(float(row.get("saved_spend") or 0.0) for row in rows)
+
+    async def query_raw(sql: str, *params: object) -> Sequence[Mapping[str, object]]:
+        return rows if sql == AUTOROUTER_BENCHMARKS_SQL else ({"saved": total},)
+
+    return SimpleNamespace(db=SimpleNamespace(query_raw=AsyncMock(side_effect=query_raw)))
+
+
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
 
@@ -635,15 +735,12 @@ class TestAutoRouterBenchmarks:
         rows: Sequence[Mapping[str, object]],
         model_list: Sequence[object],
         api_key: str | None = None,
+        recorded: float | None = None,
     ) -> AutoRouterBenchmarksResponse:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
-        class _DB:
-            async def query_raw(self, sql: str, *params: object):
-                return rows
-
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "prisma_client", _benchmark_db(rows, recorded))
         monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
         return await get_auto_router_benchmarks(
             user_api_key_dict=ADMIN,
@@ -657,6 +754,7 @@ class TestAutoRouterBenchmarks:
         router_type="complexity",
         tier_turns={},
         sessions=4,
+        session_turns=40,
         turns=40,
         unordered_turns=1,
         covered_turns=38,
@@ -672,6 +770,7 @@ class TestAutoRouterBenchmarks:
         ttl_5m_turns=30,
         ttl_1h_turns=5,
         total_tokens=4000,
+        day_total_tokens=2500,
         spend=10.0,
         saved_spend=30.0,
         savings_estimated_turns=40,
@@ -700,10 +799,10 @@ class TestAutoRouterBenchmarks:
         assert totals.avg_turns_per_session == 10.0
         assert totals.avg_session_seconds == 100.0
         assert totals.avg_tokens_per_session == 1000.0
+        assert totals.total_tokens == 2500
         assert totals.baseline_spend == 40.0
         assert totals.saved_pct == 75.0
         assert totals.savings_estimated_classifier_cost == 0.4
-        assert totals.saved_per_session == 7.5
         assert totals.cache.coverage_pct == 95.0
         assert totals.cache.hit_rate_pct == pytest.approx(73.7)
         assert totals.cache.same_model.hit_rate_pct == 95.0
@@ -720,6 +819,20 @@ class TestAutoRouterBenchmarks:
         assert totals.baseline_spend == 5.0
         assert totals.saved_pct == -100.0
         assert totals.classifier_cost == 0.4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("historical_tokens, expected_total", [(None, None), (0, 2500), (750, 3250)])
+    async def test_daily_token_totals_preserve_missing_coverage_in_any_router(
+        self, historical_tokens: int | None, expected_total: int | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        historical: Final = self.ROW.model_copy(
+            update={"router_name": "historical-auto", "day_total_tokens": historical_tokens}
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), historical.model_dump()], model_list=[]
+        )
+        assert [group.total_tokens for group in response.groups] == [2500, historical_tokens]
+        assert response.totals.total_tokens == expected_total
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("estimated_turns", [0, 4])
@@ -742,7 +855,6 @@ class TestAutoRouterBenchmarks:
         assert (totals.spend, totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (10.0, 30.0, 40.0, 75.0)
         assert (totals.savings_estimated_turns, totals.savings_estimated_actual_spend) == (40, 10.0)
         assert totals.savings_estimated_classifier_cost == 0.4
-        assert totals.saved_per_session == 7.5
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("router_type, saved", [("adaptive", 0.0), ("quality", 0.0), ("quality", 2.0)])
@@ -772,8 +884,49 @@ class TestAutoRouterBenchmarks:
         totals: Final = response.totals
         assert (totals.turns, totals.spend) == (50, 13.0)
         assert (totals.savings_estimated_turns, totals.savings_estimated_actual_spend) == (40, 10.0)
-        assert (totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (30.0, 40.0, 75.0)
+        assert totals.unattributed_saved_spend is None
+        assert (totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (
+            (30.0, 40.0, 75.0) if saved == 0.0 else (32.0, None, None)
+        )
         assert totals.savings_estimated_classifier_cost == 0.4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("recorded, unattributed", [(30.0, None), (33.0, 3.0), (27.0, -3.0)])
+    async def test_the_headline_is_the_overall_daily_total_and_untracked_savings_void_the_baseline(
+        self, recorded: float, unattributed: float | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump()], model_list=[], recorded=recorded
+        )
+        totals: Final = response.totals
+        assert (totals.saved_spend, totals.unattributed_saved_spend) == (recorded, unattributed)
+        assert (totals.baseline_spend, totals.saved_pct) == ((40.0, 75.0) if unattributed is None else (None, None))
+        group: Final = response.groups[0]
+        assert group.saved_spend == 30.0
+        assert (group.baseline_spend, group.saved_pct) == ((40.0, 75.0) if unattributed is None else (None, None))
+
+    @pytest.mark.asyncio
+    async def test_a_window_holding_only_untracked_history_shows_no_router_baseline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        history_only: Final = self.ROW.model_dump(
+            exclude={
+                "turns",
+                "spend",
+                "saved_spend",
+                "savings_estimated_turns",
+                "savings_estimated_actual_spend",
+                "savings_estimated_classifier_cost",
+                "savings_estimated_saved_spend",
+                "classifier_cost",
+                "classifier_cost_recorded_turns",
+            }
+        )
+        response: Final = await self._benchmarks(monkeypatch, rows=[history_only], model_list=[], recorded=3.0)
+        assert (response.totals.saved_spend, response.totals.unattributed_saved_spend) == (3.0, 3.0)
+        group: Final = response.groups[0]
+        assert (group.sessions, group.turns, group.saved_spend) == (4, 0, 0.0)
+        assert (group.baseline_spend, group.saved_pct) == (None, None)
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -784,6 +937,7 @@ class TestAutoRouterBenchmarks:
         totals = _benchmark_totals(_summed_agg_row([]))
         assert totals.sessions == 0
         assert totals.turns == 0
+        assert totals.total_tokens == 0
         assert totals.saved_pct == 0.0
         assert totals.cache.hit_rate_pct == 0.0
         assert totals.classifier_cost == 0.0
@@ -805,7 +959,7 @@ class TestAutoRouterBenchmarks:
                 "savings_estimated_classifier_cost": 0.0,
             }
         )
-        summed = _summed_agg_row([self.ROW, other])
+        summed = _summed_agg_row([self.ROW, other.model_copy(update={"session_turns": 10})])
         totals = _benchmark_totals(summed)
         assert summed.sessions == 5
         assert summed.turns == 50
@@ -869,6 +1023,28 @@ class TestAutoRouterBenchmarks:
         query.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_an_empty_key_filter_is_rejected_before_querying_deployment_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+        from fastapi import FastAPI
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        query: Final = AsyncMock(return_value=[])
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query)))
+        app: Final = FastAPI()
+        app.get("/auto_router/benchmarks")(get_auto_router_benchmarks)
+        app.dependency_overrides[user_api_key_auth] = lambda: ADMIN
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response: Final = await client.get("/auto_router/benchmarks", params={"api_key": ""})
+
+        assert response.status_code == 422
+        query.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_a_reversed_window_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
@@ -891,15 +1067,8 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
-        captured: dict = {}
-
-        class _DB:
-            async def query_raw(self, sql: str, *params: object):
-                captured["sql"] = sql
-                captured["params"] = params
-                return [TestAutoRouterBenchmarks.ROW.model_dump()]
-
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        prisma_client: Final = _benchmark_db([TestAutoRouterBenchmarks.ROW.model_dump()])
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
 
         response = await get_auto_router_benchmarks(
             user_api_key_dict=UserAPIKeyAuth(user_role=role, api_key="sk-admin", user_id="viewer"),
@@ -908,7 +1077,11 @@ class TestAutoRouterBenchmarks:
             api_key="key-hash",
             user_id=user_id,
         )
-        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash", user_id)
+        params: Final = tuple(call.args[1:] for call in prisma_client.db.query_raw.await_args_list)
+        assert params == (
+            ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash", user_id, "2026-07-01", "2026-08-01"),
+            ("2026-07-01", "2026-08-01", *(([user_id],) if user_id else ()), ["key-hash"]),
+        )
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
@@ -946,7 +1119,6 @@ class TestAutoRouterBenchmarks:
         assert response.totals.saved_spend == 29.5
         assert response.totals.baseline_spend == 41.5
         assert response.totals.saved_pct == 71.1
-        assert response.totals.saved_per_session == 5.9
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -958,11 +1130,9 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
-        class _DB:
-            async def query_raw(self, sql: str, *params: object):
-                return [{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}]
-
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(
+            proxy_server, "prisma_client", _benchmark_db([{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}])
+        )
 
         response = await get_auto_router_benchmarks(
             user_api_key_dict=ADMIN,
@@ -1006,11 +1176,12 @@ class TestAutoRouterBenchmarks:
                 0.0,
                 0.0,
             )
-            assert (idle.saved_pct, idle.saved_per_session, idle.avg_turns_per_session) == (0.0, 0.0, 0.0)
+            assert (idle.saved_pct, idle.avg_turns_per_session) == (0.0, 0.0)
             assert (idle.cache.hit_rate_pct, idle.cache.coverage_pct) == (0.0, 0.0)
             assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
             assert idle.tier_turns == {}
             assert idle.classifier_cost == 0.0
+            assert idle.total_tokens == 0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1069,15 +1240,14 @@ class TestAutoRouterBenchmarks:
         assert [group.router_name for group in response.groups] == ["tagged"]
 
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
-        """The one reason semantic is excluded, pinned against both declarations: a kind the
-        rollup can record must be listable, and a kind it cannot must not be."""
         from typing import get_args, get_type_hints
 
         from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
-        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
-        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+        readonly_router_type: Final = get_type_hints(StandardLoggingRoutingDecision, include_extras=True)["router_type"]
+        recorded: Final = set(get_args(get_args(readonly_router_type)[0]))
+        assert set(get_args(StrategyRouterKind)) == recorded
 
 
 # ---------------------------------------------------------------------------
@@ -3295,7 +3465,7 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
             raise litellm.BudgetExceededError(current_cost=2, max_budget=1)
 
     checks: Final = AsyncMock(side_effect=check_and_tag)
-    monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
+    monkeypatch.setattr(auth_module, "run_centralized_common_checks", checks)
     http_request: Final = Request(
         {
             "type": "http",
@@ -3724,3 +3894,18 @@ async def test_availability_waits_for_the_first_complete_catalog(monkeypatch):
     with pytest.raises(HTTPException) as error:
         await auto_router_endpoints.get_auto_router_availability(AutoRouterAvailabilityRequest(), ADMIN)
     assert error.value.status_code == 503
+
+
+class TestPerSessionAverages:
+    @pytest.mark.parametrize(
+        "sessions, turns, expected",
+        [(4, 40, (10.0, 100.0, 1000.0)), (0, 0, (0.0, 0.0, 0.0)), (0, 3, (None, None, None))],
+    )
+    def test_requests_without_session_rows_have_unknown_averages_not_zero(
+        self, sessions: int, turns: int, expected: tuple[float | None, ...]
+    ) -> None:
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
+
+        row: Final = TestAutoRouterBenchmarks.ROW.model_copy(update={"sessions": sessions, "turns": turns})
+        totals: Final = _benchmark_totals(row)
+        assert (totals.avg_turns_per_session, totals.avg_session_seconds, totals.avg_tokens_per_session) == expected

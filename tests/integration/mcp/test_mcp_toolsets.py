@@ -1,5 +1,8 @@
+import re
 import secrets
+import textwrap
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -7,14 +10,17 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, object_value
+from integration._support.client import Gateway, Scenario, gateway_from_environment, object_value
 from integration._support.mcp import (
     INITIALIZE,
     Outcome,
+    ScriptedTool,
     _outcome_from_rest,
     _outcome_from_rpc,
     mcp_peer,
     register_mcp,
+    scripted_peer,
+    text_result,
     tool_calls,
 )
 from integration._support.mcp_grants import create_toolset
@@ -507,3 +513,63 @@ def test_a_member_of_two_teams_sees_the_union_and_each_route_stays_narrowed_to_i
         crossed: Final = _route_call(gateway, headers, first_name, f"{alias}-multiply")
         assert not crossed.ok, crossed.raw
         assert tool_calls(peer.drain()) == ()
+
+
+_PROBE: Final = "catalog-probe"
+_ECHO: Final = "catalog-echo"
+_UNLISTED: Final = ""
+_GUARDRAIL_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
+    "        return allow()\n"
+    '    function = inputs.get("tools", [{}])[0].get("function", {})\n'
+    f'    return block("{_ECHO}[" + function.get("description") + "]")\n'
+)
+
+
+_ECHO_GUARDRAIL_YAML: Final = (
+    "guardrails:\n"
+    "  - guardrail_name: catalog-echo\n"
+    "    litellm_params:\n"
+    "      guardrail: custom_code\n"
+    "      mode: pre_mcp_call\n"
+    "      default_on: true\n"
+    "      custom_code: |\n" + textwrap.indent(_GUARDRAIL_CODE, 8 * " ")
+)
+
+
+@pytest.fixture(scope="module")
+def echo_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("catalog-echo")
+    path: Final = directory / "catalog_echo.yaml"
+    path.write_text((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text() + _ECHO_GUARDRAIL_YAML)
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path, workers=2) as rig:
+        yield rig
+
+
+def _echoed_description(outcome: Outcome) -> str:
+    found: Final = re.search(rf"{_ECHO}\[(.*?)\]", outcome.raw)
+    assert found is not None, outcome.raw
+    return found.group(1)
+
+
+def test_a_team_keys_toolset_route_listing_feeds_its_own_calls_but_not_a_team_mates(echo_rig: Gateway) -> None:
+    described: Final = "Adds for the team " + uuid.uuid4().hex[:8]
+    tool: Final = ScriptedTool("add", lambda _: text_result("9"), description=described)
+    with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
+        alias: Final = "lit6029echo" + uuid.uuid4().hex[:6]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        granted_id, granted_name = _toolset(scenario, server_id, "add")
+        team_id: Final = scenario.team(object_permission={"mcp_toolsets": [granted_id]})
+        key: Final = scenario.key(team_id=team_id)
+        team_mate: Final = scenario.key(team_id=team_id)
+        _assert_team_grants_only(echo_rig, team_id, key, granted_id)
+        listed: Final = _toolset_rpc(echo_rig, _bearer(key), granted_name, "tools/list", {})
+        assert listed.ok and listed.tools == (f"{alias}-add",), listed.raw
+        probe: Final[dict[str, object]] = {"name": f"{alias}-add", "arguments": {"probe": _PROBE}}
+        own: Final = _echoed_description(_toolset_rpc(echo_rig, _bearer(key), granted_name, "tools/call", probe))
+        mate: Final = _echoed_description(_toolset_rpc(echo_rig, _bearer(team_mate), granted_name, "tools/call", probe))
+        assert (own, mate) == (described, _UNLISTED), (
+            "the slot is keyed by the hashed key, so a team-mate that never listed is handed nothing"
+        )
+        assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"

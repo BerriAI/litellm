@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -7,6 +8,7 @@ from litellm.proxy.db.shadow_eval_funnel import (
     flush_shadow_eval_funnel,
     record_shadow_eval_funnel_event,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 @pytest.fixture(autouse=True)
@@ -93,3 +95,17 @@ def test_pending_count_feeds_the_drain_census():
     record_shadow_eval_funnel_event("leg-1", "shed")
     record_shadow_eval_funnel_event("leg-2", "unjudgeable")
     assert pending_shadow_eval_funnel_events() == 3
+
+
+@pytest.mark.asyncio
+async def test_a_funnel_flush_renders_one_postgres_upsert_span_per_job(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    record_shadow_eval_funnel_event("job-a", "not_sampled")
+    record_shadow_eval_funnel_event("job-b", "not_sampled")
+    prisma = MagicMock()
+    prisma.db.execute_raw = engine_call(1)
+
+    await flush_shadow_eval_funnel(prisma)
+
+    assert await postgres_span_names() == ("postgres.upsert LiteLLM_ShadowEvalFunnel",) * 2

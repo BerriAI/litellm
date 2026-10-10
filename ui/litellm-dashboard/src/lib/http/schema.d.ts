@@ -469,7 +469,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/list' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Returns:
@@ -503,7 +503,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X POST 'http://localhost:4000/access_group/new' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "access_group": "production-models",
@@ -543,7 +543,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -565,7 +565,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "max_budget": 100.0,
@@ -596,7 +596,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -633,7 +633,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -665,7 +665,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/production-models/info' \
-         *       -H 'Authorization: Bearer sk-1234'
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -705,7 +705,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X PUT 'http://localhost:4000/access_group/production-models/update' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "model_names": ["gpt-4", "claude-3-sonnet"]
@@ -826,6 +826,91 @@ export interface paths {
          * @description Get daily activity for specific agents or all accessible agents.
          */
         get: operations["get_agent_daily_activity_agent_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Daily Activity Aggregated */
+        get: operations["get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Daily Activity Aggregated Keys */
+        get: operations["get_agent_daily_activity_aggregated_keys_agent_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Daily Activity Model Top Keys */
+        get: operations["get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Daily Activity Aggregated Search */
+        get: operations["get_agent_daily_activity_aggregated_search_agent_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Daily Activity Export */
+        get: operations["get_agent_daily_activity_export_agent_daily_activity_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1265,9 +1350,10 @@ export interface paths {
          *
          *     Reads session rollups folded once per request at spend-write time, so this endpoint
          *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
-         *     internal user when written; older key-only history remains outside user views. A session
-         *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
-         *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+         *     internal user when written; older key-only history remains outside user views. Money counts
+         *     only requests on the selected UTC days, and the all-router savings headline is the same daily
+         *     total the Overall view reads. Session shape and caching cover every session that overlaps the
+         *     window, whole. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
          *
          *     The rollup supplies the measures, never the list. Which routers appear comes from the
@@ -1721,7 +1807,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["list_batches_batches_get"];
@@ -1734,7 +1820,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "input_file_id": "file-abc123",
          *             "endpoint": "/v1/chat/completions",
          *             "completion_window": "24h"
@@ -1763,7 +1849,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["retrieve_batch_batches__batch_id__get"];
@@ -1793,7 +1879,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -X POST
+         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
          */
@@ -1848,6 +1934,23 @@ export interface paths {
          *     [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
          */
         patch: operations["bedrock_proxy_route_bedrock__endpoint__patch"];
+        trace?: never;
+    };
+    "/bespoke/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bespoke Proxy Route */
+        post: operations["bespoke_proxy_route_bespoke_v1_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/budget/delete": {
@@ -2022,7 +2125,7 @@ export interface paths {
          *     - **keys**: *Optional[List[str]]* - A list of keys to delete from the cache. Example {"keys": ["key1", "key2"]}
          *
          *     ```shell
-         *     curl -X POST "http://0.0.0.0:4000/cache/delete"     -H "Authorization: Bearer sk-1234"     -d '{"keys": ["key1", "key2"]}'
+         *     curl -X POST "http://0.0.0.0:4000/cache/delete"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{"keys": ["key1", "key2"]}'
          *     ```
          */
         post: operations["cache_delete_cache_delete_post"];
@@ -2049,7 +2152,7 @@ export interface paths {
          *
          *     Usage:
          *     ```
-         *     curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cache_flushall_cache_flushall_post"];
@@ -2170,7 +2273,9 @@ export interface paths {
          *
          *     - A successful authorization response (``code`` + ``state``), which is
          *       forwarded back to the validated client ``redirect_uri`` with the
-         *       original (un-wrapped) ``state``.
+         *       original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
+         *       authorization server sent one) matches the issuer /authorize sealed
+         *       into the state.
          *     - An error response (``error``[+``error_description``/``error_uri``]), per
          *       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
          *       ``redirect_uri``, the error params are propagated back to the client so
@@ -2245,7 +2350,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -2702,7 +2807,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -3266,12 +3371,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header or query param:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_containers_containers_get"];
@@ -3285,7 +3390,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container",
          *             "expires_after": {
          *                 "anchor": "last_active_at",
@@ -3296,7 +3401,7 @@ export interface paths {
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container"
          *         }'
          *     ```
@@ -3324,12 +3429,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         get: operations["retrieve_container_containers__container_id__get"];
@@ -3344,12 +3449,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         delete: operations["delete_container_containers__container_id__delete"];
@@ -3681,6 +3786,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/user_connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List User Connections
+         * @description List the calling user's per-user provider connections.
+         */
+        get: operations["list_user_connections_credentials_user_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}": {
         parameters: {
             query?: never;
@@ -3703,6 +3828,88 @@ export interface paths {
          * @description [BETA] endpoint. This might change unexpectedly.
          */
         patch: operations["update_credential_credentials__credential_name__patch"];
+        trace?: never;
+    };
+    "/credentials/{credential_name}/jwks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Credential Internal Issuer Jwks
+         * @description Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+         *     register it on the Anthropic federation issuer from the UI. Never touches the private signing
+         *     key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+         */
+        get: operations["get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/{credential_name}/user_connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete User Connection
+         * @description Disconnect the calling user's stored GitHub token for a per-user credential. Idempotent.
+         */
+        delete: operations["delete_user_connection_credentials__credential_name__user_connection_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/{credential_name}/user_connection/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Poll User Connection
+         * @description Poll the device flow once and persist the connection on completion.
+         */
+        post: operations["poll_user_connection_credentials__credential_name__user_connection_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/{credential_name}/user_connection/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start User Connection
+         * @description Begin a GitHub device flow for the calling user's connection to a per-user credential.
+         */
+        post: operations["start_user_connection_credentials__credential_name__user_connection_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/cursor/chat/completions": {
@@ -3732,7 +3939,7 @@ export interface paths {
          *     Cursor already sent pre-nested.
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -3949,7 +4156,7 @@ export interface paths {
          *
          *         ```
          *         curl -X POST "http://0.0.0.0:8000/user/block"
-         *         -H "Authorization: Bearer sk-1234"
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *         -d '{
          *         "user_ids": [<user_id>, ...]
          *         }'
@@ -3982,6 +4189,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/customer/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Aggregated */
+        get: operations["get_customer_daily_activity_aggregated_customer_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/customer/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Aggregated Keys */
+        get: operations["get_customer_daily_activity_aggregated_keys_customer_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/customer/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Model Top Keys */
+        get: operations["get_customer_daily_activity_model_top_keys_customer_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/customer/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Aggregated Search */
+        get: operations["get_customer_daily_activity_aggregated_search_customer_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/customer/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Export */
+        get: operations["get_customer_daily_activity_export_customer_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/delete": {
         parameters: {
             query?: never;
@@ -4000,7 +4292,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_ids" :["ishaan-jaff-5"]
          *     }'
          *
@@ -4030,7 +4322,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["end_user_info_customer_info_get"];
@@ -4055,7 +4347,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_end_user_customer_list_get"];
@@ -4089,6 +4381,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4116,15 +4409,16 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
          *     # With object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer sk-1234'         -H 'Content-Type: application/json'         -d '{
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H 'Content-Type: application/json'         -d '{
          *             "user_id": "user_1",
          *             "object_permission": {
          *               "mcp_servers": ["server_1"],
@@ -4161,7 +4455,7 @@ export interface paths {
          *     Example
          *     ```
          *     curl -X POST "http://0.0.0.0:8000/user/unblock"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *     "user_ids": [<user_id>, ...]
          *     }'
@@ -4199,6 +4493,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -4212,13 +4507,14 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "user_1",
          *         "object_permission": {
          *           "mcp_servers": ["server_3"],
@@ -4283,7 +4579,7 @@ export interface paths {
          *     - include_process_info: Include process-level memory info using psutil (default: true)
          *
          *     Example usage:
-         *     curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+         *     curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     All memory sizes are reported in both bytes and MB.
          */
@@ -4325,10 +4621,10 @@ export interface paths {
          *     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
          *
          *     Example for more aggressive collection:
-         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
+         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     Example for less aggressive collection:
-         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
+         *     curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     Monitor memory usage with GET /debug/memory/summary after changes.
          */
@@ -4359,7 +4655,7 @@ export interface paths {
          *     - garbage_collector: GC status and pending object counts
          *
          *     Example usage:
-         *     curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     For detailed analysis, call GET /debug/memory/details
          *     For cache management, use the cache management endpoints
@@ -4387,11 +4683,28 @@ export interface paths {
          *     Nothing from the operator's config values, request data, or errors
          *
          *     Example usage:
-         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          */
         get: operations["get_debug_report_debug_report_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decisions */
+        post: operations["decisions_decisions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4475,7 +4788,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -4509,7 +4822,7 @@ export interface paths {
          *
          *         ```
          *         curl -X POST "http://0.0.0.0:8000/user/block"
-         *         -H "Authorization: Bearer sk-1234"
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *         -d '{
          *         "user_ids": [<user_id>, ...]
          *         }'
@@ -4542,6 +4855,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/end_user/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Aggregated */
+        get: operations["get_customer_daily_activity_aggregated_end_user_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Aggregated Keys */
+        get: operations["get_customer_daily_activity_aggregated_keys_end_user_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Model Top Keys */
+        get: operations["get_customer_daily_activity_model_top_keys_end_user_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Aggregated Search */
+        get: operations["get_customer_daily_activity_aggregated_search_end_user_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Customer Daily Activity Export */
+        get: operations["get_customer_daily_activity_export_end_user_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/end_user/delete": {
         parameters: {
             query?: never;
@@ -4560,7 +4958,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_ids" :["ishaan-jaff-5"]
          *     }'
          *
@@ -4590,7 +4988,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["end_user_info_end_user_info_get"];
@@ -4615,7 +5013,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_end_user_end_user_list_get"];
@@ -4649,6 +5047,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4676,15 +5075,16 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
          *     # With object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer sk-1234'         -H 'Content-Type: application/json'         -d '{
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H 'Content-Type: application/json'         -d '{
          *             "user_id": "user_1",
          *             "object_permission": {
          *               "mcp_servers": ["server_1"],
@@ -4721,7 +5121,7 @@ export interface paths {
          *     Example
          *     ```
          *     curl -X POST "http://0.0.0.0:8000/user/unblock"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *     "user_ids": [<user_id>, ...]
          *     }'
@@ -4759,6 +5159,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -4772,13 +5173,14 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "user_1",
          *         "object_permission": {
          *           "mcp_servers": ["server_3"],
@@ -4812,7 +5214,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -4847,7 +5249,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -4879,7 +5281,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -5052,7 +5454,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -5067,7 +5469,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer sk-1234"         -F purpose="batch"         -F file="@mydata.jsonl"
+         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F purpose="batch"         -F file="@mydata.jsonl"
          *         -F expires_after[anchor]="created_at"         -F expires_after[seconds]=2592000
          *     ```
          */
@@ -5094,7 +5496,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -5136,7 +5538,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -5177,7 +5579,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer sk-1234"       -d '{
+         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer $LITELLM_MASTER_KEY"       -d '{
          *         "model": "gpt-3.5-turbo",
          *         "training_file": "file-abc123",
          *         "hyperparameters": {
@@ -5259,6 +5661,27 @@ export interface paths {
          *     so this is admin-only.
          */
         get: operations["get_gateway_daily_activity_gateway_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/gateway/errors/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Request Error Activity
+         * @description Failed requests over time by HTTP status, and the keys, teams, users and
+         *     model groups they land on. Deployment-wide, so admin-only.
+         */
+        get: operations["get_request_error_activity_gateway_errors_activity_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6161,12 +6584,12 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/spend/tags" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/spend/tags" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Spend with Start Date and End Date
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["global_view_spend_tags_global_spend_tags_get"];
@@ -7291,7 +7714,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-1234'
+         *     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["health_services_endpoint_health_services_get"];
@@ -7345,7 +7768,7 @@ export interface paths {
          *     ```bash
          *     # If model is configured in proxy_config.yaml, you only need to specify the model name:
          *     curl -X POST 'http://localhost:4000/health/test_connection' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "litellm_params": {
@@ -7358,7 +7781,7 @@ export interface paths {
          *
          *     # You can also override specific params or test with custom credentials:
          *     curl -X POST 'http://localhost:4000/health/test_connection' \
-         *       -H 'Authorization: Bearer sk-1234' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "litellm_params": {
@@ -7405,7 +7828,7 @@ export interface paths {
          * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
          *
          *     ```bash
-         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer sk-1234"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
+         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
          *     ```
          */
         post: operations["image_edit_api_images_edits_post"];
@@ -7453,7 +7876,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "gemini/gemini-2.5-flash",
          *             "input": "Hello, how are you?"
          *         }'
@@ -7780,7 +8203,7 @@ export interface paths {
          *
          *      Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/block'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/block'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
          *     }'
          *     ```
@@ -7829,10 +8252,10 @@ export interface paths {
          *
          *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/bulk_update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "keys": [
          *             {
-         *                 "key": "sk-1234",
+         *                 "key": "sk-<your-virtual-key>",
          *                 "max_budget": 100.0,
          *                 "team_id": "team-123",
          *                 "tags": ["production", "api"]
@@ -7875,7 +8298,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/delete'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/delete'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
          *     }'
          *     ```
@@ -7953,6 +8376,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
+         *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
@@ -7968,7 +8392,7 @@ export interface paths {
          *     1. Allow users to turn on/off pii masking
          *
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "permissions": {"allow_pii_controls": true}
          *     }'
          *     ```
@@ -8006,7 +8430,7 @@ export interface paths {
          *     Pass the key in the request header
          *
          *     ```bash
-         *     curl -X POST "http://localhost:4000/key/health"      -H "Authorization: Bearer sk-1234"      -H "Content-Type: application/json"
+         *     curl -X POST "http://localhost:4000/key/health"      -H "Authorization: Bearer $LITELLM_MASTER_KEY"      -H "Content-Type: application/json"
          *     ```
          *
          *     Response when logging callbacks are setup correctly:
@@ -8095,7 +8519,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -8198,7 +8622,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request POST "http://localhost:4000/key/$LITELLM_API_KEY/regenerate"     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "max_budget": 100,
          *         "metadata": {"team": "core-infra"},
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
@@ -8278,7 +8702,7 @@ export interface paths {
          *     1. Allow users to turn on/off pii masking
          *
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "permissions": {"allow_pii_controls": true}
          *     }'
          *     ```
@@ -8337,7 +8761,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
          *     }'
          *     ```
@@ -8419,6 +8843,7 @@ export interface paths {
          *     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
+         *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
@@ -8430,8 +8855,8 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
-         *         "key": "sk-1234",
+         *     curl --location 'http://0.0.0.0:4000/key/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
+         *         "key": "sk-<your-virtual-key>",
          *         "key_alias": "my-key",
          *         "user_id": "user-1234",
          *         "team_id": "team-1234",
@@ -8496,7 +8921,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request POST "http://localhost:4000/key/$LITELLM_API_KEY/regenerate"     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "max_budget": 100,
          *         "metadata": {"team": "core-infra"},
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
@@ -8575,6 +9000,23 @@ export interface paths {
         patch: operations["langfuse_proxy_route_langfuse__endpoint__patch"];
         trace?: never;
     };
+    "/laya/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Laya Proxy Route */
+        post: operations["laya_proxy_route_laya_v1_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lazy/warm/{name}": {
         parameters: {
             query?: never;
@@ -8599,60 +9041,29 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Lenses */
-        get: operations["list_lenses_lens_get"];
-        put?: never;
-        /** Create Lens */
-        post: operations["create_lens_lens_post"];
-        delete?: never;
+        /** Lens Request */
+        get: operations["lens_request_lens_get"];
+        /** Lens Request */
+        put: operations["lens_request_lens_put"];
+        /** Lens Request */
+        post: operations["lens_request_lens_post"];
+        /** Lens Request */
+        delete: operations["lens_request_lens_delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Lens Request */
+        patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
-    "/lens/preview/sample": {
+    "/lens/service": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /** Preview Sample */
-        post: operations["preview_sample_lens_preview_sample_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim */
-        post: operations["claim_lens_worker_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Content */
-        get: operations["content_lens_worker__lens_id___job_id__content_get"];
+        /** Service Connection */
+        get: operations["service_connection_lens_service_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8661,240 +9072,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/lens/worker/{lens_id}/{job_id}/heartbeat": {
+    "/lens/{path}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Lens Request */
+        get: operations["lens_request_lens__path__get"];
+        /** Lens Request */
+        put: operations["lens_request_lens__path__put"];
+        /** Lens Request */
+        post: operations["lens_request_lens__path__post"];
+        /** Lens Request */
+        delete: operations["lens_request_lens__path__delete"];
+        options?: never;
+        head?: never;
+        /** Lens Request */
+        patch: operations["lens_request_lens__path__patch"];
+        trace?: never;
+    };
+    "/liteadmin/slack/connect/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connect Page */
+        get: operations["connect_page_liteadmin_slack_connect__token__get"];
         put?: never;
-        /** Heartbeat */
-        post: operations["heartbeat_lens_worker__lens_id___job_id__heartbeat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Model */
-        post: operations["model_lens_worker__lens_id___job_id__model_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/progress": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Progress */
-        post: operations["progress_lens_worker__lens_id___job_id__progress_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/result": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Result */
-        post: operations["result_lens_worker__lens_id___job_id__result_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/sample": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Sample */
-        get: operations["sample_lens_worker__lens_id___job_id__sample_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/workers/register": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Register Worker */
-        post: operations["register_worker_lens_workers_register_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/workers/{worker_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Revoke Worker */
-        delete: operations["revoke_worker_lens_workers__worker_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/workers/{worker_id}/billing-key": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set Worker Billing */
-        put: operations["set_worker_billing_lens_workers__worker_id__billing_key_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Lens */
-        get: operations["read_lens_lens__lens_id__get"];
-        /** Update Lens */
-        put: operations["update_lens_lens__lens_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cancel Lens */
-        post: operations["cancel_lens_lens__lens_id__cancel_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/executions/{execution_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Evidence Content */
-        get: operations["evidence_content_lens__lens_id__executions__execution_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/findings/{finding_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Finding */
-        patch: operations["update_finding_lens__lens_id__findings__finding_id__patch"];
-        trace?: never;
-    };
-    "/lens/{lens_id}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Runs */
-        get: operations["list_runs_lens__lens_id__runs_get"];
-        put?: never;
-        /** Run Lens */
-        post: operations["run_lens_lens__lens_id__runs_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/runs/{job_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Run */
-        get: operations["read_run_lens__lens_id__runs__job_id__get"];
-        put?: never;
-        post?: never;
+        /** Connect Account */
+        post: operations["connect_account_liteadmin_slack_connect__token__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8961,7 +9171,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_budgets_management_v1_budgets_get"];
@@ -8995,7 +9205,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
@@ -9050,7 +9260,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
          *     ```
          */
         post: operations["bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"];
@@ -9089,7 +9299,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
          *     ```
          */
         post: operations["bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post"];
@@ -9128,7 +9338,7 @@ export interface paths {
          *     ```
          *     curl -X POST "http://localhost:4000/management/v1/users/bulk" \
          *     -H "Content-Type: application/json" \
-         *     -H "Authorization: Bearer sk-1234" \
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     -d '{
          *         "users": [
          *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
@@ -9169,7 +9379,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
+         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
          *     ```
          */
         post: operations["bulk_delete_users_action_management_v1_users_bulk_delete_post"];
@@ -9637,7 +9847,7 @@ export interface paths {
          *     Example:
          *     ```shell
          *     curl -X GET 'http://localhost:4000/model/deprecations' \
-         *         -H 'Authorization: Bearer sk-1234'
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["model_deprecations_model_deprecations_get"];
@@ -9927,18 +10137,18 @@ export interface paths {
          *
          *     Example Request (All Models):
          *     ```shell
-         *     curl -X 'GET'     'http://localhost:4000/model_group/info'     -H 'accept: application/json'     -H 'x-api-key: sk-1234'
+         *     curl -X 'GET'     'http://localhost:4000/model_group/info'     -H 'accept: application/json'     -H "x-api-key: $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request (Specific Model Group):
          *     ```shell
-         *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0'     -H 'accept: application/json'     -H 'Authorization: Bearer sk-1234'
+         *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0'     -H 'accept: application/json'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
          *     ```shell
          *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=openai/tts-1'
-         *     -H 'accept: application/json'     -H 'Authorization: Bearersk-1234'
+         *     -H 'accept: application/json'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
@@ -10122,6 +10332,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -10260,10 +10475,44 @@ export interface paths {
          * @description The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
          *     Quick Start
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header 'Authorization: Bearer sk-1234'     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
          *     ```
          */
         post: operations["moderations_moderations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/moyai/connect/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Moyai Connect Exchange */
+        post: operations["moyai_connect_exchange_moyai_connect_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/moyai/connect/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Moyai Connect Start */
+        post: operations["moyai_connect_start_moyai_connect_start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10343,7 +10592,7 @@ export interface paths {
          *
          *     **1. JSON body** (Mistral OCR API compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "mistral-ocr",
          *             "document": {
          *                 "type": "document_url",
@@ -10354,7 +10603,7 @@ export interface paths {
          *
          *     **2. Multipart form file upload**:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
          *
          *     Response format is normalized to the LiteLLM OCR schema by default. Providers
@@ -10437,7 +10686,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -10472,7 +10721,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -10504,7 +10753,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -10532,7 +10781,7 @@ export interface paths {
          * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
          *
          *     ```bash
-         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer sk-1234"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
+         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
          *     ```
          */
         post: operations["image_edit_api_openai_deployments__model__images_edits_post"];
@@ -10656,13 +10905,13 @@ export interface paths {
          *
          *     ```bash
          *     # Normal request
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI"
          *     }'
          *
          *     # Background request with polling
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI",
          *         "background": true
@@ -10694,7 +10943,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -10723,7 +10972,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Hello, how are you?"
          *     }'
@@ -10757,10 +11006,10 @@ export interface paths {
          *
          *     ```bash
          *     # Get polling response
-         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Get provider response
-         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_openai_v1_responses__response_id__get"];
@@ -10777,7 +11026,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
          *
          *     ```bash
-         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         delete: operations["delete_response_openai_v1_responses__response_id__delete"];
@@ -10807,10 +11056,10 @@ export interface paths {
          *
          *     ```bash
          *     # Cancel polling response
-         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Cancel provider response
-         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cancel_response_openai_v1_responses__response_id__cancel_post"];
@@ -11093,6 +11342,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organization/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Organization Daily Activity Aggregated */
+        get: operations["get_organization_daily_activity_aggregated_organization_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Organization Daily Activity Aggregated Keys */
+        get: operations["get_organization_daily_activity_aggregated_keys_organization_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Organization Daily Activity Model Top Keys */
+        get: operations["get_organization_daily_activity_model_top_keys_organization_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Organization Daily Activity Aggregated Search */
+        get: operations["get_organization_daily_activity_aggregated_search_organization_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Organization Daily Activity Export */
+        get: operations["get_organization_daily_activity_export_organization_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organization/delete": {
         parameters: {
             query?: never;
@@ -11160,12 +11494,12 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example with org_id:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_organization_organization_list_get"];
@@ -11208,7 +11542,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X POST 'http://0.0.0.0:4000/organization/member_add'     -H 'Authorization: Bearer sk-1234'     -H 'Content-Type: application/json'     -d '{
+         *     curl -X POST 'http://0.0.0.0:4000/organization/member_add'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H 'Content-Type: application/json'     -d '{
          *         "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
          *         "member": {
          *             "role": "internal_user",
@@ -11317,7 +11651,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/organization/new'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "organization_alias": "my-secret-org",
@@ -11332,7 +11666,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/organization/new'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "organization_alias": "my-secret-org",
@@ -12358,7 +12692,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_ids": ["project-123", "project-456"]
@@ -12388,7 +12722,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["project_info_project_info_get"];
@@ -12414,7 +12748,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/list' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_projects_project_list_get"];
@@ -12467,7 +12801,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "flight-search-assistant",
@@ -12494,7 +12828,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "hotel-recommendations",
@@ -12548,7 +12882,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/update' \
-         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_id": "project-123",
@@ -12927,7 +13261,7 @@ export interface paths {
          *     Example Request
          *
          *     ```bash
-         *     curl -X GET http://localhost:4000/provider/budgets     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/provider/budgets     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Response
@@ -13131,6 +13465,7 @@ export interface paths {
          * Get Litellm Model Cost Map
          * @description Public endpoint to get the LiteLLM model cost map.
          *     Returns pricing information for all supported models.
+         *     With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
          */
         get: operations["get_litellm_model_cost_map_public_litellm_model_cost_map_get"];
         put?: never;
@@ -13347,7 +13682,7 @@ export interface paths {
          *     ## Form upload (for files):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
          *     ```
@@ -13355,7 +13690,7 @@ export interface paths {
          *     ## JSON body (for URLs):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "file_url": "https://example.com/document.pdf",
@@ -13366,7 +13701,7 @@ export interface paths {
          *     ## Bedrock:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
          *     ```
@@ -13400,7 +13735,7 @@ export interface paths {
          *     ## Example Request:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -13416,7 +13751,7 @@ export interface paths {
          *     ## With Reranking:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -13622,13 +13957,13 @@ export interface paths {
          *
          *     ```bash
          *     # Normal request
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI"
          *     }'
          *
          *     # Background request with polling
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI",
          *         "background": true
@@ -13660,7 +13995,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -13689,7 +14024,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Hello, how are you?"
          *     }'
@@ -13723,10 +14058,10 @@ export interface paths {
          *
          *     ```bash
          *     # Get polling response
-         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Get provider response
-         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_responses__response_id__get"];
@@ -13743,7 +14078,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
          *
          *     ```bash
-         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         delete: operations["delete_response_responses__response_id__delete"];
@@ -13773,10 +14108,10 @@ export interface paths {
          *
          *     ```bash
          *     # Cancel polling response
-         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Cancel provider response
-         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cancel_response_responses__response_id__cancel_post"];
@@ -13844,128 +14179,6 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/connections/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Test Roi Calculator Connections */
-        post: operations["test_roi_calculator_connections_roi_calculator_connections_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/identity-map": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Update Roi Calculator Identity Map */
-        put: operations["update_roi_calculator_identity_map_roi_calculator_identity_map_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Report */
-        get: operations["get_roi_calculator_report_roi_calculator_report_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/repositories": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Repositories */
-        get: operations["get_roi_calculator_repositories_roi_calculator_repositories_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Settings */
-        get: operations["get_roi_calculator_settings_roi_calculator_settings_get"];
-        /** Update Roi Calculator Settings */
-        put: operations["update_roi_calculator_settings_roi_calculator_settings_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/setup/reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reset Roi Calculator Setup */
-        post: operations["reset_roi_calculator_setup_roi_calculator_setup_reset_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Sync Status */
-        get: operations["get_roi_calculator_sync_status_roi_calculator_sync_get"];
-        put?: never;
-        /** Start Roi Calculator Sync */
-        post: operations["start_roi_calculator_sync_roi_calculator_sync_post"];
-        /** Cancel Roi Calculator Sync */
-        delete: operations["cancel_roi_calculator_sync_roi_calculator_sync_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -14461,7 +14674,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -14471,7 +14684,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -14534,7 +14747,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Response:
@@ -14582,7 +14795,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -14592,7 +14805,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -15034,7 +15247,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://localhost:4000/spend/calculate'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "model": "anthropic.claude-v2",
@@ -15046,7 +15259,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://localhost:4000/spend/calculate'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "completion_response": {
@@ -15096,7 +15309,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -H "Authorization: Bearer sk-1234"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+         *     curl -H "Authorization: Bearer $LITELLM_MASTER_KEY"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
          *     ```
          */
         get: operations["get_spend_capture_rate_spend_capture_rate_get"];
@@ -15128,7 +15341,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/keys" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/keys" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["spend_key_fn_spend_keys_get"];
@@ -15162,27 +15375,27 @@ export interface paths {
          *
          *     Example Request for all logs
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific request_id
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific api_key
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific user_id
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for date range with individual logs (unsummarized)
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["view_spend_logs_spend_logs_get"];
@@ -15239,7 +15452,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["ui_view_spend_logs_spend_logs_ui_get"];
@@ -15290,7 +15503,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["ui_view_spend_logs_spend_logs_v2_get"];
@@ -15315,12 +15528,12 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/tags" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/tags" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Spend with Start Date and End Date
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["view_spend_tags_spend_tags_get"];
@@ -15354,12 +15567,12 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/users" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/users" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     View User Table row for user_id
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["spend_user_fn_spend_users_get"];
@@ -15615,6 +15828,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Systemone */
+        post: operations["systemone_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity": {
         parameters: {
             query?: never;
@@ -15639,6 +15869,91 @@ export interface paths {
          *         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
          */
         get: operations["get_tag_daily_activity_tag_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tag Daily Activity Aggregated */
+        get: operations["get_tag_daily_activity_aggregated_tag_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tag Daily Activity Aggregated Keys */
+        get: operations["get_tag_daily_activity_aggregated_keys_tag_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tag Daily Activity Model Top Keys */
+        get: operations["get_tag_daily_activity_model_top_keys_tag_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tag Daily Activity Aggregated Search */
+        get: operations["get_tag_daily_activity_aggregated_search_tag_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tag Daily Activity Export */
+        get: operations["get_tag_daily_activity_export_tag_daily_activity_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16003,7 +16318,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/block'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/block'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234"
          *     }'
          *     ```
@@ -16048,7 +16363,7 @@ export interface paths {
          *
          *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_add'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_add'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "members": [
          *             {
@@ -16138,6 +16453,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Team Daily Activity Aggregated Keys */
+        get: operations["get_team_daily_activity_aggregated_keys_team_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Team Daily Activity Model Top Keys */
+        get: operations["get_team_daily_activity_model_top_keys_team_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Team Daily Activity Aggregated Search */
+        get: operations["get_team_daily_activity_aggregated_search_team_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Team Daily Activity Export */
+        get: operations["get_team_daily_activity_export_team_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -16155,7 +16538,7 @@ export interface paths {
          *     - team_ids: List[str] - Required. List of team IDs to delete. Example: ["team-1234", "team-5678"]
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/delete'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/delete'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
          *     }'
          *     ```
@@ -16260,7 +16643,7 @@ export interface paths {
         /**
          * List Team
          * @description ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/team/list'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location --request GET 'http://0.0.0.0:4000/team/list'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Parameters:
@@ -16294,7 +16677,7 @@ export interface paths {
          *     Only proxy_admin or admin of team, allowed to access this endpoint.
          *     ```
          *
-         *     curl -X POST 'http://0.0.0.0:4000/team/member_add'     -H 'Authorization: Bearer sk-1234'     -H 'Content-Type: application/json'     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
+         *     curl -X POST 'http://0.0.0.0:4000/team/member_add'     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H 'Content-Type: application/json'     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
          *
          *     ```
          */
@@ -16323,7 +16706,7 @@ export interface paths {
          *     If user doesn't exist, an exception will be raised
          *     ```
          *     curl -X POST 'http://0.0.0.0:8000/team/member_delete'
-         *     -H 'Authorization: Bearer sk-1234'
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -H 'Content-Type: application/json'
          *     -d '{
          *         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
@@ -16404,7 +16787,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/model/add'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/model/add'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "models": ["gpt-4", "claude-2"]
          *     }'
@@ -16436,7 +16819,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/model/delete'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/model/delete'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "models": ["gpt-4"]
          *     }'
@@ -16502,6 +16885,7 @@ export interface paths {
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+         *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
          *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
@@ -16520,7 +16904,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/new'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/new'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *       "team_alias": "my-new-team_2",
          *       "members_with_roles": [{"role": "admin", "user_id": "user-1234"},
          *         {"role": "user", "user_id": "user-2434"}]
@@ -16529,7 +16913,7 @@ export interface paths {
          *     ```
          *
          *      ```
-         *     curl --location 'http://0.0.0.0:4000/team/new'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/new'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *                 "team_alias": "QA Prod Bot",
          *                 "max_budget": 0.000000001,
          *                 "budget_duration": "1d"
@@ -16674,7 +17058,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/unblock'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/unblock'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234"
          *     }'
          *     ```
@@ -16729,6 +17113,7 @@ export interface paths {
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+         *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
@@ -16745,7 +17130,7 @@ export interface paths {
          *     - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
          *         "tpm_limit": 100
          *     }'
@@ -16753,7 +17138,7 @@ export interface paths {
          *
          *     Example - Update Team `max_budget` budget
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
          *         "max_budget": 10
          *     }'
@@ -16791,7 +17176,7 @@ export interface paths {
          *     updated team.
          *
          *     ```
-         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "metadata": {"cost_center": "1234", "deprecated_key": null}
          *     }'
          *     ```
@@ -16815,7 +17200,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
@@ -16867,7 +17252,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{
+         *     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Content-Type: application/json'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -d '{
          *         "callback_name": "langfuse",
          *         "callback_type": "success",
          *         "callback_vars": {"langfuse_public_key": "pk-lf-xxxx1", "langfuse_secret_key": "sk-xxxxx"}
@@ -16911,7 +17296,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
@@ -16947,7 +17332,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging'         -H 'Authorization: Bearer sk-1234'
+         *     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["disable_team_logging_team__team_id__disable_logging_post"];
@@ -17721,7 +18106,7 @@ export interface paths {
          *
          *     Example request for specific users:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "users": [
          *             {
          *                 "user_id": "user1",
@@ -17739,7 +18124,7 @@ export interface paths {
          *
          *     Example request for all users:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "all_users": true,
          *         "user_updates": {
          *             "user_role": "internal_user",
@@ -17819,6 +18204,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/daily/activity/aggregated/cache_leakage_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Cache Leakage Keys */
+        get: operations["get_user_daily_activity_cache_leakage_keys_user_daily_activity_aggregated_cache_leakage_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/aggregated/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Aggregated Keys */
+        get: operations["get_user_daily_activity_aggregated_keys_user_daily_activity_aggregated_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Model Top Keys */
+        get: operations["get_user_daily_activity_model_top_keys_user_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Aggregated Search */
+        get: operations["get_user_daily_activity_aggregated_search_user_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Export */
+        get: operations["get_user_daily_activity_export_user_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/delete": {
         parameters: {
             query?: never;
@@ -17834,7 +18304,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://0.0.0.0:4000/user/delete'
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     --header 'Content-Type: application/json'
          *     --data-raw '{
          *         "user_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
@@ -17898,7 +18368,7 @@ export interface paths {
          *
          *     Example request
          *     ```
-         *     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai'     --header 'Authorization: Bearer sk-1234'
+         *     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["user_info_user_info_get"];
@@ -18021,7 +18491,7 @@ export interface paths {
          *     Usage Example
          *
          *     ```shell
-         *      curl -X POST "http://localhost:4000/user/new"      -H "Content-Type: application/json"      -H "Authorization: Bearer sk-1234"      -d '{
+         *      curl -X POST "http://localhost:4000/user/new"      -H "Content-Type: application/json"      -H "Authorization: Bearer $LITELLM_MASTER_KEY"      -d '{
          *          "username": "new_user",
          *          "email": "new_user@example.com"
          *      }'
@@ -18105,7 +18575,7 @@ export interface paths {
          * @description Example curl
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/user/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
          *         "user_role": "proxy_admin_viewer"
          *     }'
@@ -18197,7 +18667,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header 'Authorization: Bearer sk-1234'
+         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["model_info_lookup_utils_model_info_get"];
@@ -18224,7 +18694,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k'         --header 'Authorization: Bearer sk-1234'
+         *     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["supported_openai_params_utils_supported_openai_params_get"];
@@ -18832,7 +19302,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["list_batches_v1_batches_get"];
@@ -18845,7 +19315,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "input_file_id": "file-abc123",
          *             "endpoint": "/v1/chat/completions",
          *             "completion_window": "24h"
@@ -18874,7 +19344,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["retrieve_batch_v1_batches__batch_id__get"];
@@ -18904,7 +19374,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -X POST
+         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
          */
@@ -18931,7 +19401,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/chat/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-4o",
          *         "messages": [
@@ -18966,7 +19436,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/completions
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "gpt-3.5-turbo-instruct",
          *         "prompt": "Once upon a time",
@@ -18998,12 +19468,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header or query param:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_containers_v1_containers_get"];
@@ -19017,7 +19487,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container",
          *             "expires_after": {
          *                 "anchor": "last_active_at",
@@ -19028,7 +19498,7 @@ export interface paths {
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/containers"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"         -H "Content-Type: application/json"         -d '{
          *             "name": "My Container"
          *         }'
          *     ```
@@ -19056,12 +19526,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X GET "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         get: operations["retrieve_container_v1_containers__container_id__get"];
@@ -19076,12 +19546,12 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Or specify provider via header:
          *     ```bash
-         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer sk-1234"         -H "custom-llm-provider: azure"
+         *     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "custom-llm-provider: azure"
          *     ```
          */
         delete: operations["delete_container_v1_containers__container_id__delete"];
@@ -19143,6 +19613,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decisions */
+        post: operations["decisions_v1_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/embeddings": {
         parameters: {
             query?: never;
@@ -19159,7 +19646,7 @@ export interface paths {
          *     ```bash
          *     curl -X POST http://localhost:4000/v1/embeddings
          *     -H "Content-Type: application/json"
-         *     -H "Authorization: Bearer sk-1234"
+         *     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     -d '{
          *         "model": "text-embedding-ada-002",
          *         "input": "The quick brown fox jumps over the lazy dog"
@@ -19449,7 +19936,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -19464,7 +19951,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer sk-1234"         -F purpose="batch"         -F file="@mydata.jsonl"
+         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F purpose="batch"         -F file="@mydata.jsonl"
          *         -F expires_after[anchor]="created_at"         -F expires_after[seconds]=2592000
          *     ```
          */
@@ -19491,7 +19978,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -19533,7 +20020,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -19574,7 +20061,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer sk-1234"       -d '{
+         *     curl http://localhost:4000/v1/fine_tuning/jobs       -H "Content-Type: application/json"       -H "Authorization: Bearer $LITELLM_MASTER_KEY"       -d '{
          *         "model": "gpt-3.5-turbo",
          *         "training_file": "file-abc123",
          *         "hyperparameters": {
@@ -19655,7 +20142,7 @@ export interface paths {
          * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
          *
          *     ```bash
-         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer sk-1234"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
+         *     curl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST "http://localhost:4000/v1/images/edits"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=gpt-image-1"         -F "image[]=@soap.png"         -F 'prompt=Create a studio ghibli image of this'
          *     ```
          */
         post: operations["image_edit_api_v1_images_edits_post"];
@@ -19694,7 +20181,7 @@ export interface paths {
          * @description List all vector store indexes. Proxy admin only.
          *
          *     ```bash
-         *     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H 'Authorization: Bearer sk-1234'
+         *     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["index_list_v1_indexes_get"];
@@ -19704,7 +20191,7 @@ export interface paths {
          * @description Create an index. Just writes the index to the database.
          *
          *     ```bash
-         *     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{
+         *     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -d '{
          *             "index_name": "dall-e-3",
          *             "litellm_params": {
          *                 "vector_store_index": "real-index-name",
@@ -19714,6 +20201,23 @@ export interface paths {
          *     ```
          */
         post: operations["index_create_v1_indexes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20449,7 +20953,7 @@ export interface paths {
          *     Example:
          *     ```shell
          *     curl -X GET 'http://localhost:4000/model/deprecations' \
-         *         -H 'Authorization: Bearer sk-1234'
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["model_deprecations_v1_model_deprecations_get"];
@@ -20538,6 +21042,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -20611,7 +21120,7 @@ export interface paths {
          * @description The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
          *     Quick Start
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header 'Authorization: Bearer sk-1234'     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
          *     ```
          */
         post: operations["moderations_v1_moderations_post"];
@@ -20638,7 +21147,7 @@ export interface paths {
          *
          *     **1. JSON body** (Mistral OCR API compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "mistral-ocr",
          *             "document": {
          *                 "type": "document_url",
@@ -20649,7 +21158,7 @@ export interface paths {
          *
          *     **2. Multipart form file upload**:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
+         *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
          *
          *     Response format is normalized to the LiteLLM OCR schema by default. Providers
@@ -20682,7 +21191,7 @@ export interface paths {
          *     ## Form upload (for files):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
          *     ```
@@ -20690,7 +21199,7 @@ export interface paths {
          *     ## JSON body (for URLs):
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "file_url": "https://example.com/document.pdf",
@@ -20701,7 +21210,7 @@ export interface paths {
          *     ## Bedrock:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/ingest" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -F file="@document.pdf" \
          *         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
          *     ```
@@ -20735,7 +21244,7 @@ export interface paths {
          *     ## Example Request:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -20751,7 +21260,7 @@ export interface paths {
          *     ## With Reranking:
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/rag/query" \
-         *         -H "Authorization: Bearer sk-1234" \
+         *         -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
          *         -H "Content-Type: application/json" \
          *         -d '{
          *             "model": "gpt-4o-mini",
@@ -20894,13 +21403,13 @@ export interface paths {
          *
          *     ```bash
          *     # Normal request
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI"
          *     }'
          *
          *     # Background request with polling
-         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Tell me about AI",
          *         "background": true
@@ -20932,7 +21441,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/compact     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": [{"role": "user", "content": "Hello"}]
          *     }'
@@ -20961,7 +21470,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
          *
          *     ```bash
-         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d '{
          *         "model": "gpt-4o",
          *         "input": "Hello, how are you?"
          *     }'
@@ -20995,10 +21504,10 @@ export interface paths {
          *
          *     ```bash
          *     # Get polling response
-         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Get provider response
-         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_v1_responses__response_id__get"];
@@ -21015,7 +21524,7 @@ export interface paths {
          *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
          *
          *     ```bash
-         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer sk-1234"
+         *     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         delete: operations["delete_response_v1_responses__response_id__delete"];
@@ -21045,10 +21554,10 @@ export interface paths {
          *
          *     ```bash
          *     # Cancel polling response
-         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     # Cancel provider response
-         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer sk-1234"
+         *     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         post: operations["cancel_response_v1_responses__response_id__cancel_post"];
@@ -21123,7 +21632,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -21133,7 +21642,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -21196,7 +21705,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/search/tools"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Response:
@@ -21244,7 +21753,7 @@ export interface paths {
          *
          *     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search/litellm-search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
          *             "search_domain_filter": ["arxiv.org", "nature.com"],
@@ -21254,7 +21763,7 @@ export interface paths {
          *
          *     Example with search_tool_name in body:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/search"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "search_tool_name": "litellm-search",
          *             "query": "latest AI developments 2024",
          *             "max_results": 5,
@@ -21443,6 +21952,23 @@ export interface paths {
         get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Systemone */
+        post: operations["systemone_v1_systemone_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21745,6 +22271,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Trace Agents */
+        get: operations["list_trace_agents_v1_traces_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Query Agent Traces */
+        post: operations["query_agent_traces_v1_traces_query_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/query/help": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Help Agent Trace Queries */
+        get: operations["help_agent_trace_queries_v1_traces_query_help_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/{trace_id}": {
         parameters: {
             query?: never;
@@ -22029,7 +22606,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_list_v1_videos_get"];
@@ -22043,7 +22620,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "sora-2",
          *             "prompt": "A beautiful sunset over the ocean"
          *         }'
@@ -22074,7 +22651,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer sk-1234"         -F "video=@character_video.mp4"         -F "name=my_character"
+         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "video=@character_video.mp4"         -F "name=my_character"
          *     ```
          */
         post: operations["video_create_character_v1_videos_characters_post"];
@@ -22100,7 +22677,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_get_character_v1_videos_characters__character_id__get"];
@@ -22130,7 +22707,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_edit_v1_videos_edits_post"];
@@ -22158,7 +22735,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_extension_v1_videos_extensions_post"];
@@ -22184,7 +22761,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_status_v1_videos__video_id__get"];
@@ -22212,7 +22789,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer sk-1234"         --output video.mp4
+         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         --output video.mp4
          *     ```
          */
         get: operations["video_content_v1_videos__video_id__content_get"];
@@ -22242,7 +22819,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "prompt": "A new version with different colors"
          *         }'
          *     ```
@@ -22509,7 +23086,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1beta/interactions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "gemini/gemini-2.5-flash",
          *             "input": "Hello, how are you?"
          *         }'
@@ -22708,7 +23285,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info"     -H "Authorization: Bearer sk-1234"     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
+         *     curl -X GET "http://0.0.0.0:4000/key/info"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
          *     ```
          */
         post: operations["info_key_fn_v2_v2_key_info_post"];
@@ -22765,7 +23342,7 @@ export interface paths {
          *     Example request:
          *     ```
          *     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example response:
@@ -22914,7 +23491,7 @@ export interface paths {
          *     Example request:
          *     ```
          *     curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \
-         *     --header 'Authorization: Bearer sk-1234'
+         *     --header "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["user_info_v2_v2_user_info_get"];
@@ -23504,7 +24081,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_list_videos_get"];
@@ -23518,7 +24095,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "model": "sora-2",
          *             "prompt": "A beautiful sunset over the ocean"
          *         }'
@@ -23549,7 +24126,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer sk-1234"         -F "video=@character_video.mp4"         -F "name=my_character"
+         *     curl -X POST "http://localhost:4000/v1/videos/characters"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "video=@character_video.mp4"         -F "name=my_character"
          *     ```
          */
         post: operations["video_create_character_videos_characters_post"];
@@ -23575,7 +24152,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/characters/char_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_get_character_videos_characters__character_id__get"];
@@ -23605,7 +24182,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/edits"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_edit_videos_edits_post"];
@@ -23633,7 +24210,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
+         *     curl -X POST "http://localhost:4000/v1/videos/extensions"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
          *     ```
          */
         post: operations["video_extension_videos_extensions_post"];
@@ -23659,7 +24236,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://localhost:4000/v1/videos/video_123"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["video_status_videos__video_id__get"];
@@ -23687,7 +24264,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer sk-1234"         --output video.mp4
+         *     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         --output video.mp4
          *     ```
          */
         get: operations["video_content_videos__video_id__content_get"];
@@ -23717,7 +24294,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl -X POST "http://localhost:4000/v1/videos/video_123/remix"         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "prompt": "A new version with different colors"
          *         }'
          *     ```
@@ -23856,7 +24433,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23867,7 +24444,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23878,7 +24455,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23889,7 +24466,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23900,7 +24477,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23911,7 +24488,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23922,7 +24499,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -23987,7 +24564,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["list_batches__provider__v1_batches_get"];
@@ -24000,7 +24577,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -d '{
+         *     curl http://localhost:4000/v1/batches         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -d '{
          *             "input_file_id": "file-abc123",
          *             "endpoint": "/v1/chat/completions",
          *             "completion_window": "24h"
@@ -24029,7 +24606,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer sk-1234"     -H "Content-Type: application/json"
+         *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
          */
         get: operations["retrieve_batch__provider__v1_batches__batch_id__get"];
@@ -24059,7 +24636,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer sk-1234"         -H "Content-Type: application/json"         -X POST
+         *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
          */
@@ -24086,7 +24663,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -24101,7 +24678,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer sk-1234"         -F purpose="batch"         -F file="@mydata.jsonl"
+         *     curl http://localhost:4000/v1/files         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F purpose="batch"         -F file="@mydata.jsonl"
          *         -F expires_after[anchor]="created_at"         -F expires_after[seconds]=2592000
          *     ```
          */
@@ -24128,7 +24705,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -24170,7 +24747,7 @@ export interface paths {
          *
          *     Example Curl
          *     ```
-         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer sk-1234"
+         *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
          */
@@ -24978,6 +25555,25 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
+        /** AgentNode */
+        AgentNode: {
+            /** Duration Ms */
+            duration_ms: number;
+            /** Invocations */
+            invocations: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Name */
+            name: string;
+            /** Parent Agent */
+            parent_agent: string | null;
+            /** Priced Calls */
+            priced_calls: number;
+            /** Spend */
+            spend: number | null;
+            /** Tool Calls */
+            tool_calls: number;
+        };
         /** AgentObjectPermission */
         AgentObjectPermission: {
             /** Agents */
@@ -25473,12 +26069,21 @@ export interface components {
          * @description One auto-router's slice of the benchmarks.
          */
         AutoRouterBenchmarkGroup: {
-            /** Avg Session Seconds */
-            avg_session_seconds: number;
-            /** Avg Tokens Per Session */
-            avg_tokens_per_session: number;
-            /** Avg Turns Per Session */
-            avg_turns_per_session: number;
+            /**
+             * Avg Session Seconds
+             * @description Lifetime seconds per overlapping session; null as above
+             */
+            avg_session_seconds: number | null;
+            /**
+             * Avg Tokens Per Session
+             * @description Lifetime tokens per overlapping session; null as above
+             */
+            avg_tokens_per_session: number | null;
+            /**
+             * Avg Turns Per Session
+             * @description Lifetime turns per overlapping session; null when the window has routed requests but no session rows for this router type, such as an alias whose router type changed mid-session
+             */
+            avg_turns_per_session: number | null;
             /**
              * Baseline Spend
              * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
@@ -25506,13 +26111,8 @@ export interface components {
              */
             saved_pct: number | null;
             /**
-             * Saved Per Session
-             * @description Recorded savings per session, including historical estimates
-             */
-            saved_per_session: number | null;
-            /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
+             * @description Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. On totals this is the same daily figure the Overall savings view reports
              */
             saved_spend: number | null;
             /**
@@ -25530,11 +26130,14 @@ export interface components {
              * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
-            /** Sessions */
+            /**
+             * Sessions
+             * @description Sessions overlapping the window, counted whole
+             */
             sessions: number;
             /**
              * Spend
-             * @description What the routed traffic actually cost
+             * @description What the selected days' routed traffic actually cost
              */
             spend: number;
             /**
@@ -25544,20 +26147,43 @@ export interface components {
             tier_turns?: {
                 [key: string]: number;
             };
-            /** Turns */
+            /**
+             * Total Tokens
+             * @description Input and output tokens of routed generation requests on the selected UTC days, excluding classifier tokens; null when any selected requests predate daily token recording
+             */
+            total_tokens?: number | null;
+            /**
+             * Turns
+             * @description Auto-routed requests on the selected UTC days
+             */
             turns: number;
+            /**
+             * Unattributed Saved Spend
+             * @description Part of saved_spend no router's daily rows account for, such as history recorded before per-router daily tracking; when set, baseline_spend and saved_pct are null
+             */
+            unattributed_saved_spend?: number | null;
         };
         /**
          * AutoRouterBenchmarkTotals
-         * @description Session-shape and savings aggregates over auto-routed traffic in the window.
+         * @description Auto-routed traffic in the window. Turns, spend and savings count requests on the selected UTC days;
+         *     the session averages and cache stats describe every session overlapping the window, whole.
          */
         AutoRouterBenchmarkTotals: {
-            /** Avg Session Seconds */
-            avg_session_seconds: number;
-            /** Avg Tokens Per Session */
-            avg_tokens_per_session: number;
-            /** Avg Turns Per Session */
-            avg_turns_per_session: number;
+            /**
+             * Avg Session Seconds
+             * @description Lifetime seconds per overlapping session; null as above
+             */
+            avg_session_seconds: number | null;
+            /**
+             * Avg Tokens Per Session
+             * @description Lifetime tokens per overlapping session; null as above
+             */
+            avg_tokens_per_session: number | null;
+            /**
+             * Avg Turns Per Session
+             * @description Lifetime turns per overlapping session; null when the window has routed requests but no session rows for this router type, such as an alias whose router type changed mid-session
+             */
+            avg_turns_per_session: number | null;
             /**
              * Baseline Spend
              * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
@@ -25575,13 +26201,8 @@ export interface components {
              */
             saved_pct: number | null;
             /**
-             * Saved Per Session
-             * @description Recorded savings per session, including historical estimates
-             */
-            saved_per_session: number | null;
-            /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
+             * @description Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. On totals this is the same daily figure the Overall savings view reports
              */
             saved_spend: number | null;
             /**
@@ -25599,19 +26220,35 @@ export interface components {
              * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
-            /** Sessions */
+            /**
+             * Sessions
+             * @description Sessions overlapping the window, counted whole
+             */
             sessions: number;
             /**
              * Spend
-             * @description What the routed traffic actually cost
+             * @description What the selected days' routed traffic actually cost
              */
             spend: number;
-            /** Turns */
+            /**
+             * Total Tokens
+             * @description Input and output tokens of routed generation requests on the selected UTC days, excluding classifier tokens; null when any selected requests predate daily token recording
+             */
+            total_tokens?: number | null;
+            /**
+             * Turns
+             * @description Auto-routed requests on the selected UTC days
+             */
             turns: number;
+            /**
+             * Unattributed Saved Spend
+             * @description Part of saved_spend no router's daily rows account for, such as history recorded before per-router daily tracking; when set, baseline_spend and saved_pct are null
+             */
+            unattributed_saved_spend?: number | null;
         };
         /**
          * AutoRouterBenchmarksResponse
-         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session rollup.
+         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session and per-day rollups.
          */
         AutoRouterBenchmarksResponse: {
             /**
@@ -26051,6 +26688,11 @@ export interface components {
              */
             location?: string | null;
             /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output" | "both") | null;
+            /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
              */
@@ -26159,6 +26801,13 @@ export interface components {
              * @default true
              */
             sticky_session_routing: boolean | null;
+            /**
+             * Stream Scope
+             * @description Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.
+             */
+            stream_scope?: ("streaming" | "non_streaming" | "both") | {
+                [key: string]: "streaming" | "non_streaming" | "both";
+            } | null;
             /**
              * Template Id
              * @description The ID of your Model Armor template
@@ -26474,9 +27123,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
+             * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -27151,6 +27800,11 @@ export interface components {
              */
             source: "provider_usage";
         };
+        /** CacheLeakageKeysResponse */
+        CacheLeakageKeysResponse: {
+            /** Api Keys */
+            api_keys: components["schemas"]["KeySpendActivityRow"][];
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -27338,7 +27992,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -27959,18 +28613,6 @@ export interface components {
              */
             role: "user" | "assistant";
         };
-        /** Check */
-        Check: {
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /** Id */
-            id: string;
-            /** Instruction */
-            instruction: string;
-        };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
             /** Content */
@@ -28081,14 +28723,6 @@ export interface components {
         CitationsObject: {
             /** Enabled */
             enabled: boolean;
-        };
-        /** Claim */
-        Claim: {
-            /** Findings */
-            findings: components["schemas"]["Finding"][];
-            job: components["schemas"]["Job"];
-            /** Lens Id */
-            lens_id: string;
         };
         /**
          * ClassificationRubric
@@ -28895,10 +29529,20 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Records
+             * @description max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit
+             */
+            max_batch_file_records?: number | null;
+            /**
              * Max Batch File Size Mb
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Batch File Uploads Per Day
+             * @description max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_batch_file_uploads_per_day?: number | null;
             /**
              * Max Failed Login Attempts Per Source
              * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
@@ -28911,6 +29555,11 @@ export interface components {
             max_failed_login_attempts_per_source_overrides?: {
                 [key: string]: number;
             } | null;
+            /**
+             * Max File Downloads Per Minute
+             * @description max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_file_downloads_per_minute?: number | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
@@ -28983,9 +29632,9 @@ export interface components {
             maximum_spend_logs_retention_period?: string | null;
             /**
              * Mcp Advertised Versions
-             * @description MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. Modern protocol serving and Apps/Tasks remain disabled.
+             * @description MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.
              */
-            mcp_advertised_versions?: ("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25")[] | null;
+            mcp_advertised_versions?: (("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25") | "2026-07-28")[] | null;
             /**
              * Mcp Allowed Clients
              * @description MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.
@@ -29001,6 +29650,11 @@ export interface components {
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
             mcp_internal_ip_ranges?: string[] | null;
+            /**
+             * Mcp Prefer Client Id Metadata Document
+             * @description When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.
+             */
+            mcp_prefer_client_id_metadata_document?: boolean | null;
             /**
              * Mcp Required Fields
              * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
@@ -29087,10 +29741,24 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Responses Websocket Session Limit Seconds
+             * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
+             * @default 3600
+             */
+            responses_websocket_session_limit_seconds: number;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /**
+             * Search Tool Deny By Default
+             * @description When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt
+             * @default false
+             */
+            search_tool_deny_by_default: boolean;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
+            /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
+            spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -29164,6 +29832,12 @@ export interface components {
              * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
              */
             user_url_validation?: boolean | null;
+            /**
+             * Vector Store Deny By Default
+             * @description When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered
+             * @default false
+             */
+            vector_store_deny_by_default: boolean;
         };
         /** ConfigList */
         ConfigList: {
@@ -29894,59 +30568,6 @@ export interface components {
              */
             reasoning_tokens: number;
         };
-        /** Coverage */
-        Coverage: {
-            /**
-             * Candidates
-             * @default 0
-             */
-            candidates: number;
-            /**
-             * Eligible
-             * @default 0
-             */
-            eligible: number;
-            /**
-             * Grouped Batches
-             * @default 0
-             */
-            grouped_batches: number;
-            /**
-             * Grouping Batches
-             * @default 0
-             */
-            grouping_batches: number;
-            /**
-             * Inconclusive
-             * @default 0
-             */
-            inconclusive: number;
-            /**
-             * Investigated
-             * @default 0
-             */
-            investigated: number;
-            /**
-             * Partial
-             * @default 0
-             */
-            partial: number;
-            /**
-             * Screened
-             * @default 0
-             */
-            screened: number;
-            /**
-             * Selected
-             * @default 0
-             */
-            selected: number;
-            /**
-             * Unassessable
-             * @default 0
-             */
-            unassessable: number;
-        };
         /** CreateCredentialItem */
         CreateCredentialItem: {
             /** Credential Info */
@@ -29959,6 +30580,8 @@ export interface components {
             credential_values?: {
                 [key: string]: unknown;
             } | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -29997,6 +30620,28 @@ export interface components {
             credential_values: {
                 [key: string]: unknown;
             };
+            /** Display Name */
+            display_name?: string | null;
+        };
+        /** CredentialView */
+        CredentialView: {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values: {
+                [key: string]: unknown;
+            };
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "db" | "config";
         };
         /** CustomDimension */
         CustomDimension: {
@@ -30113,6 +30758,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -30170,6 +30817,22 @@ export interface components {
              */
             ssl_verify?: string | null;
         };
+        /** DailyActivityKeyPageResponse */
+        DailyActivityKeyPageResponse: {
+            /** Api Keys */
+            api_keys: components["schemas"]["KeySpendActivityRow"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total Api Keys */
+            total_api_keys: number;
+        };
+        /** DailyActivityKeySearchResponse */
+        DailyActivityKeySearchResponse: {
+            /** Api Keys */
+            api_keys: components["schemas"]["KeyActivityRow"][];
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -30183,6 +30846,18 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
+             * Api Key Limit
+             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
+             */
+            api_key_limit?: number | null;
+            /**
+             * Entity Total Api Keys
+             * @description Distinct API keys per entity over the requested range, set when the entity breakdown is included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys among the top api_key_limit keys overall.
+             */
+            entity_total_api_keys?: {
+                [key: string]: number;
+            } | null;
+            /**
              * Has More
              * @default false
              */
@@ -30192,6 +30867,11 @@ export interface components {
              * @default 1
              */
             page: number;
+            /**
+             * Total Api Keys
+             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
+             */
+            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -30483,6 +31163,8 @@ export interface components {
         };
         /** Deployment */
         Deployment: {
+            /** Blocked */
+            blocked?: boolean | null;
             litellm_params: components["schemas"]["LiteLLM_Params"];
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
@@ -30892,74 +31574,11 @@ export interface components {
             /** Updated At */
             updated_at?: number | null;
         };
-        /** Evidence */
-        Evidence: {
-            /** Execution Id */
-            execution_id: string;
-            /** Quote */
-            quote: string;
-            /**
-             * Role
-             * @default support
-             * @enum {string}
-             */
-            role: "support" | "counterexample";
-            /** Span Id */
-            span_id: string;
-        };
-        /** Execution */
-        Execution: {
-            /** Id */
-            id: string;
-            /**
-             * Metadata
-             * @default []
-             */
-            metadata: components["schemas"]["MetadataFilter"][];
-            /** Name */
-            name: string;
-            /**
-             * Root Seen
-             * @default false
-             */
-            root_seen: boolean;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @enum {string}
-             */
-            source: "traces" | "requests";
-            /** Span Count */
-            span_count: number;
-            /** Start Time */
-            start_time: string;
-            /** Team Id */
-            team_id: string;
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
-        /** ExecutionContent */
-        ExecutionContent: {
-            execution: components["schemas"]["Execution"];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /**
-             * Partial
-             * @default false
-             */
-            partial: boolean;
-            /** Parts */
-            parts: components["schemas"]["TracePart"][];
-        };
+        /**
+         * ExportType
+         * @enum {string}
+         */
+        ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
@@ -31140,119 +31759,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** Finding */
-        Finding: {
-            /** Check Id */
-            check_id: string;
-            /** Description */
-            description: string;
-            /** Evidence */
-            evidence: components["schemas"]["Evidence"][];
-            /** Existing Finding Id */
-            existing_finding_id?: string | null;
-            /**
-             * First Seen
-             * Format: date-time
-             */
-            first_seen: string;
-            /** Id */
-            id: string;
-            /**
-             * Kind
-             * @default issue
-             * @enum {string}
-             */
-            kind: "issue" | "pattern";
-            /**
-             * Last Seen
-             * Format: date-time
-             */
-            last_seen: string;
-            /**
-             * Limitation
-             * @default
-             */
-            limitation: string;
-            /**
-             * Occurrences
-             * @default []
-             */
-            occurrences: string[];
-            /**
-             * Priority
-             * @default medium
-             * @enum {string}
-             */
-            priority: "high" | "medium" | "low";
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-            /** Revision */
-            revision: number;
-            /**
-             * Status
-             * @default open
-             * @enum {string}
-             */
-            status: "open" | "resolved" | "dismissed";
-            /**
-             * Suggestion
-             * @default
-             */
-            suggestion: string;
-            /** Title */
-            title: string;
-        };
-        /** FindingDraft */
-        FindingDraft: {
-            /** Check Id */
-            check_id: string;
-            /** Description */
-            description: string;
-            /** Evidence */
-            evidence: components["schemas"]["Evidence"][];
-            /** Existing Finding Id */
-            existing_finding_id?: string | null;
-            /**
-             * Kind
-             * @default issue
-             * @enum {string}
-             */
-            kind: "issue" | "pattern";
-            /**
-             * Limitation
-             * @default
-             */
-            limitation: string;
-            /**
-             * Priority
-             * @default medium
-             * @enum {string}
-             */
-            priority: "high" | "medium" | "low";
-            /**
-             * Suggestion
-             * @default
-             */
-            suggestion: string;
-            /** Title */
-            title: string;
-        };
-        /** FindingUpdate */
-        FindingUpdate: {
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "open" | "resolved" | "dismissed";
-        };
         /** FunctionCall */
         FunctionCall: {
             /** Arguments */
@@ -31415,6 +31921,11 @@ export interface components {
              */
             by_route: components["schemas"]["GatewayRequestBreakdownEntry"][];
             /**
+             * By Status Code
+             * @default []
+             */
+            by_status_code: components["schemas"]["GatewayRequestStatusCodeEntry"][];
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -31456,6 +31967,16 @@ export interface components {
              * @default 0
              */
             successful_requests: number;
+        };
+        /** GatewayRequestStatusCodeEntry */
+        GatewayRequestStatusCodeEntry: {
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Status Code */
+            status_code: number;
         };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
@@ -31515,6 +32036,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -31681,6 +32204,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -31985,6 +32510,27 @@ export interface components {
             guardrail_name: string;
             /** Output Text */
             output_text: string;
+        };
+        /** GuardrailUIAddGuardrailSettings */
+        GuardrailUIAddGuardrailSettings: {
+            /** Content Filter Settings */
+            content_filter_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Pii Entity Categories */
+            pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
+            /** Providers Without Directional Logging Only Scope */
+            providers_without_directional_logging_only_scope: string[];
+            /** Supported Actions */
+            supported_actions: string[];
+            /** Supported Entities */
+            supported_entities: string[];
+            /** Supported Modes */
+            supported_modes: string[];
+            /** Supported Modes By Provider */
+            supported_modes_by_provider: {
+                [key: string]: string[];
+            };
         };
         /**
          * HTTPAuthSecurityScheme
@@ -32430,123 +32976,14 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
-        /** JevClassifierConfig */
-        JevClassifierConfig: {
-            /**
-             * Api Base
-             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
-             */
-            api_base?: string | null;
-            /**
-             * Api Key
-             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
-             */
-            api_key?: string | null;
-            /**
-             * Circuit Breaker Cooldown Seconds
-             * @default 30
-             */
-            circuit_breaker_cooldown_seconds: number;
-            /**
-             * Circuit Breaker Enabled
-             * @default true
-             */
-            circuit_breaker_enabled: boolean;
-            /**
-             * Instructions
-             * @description Replaces the built-in Jev question instructions
-             */
-            instructions?: string | null;
-            /**
-             * Model
-             * @default jev-latest
-             */
-            model: string;
-            /**
-             * Timeout Ms
-             * @default 3000
-             */
-            timeout_ms: number;
-        };
-        /** Job */
-        Job: {
-            /**
-             * Assessments
-             * @default []
-             */
-            assessments: components["schemas"]["RunAssessment"][];
-            /**
-             * Attempts
-             * @default 0
-             */
-            attempts: number;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * End
-             * Format: date-time
-             */
-            end: string;
-            /**
-             * Error
-             * @default
-             */
-            error: string;
-            /** Findings */
-            findings?: components["schemas"]["Finding"][] | null;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Id */
-            id: string;
-            /** Lease Until */
-            lease_until?: string | null;
-            /** Revision */
-            revision: number;
-            sample?: components["schemas"]["Sample"] | null;
-            settings: components["schemas"]["LensSettings"];
-            /**
-             * Stage
-             * @default Queued
-             */
-            stage: string;
-            /**
-             * Start
-             * Format: date-time
-             */
-            start: string;
-            /**
-             * Status
-             * @default queued
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Worker Id */
-            worker_id?: string | null;
-        };
         JsonValue: unknown;
+        /** KeyActivityRow */
+        KeyActivityRow: {
+            /** Api Key */
+            api_key: string;
+            metadata: components["schemas"]["KeyMetadata"];
+            metrics: components["schemas"]["SpendMetrics"];
+        };
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -32608,6 +33045,61 @@ export interface components {
             key_aliases?: string[] | null;
             /** Keys */
             keys?: string[] | null;
+        };
+        /** KeySpendActivityRow */
+        KeySpendActivityRow: {
+            /** Api Key */
+            api_key: string;
+            metadata: components["schemas"]["KeyMetadata"];
+            metrics: components["schemas"]["KeySpendMetrics"];
+        };
+        /** KeySpendMetrics */
+        KeySpendMetrics: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Cache Creation Input Tokens
+             * @default 0
+             */
+            cache_creation_input_tokens: number;
+            /**
+             * Cache Read Input Tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
         };
         /**
          * KeyUpdateFields
@@ -32770,136 +33262,6 @@ export interface components {
             release_url: string;
             /** Version */
             version: string;
-        };
-        /** Lens */
-        Lens: {
-            /** Budget Month */
-            budget_month: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Findings
-             * @default []
-             */
-            findings: components["schemas"]["Finding"][];
-            /** Id */
-            id: string;
-            /**
-             * Jobs
-             * @default []
-             */
-            jobs: components["schemas"]["Job"][];
-            /** Last Scan At */
-            last_scan_at?: string | null;
-            /**
-             * Next Run At
-             * Format: date-time
-             */
-            next_run_at: string;
-            /**
-             * Revision
-             * @default 1
-             */
-            revision: number;
-            scope: components["schemas"]["Scope"];
-            settings: components["schemas"]["LensSettings"];
-            /**
-             * Spent
-             * @default 0
-             */
-            spent: number;
-            /**
-             * Version
-             * @default 0
-             */
-            version: number;
-        };
-        /** LensList */
-        LensList: {
-            /** Lenses */
-            lenses: components["schemas"]["Lens"][];
-            /** Tracing Enabled */
-            tracing_enabled: boolean;
-            /** Workers */
-            workers: components["schemas"]["Worker"][];
-        };
-        /** LensSettings */
-        LensSettings: {
-            /**
-             * Checks
-             * @default []
-             */
-            checks: components["schemas"]["Check"][];
-            /**
-             * Concurrency
-             * @default 8
-             */
-            concurrency: number;
-            /**
-             * Context
-             * @default
-             */
-            context: string;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /**
-             * Execution Ids
-             * @default []
-             */
-            execution_ids: string[];
-            /**
-             * Filters
-             * @default []
-             */
-            filters: components["schemas"]["MetadataFilter"][];
-            /**
-             * Interval Minutes
-             * @default 15
-             */
-            interval_minutes: number;
-            /**
-             * Lookback Hours
-             * @default 24
-             */
-            lookback_hours: number;
-            /** Model */
-            model: string;
-            /**
-             * Monthly Budget
-             * @default 20
-             */
-            monthly_budget: number;
-            /** Name */
-            name: string;
-            /**
-             * Sample Percent
-             * @default 100
-             */
-            sample_percent: number;
-            /** Sample Size */
-            sample_size?: number | null;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @default traces
-             * @enum {string}
-             */
-            source: "traces" | "requests" | "both";
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -33449,6 +33811,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -33574,6 +33938,8 @@ export interface components {
             review_notes?: string | null;
             /** Reviewed At */
             reviewed_at?: string | null;
+            /** Rpm */
+            rpm?: number | null;
             /** Server Id */
             server_id: string;
             /** Server Name */
@@ -33981,6 +34347,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -34047,8 +34449,14 @@ export interface components {
             cache_creation_input_audio_token_cost?: number | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens */
+            cache_creation_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens Batches */
+            cache_creation_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
+            /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
+            cache_creation_input_token_cost_above_1hr_above_100k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens Batches */
@@ -34077,6 +34485,10 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens */
+            cache_read_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens Batches */
+            cache_read_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Batches */
@@ -34129,6 +34541,11 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /**
+             * Fireworks Forward User Id
+             * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
+             */
+            fireworks_forward_user_id?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -34161,6 +34578,10 @@ export interface components {
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
+            /** Input Cost Per Token Above 100K Tokens */
+            input_cost_per_token_above_100k_tokens?: number | null;
+            /** Input Cost Per Token Above 100K Tokens Batches */
+            input_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 128K Tokens */
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
@@ -34244,6 +34665,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -34266,6 +34693,8 @@ export interface components {
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
+            /** Output Cost Per Image Token Batches */
+            output_cost_per_image_token_batches?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -34290,6 +34719,10 @@ export interface components {
             output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Output Cost Per Token Above 100K Tokens */
+            output_cost_per_token_above_100k_tokens?: number | null;
+            /** Output Cost Per Token Above 100K Tokens Batches */
+            output_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
@@ -34378,6 +34811,14 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Token Exchange Audience */
+            token_exchange_audience?: string | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
+            /** Token Exchange Scope */
+            token_exchange_scope?: string | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */
@@ -35143,6 +35584,13 @@ export interface components {
              */
             akto_base_url?: string | null;
             /**
+             * Akto Metadata
+             * @description JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {"policy_name": "PII Strict, Secrets"}.
+             */
+            akto_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Akto Vxlan Id
              * @description Akto VXLAN ID. Env: AKTO_VXLAN_ID. Default: '0'.
              */
@@ -35360,6 +35808,11 @@ export interface components {
              */
             content_moderation_check?: boolean | null;
             /**
+             * Context Source
+             * @description Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.
+             */
+            context_source?: ("ENDPOINT" | "AGENTIC") | null;
+            /**
              * Contextual Grounding From Messages
              * @description ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.
              * @default false
@@ -35462,6 +35915,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * File Guardrail Timeout
+             * @description HTTP timeout in seconds for checking attached files. Default: 10.
+             */
+            file_guardrail_timeout?: number | null;
+            /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
              */
@@ -35549,6 +36007,11 @@ export interface components {
              * @description Google Cloud location/region (e.g., us-central1)
              */
             location?: string | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output" | "both") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API
@@ -35875,6 +36338,13 @@ export interface components {
              * @default true
              */
             sticky_session_routing: boolean | null;
+            /**
+             * Stream Scope
+             * @description Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.
+             */
+            stream_scope?: ("streaming" | "non_streaming" | "both") | {
+                [key: string]: "streaming" | "non_streaming" | "both";
+            } | null;
             /**
              * Template Id
              * @description The ID of your Model Armor template
@@ -36238,6 +36708,10 @@ export interface components {
             client_private_key_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
+            /** Dcr Issuer */
+            dcr_issuer?: string | null;
+            /** Dcr Server Url */
+            dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
             /** Id Jag Resource Token Endpoint */
@@ -36950,13 +37424,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** MetadataFilter */
-        MetadataFilter: {
-            /** Key */
-            key: string;
-            /** Value */
-            value: string;
-        };
         /** MetricWithMetadata */
         MetricWithMetadata: {
             /** Api Key Breakdown */
@@ -37261,16 +37728,6 @@ export interface components {
             /** Model Name */
             model_name: string;
         };
-        /** ModelRequest */
-        ModelRequest: {
-            /** Prompt */
-            prompt: string;
-            /**
-             * Purpose
-             * @enum {string}
-             */
-            purpose: "extract" | "cluster" | "investigate";
-        };
         /** ModelResponse */
         ModelResponse: {
             /** Choices */
@@ -37288,12 +37745,14 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** ModelResult */
-        ModelResult: {
-            /** Content */
-            content: string;
-            /** Cost */
-            cost: number;
+        /** ModelTopKeysResponse */
+        ModelTopKeysResponse: {
+            /** Api Keys */
+            api_keys: components["schemas"]["KeySpendActivityRow"][];
+            /** By Model Group */
+            by_model_group: boolean;
+            /** Model */
+            model: string;
         };
         /**
          * Move
@@ -37313,6 +37772,34 @@ export interface components {
             y: number;
         } & {
             [key: string]: unknown;
+        };
+        /** MoyaiConnectExchangeRequest */
+        MoyaiConnectExchangeRequest: {
+            /** Code */
+            code: string;
+            /** Moyai Url */
+            moyai_url: string;
+        };
+        /** MoyaiConnectExchangeResponse */
+        MoyaiConnectExchangeResponse: {
+            /** Api Base */
+            api_base: string;
+            /** Api Key */
+            api_key: string;
+            /** Key Alias */
+            key_alias: string;
+        };
+        /** MoyaiConnectStartRequest */
+        MoyaiConnectStartRequest: {
+            /** Moyai Url */
+            moyai_url: string;
+            /** Return To */
+            return_to: string;
+        };
+        /** MoyaiConnectStartResponse */
+        MoyaiConnectStartResponse: {
+            /** Connect Url */
+            connect_url: string;
         };
         /**
          * MutualTLSSecurityScheme
@@ -37408,6 +37895,8 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /**
              * Rpm Limit
@@ -37518,6 +38007,8 @@ export interface components {
             per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
+            /** Rpm */
+            rpm?: number | null;
             /** Server Id */
             server_id?: string | null;
             /** Server Name */
@@ -37872,6 +38363,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -38166,6 +38659,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -38335,6 +38830,50 @@ export interface components {
              * @constant
              */
             type: "openIdConnect";
+        };
+        /** OpenSourceClassifierConfig */
+        OpenSourceClassifierConfig: {
+            /**
+             * Api Base
+             * @description Provider API base; defaults to the selected provider API_BASE environment variable
+             */
+            api_base?: string | null;
+            /**
+             * Api Key
+             * @description Provider API key; optional for self-hosted providers
+             */
+            api_key?: string | null;
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
+            /**
+             * Instructions
+             * @description Replaces the built-in classification instructions
+             */
+            instructions?: string | null;
+            /**
+             * Model
+             * @default jev-latest
+             */
+            model: string;
+            /**
+             * Provider
+             * @default jev
+             * @enum {string}
+             */
+            provider: "jev" | "laya" | "bespoke" | "databricks";
+            /**
+             * Timeout Ms
+             * @default 3000
+             */
+            timeout_ms: number;
         };
         /**
          * OperationCreateFile
@@ -38922,6 +39461,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -39086,6 +39627,13 @@ export interface components {
          * @enum {string}
          */
         PiiAction: "BLOCK" | "MASK";
+        /** PiiEntityCategoryMap */
+        PiiEntityCategoryMap: {
+            /** Category */
+            category: string;
+            /** Entities */
+            entities: string[];
+        };
         /**
          * PiiEntityType
          * @enum {string}
@@ -39907,42 +40455,6 @@ export interface components {
              */
             version_status: string;
         };
-        /** Preview */
-        Preview: {
-            /** As Of */
-            as_of?: string | null;
-            /**
-             * Lookback Hours
-             * @default 24
-             */
-            lookback_hours: number;
-            /**
-             * Offset
-             * @default 0
-             */
-            offset: number;
-            settings: components["schemas"]["LensSettings"];
-        };
-        /** Progress */
-        Progress: {
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
-            /** Stage */
-            stage: string;
-        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -40360,286 +40872,6 @@ export interface components {
                 };
             } | null;
         };
-        /** ROIEstimateResponse */
-        ROIEstimateResponse: {
-            /**
-             * Cached
-             * @default false
-             */
-            cached: boolean;
-            /** Effort Basis */
-            effort_basis?: string | null;
-            /** Evidence Source */
-            evidence_source?: string | null;
-            /** Hours */
-            hours: number | null;
-            /** Model */
-            model?: string | null;
-            /** Reasoning */
-            reasoning: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "estimated" | "needs_review" | "error";
-        };
-        /** ROIIdentityMapResponse */
-        ROIIdentityMapResponse: {
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            report: components["schemas"]["ROISummaryResponse"] | null;
-        };
-        /** ROIIdentityMapUpdate */
-        ROIIdentityMapUpdate: {
-            /** Email */
-            email: string | null;
-            /** Github Login */
-            github_login: string;
-        };
-        /** ROIMetricsResponse */
-        ROIMetricsResponse: {
-            /** Cohort People */
-            cohort_people: number;
-            /** Cost Per Hour */
-            cost_per_hour: number | null;
-            /** Estimated Prs */
-            estimated_prs: number;
-            /** Excluded Spend */
-            excluded_spend: number;
-            /** Hours Per Dollar */
-            hours_per_dollar: number | null;
-            /** Matched Prs */
-            matched_prs: number;
-            /** Matched Spend */
-            matched_spend: number;
-            /** Merged Prs */
-            merged_prs: number;
-            /** Output Hours */
-            output_hours: number;
-            /** Pending Prs */
-            pending_prs: number;
-            /** People With Prs */
-            people_with_prs: number;
-            /** Total Output Hours */
-            total_output_hours: number;
-            /** Total Spend */
-            total_spend: number;
-        };
-        /** ROIPersonResponse */
-        ROIPersonResponse: {
-            /** Cost Per Hour */
-            cost_per_hour: number | null;
-            /** Eligible */
-            eligible: boolean;
-            /** Email */
-            email: string;
-            /** Estimated Prs */
-            estimated_prs: number;
-            /** Hours */
-            hours: number;
-            /** Id */
-            id: string;
-            /** Logins */
-            logins: string[];
-            /** Match Methods */
-            match_methods: string[];
-            /** Pending Prs */
-            pending_prs: number;
-            /** Prs */
-            prs: number;
-            /** Spend */
-            spend: number | null;
-        };
-        /** ROIPullResponse */
-        ROIPullResponse: {
-            /** Additions */
-            additions: number;
-            /** Cache Key */
-            cache_key?: string | null;
-            /** Changed Files */
-            changed_files: number;
-            /** Commit Count */
-            commit_count: number;
-            /** Deletions */
-            deletions: number;
-            /** Email */
-            email: string;
-            /** Emails */
-            emails: string[];
-            estimate: components["schemas"]["ROIEstimateResponse"];
-            /** Head Sha */
-            head_sha: string;
-            /** Incomplete Metadata */
-            incomplete_metadata: boolean;
-            /** Login */
-            login: string;
-            /** Match Method */
-            match_method: string;
-            /** Matched */
-            matched: boolean;
-            /** Merged At */
-            merged_at: string;
-            /** Number */
-            number: number;
-            /** Profile Email */
-            profile_email: string;
-            /** Repo */
-            repo: string;
-            /** Title */
-            title: string;
-            /** Url */
-            url: string;
-        };
-        /** ROIReportResponse */
-        ROIReportResponse: {
-            report: components["schemas"]["ROISummaryResponse"] | null;
-        };
-        /** ROIRepositoriesResponse */
-        ROIRepositoriesResponse: {
-            /** Has More */
-            has_more: boolean;
-            /** Page */
-            page: number;
-            /** Repositories */
-            repositories: components["schemas"]["ROIRepository"][];
-        };
-        /** ROIRepository */
-        ROIRepository: {
-            /** Archived */
-            archived: boolean;
-            /** Name */
-            name: string;
-            /** Visibility */
-            visibility: string;
-        };
-        /** ROISettingsResponse */
-        ROISettingsResponse: {
-            /** Available Models */
-            available_models: string[];
-            /** Backfill Days */
-            backfill_days: number;
-            /** Default Prompt */
-            default_prompt: string;
-            /** Estimator Model */
-            estimator_model: string;
-            /** Estimator Prompt */
-            estimator_prompt: string;
-            /** Github Api Url */
-            github_api_url: string;
-            /** Has Estimator Key */
-            has_estimator_key: boolean;
-            /** Has Github Token */
-            has_github_token: boolean;
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            /** Ready */
-            ready: boolean;
-            /** Repos */
-            repos: string[];
-            /** Update Interval Minutes */
-            update_interval_minutes: number;
-        };
-        /** ROISettingsUpdate */
-        ROISettingsUpdate: {
-            /** Backfill Days */
-            backfill_days?: number | null;
-            /** Estimator Key */
-            estimator_key?: string | null;
-            /** Estimator Model */
-            estimator_model?: string | null;
-            /** Estimator Prompt */
-            estimator_prompt?: string | null;
-            /** Github Api Url */
-            github_api_url?: string | null;
-            /** Github Token */
-            github_token?: string | null;
-            /** Repos */
-            repos?: string[] | null;
-            /** Update Interval Minutes */
-            update_interval_minutes?: number | null;
-        };
-        /** ROISummaryResponse */
-        ROISummaryResponse: {
-            /** Effort Basis */
-            effort_basis: string | null;
-            /** End */
-            end: string;
-            /** Estimator Model */
-            estimator_model: string;
-            /** Estimator Prompt */
-            estimator_prompt: string;
-            /** Id */
-            id: string | null;
-            metrics: components["schemas"]["ROIMetricsResponse"];
-            /** Mode */
-            mode: string;
-            /** People */
-            people: components["schemas"]["ROIPersonResponse"][];
-            /** Pulls */
-            pulls: components["schemas"]["ROIPullResponse"][];
-            /** Repos */
-            repos: string[];
-            /** Start */
-            start: string;
-            /** Synced At */
-            synced_at: string;
-            /** Trend */
-            trend: components["schemas"]["ROITrendResponse"][];
-            /** Warnings */
-            warnings: string[];
-        };
-        /** ROISyncStatus */
-        ROISyncStatus: {
-            /** Done */
-            done: number;
-            /**
-             * Elapsed Seconds
-             * @default 0
-             */
-            elapsed_seconds: number;
-            /** Error */
-            error: string | null;
-            /** Estimated */
-            estimated: number;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Needs Attention */
-            needs_attention: number;
-            /** Next Update */
-            next_update?: string | null;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "idle" | "spend" | "repositories" | "estimates" | "complete" | "cancelled" | "error";
-            /** Remaining Seconds */
-            remaining_seconds?: number | null;
-            /** Reused */
-            reused: number;
-            /** Running */
-            running: boolean;
-            /** Stage */
-            stage: string;
-            /** Started At */
-            started_at?: string | null;
-            /** Total */
-            total: number;
-        };
-        /** ROITrendResponse */
-        ROITrendResponse: {
-            /** Date */
-            date: string;
-            /** Hours */
-            hours: number;
-            /** Prs */
-            prs: number;
-            /** Spend */
-            spend: number;
-        };
         /**
          * RankingOptions
          * @description Ranking options for search.
@@ -40786,6 +41018,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -41136,11 +41370,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev, Laya or Bespoke Nimble
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid" | "jev";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid" | "oss_classifier";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -41215,18 +41449,18 @@ export interface components {
             fallback_tier?: string | null;
             /**
              * Heuristic First Max Tier
-             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
+             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
              */
             heuristic_first_max_tier?: string | null;
             /**
              * Heuristic V2 Artifact
-             * @description Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
+             * @description Success-probability artifact used by standalone or chained heuristic_v2. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
              * @default ultrafeedback
              */
             heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
             /**
              * Heuristic V2 Success Threshold
-             * @description Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. The first tier meeting this threshold is selected, or REASONING if none meets it. When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). Other classifier types ignore this setting
+             * @description Minimum predicted success probability for standalone or chained heuristic_v2 to select a tier. The first tier meeting this threshold is selected. When none meets it, standalone heuristic_v2 selects REASONING and chained heuristic_v2 defers to the LLM judge. When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). Ignored when heuristic_v2 is not selected
              */
             heuristic_v2_success_threshold?: number | null;
             /**
@@ -41236,10 +41470,9 @@ export interface components {
             housekeeping_patterns?: string[] | null;
             /**
              * Hybrid Boundary Margin
-             * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. 0 escalates only scores sitting exactly on a boundary.
+             * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. With local_heuristic 'heuristic_v2', a tier must meet its success threshold and its probability and all lower-tier probabilities must be further than this margin from that threshold. 0 escalates only scores or probabilities exactly on a boundary.
              */
             hybrid_boundary_margin?: number | null;
-            jev_classifier_config?: components["schemas"]["JevClassifierConfig"] | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -41247,6 +41480,11 @@ export interface components {
             keyword_tier_rules?: components["schemas"]["KeywordTierRule"][] | null;
             /** @description Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2. */
             llm_v2_config?: components["schemas"]["LLMV2Config"] | null;
+            /**
+             * Local Heuristic
+             * @description Local scorer for heuristic_first or hybrid. Omitted or null keeps heuristic v1; heuristic_v2 uses the trained success predictor. Rejected for other classifier types.
+             */
+            local_heuristic?: ("heuristic" | "heuristic_v2") | null;
             /**
              * Match Threshold
              * @description Minimum cosine similarity for a semantic keyword match
@@ -41271,6 +41509,7 @@ export interface components {
              * @default false
              */
             modality_routing: boolean;
+            opensource_classifier_config?: components["schemas"]["OpenSourceClassifierConfig"] | null;
             /**
              * Plan Mode Min Tier
              * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
@@ -41368,7 +41607,7 @@ export interface components {
             };
             /**
              * Tier Definitions
-             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'oss_classifier' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
              */
             tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
@@ -41404,6 +41643,116 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * RequestErrorActivityResponse
+         * @description Response for GET /gateway/errors/activity.
+         */
+        RequestErrorActivityResponse: {
+            /**
+             * By Date
+             * @default []
+             */
+            by_date: components["schemas"]["RequestErrorDailyEntry"][];
+            /**
+             * By Key
+             * @default []
+             */
+            by_key: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * By Model
+             * @default []
+             */
+            by_model: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * By Status Code
+             * @default []
+             */
+            by_status_code: components["schemas"]["RequestErrorStatusCodeEntry"][];
+            /**
+             * By Team
+             * @default []
+             */
+            by_team: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * By User
+             * @default []
+             */
+            by_user: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * Total Failed Requests
+             * @default 0
+             */
+            total_failed_requests: number;
+            /**
+             * Total Successful Requests
+             * @default 0
+             */
+            total_successful_requests: number;
+        };
+        /** RequestErrorDailyEntry */
+        RequestErrorDailyEntry: {
+            /**
+             * By Status Code
+             * @default []
+             */
+            by_status_code: components["schemas"]["RequestErrorStatusCodeEntry"][];
+            /**
+             * Client Errors
+             * @default 0
+             */
+            client_errors: number;
+            /** Date */
+            date: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Server Errors
+             * @default 0
+             */
+            server_errors: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+        };
+        /** RequestErrorEntityEntry */
+        RequestErrorEntityEntry: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+            /** Top Status Code */
+            top_status_code?: number | null;
+            /**
+             * Top Status Code Requests
+             * @default 0
+             */
+            top_status_code_requests: number;
+        };
+        /** RequestErrorStatusCodeEntry */
+        RequestErrorStatusCodeEntry: {
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Status Code */
+            status_code: number;
         };
         /**
          * RequestType
@@ -41828,7 +42177,7 @@ export interface components {
             /** Queries */
             queries: string[];
             /** Results */
-            results?: components["schemas"]["Result-Output"][] | null;
+            results?: components["schemas"]["Result"][] | null;
             /**
              * Status
              * @enum {string}
@@ -42889,40 +43238,6 @@ export interface components {
                 [key: string]: string | number | boolean;
             } | null;
             /** File Id */
-            file_id?: string;
-            /** Filename */
-            filename?: string;
-            /** Score */
-            score?: number;
-            /** Text */
-            text?: string;
-        };
-        /** Result */
-        "Result-Input": {
-            /**
-             * Assessments
-             * @default []
-             */
-            assessments: components["schemas"]["RunAssessment"][];
-            coverage: components["schemas"]["Coverage"];
-            /**
-             * Error
-             * @default
-             */
-            error: string;
-            /**
-             * Findings
-             * @default []
-             */
-            findings: components["schemas"]["FindingDraft"][];
-        };
-        /** Result */
-        "Result-Output": {
-            /** Attributes */
-            attributes?: {
-                [key: string]: string | number | boolean;
-            } | null;
-            /** File Id */
             file_id?: string | null;
             /** Filename */
             filename?: string | null;
@@ -43161,26 +43476,6 @@ export interface components {
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
         };
-        /** RunAssessment */
-        RunAssessment: {
-            /**
-             * Cannot Assess
-             * @default false
-             */
-            cannot_assess: boolean;
-            /** Execution Id */
-            execution_id: string;
-            /**
-             * Issue Checks
-             * @default []
-             */
-            issue_checks: string[];
-            /**
-             * Pattern Checks
-             * @default []
-             */
-            pattern_checks: string[];
-        };
         /**
          * RunDeleteResponse
          * @description Response from deleting a run
@@ -43199,11 +43494,19 @@ export interface components {
             /** Run Id */
             run_id: string;
         };
-        /** RunRequest */
-        RunRequest: {
-            /** Lookback Hours */
-            lookback_hours?: number | null;
-            settings?: components["schemas"]["LensSettings"] | null;
+        /** RunSource */
+        RunSource: {
+            /** Title */
+            title: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
+            /** Url */
+            url: string;
+            /** User */
+            user?: string;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -43590,22 +43893,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** Sample */
-        Sample: {
-            /** Eligible */
-            eligible: number;
-            /** Executions */
-            executions: components["schemas"]["Execution"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /** Next Offset */
-            next_offset?: number | null;
-            /**
-             * Selected
-             * @default 0
-             */
-            selected: number;
-        };
         /**
          * ScheduledJobStaggerSettings
          * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
@@ -43636,24 +43923,6 @@ export interface components {
              * @default 300
              */
             window_seconds: number;
-        };
-        /** Scope */
-        Scope: {
-            /**
-             * All Teams
-             * @default false
-             */
-            all_teams: boolean;
-            /**
-             * Api Key Hash
-             * @default
-             */
-            api_key_hash: string;
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
         };
         /**
          * Screenshot
@@ -43762,6 +44031,52 @@ export interface components {
             search_provider: string;
             /** Timeout */
             timeout?: number | null;
+        };
+        /** ServiceConnection */
+        ServiceConnection: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
+            status: components["schemas"]["ServiceStatus"];
+            /** Url */
+            url: string;
+        };
+        /** ServiceStatus */
+        ServiceStatus: {
+            /**
+             * Credentials Ready
+             * @default false
+             */
+            credentials_ready: boolean;
+            /**
+             * Protocol Version
+             * @default 0
+             */
+            protocol_version: number;
+            /**
+             * Public Contract
+             * @default 0
+             */
+            public_contract: number;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
+            /**
+             * Storage Ready
+             * @default false
+             */
+            storage_ready: boolean;
         };
         /** SessionLogoutResponse */
         SessionLogoutResponse: {
@@ -44132,6 +44447,70 @@ export interface components {
             /** Version */
             version?: string;
         };
+        /** Span */
+        Span: {
+            /** Agent */
+            agent: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error */
+            error: string | null;
+            /** Error Truncated */
+            error_truncated: boolean;
+            /** Framework */
+            framework: string;
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Litellm Request Id */
+            litellm_request_id: string | null;
+            /** Model */
+            model: string | null;
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Parent Span Id */
+            parent_span_id: string | null;
+            /** Span Id */
+            span_id: string;
+            /** Spend */
+            spend: number | null;
+            /** Spend Log Request Id */
+            spend_log_request_id: string | null;
+            /** Spend Match */
+            spend_match: ("matched" | "no_call_id" | "no_spend_log" | "ambiguous" | "incomplete_evidence") | null;
+            /** Start Offset Ms */
+            start_offset_ms: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "error" | "unset";
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
+        };
+        /** SpanDetail */
+        SpanDetail: {
+            /** Attributes */
+            attributes: {
+                [key: string]: string;
+            };
+            /** Input */
+            input: string;
+            /** Input Ui */
+            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Output */
+            output: string;
+            /** Output Ui */
+            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Span Id */
+            span_id: string;
+        };
         /** SpanErrorPage */
         SpanErrorPage: {
             /** Message */
@@ -44188,6 +44567,13 @@ export interface components {
              * @default 0.9
              */
             threshold: number;
+        };
+        /** SpendLogsMetadataFields */
+        SpendLogsMetadataFields: {
+            /** Exclude */
+            exclude?: string[] | null;
+            /** Include */
+            include?: string[] | null;
         };
         /** SpendMetrics */
         SpendMetrics: {
@@ -44299,7 +44685,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit" | "semantic_match" | "semantic_no_match" | "semantic_error";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
@@ -44320,6 +44706,13 @@ export interface components {
             classifier_crux?: string;
             /** Classifier Efficient P Solve */
             classifier_efficient_p_solve?: number;
+            /** Classifier Error Type */
+            classifier_error_type?: string;
+            /**
+             * Classifier Failure Reason
+             * @enum {string}
+             */
+            classifier_failure_reason?: "timeout" | "circuit_open" | "not_configured" | "unsupported_input" | "invalid_response" | "declined" | "classifier_error";
             /** Classifier Max Quality Gap */
             classifier_max_quality_gap?: number;
             /** Classifier Model */
@@ -44355,13 +44748,19 @@ export interface components {
             request_type?: string;
             /** Routed Model */
             routed_model?: string;
+            /** Router Config Fingerprint */
+            router_config_fingerprint?: string;
+            /** Router Config Id */
+            router_config_id?: string;
+            /** Router Config Updated At */
+            router_config_updated_at?: string;
             /** Router Model Name */
             router_model_name?: string;
             /**
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -45944,28 +46343,254 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** TracePart */
-        TracePart: {
-            /** Content */
-            content: string;
-            /** Execution Id */
-            execution_id: string;
-            /** Kind */
-            kind: string;
+        /** Trace */
+        Trace: {
+            /** Agents */
+            agents: components["schemas"]["AgentNode"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Spans */
+            spans: components["schemas"]["Span"][];
+            summary: components["schemas"]["TraceSummary"];
+        };
+        /**
+         * TraceAgent
+         * @description One agent seen in the caller's traces, for picking which agent's runs to look at.
+         */
+        TraceAgent: {
+            /** Failed Runs */
+            failed_runs: number;
+            /**
+             * Frameworks
+             * @default []
+             */
+            frameworks: string[];
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /** Runs */
+            runs: number;
+        };
+        /** TraceAgentList */
+        TraceAgentList: {
+            /** Agents */
+            agents: components["schemas"]["TraceAgent"][];
+        };
+        /** TracePage */
+        TracePage: {
+            /** Data */
+            data: components["schemas"]["TraceSummary"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** TraceQueryAttributeField */
+        TraceQueryAttributeField: {
+            /** Expression */
+            expression: string;
+            /** Key */
+            key: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "String";
+        };
+        /** TraceQueryAttributes */
+        TraceQueryAttributes: {
+            /** Column */
+            column: string;
+            /** Discovery Sql */
+            discovery_sql: string;
+            /** Error */
+            error?: string | null;
+            /** Fields */
+            fields: components["schemas"]["TraceQueryAttributeField"][];
+            /** Scope */
+            scope: string;
+            /**
+             * Table
+             * @enum {string}
+             */
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** TraceQueryColumn */
+        TraceQueryColumn: {
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TraceQueryExample */
+        TraceQueryExample: {
+            /** Name */
+            name: string;
+            /** Sql */
+            sql: string;
+        };
+        /** TraceQueryHelp */
+        TraceQueryHelp: {
+            /** Access */
+            access: string;
+            /** Attributes */
+            attributes: components["schemas"]["TraceQueryAttributes"][];
+            /** Dialect */
+            dialect: string;
+            /** Examples */
+            examples: components["schemas"]["TraceQueryExample"][];
+            /** Gotchas */
+            gotchas: string[];
+            /** Guide */
+            guide: string;
+            metadata: components["schemas"]["TraceQueryMetadata"];
+            /** Normalized Fields */
+            normalized_fields: components["schemas"]["TraceQueryNormalizedField"][];
+            /** Relationships */
+            relationships: components["schemas"]["TraceQueryRelationship"][];
+            /** Response */
+            response: string;
+            /** Tables */
+            tables: components["schemas"]["TraceQueryTable"][];
+        };
+        /** TraceQueryMetadata */
+        TraceQueryMetadata: {
+            /** Column */
+            column: string;
+            /** Error */
+            error?: string | null;
+            /** Fields */
+            fields: components["schemas"]["TraceQueryMetadataField"][];
+            /** Invalid Json Rows */
+            invalid_json_rows: number;
+            /** Sample Sql */
+            sample_sql: string;
+            /** Sampled Rows */
+            sampled_rows: number;
+            /** Scope */
+            scope: string;
+            /**
+             * Table
+             * @enum {string}
+             */
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** TraceQueryMetadataField */
+        TraceQueryMetadataField: {
+            /** Expression */
+            expression: string;
+            /** Path */
+            path: (string | number)[];
+            /** Types */
+            types: ("array" | "boolean" | "integer" | "null" | "number" | "object" | "string")[];
+        };
+        /** TraceQueryNormalizedField */
+        TraceQueryNormalizedField: {
+            /** Column */
+            column: string;
+            /** Meaning */
+            meaning: string;
             /** Name */
             name: string;
             /**
-             * Parent Span Id
-             * @default
+             * Table
+             * @enum {string}
              */
-            parent_span_id: string;
-            /** Span Id */
-            span_id: string;
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            /** Type */
+            type: string;
+        };
+        /** TraceQueryRelationship */
+        TraceQueryRelationship: {
+            /** Additional Predicates */
+            additional_predicates: string;
+            /** Left */
+            left: string;
+            /** Meaning */
+            meaning: string;
+            /** Right */
+            right: string;
+        };
+        /** TraceQueryRequest */
+        TraceQueryRequest: {
+            /** Sql */
+            sql: string;
+        };
+        /** TraceQueryTable */
+        TraceQueryTable: {
+            /** Columns */
+            columns: components["schemas"]["TraceQueryColumn"][];
             /**
-             * Truncated
-             * @default false
+             * Name
+             * @enum {string}
              */
-            truncated: boolean;
+            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+        };
+        /** TraceSQLResponse */
+        TraceSQLResponse: {
+            /** Data */
+            data: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+        };
+        /** TraceSummary */
+        TraceSummary: {
+            /** Agent Count */
+            agent_count: number;
+            /** Agent Invocations */
+            agent_invocations: number;
+            /** Agent Names */
+            agent_names?: string[];
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error Count */
+            error_count: number;
+            /** Frameworks */
+            frameworks?: string[];
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Priced Calls */
+            priced_calls: number;
+            /** Resolution Limited */
+            resolution_limited?: boolean;
+            /** Service */
+            service: string;
+            source?: components["schemas"]["RunSource"] | null;
+            /** Span Count */
+            span_count: number;
+            /** Spend */
+            spend: number | null;
+            /** Start Time */
+            start_time: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "error" | "unset";
+            /** Tool Calls */
+            tool_calls: number;
+            /** Trace Id */
+            trace_id: string;
+            /** Trace Ref */
+            trace_ref?: string;
         };
         /** TrainedTierArtifact */
         TrainedTierArtifact: {
@@ -46041,6 +46666,47 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** UIField */
+        UIField: {
+            /** Key */
+            key: string;
+            /** Value */
+            value: string;
+        };
+        /** UIFields */
+        UIFields: {
+            /** Fields */
+            fields: components["schemas"]["UIField"][];
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "fields";
+        };
+        /** UIMessage */
+        UIMessage: {
+            /** Content */
+            content: string;
+            /** Name */
+            name?: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant" | "tool";
+            /** Tool Calls */
+            tool_calls?: components["schemas"]["UIToolCall"][];
+        };
+        /** UIMessages */
+        UIMessages: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "messages";
+            /** Messages */
+            messages: components["schemas"]["UIMessage"][];
+        };
         /**
          * UISettingsResponse
          * @description Response model for UI settings
@@ -46058,6 +46724,16 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** UIText */
+        UIText: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "text";
+            /** Text */
+            text: string;
         };
         /**
          * UIThemeConfig
@@ -46094,6 +46770,13 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** UIToolCall */
+        UIToolCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
+        };
         /** UiDiscoveryEndpoints */
         UiDiscoveryEndpoints: {
             /** Admin Ui Disabled */
@@ -46110,6 +46793,11 @@ export interface components {
              * @default false
              */
             is_control_plane: boolean;
+            /**
+             * Mcp Stdio Enabled
+             * @default false
+             */
+            mcp_stdio_enabled: boolean;
             /** Proxy Base Url */
             proxy_base_url: string | null;
             /** Server Root Path */
@@ -46137,11 +46825,15 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Credential Name */
-            credential_name: string;
+            credential_name?: string | null;
             /** Credential Values */
             credential_values?: {
                 [key: string]: unknown;
             } | null;
+            /** Credential Values To Delete */
+            credential_values_to_delete?: string[] | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -46165,6 +46857,8 @@ export interface components {
             default_model?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** User Id */
             user_id: string;
@@ -46242,6 +46936,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -46422,6 +47118,8 @@ export interface components {
             per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
+            /** Rpm */
+            rpm?: number | null;
             /** Server Id */
             server_id: string;
             /** Server Name */
@@ -46736,6 +47434,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -47591,6 +48291,41 @@ export interface components {
              */
             severity: "info" | "warning" | "error";
         };
+        /** UserConnectionDeleteResponse */
+        UserConnectionDeleteResponse: {
+            /** Status */
+            status: string;
+        };
+        /** UserConnectionPollRequest */
+        UserConnectionPollRequest: {
+            /** Flow Handle */
+            flow_handle: string;
+        };
+        /** UserConnectionPollResponse */
+        UserConnectionPollResponse: {
+            /** Github Login */
+            github_login?: string | null;
+            /** Interval */
+            interval?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "slow_down" | "expired" | "denied" | "connected" | "no_copilot_seat";
+        };
+        /** UserConnectionStartResponse */
+        UserConnectionStartResponse: {
+            /** Expires In */
+            expires_in: number;
+            /** Flow Handle */
+            flow_handle: string;
+            /** Interval */
+            interval: number;
+            /** User Code */
+            user_code: string;
+            /** Verification Uri */
+            verification_uri: string;
+        };
         /**
          * UserCreateResult
          * @description Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
@@ -47691,6 +48426,8 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
             /**
              * Spend
              * @default 0
@@ -47703,6 +48440,8 @@ export interface components {
              * @default []
              */
             teams: string[];
+            /** Tpm Limit */
+            tpm_limit?: number | null;
             /** Updated At */
             updated_at?: string | null;
             /** User Alias */
@@ -47729,6 +48468,24 @@ export interface components {
             total_pages: number;
             /** Users */
             users: components["schemas"]["LiteLLM_UserTableWithKeyCount"][];
+        };
+        /** UserProviderConnection */
+        UserProviderConnection: {
+            /** Connected */
+            connected: boolean;
+            /** Connected At */
+            connected_at?: string | null;
+            /** Credential Name */
+            credential_name: string;
+            /** Github Login */
+            github_login?: string | null;
+            /** Provider */
+            provider: string;
+        };
+        /** UserProviderConnectionsResponse */
+        UserProviderConnectionsResponse: {
+            /** Connections */
+            connections: components["schemas"]["UserProviderConnection"][];
         };
         /**
          * UserUpdateResult
@@ -48064,47 +48821,6 @@ export interface components {
             type: "web_search" | "web_search_2025_08_26";
             user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
         };
-        /** Worker */
-        Worker: {
-            /** Analysis Key Id */
-            analysis_key_id?: string | null;
-            /** Id */
-            id: string;
-            /**
-             * Last Seen
-             * Format: date-time
-             */
-            last_seen: string;
-            /** Name */
-            name: string;
-            /**
-             * Revoked
-             * @default false
-             */
-            revoked: boolean;
-            scope: components["schemas"]["Scope"];
-        };
-        /** WorkerBilling */
-        WorkerBilling: {
-            /** Analysis Key Id */
-            analysis_key_id: string;
-        };
-        /** WorkerCreated */
-        WorkerCreated: {
-            /** Token */
-            token: string;
-            worker: components["schemas"]["Worker"];
-        };
-        /** WorkerName */
-        WorkerName: {
-            /** Analysis Key Id */
-            analysis_key_id: string;
-            /**
-             * Name
-             * @default Lens worker
-             */
-            name: string;
-        };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
             /** Name */
@@ -48384,6 +49100,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -48450,8 +49202,14 @@ export interface components {
             cache_creation_input_audio_token_cost?: number | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens */
+            cache_creation_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 100K Tokens Batches */
+            cache_creation_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 1Hr */
             cache_creation_input_token_cost_above_1hr?: number | null;
+            /** Cache Creation Input Token Cost Above 1Hr Above 100K Tokens */
+            cache_creation_input_token_cost_above_1hr_above_100k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens Batches */
@@ -48480,6 +49238,10 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens */
+            cache_read_input_token_cost_above_100k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 100K Tokens Batches */
+            cache_read_input_token_cost_above_100k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Batches */
@@ -48532,6 +49294,11 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /**
+             * Fireworks Forward User Id
+             * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
+             */
+            fireworks_forward_user_id?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -48564,6 +49331,10 @@ export interface components {
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
+            /** Input Cost Per Token Above 100K Tokens */
+            input_cost_per_token_above_100k_tokens?: number | null;
+            /** Input Cost Per Token Above 100K Tokens Batches */
+            input_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 128K Tokens */
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
@@ -48647,6 +49418,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -48669,6 +49446,8 @@ export interface components {
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
+            /** Output Cost Per Image Token Batches */
+            output_cost_per_image_token_batches?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -48693,6 +49472,10 @@ export interface components {
             output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Output Cost Per Token Above 100K Tokens */
+            output_cost_per_token_above_100k_tokens?: number | null;
+            /** Output Cost Per Token Above 100K Tokens Batches */
+            output_cost_per_token_above_100k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
@@ -48781,6 +49564,14 @@ export interface components {
             }[] | null;
             /** Timeout */
             timeout?: number | string | null;
+            /** Token Exchange Audience */
+            token_exchange_audience?: string | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
+            /** Token Exchange Scope */
+            token_exchange_scope?: string | null;
             /** Tpm */
             tpm?: number | null;
             /** Use Chat Completions Api */
@@ -49694,6 +50485,202 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                api_key_limit?: number;
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_daily_activity_aggregated_keys_agent_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_daily_activity_aggregated_search_agent_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_daily_activity_export_agent_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -51628,6 +52615,26 @@ export interface operations {
             };
         };
     };
+    bespoke_proxy_route_bespoke_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_budget_budget_delete_post: {
         parameters: {
             query?: never;
@@ -51985,6 +52992,7 @@ export interface operations {
             query?: {
                 code?: string | null;
                 state?: string | null;
+                iss?: string | null;
                 error?: string | null;
                 error_description?: string | null;
                 error_uri?: string | null;
@@ -54330,7 +55338,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CredentialItem"];
+                    "application/json": components["schemas"]["CredentialView"];
                 };
             };
             /** @description Validation Error */
@@ -54396,6 +55404,26 @@ export interface operations {
             };
         };
     };
+    list_user_connections_credentials_user_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserProviderConnectionsResponse"];
+                };
+            };
+        };
+    };
     delete_credential_credentials__credential_name__delete: {
         parameters: {
             query?: never;
@@ -54451,6 +55479,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_user_connection_credentials__credential_name__user_connection_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserConnectionDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_user_connection_credentials__credential_name__user_connection_poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserConnectionPollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserConnectionPollResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_user_connection_credentials__credential_name__user_connection_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserConnectionStartResponse"];
                 };
             };
             /** @description Validation Error */
@@ -54737,6 +55897,202 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_customer_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                api_key_limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_keys_customer_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_model_top_keys_customer_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_search_customer_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_export_customer_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -55070,6 +56426,26 @@ export interface operations {
             };
         };
     };
+    decisions_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_allowed_ip_delete_allowed_ip_post: {
         parameters: {
             query?: never;
@@ -55334,6 +56710,202 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_end_user_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                api_key_limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_keys_end_user_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_model_top_keys_end_user_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_search_end_user_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_export_end_user_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -56616,6 +58188,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GatewayRequestActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_request_error_activity_gateway_errors_activity_get: {
+        parameters: {
+            query?: {
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestErrorActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -58085,7 +59691,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GuardrailUIAddGuardrailSettings"];
                 };
             };
         };
@@ -60070,6 +61676,26 @@ export interface operations {
             };
         };
     };
+    laya_proxy_route_laya_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     warm_lazy_warm__name__post: {
         parameters: {
             query?: never;
@@ -60101,96 +61727,10 @@ export interface operations {
             };
         };
     };
-    list_lenses_lens_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LensList"];
-                };
-            };
-        };
-    };
-    create_lens_lens_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LensSettings"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preview_sample_lens_preview_sample_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Preview"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Sample"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_lens_worker_claim_post: {
+    lens_request_lens_get: {
         parameters: {
             query?: {
-                protocol_version?: number;
+                path?: string;
             };
             header?: never;
             path?: never;
@@ -60204,7 +61744,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Claim"] | null;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60218,18 +61758,13 @@ export interface operations {
             };
         };
     };
-    content_lens_worker__lens_id___job_id__content_get: {
+    lens_request_lens_put: {
         parameters: {
-            query: {
-                execution_id: string;
-                cursor?: string;
-                offset?: number;
+            query?: {
+                path?: string;
             };
             header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -60240,7 +61775,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExecutionContent"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60254,14 +61789,13 @@ export interface operations {
             };
         };
     };
-    heartbeat_lens_worker__lens_id___job_id__heartbeat_post: {
+    lens_request_lens_post: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
+            query?: {
+                path?: string;
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -60272,7 +61806,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": boolean;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60286,122 +61820,13 @@ export interface operations {
             };
         };
     };
-    model_lens_worker__lens_id___job_id__model_post: {
+    lens_request_lens_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                path?: string;
+            };
             header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ModelRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    progress_lens_worker__lens_id___job_id__progress_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Progress"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": boolean;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    result_lens_worker__lens_id___job_id__result_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Result-Input"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sample_lens_worker__lens_id___job_id__sample_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -60412,7 +61837,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Sample"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60426,18 +61851,45 @@ export interface operations {
             };
         };
     };
-    register_worker_lens_workers_register_post: {
+    lens_request_lens_patch: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    service_connection_lens_service_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkerName"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -60445,26 +61897,17 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkerCreated"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ServiceConnection"];
                 };
             };
         };
     };
-    revoke_worker_lens_workers__worker_id__delete: {
+    lens_request_lens__path__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                worker_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -60476,7 +61919,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": boolean;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60490,47 +61933,12 @@ export interface operations {
             };
         };
     };
-    set_worker_billing_lens_workers__worker_id__billing_key_put: {
+    lens_request_lens__path__put: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                worker_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkerBilling"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Worker"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_lens_lens__lens_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -60542,7 +61950,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Lens"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60556,47 +61964,12 @@ export interface operations {
             };
         };
     };
-    update_lens_lens__lens_id__put: {
+    lens_request_lens__path__post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LensSettings"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_lens_lens__lens_id__cancel_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -60608,7 +61981,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Lens"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60622,16 +61995,12 @@ export interface operations {
             };
         };
     };
-    evidence_content_lens__lens_id__executions__execution_id__get: {
+    lens_request_lens__path__delete: {
         parameters: {
-            query?: {
-                cursor?: string;
-                offset?: number;
-            };
+            query?: never;
             header?: never;
             path: {
-                lens_id: string;
-                execution_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -60643,7 +62012,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExecutionContent"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60657,50 +62026,12 @@ export interface operations {
             };
         };
     };
-    update_finding_lens__lens_id__findings__finding_id__patch: {
+    lens_request_lens__path__patch: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                lens_id: string;
-                finding_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FindingUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_runs_lens__lens_id__runs_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-            };
-            header?: never;
-            path: {
-                lens_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -60712,7 +62043,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Job"][];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -60726,48 +62057,12 @@ export interface operations {
             };
         };
     };
-    run_lens_lens__lens_id__runs_post: {
+    connect_page_liteadmin_slack_connect__token__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_run_lens__lens_id__runs__job_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
+                token: string;
             };
             cookie?: never;
         };
@@ -60779,7 +62074,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Job"];
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_account_liteadmin_slack_connect__token__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
             /** @description Validation Error */
@@ -62462,6 +63788,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -62632,6 +63959,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    moyai_connect_exchange_moyai_connect_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoyaiConnectExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoyaiConnectExchangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    moyai_connect_start_moyai_connect_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoyaiConnectStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoyaiConnectStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -64172,6 +65565,202 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_daily_activity_aggregated_organization_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                api_key_limit?: number;
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_daily_activity_aggregated_keys_organization_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_daily_activity_model_top_keys_organization_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_daily_activity_aggregated_search_organization_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_daily_activity_export_organization_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -66245,7 +67834,9 @@ export interface operations {
     };
     get_litellm_model_cost_map_public_litellm_model_cost_map_get: {
         parameters: {
-            query?: never;
+            query?: {
+                catalog_only?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -66259,6 +67850,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -66988,255 +68588,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    test_roi_calculator_connections_roi_calculator_connections_test_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    update_roi_calculator_identity_map_roi_calculator_identity_map_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ROIIdentityMapUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIIdentityMapResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_report_roi_calculator_report_get: {
-        parameters: {
-            query?: {
-                mode?: "live" | "demo";
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_repositories_roi_calculator_repositories_get: {
-        parameters: {
-            query?: {
-                query?: string;
-                page?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_settings_roi_calculator_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    update_roi_calculator_settings_roi_calculator_settings_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ROISettingsUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_roi_calculator_setup_roi_calculator_setup_reset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_sync_status_roi_calculator_sync_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    start_roi_calculator_sync_roi_calculator_sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    cancel_roi_calculator_sync_roi_calculator_sync_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
                 };
             };
         };
@@ -69192,6 +70543,26 @@ export interface operations {
             };
         };
     };
+    systemone_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_tag_daily_activity_tag_daily_activity_get: {
         parameters: {
             query?: {
@@ -69216,6 +70587,197 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_aggregated_tag_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                api_key_limit?: number;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_aggregated_keys_tag_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_model_top_keys_tag_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_aggregated_search_tag_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_export_tag_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -69731,6 +71293,7 @@ export interface operations {
     get_team_daily_activity_aggregated_team_daily_activity_aggregated_get: {
         parameters: {
             query?: {
+                api_key_limit?: number;
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -69752,6 +71315,164 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_aggregated_keys_team_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_model_top_keys_team_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_aggregated_search_team_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_export_team_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -71854,6 +73575,7 @@ export interface operations {
     get_user_daily_activity_aggregated_user_daily_activity_aggregated_get: {
         parameters: {
             query?: {
+                api_key_limit?: number;
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
                 /** @description End date in YYYY-MM-DD format */
@@ -71882,6 +73604,237 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_cache_leakage_keys_user_daily_activity_aggregated_cache_leakage_keys_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CacheLeakageKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_aggregated_keys_user_daily_activity_aggregated_keys_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_model_top_keys_user_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                model_group: string;
+                by_model_group?: boolean;
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_aggregated_search_user_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                search: string;
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_export_user_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                export_type?: components["schemas"]["ExportType"];
+                format?: "csv" | "json";
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed daily activity export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -73711,6 +75664,26 @@ export interface operations {
             };
         };
     };
+    decisions_v1_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     embeddings_v1_embeddings_post: {
         parameters: {
             query?: never;
@@ -74598,6 +76571,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -76058,6 +78051,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -76843,6 +78837,26 @@ export interface operations {
             };
         };
     };
+    systemone_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     create_threads_v1_threads_post: {
         parameters: {
             query?: never;
@@ -77244,11 +79258,11 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                /** @description Window start, unix ms. Default: 24h ago */
-                start_ms?: number | null;
+                cursor?: string | null;
                 /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
-                cursor?: string | null;
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
             };
             header?: never;
             path?: never;
@@ -77262,7 +79276,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TracePage"];
                 };
             };
             /** @description Validation Error */
@@ -77296,9 +79310,96 @@ export interface operations {
             };
         };
     };
+    list_trace_agents_v1_traces_agents_get: {
+        parameters: {
+            query?: {
+                start_ms?: number | null;
+                end_ms?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceAgentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    query_agent_traces_v1_traces_query_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceSQLResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    help_agent_trace_queries_v1_traces_query_help_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceQueryHelp"];
+                };
+            };
+        };
+    };
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
+                cursor?: string | null;
+                page_size?: number | null;
                 trace_ref?: string;
             };
             header?: never;
@@ -77315,7 +79416,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Trace"];
                 };
             };
             /** @description Validation Error */
@@ -77349,7 +79450,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SpanDetail"];
                 };
             };
             /** @description Validation Error */
@@ -77366,8 +79467,8 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
-                trace_ref?: string;
                 cursor?: string | null;
+                trace_ref?: string;
             };
             header?: never;
             path: {

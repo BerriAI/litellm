@@ -1,6 +1,7 @@
 @layer theme, base, components, utilities;
 
 @import "tailwindcss";
+@source "../../node_modules/@litellm/lens-ui/src";
 @import "tw-animate-css";
 
 @plugin '@headlessui/tailwindcss';
@@ -64,11 +65,19 @@
 }
 
 @theme inline {
-  --animate-slide-left: slide-left 200ms cubic-bezier(0, 0, 0.2, 1) both;
-  --animate-view-fade-in: view-fade-in 100ms cubic-bezier(0.4, 0, 0.2, 1) both;
   --animate-slot-slide-in: slot-slide-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
   --animate-trace-drawer-in: trace-drawer-in 200ms cubic-bezier(0.25, 1, 0.5, 1) both;
   --animate-trace-drawer-out: trace-drawer-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+  --animate-lens-shimmer: lens-shimmer 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+
+  @keyframes lens-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
 
   @keyframes trace-drawer-in {
     from {
@@ -91,24 +100,6 @@
     }
   }
 
-  @keyframes slide-left {
-    from {
-      opacity: 0;
-      transform: translateX(2rem) scaleX(0.98);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-  @keyframes view-fade-in {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
   @keyframes slot-slide-in {
     from {
       opacity: 0;
@@ -137,8 +128,6 @@
   @media (prefers-reduced-motion: reduce) {
     .animate-trace-drawer-in,
     .animate-trace-drawer-out,
-    .animate-slide-left,
-    .animate-view-fade-in,
     .animate-slot-slide-in {
       animation: none !important;
     }
@@ -223,6 +212,10 @@
   --trace-row-hover: oklch(0.975 0.008 215);
   --trace-row-selected: oklch(0.95 0.035 200);
   --trace-brand: oklch(0.6 0.13 195);
+  --finding-affected: var(--info);
+  --finding-unaffected: oklch(0.551 0.027 264.364 / 0.45);
+  --finding-quote: color-mix(in oklab, var(--warning) 16%, transparent);
+  --finding-ring: 0 0 0 1px oklch(0 0 0 / 0.06), 0 1px 2px -1px oklch(0 0 0 / 0.06), 0 2px 4px 0 oklch(0 0 0 / 0.04);
   --trace-border: oklch(0.92 0.01 230);
   --trace-line: oklch(0.88 0.03 205);
   --trace-card-border: oklch(0.93 0.01 230);
@@ -230,9 +223,12 @@
   --trace-tab-active: oklch(0.95 0.025 205);
   --trace-tab-hover: oklch(0.93 0.02 215);
   --trace-tag: oklch(0.95 0.02 205);
-  --trace-chain: oklch(0.56 0.17 255);
-  --trace-llm: oklch(0.6 0.13 215);
-  --trace-tool: oklch(0.64 0.14 165);
+  --trace-chain: #2a78d6;
+  --trace-llm: #eb6834;
+  --trace-tool: #1baf7a;
+  --trace-chain-soft: color-mix(in oklab, #2a78d6 12%, transparent);
+  --trace-llm-soft: color-mix(in oklab, #eb6834 12%, transparent);
+  --trace-tool-soft: color-mix(in oklab, #1baf7a 14%, transparent);
   --trace-glyph: oklch(0.99 0 0);
   --trace-human: oklch(0.5 0.15 260);
   --trace-human-glyph: oklch(0.95 0.04 210);
@@ -297,6 +293,10 @@
   --trace-row-hover: oklch(0.23 0.018 230);
   --trace-row-selected: oklch(0.29 0.05 210);
   --trace-brand: oklch(0.78 0.13 190);
+  --finding-affected: var(--info);
+  --finding-unaffected: oklch(0.707 0.022 261.325 / 0.35);
+  --finding-quote: color-mix(in oklab, var(--warning) 24%, transparent);
+  --finding-ring: 0 0 0 1px oklch(1 0 0 / 0.08);
   --trace-border: oklch(0.3 0.02 235);
   --trace-line: oklch(0.36 0.04 210);
   --trace-card-border: oklch(0.27 0.02 235);
@@ -304,9 +304,12 @@
   --trace-tab-active: oklch(0.28 0.03 215);
   --trace-tab-hover: oklch(0.32 0.03 220);
   --trace-tag: oklch(0.28 0.03 215);
-  --trace-chain: oklch(0.6 0.17 255);
-  --trace-llm: oklch(0.64 0.13 215);
-  --trace-tool: oklch(0.68 0.14 165);
+  --trace-chain: #3987e5;
+  --trace-llm: #d95926;
+  --trace-tool: #199e70;
+  --trace-chain-soft: color-mix(in oklab, #3987e5 24%, transparent);
+  --trace-llm-soft: color-mix(in oklab, #d95926 24%, transparent);
+  --trace-tool-soft: color-mix(in oklab, #199e70 24%, transparent);
   --trace-glyph: oklch(0.99 0 0);
   --trace-human: oklch(0.56 0.15 260);
   --trace-human-glyph: oklch(0.95 0.04 210);
@@ -332,6 +335,10 @@
   --color-trace-row-hover: var(--trace-row-hover);
   --color-trace-row-selected: var(--trace-row-selected);
   --color-trace-brand: var(--trace-brand);
+  --color-finding-affected: var(--finding-affected);
+  --color-finding-unaffected: var(--finding-unaffected);
+  --color-finding-quote: var(--finding-quote);
+  --shadow-finding-ring: var(--finding-ring);
   --color-trace-border: var(--trace-border);
   --color-trace-line: var(--trace-line);
   --color-trace-card-border: var(--trace-card-border);
@@ -342,6 +349,9 @@
   --color-trace-chain: var(--trace-chain);
   --color-trace-llm: var(--trace-llm);
   --color-trace-tool: var(--trace-tool);
+  --color-trace-chain-soft: var(--trace-chain-soft);
+  --color-trace-llm-soft: var(--trace-llm-soft);
+  --color-trace-tool-soft: var(--trace-tool-soft);
   --color-trace-glyph: var(--trace-glyph);
   --color-trace-human: var(--trace-human);
   --color-trace-human-glyph: var(--trace-human-glyph);
@@ -472,4 +482,13 @@
    showing its own edges around a differently sized child. */
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
+}
+
+@keyframes timeline-sweep {
+  from {
+    left: -6rem;
+  }
+  to {
+    left: 100%;
+  }
 }

@@ -28,10 +28,10 @@ from litellm import DualCache, Router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    _PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
+    PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 
@@ -89,7 +89,7 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
 
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -142,7 +142,7 @@ async def test_batch_limiter_uses_atomic_check_and_increment():
     """
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -356,7 +356,7 @@ async def test_batch_zero_token_consumes_rpm_only():
     """
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
     batch_limiter = rate_limiter._get_batch_rate_limiter()
