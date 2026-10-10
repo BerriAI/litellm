@@ -3092,12 +3092,23 @@ async def run_centralized_common_checks(
     # may have a non-admin user_role and would otherwise demote the
     # caller. The token is the source of truth for these paths — force
     # the admin user_object whenever the token says PROXY_ADMIN, even
-    # if a DB row was fetched.
+    # if a DB row was fetched. Every admin token except the built-in admin
+    # identity (litellm_proxy_admin_name: the master key and the UI
+    # username/password login) keeps the row's personal budget (max_budget,
+    # and user_email for budget alerts) so common_checks enforces it; every
+    # other field keeps its default.
     if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
+        budget_row: Final = (
+            user_object
+            if isinstance(user_object, LiteLLM_UserTable) and user_api_key_auth_obj.user_id != litellm_proxy_admin_name
+            else None
+        )
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            max_budget=budget_row.max_budget if budget_row is not None else None,
+            user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
             ),
