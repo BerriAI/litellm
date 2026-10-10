@@ -5,22 +5,22 @@ import httpx
 
 from litellm.decisions.call import (
     DecisionsCall,
-    OpenAIDecisionQuestions,
-    OpenAIDecisionRequestFields,
+    SystemOneQuestions,
+    SystemOneRequestFields,
     asend,
     prepare_call,
     reject_other_format,
     send,
 )
-from litellm.types.decisions import OpenAIDecisionInput, OpenAIDecisionResponse
-from litellm.utils import client
+from litellm.types.decisions import DecisionsJSON, DecisionsResponse
+from litellm.utils import client  # pyright: ignore[reportUnknownVariableType]  # client is an untyped decorator
 
 
-def _prepare_openai_call(
+def _prepare_systemone_call(
     *,
     model: str,
-    decision_input: OpenAIDecisionInput | None,
-    questions: OpenAIDecisionQuestions | None,
+    state: DecisionsJSON | None,
+    questions: SystemOneQuestions | None,
     safety_identifier: str | None,
     api_key: str | None,
     api_base: str | None,
@@ -29,10 +29,10 @@ def _prepare_openai_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
-    reject_other_format(model=model, kwargs=kwargs, field_name="state", other_function="systemone")
+    reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=OpenAIDecisionRequestFields(input=decision_input, questions=questions),
+        fields=SystemOneRequestFields(state=state, questions=questions),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -43,27 +43,27 @@ def _prepare_openai_call(
     )
 
 
-def _openai_response(response: object) -> OpenAIDecisionResponse:
-    assert isinstance(response, OpenAIDecisionResponse)
+def _systemone_response(response: object) -> DecisionsResponse:
+    assert isinstance(response, DecisionsResponse)
     return response
 
 
 @client
-async def adecisions(
+async def asystemone(
     model: str,
-    input: OpenAIDecisionInput | None = None,
-    questions: OpenAIDecisionQuestions | None = None,
-    safety_identifier: str | None = None,
+    state: DecisionsJSON | None = None,
+    questions: SystemOneQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
-    **kwargs: object,
-) -> OpenAIDecisionResponse:
-    call: Final = _prepare_openai_call(
+    safety_identifier: str | None = None,
+    **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
+) -> DecisionsResponse:
+    call: Final = _prepare_systemone_call(
         model=model,
-        decision_input=input,
+        state=state,
         questions=questions,
         safety_identifier=safety_identifier,
         api_key=api_key,
@@ -73,25 +73,25 @@ async def adecisions(
         extra_headers=extra_headers,
         kwargs=kwargs,
     )
-    return _openai_response(await asend(call))
+    return _systemone_response(await asend(call))
 
 
 @client
-def decisions(
+def systemone(
     model: str,
-    input: OpenAIDecisionInput | None = None,
-    questions: OpenAIDecisionQuestions | None = None,
-    safety_identifier: str | None = None,
+    state: DecisionsJSON | None = None,
+    questions: SystemOneQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
-    **kwargs: object,
-) -> OpenAIDecisionResponse:
-    call: Final = _prepare_openai_call(
+    safety_identifier: str | None = None,
+    **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
+) -> DecisionsResponse:
+    call: Final = _prepare_systemone_call(
         model=model,
-        decision_input=input,
+        state=state,
         questions=questions,
         safety_identifier=safety_identifier,
         api_key=api_key,
@@ -101,7 +101,7 @@ def decisions(
         extra_headers=extra_headers,
         kwargs=kwargs,
     )
-    return _openai_response(send(call))
+    return _systemone_response(send(call))
 
 
-__all__ = ["adecisions", "decisions"]
+__all__ = ["asystemone", "systemone"]
