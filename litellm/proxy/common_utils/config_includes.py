@@ -8,6 +8,25 @@ from litellm._logging import verbose_proxy_logger
 INCLUDE_KEY: Final = "include"
 
 
+def _path_is_within_directory(path: str, directory: str) -> bool:
+    """True when ``path`` is ``directory`` itself or a file under it (after abspath)."""
+    try:
+        return os.path.commonpath([directory, path]) == directory
+    except ValueError:
+        # Different drives on Windows — never treat that as inside the config dir.
+        return False
+
+
+def _reject_include_outside_config_dir(resolved: str, root_config_path: str, include_file: str) -> str:
+    config_dir: Final = os.path.abspath(os.path.dirname(root_config_path))
+    if _path_is_within_directory(resolved, config_dir):
+        return resolved
+    raise ValueError(
+        f"Config include '{include_file}' resolves to {resolved}, which is outside the config "
+        f"directory {config_dir}. Include paths must stay under the config directory."
+    )
+
+
 def resolve_include_file_path(include_file: str, declared_in: str, root_config_path: str) -> str:
     """
     Resolve one `include` entry to the file it names, next to the config that declares it.
@@ -15,11 +34,14 @@ def resolve_include_file_path(include_file: str, declared_in: str, root_config_p
     A config written before nested entries resolved this way can name a file sitting next to the root
     config instead, so that file is still read, with a warning naming where it was found. When both
     files exist the one next to the declaring config wins and the other is named in a warning.
+
+    Resolved paths that climb out of the root config directory (``..`` or an absolute path outside
+    it) are rejected before the file is opened.
     """
     declared_relative: Final = os.path.abspath(os.path.join(os.path.dirname(declared_in), include_file))
     root_relative: Final = os.path.abspath(os.path.join(os.path.dirname(root_config_path), include_file))
     if root_relative == declared_relative or not os.path.exists(root_relative):
-        return declared_relative
+        return _reject_include_outside_config_dir(declared_relative, root_config_path, include_file)
 
     if not os.path.exists(declared_relative):
         verbose_proxy_logger.warning(
@@ -29,7 +51,7 @@ def resolve_include_file_path(include_file: str, declared_in: str, root_config_p
             declared_in,
             root_relative,
         )
-        return root_relative
+        return _reject_include_outside_config_dir(root_relative, root_config_path, include_file)
 
     verbose_proxy_logger.warning(
         "Config include '%s' declared in %s matches two files. %s sits next to that config and was read, "
@@ -39,7 +61,7 @@ def resolve_include_file_path(include_file: str, declared_in: str, root_config_p
         declared_relative,
         root_relative,
     )
-    return declared_relative
+    return _reject_include_outside_config_dir(declared_relative, root_config_path, include_file)
 
 
 class IncludeResolver(Protocol):
