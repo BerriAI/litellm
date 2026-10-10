@@ -130,20 +130,21 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
-    ) -> dict:
-        if not is_gpt_reasoning_series_name(model):
-            return super().map_openai_params(
-                non_default_params, optional_params, model, drop_params, replace_max_completion_tokens_with_max_tokens
-            )
-        mapped_params: Final = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params, replace_max_completion_tokens_with_max_tokens=False
+    ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
+        mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
         )
-        if "max_tokens" not in mapped_params:
+        if not gpt_reasoning_model or "max_tokens" not in mapped_params:
             return mapped_params
         return {
             param: value
