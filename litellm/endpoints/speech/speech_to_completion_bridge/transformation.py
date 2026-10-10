@@ -5,6 +5,11 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.llms.gemini.speech_audio import (
+    gemini_tts_chat_audio_format,
+    gemini_tts_speech_response,
+    validate_gemini_tts_speech_format,
+)
 
 if TYPE_CHECKING:
     from litellm import Logging as LiteLLMLoggingObj
@@ -20,11 +25,6 @@ def _completion_response_cost(model_response: "ModelResponse") -> float | None:
     return response_cost if isinstance(response_cost, float) else None
 
 
-GEMINI_TTS_CHAT_AUDIO_FORMAT: Final = "pcm16"
-GEMINI_TTS_RAW_RESPONSE_FORMAT: Final = "pcm"
-GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS: Final = frozenset({"wav", GEMINI_TTS_RAW_RESPONSE_FORMAT})
-
-
 class ChatAudioParam(TypedDict):
     voice: ReadOnly[str]
     format: ReadOnly[NotRequired[str]]
@@ -34,22 +34,7 @@ class SpeechToCompletionBridgeTransformationHandler:
     def _validate_response_format(
         self, model: str, custom_llm_provider: str, optional_params: Mapping[str, object]
     ) -> None:
-        if not self._is_gemini_tts_model(model):
-            return
-        response_format: Final = optional_params.get("response_format")
-        if not isinstance(response_format, str) or response_format in GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS:
-            return
-        from litellm.exceptions import BadRequestError
-
-        supported: Final = ", ".join(sorted(GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS))
-        raise BadRequestError(
-            message=(
-                f"Gemini TTS only produces raw PCM16 audio, so response_format='{response_format}'"
-                f" is not supported. Supported response formats: {supported}."
-            ),
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
+        validate_gemini_tts_speech_format(model, custom_llm_provider, optional_params)
 
     def _chat_completion_params(self, optional_params: Mapping[str, object]) -> Mapping[str, object]:
         return MappingProxyType(
@@ -61,8 +46,9 @@ class SpeechToCompletionBridgeTransformationHandler:
         )
 
     def _chat_audio_format(self, model: str, optional_params: Mapping[str, object]) -> str | None:
-        if self._is_gemini_tts_model(model):
-            return GEMINI_TTS_CHAT_AUDIO_FORMAT
+        gemini_format: Final = gemini_tts_chat_audio_format(model)
+        if gemini_format is not None:
+            return gemini_format
         response_format: Final = optional_params.get("response_format")
         return response_format if isinstance(response_format, str) else None
 
@@ -104,55 +90,6 @@ class SpeechToCompletionBridgeTransformationHandler:
         }
         return {k: v for k, v in return_kwargs.items() if v is not None}
 
-    def _convert_pcm16_to_wav(self, pcm_data: bytes, sample_rate: int = 24000, channels: int = 1) -> bytes:
-        """
-        Convert raw PCM16 data to WAV format.
-
-        Args:
-            pcm_data: Raw PCM16 audio data
-            sample_rate: Sample rate in Hz (Gemini TTS typically uses 24000)
-            channels: Number of audio channels (1 for mono)
-
-        Returns:
-            bytes: WAV formatted audio data
-        """
-        import struct
-
-        # WAV header parameters
-        byte_rate: Final = sample_rate * channels * 2  # 2 bytes per sample (16-bit)
-        block_align: Final = channels * 2
-        data_size: Final = len(pcm_data)
-        file_size: Final = 36 + data_size
-
-        # Create WAV header
-        wav_header: Final = struct.pack(
-            "<4sI4s4sIHHIIHH4sI",
-            b"RIFF",  # Chunk ID
-            file_size,  # Chunk Size
-            b"WAVE",  # Format
-            b"fmt ",  # Subchunk1 ID
-            16,  # Subchunk1 Size (PCM)
-            1,  # Audio Format (PCM)
-            channels,  # Number of Channels
-            sample_rate,  # Sample Rate
-            byte_rate,  # Byte Rate
-            block_align,  # Block Align
-            16,  # Bits per Sample
-            b"data",  # Subchunk2 ID
-            data_size,  # Subchunk2 Size
-        )
-
-        return wav_header + pcm_data
-
-    def _is_gemini_tts_model(self, model: str) -> bool:
-        """Check if the model is a Gemini TTS model that returns PCM16 data."""
-        return "gemini" in model.lower() and ("tts" in model.lower() or "preview-tts" in model.lower())
-
-    def _gemini_tts_response_body(self, decoded_audio: bytes, response_format: str | None) -> tuple[bytes, str]:
-        if response_format == GEMINI_TTS_RAW_RESPONSE_FORMAT:
-            return decoded_audio, "audio/pcm"
-        return self._convert_pcm16_to_wav(decoded_audio), "audio/wav"
-
     def transform_response(
         self, model_response: "ModelResponse", response_format: str | None
     ) -> "HttpxBinaryResponseContent":
@@ -169,11 +106,8 @@ class SpeechToCompletionBridgeTransformationHandler:
         decoded_audio: Final = base64.b64decode(audio_part.data)
 
         model: Final = getattr(model_response, "model", "")
-        content, content_type = (
-            self._gemini_tts_response_body(decoded_audio, response_format)
-            if self._is_gemini_tts_model(model)
-            else (decoded_audio, "audio/mpeg")
-        )
+        provider_body: Final = gemini_tts_speech_response(model, decoded_audio, response_format)
+        content, content_type = provider_body if provider_body is not None else (decoded_audio, "audio/mpeg")
         response: Final = httpx.Response(
             status_code=200, content=content, headers=MappingProxyType({"Content-Type": content_type})
         )
