@@ -5,7 +5,7 @@ import threading
 import time
 import types
 import unittest
-from typing import Final, Optional
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -29,9 +29,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 
 
 class TestLangfuseUsageDetails(unittest.TestCase):
@@ -328,7 +329,103 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             mock_add_prompt_params.assert_called_once()
 
-    def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
+    def _responses_api_usage(self) -> ResponseAPIUsage:
+        return ResponseAPIUsage(
+            input_tokens=16,
+            output_tokens=21,
+            total_tokens=37,
+            input_tokens_details=InputTokensDetails(cached_tokens=4),
+        )
+
+    def _log_responses_api_generation(self, response_obj: ResponsesAPIResponse) -> dict[str, int]:
+        self.use_real_langfuse_client()
+
+        kwargs = {
+            "model": "gpt-5.5",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_params": {"metadata": {}},
+            "optional_params": {},
+            "litellm_call_id": "test-call-id-responses-api-usage",
+            "standard_logging_object": self._build_standard_logging_payload(),
+            "response_cost": 0.0,
+        }
+
+        fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+        self.logger._log_langfuse_v2(
+            user_id="test-user",
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            output={"role": "assistant", "content": "Response"},
+            start_time=fixed_time,
+            end_time=fixed_time + datetime.timedelta(seconds=1),
+            kwargs=kwargs,
+            optional_params=kwargs["optional_params"],
+            input={"messages": kwargs["messages"]},
+            response_obj=response_obj,
+            level="DEFAULT",
+            litellm_call_id=kwargs["litellm_call_id"],
+        )
+
+        return json.loads(self.exported_generation().attributes["langfuse.observation.usage_details"])
+
+    def test_log_langfuse_v2_responses_api_usage(self):
+        """
+        Regression test: a /v1/responses response carries ResponseAPIUsage
+        (input_tokens/output_tokens), which must be normalized to a chat Usage
+        before Langfuse usage_details are read, or generations log 0 tokens.
+        """
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[], usage=self._responses_api_usage())
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        # input is reduced by cache_read_input_tokens per Langfuse docs
+        assert usage_details == {
+            "input": 12,
+            "output": 21,
+            "total": 37,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 4,
+        }
+
+    def test_log_langfuse_v2_streamed_responses_api_usage(self):
+        """
+        Regression test: an assembled /v1/responses stream reaches the logger
+        with its usage already converted to a plain dict of chat usage fields,
+        the shape litellm_logging stores on the completed response.
+        """
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[])
+        streamed_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+            self._responses_api_usage()
+        ).model_dump()
+        setattr(response_obj, "usage", streamed_usage)
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        assert usage_details == {
+            "input": 12,
+            "output": 21,
+            "total": 37,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 4,
+        }
+
+    def test_log_langfuse_v2_malformed_responses_api_usage_still_logs(self):
+        """A usage dict whose token counts fail validation is logged as zero usage, not dropped."""
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[])
+        setattr(response_obj, "usage", {"input_tokens": 16, "output_tokens": None})
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        assert usage_details == {
+            "input": 0,
+            "output": 0,
+            "total": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+
+    def _build_standard_logging_payload(self, trace_id: str | None = None):
         payload = {
             "id": "payload-id",
             "call_type": "completion",
