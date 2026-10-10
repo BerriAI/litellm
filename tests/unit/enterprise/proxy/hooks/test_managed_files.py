@@ -2608,36 +2608,6 @@ async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it
         f"{_XAI_BATCH_ID}_results.jsonl",
         None,
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_respx_sees_provider_calls")
-@respx.mock
-async def test_afile_retrieve_refresh_retries_when_the_batch_job_writes_between_its_read_and_write():
-    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
-        _batch_output_row("xai", size_bytes=0, fallback=True)
-    )
-    _provider_file_route("xai")
-    read_row: Final = managed_file_table.find_first
-    reads: Final = [0]
-
-    async def read_then_batch_job_writes(where: Mapping[str, object]) -> LiteLLM_ManagedFileTable | None:
-        row: Final = await read_row(where)
-        reads[0] += 1
-        if reads[0] == 2:
-            _size_written_by_batch_job(managed_file_table)
-        return row
-
-    with patch.object(managed_file_table, "find_first", side_effect=read_then_batch_job_writes):
-        response: Final = await proxy_managed_files.afile_retrieve(
-            file_id="unified-output",
-            litellm_parent_otel_span=None,
-            llm_router=_provider_router("xai"),
-        )
-
-    stored: Final = managed_file_table.rows["unified-output"].file_object
-    assert stored is not None
-    assert (response.bytes, stored.bytes, stored.litellm_details_fallback) == (2565, 2565, None)
     assert len(managed_file_table.update_many_calls) == 2
 
 
@@ -2907,7 +2877,12 @@ async def test_store_batch_output_file_does_not_recreate_deleted_row_after_refre
 
     assert "unified-output" not in managed_file_table.rows
     assert managed_file_table.upsert_calls == []
-    assert managed_file_table.update_many_calls == []
+    assert len(managed_file_table.update_many_calls) == 1
+    saved_file_object_json: Final = cast(
+        str, managed_file_table.update_many_calls[0][1]["file_object"]
+    )
+    saved_file_object: Final = json.loads(saved_file_object_json)
+    assert saved_file_object["id"] == "unified-output"
     assert (
         await proxy_managed_files.internal_usage_cache.async_get_cache(
             key="unified-output",

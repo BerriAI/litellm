@@ -853,20 +853,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         stored: LiteLLM_ManagedFileTable,
         file_object: OpenAIFileObject,
     ) -> OpenAIFileObject | None:
-        """Save refreshed details, keeping a size another writer stored after this row was read."""
+        """Save refreshed details only over the row as read, re-reading it after another write landed first."""
         repository: Final = ManagedFileRepository(self.prisma_client, use_writer=True)
+        expected_raw: object = stored.file_object  # rebind-ok: replaced by the writer's copy after a lost race
         for _ in range(_REFRESH_SAVE_ATTEMPTS):
-            current_row = await repository.table.find_first(where={"unified_file_id": stored.unified_file_id})  # rebind-ok: re-read after a concurrent write
-            if current_row is None:
-                return None
-            current_object = _parse_managed_file_object(current_row.file_object, stored.unified_file_id)  # rebind-ok: re-read after a concurrent write
-            sized_file_object = _with_measured_size(  # rebind-ok: re-read after a concurrent write
-                file_object, current_object.bytes if current_object is not None else None
+            expected_object = _parse_managed_file_object(expected_raw, stored.unified_file_id)  # rebind-ok: per attempt
+            sized_file_object = _with_measured_size(  # rebind-ok: per attempt
+                file_object, expected_object.bytes if expected_object is not None else None
             )
             if await repository.update_file_object(
                 stored.unified_file_id,
                 sized_file_object,
-                if_file_object=_stored_json_text(current_row.file_object) if current_row.file_object is not None else None,
+                if_file_object=_stored_json_text(expected_raw) if expected_raw is not None else None,
             ):
                 await self.internal_usage_cache.async_set_cache(
                     key=stored.unified_file_id,
@@ -874,6 +872,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     litellm_parent_otel_span=None,
                 )
                 return sized_file_object
+            current_row = await repository.table.find_first(where={"unified_file_id": stored.unified_file_id})  # rebind-ok: per attempt
+            if current_row is None:
+                return None
+            expected_raw = current_row.file_object
         return None
 
     async def store_batch_output_file(
