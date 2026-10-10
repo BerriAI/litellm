@@ -46,6 +46,8 @@ from litellm.integrations.opentelemetry import (
     RAW_REQUEST_SPAN_NAME,
     _normalize_team_metadata_keys,
 )
+from litellm.integrations.otel import logger as otel_logger
+from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
 from litellm.proxy._types import SpanAttributes
@@ -402,6 +404,28 @@ def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
 
     recording_span.set_attribute.assert_called_once_with("litellm.test", "recorded")
     ended_span.set_attribute.assert_not_called()
+
+
+@pytest.mark.parametrize("recording", [True, False])
+def test_seed_request_identity_checks_server_span_recording(recording: bool) -> None:
+    logger = OpenTelemetryV2()
+    server_span = MagicMock()
+    server_span.is_recording.return_value = recording
+    with (
+        patch.object(otel_logger.RequestIdentity, "from_user_api_key_auth", return_value=MagicMock()),
+        patch.object(otel_logger, "promoted_baggage", return_value={"team.id": "qa-team"}),
+        patch.object(otel_logger, "request_root_span", return_value=server_span),
+        patch.object(otel_logger, "is_recordable_span", return_value=True),
+        patch.object(otel_logger, "set_request_root_span"),
+        patch.object(otel_logger, "set_request_baggage", return_value=MagicMock()),
+        patch.object(otel_logger, "attach"),
+    ):
+        logger.seed_request_identity({}, model="qa-model")
+
+    if recording:
+        server_span.set_attribute.assert_called_once_with("team.id", "qa-team")
+    else:
+        server_span.set_attribute.assert_not_called()
 
 
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
