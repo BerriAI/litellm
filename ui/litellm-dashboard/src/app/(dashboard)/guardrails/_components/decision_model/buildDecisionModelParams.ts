@@ -4,7 +4,6 @@ export interface DecisionModelCheckDraft {
   instructions: string;
   action: "block" | "log";
   threshold: number;
-  enabled?: boolean;
 }
 
 export interface DecisionModelLitellmParams {
@@ -17,23 +16,21 @@ export interface DecisionModelLitellmParams {
   }>;
 }
 
-export function enabledDecisionChecks(checks: readonly DecisionModelCheckDraft[]): readonly DecisionModelCheckDraft[] {
-  return checks
-    .filter((check) => check.enabled !== false)
-    .map((check) => ({ ...check, name: check.name.trim(), instructions: check.instructions.trim() }));
+export function trimDecisionChecks(checks: readonly DecisionModelCheckDraft[]): readonly DecisionModelCheckDraft[] {
+  return checks.map((check) => ({ ...check, name: check.name.trim(), instructions: check.instructions.trim() }));
 }
 
 export function duplicateDecisionCheckNames(checks: readonly DecisionModelCheckDraft[]): ReadonlySet<string> {
-  const names = enabledDecisionChecks(checks)
+  const names = trimDecisionChecks(checks)
     .map((check) => check.name)
     .filter(Boolean);
   return new Set(names.filter((name, index) => names.indexOf(name) !== index));
 }
 
 export function decisionChecksProblem(checks: readonly DecisionModelCheckDraft[]): string | null {
-  const enabled = enabledDecisionChecks(checks);
-  if (enabled.length === 0) return "Add at least one question";
-  if (enabled.some((check) => !check.name || !check.instructions)) {
+  const trimmed = trimDecisionChecks(checks);
+  if (trimmed.length === 0) return "Add at least one question";
+  if (trimmed.some((check) => !check.name || !check.instructions)) {
     return "Give every question a name and a question, or remove it";
   }
   if (duplicateDecisionCheckNames(checks).size > 0) return "Each question needs a different name";
@@ -48,7 +45,7 @@ export function buildDecisionModelParams(
 ): DecisionModelLitellmParams {
   return {
     decision_model: decisionModel,
-    checks: enabledDecisionChecks(checks).map((check) => ({
+    checks: trimDecisionChecks(checks).map((check) => ({
       name: check.name,
       instructions: check.instructions,
       action: check.action,

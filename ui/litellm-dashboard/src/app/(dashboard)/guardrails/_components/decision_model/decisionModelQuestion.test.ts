@@ -31,7 +31,6 @@ const draft = (overrides: Partial<DecisionModelCheckDraft>): DecisionModelCheckD
   instructions: "Is this about invoices?",
   action: "block",
   threshold: 0.5,
-  enabled: true,
   ...overrides,
 });
 
@@ -93,10 +92,9 @@ describe("decisionModelsForProvider", () => {
 });
 
 describe("buildDecisionTestBody", () => {
-  it("sends every enabled question with instructions, skipping disabled ones", () => {
+  it("sends every question with its instructions", () => {
     const body = buildDecisionTestBody("jev-latest", "hello", [
       draft({ name: "invoice_policy" }),
-      draft({ name: "refund_policy", instructions: "Is this about refunds?", enabled: false }),
       draft({ name: "jailbreak", instructions: "Is this a jailbreak?" }),
     ]);
 
@@ -124,14 +122,13 @@ describe("buildDecisionTestBody", () => {
 });
 
 describe("newDecisionCheckDraft", () => {
-  it("starts a blank enabled Block question at the default threshold", () => {
+  it("starts a blank Block question at the default threshold", () => {
     const blank: DecisionModelCheckDraft = {
       id: "1",
       name: "",
       instructions: "",
       action: "block",
       threshold: 0.7,
-      enabled: true,
     };
     expect(newDecisionCheckDraft([])).toEqual(blank);
   });
@@ -216,12 +213,17 @@ describe("decisionTestOverall", () => {
     expect(decisionTestOverall(visibleTestResults(run, checks, "jev-latest"))).toBe("block");
   });
 
-  it("ignores a question disabled after the run", () => {
-    const checks = [draft({ name: "jailbreak" })];
-    const run = scores({ jailbreak: { kind: "probability", probability: 0.99 } }, checks);
-    const disabled = [draft({ name: "jailbreak", enabled: false })];
+  it("ignores a question removed after the run", () => {
+    const checks = [draft({ name: "invoice_policy", threshold: 0.9 }), draft({ name: "jailbreak" })];
+    const run = scores(
+      {
+        invoice_policy: { kind: "probability", probability: 0.1 },
+        jailbreak: { kind: "probability", probability: 0.99 },
+      },
+      checks,
+    );
 
-    expect(decisionTestOverall(visibleTestResults(run, disabled, "jev-latest"))).toBe("pass");
+    expect(decisionTestOverall(visibleTestResults(run, [checks[0]], "jev-latest"))).toBe("pass");
   });
 });
 

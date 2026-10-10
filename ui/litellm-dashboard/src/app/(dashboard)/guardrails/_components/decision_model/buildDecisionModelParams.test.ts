@@ -43,21 +43,6 @@ describe("buildDecisionModelParams", () => {
     });
   });
 
-  it("leaves out questions that are disabled", () => {
-    const refund: Partial<DecisionModelCheckDraft> = {
-      id: "2",
-      name: "refund_policy",
-      instructions: "Is this about refunds?",
-      action: "log",
-      enabled: true,
-    };
-    const params = buildDecisionModelParams("jev-latest", [draft({ enabled: false }), draft(refund)]);
-
-    expect(params.checks).toEqual([
-      { name: "refund_policy", instructions: "Is this about refunds?", action: "log", threshold: 0.5 },
-    ]);
-  });
-
   it("trims the typed name and question", () => {
     const params = buildDecisionModelParams("jev-latest", [
       draft({ name: "  invoice_policy ", instructions: " Is this about invoices?\n" }),
@@ -83,12 +68,11 @@ describe("decisionChecksProblem", () => {
     expect(decisionChecksProblem([draft({}), draft({ id: "2", name: "refund_policy" })])).toBeNull();
   });
 
-  it("asks for a question when none is enabled", () => {
+  it("asks for a question when there is none", () => {
     expect(decisionChecksProblem([])).toBe("Add at least one question");
-    expect(decisionChecksProblem([draft({ enabled: false })])).toBe("Add at least one question");
   });
 
-  it("rejects an enabled question with a blank name or question", () => {
+  it("rejects a question with a blank name or question", () => {
     const message = "Give every question a name and a question, or remove it";
     expect(decisionChecksProblem([draft({ name: "  " })])).toBe(message);
     expect(decisionChecksProblem([draft({}), draft({ id: "2", name: "refund_policy", instructions: "" })])).toBe(
@@ -96,12 +80,7 @@ describe("decisionChecksProblem", () => {
     );
   });
 
-  it("ignores a blank question that is disabled", () => {
-    const blank: Partial<DecisionModelCheckDraft> = { id: "2", name: "", instructions: "", enabled: false };
-    expect(decisionChecksProblem([draft({}), draft(blank)])).toBeNull();
-  });
-
-  it("rejects two enabled questions with the same name", () => {
+  it("rejects two questions with the same name", () => {
     expect(decisionChecksProblem([draft({}), draft({ id: "2", name: " invoice_policy" })])).toBe(
       "Each question needs a different name",
     );
@@ -109,12 +88,11 @@ describe("decisionChecksProblem", () => {
 });
 
 describe("duplicateDecisionCheckNames", () => {
-  it("returns names shared by enabled questions only", () => {
+  it("returns names shared by more than one question, ignoring blank names", () => {
     const checks = [
       draft({}),
       draft({ id: "2", name: "invoice_policy " }),
       draft({ id: "3", name: "refund_policy" }),
-      draft({ id: "4", name: "refund_policy", enabled: false }),
       draft({ id: "5", name: "" }),
       draft({ id: "6", name: "" }),
     ];

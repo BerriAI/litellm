@@ -4,7 +4,6 @@ import { Plus, X } from "lucide-react";
 import React from "react";
 import { useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Combobox,
   ComboboxContent,
@@ -44,9 +43,8 @@ const ACTION_ITEMS = [
 const ThresholdSlider: React.FC<{
   value: number;
   onChange: (value: number) => void;
-  disabled?: boolean;
   "aria-label": string;
-}> = ({ value, onChange, disabled, "aria-label": ariaLabel }) => (
+}> = ({ value, onChange, "aria-label": ariaLabel }) => (
   <div className="flex items-center gap-2">
     <Slider
       aria-label={ariaLabel}
@@ -55,7 +53,6 @@ const ThresholdSlider: React.FC<{
       step={0.01}
       value={[value]}
       onValueChange={(next) => onChange(Array.isArray(next) ? next[0] ?? 0 : next)}
-      disabled={disabled}
       className="min-w-[120px] flex-1"
     />
     <span className="w-9 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
@@ -175,12 +172,8 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
         </p>
         {checks.map((check, index) => {
           const position = index + 1;
-          const enabled = check.enabled !== false;
           return (
-            <div
-              key={check.id}
-              className={`relative space-y-2 rounded-lg border border-border bg-muted p-4 ${enabled ? "" : "opacity-60"}`}
-            >
+            <div key={check.id} className="relative space-y-3 rounded-lg border border-border bg-muted p-4">
               <button
                 type="button"
                 onClick={() => removeCheck(check.id)}
@@ -189,12 +182,8 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               >
                 <X className="size-4" />
               </button>
-              <div className="flex items-center gap-3 pr-8">
-                <Checkbox
-                  checked={enabled}
-                  onCheckedChange={(next) => updateCheck(check.id, { enabled: next === true })}
-                  aria-label={`Enable question ${position}`}
-                />
+              <div className="pr-8">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">Name</span>
                 <Input
                   aria-label={`Question ${position} name`}
                   placeholder="Name (e.g. invoice_policy)"
@@ -202,18 +191,21 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                   value={check.name}
                   onChange={(event) => updateCheck(check.id, { name: event.target.value })}
                 />
+                {duplicateNames.has(check.name.trim()) && (
+                  <p className="m-0 mt-1 text-xs text-destructive">Another question already uses this name</p>
+                )}
               </div>
-              {enabled && duplicateNames.has(check.name.trim()) && (
-                <p className="m-0 text-xs text-destructive">Another question already uses this name</p>
-              )}
-              <Textarea
-                aria-label={`Question ${position}`}
-                rows={2}
-                placeholder="The question the decision model answers, e.g. Does the text ask about invoices?"
-                className="w-full resize-none bg-background"
-                value={check.instructions}
-                onChange={(event) => updateCheck(check.id, { instructions: event.target.value })}
-              />
+              <div>
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">Question</span>
+                <Textarea
+                  aria-label={`Question ${position}`}
+                  rows={2}
+                  placeholder="The question the decision model answers, e.g. Does the text ask about invoices?"
+                  className="w-full resize-none bg-background"
+                  value={check.instructions}
+                  onChange={(event) => updateCheck(check.id, { instructions: event.target.value })}
+                />
+              </div>
               <div className="flex items-end gap-6">
                 <div className="w-32">
                   <span className="mb-1 block text-xs font-medium text-muted-foreground">Action</span>
@@ -223,7 +215,6 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     onValueChange={(next: string | null) =>
                       next && updateCheck(check.id, { action: next as "block" | "log" })
                     }
-                    disabled={!enabled}
                   >
                     <SelectTrigger className="w-full bg-background" aria-label={`Question ${position} action`}>
                       <SelectValue />
@@ -244,7 +235,6 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       aria-label={`Question ${position} threshold`}
                       value={check.threshold}
                       onChange={(next) => updateCheck(check.id, { threshold: next })}
-                      disabled={!enabled}
                     />
                   </div>
                 </div>

@@ -116,7 +116,6 @@ describe("AddGuardrailForm decision model questions", () => {
 
     await user.click(screen.getByLabelText("Question 1 action"));
     await user.click(await screen.findByText("Log only"));
-    expect(screen.getByRole("checkbox", { name: "Enable question 1" })).toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
 
@@ -151,25 +150,6 @@ describe("AddGuardrailForm decision model questions", () => {
       ["billing_policy", "Is this about billing?"],
       ["refund_policy", "Is this about refunds?"],
     ]);
-  });
-
-  it("drops an unchecked question from the submitted params", async () => {
-    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
-    await renderDecisionModel(user);
-    await pickTypesafeModel(user);
-    await addQuestion("invoice_policy", "Does the text ask about invoices?");
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Enable question 1" }));
-    expect(screen.getByLabelText("Question 1 action")).toBeDisabled();
-    expect(screen.getByLabelText("Question 1 threshold")).toHaveAttribute("data-disabled");
-
-    await addQuestion("refund_policy", "Is this about refunds?");
-    fireEvent.click(screen.getByRole("button", { name: "Create Guardrail" }));
-
-    await waitFor(() => expect(vi.mocked(createGuardrailCall)).toHaveBeenCalled());
-    const submitted = vi.mocked(createGuardrailCall).mock.calls[0][1];
-    const names = submitted.litellm_params.checks.map((c: { name: string }) => c.name);
-    expect(names).toEqual(["refund_policy"]);
   });
 
   it("flags two questions with the same name and blocks create", async () => {
@@ -217,20 +197,20 @@ describe("AddGuardrailForm decision model questions", () => {
     expect(screen.getByLabelText("Question 1 name")).toHaveValue("refund_policy");
   });
 
-  it("blocks create when the only question left is unchecked", async () => {
+  it("blocks create once the last question is removed", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     await renderDecisionModel(user);
     await pickTypesafeModel(user);
     await addQuestion("invoice_policy", "Does the text ask about invoices?");
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Enable question 1" }));
+    fireEvent.click(screen.getByLabelText("Remove question 1"));
     fireEvent.click(await screen.findByRole("button", { name: "Create Guardrail" }));
 
     await waitFor(() => expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith("Add at least one question"));
     expect(vi.mocked(createGuardrailCall)).not.toHaveBeenCalled();
   });
 
-  it("sends one request with every enabled question only when Run test is clicked", async () => {
+  it("sends one request with every question only when Run test is clicked", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     vi.mocked(decisionsTestCall).mockResolvedValue({ answers: [] });
 

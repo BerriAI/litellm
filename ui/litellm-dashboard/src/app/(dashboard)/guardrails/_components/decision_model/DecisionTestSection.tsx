@@ -12,9 +12,9 @@ import {
   DECISION_TEST_CHIP_TONE,
   decisionTestChip,
   decisionTestOverall,
-  enabledDecisionQuestions,
   parseDecisionTestResponse,
   prependTestRun,
+  runnableDecisionQuestions,
   runTestShortcutLabel,
   visibleTestResults,
   type DecisionTestRun,
@@ -33,11 +33,11 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
   const nextRunId = useRef(1);
   const controllerRef = useRef<AbortController | null>(null);
 
-  const runnableQuestions = enabledDecisionQuestions(checks);
+  const runnableQuestions = runnableDecisionQuestions(checks);
   let disabledReason: string | null = null;
   if (!model) disabledReason = "Select a decision model to run a test";
   else if (!input.trim()) disabledReason = "Type an input to run a test";
-  else if (runnableQuestions.length === 0) disabledReason = "Add and enable at least one question to run a test";
+  else if (runnableQuestions.length === 0) disabledReason = "Add a question to run a test";
   const canRun = !disabledReason && !running;
 
   const runTest = async () => {

@@ -1,7 +1,7 @@
 import type { StatusTone } from "@/components/shared/table_cells";
 import { isDecisionMode } from "@/lib/decisionModels";
 
-import { enabledDecisionChecks, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
+import { trimDecisionChecks, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
 
 export interface DecisionModelGroup {
   model_group: string;
@@ -49,8 +49,8 @@ export interface DecisionTestBody {
   questions: Array<{ type: "predicate"; name: string; instructions: string }>;
 }
 
-export function enabledDecisionQuestions(checks: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft[] {
-  return enabledDecisionChecks(checks).filter((check) => check.name && check.instructions);
+export function runnableDecisionQuestions(checks: readonly DecisionModelCheckDraft[]): DecisionModelCheckDraft[] {
+  return trimDecisionChecks(checks).filter((check) => check.name && check.instructions);
 }
 
 export function buildDecisionTestBody(
@@ -61,7 +61,7 @@ export function buildDecisionTestBody(
   return {
     model,
     input,
-    questions: enabledDecisionQuestions(checks).map((check) => ({
+    questions: runnableDecisionQuestions(checks).map((check) => ({
       type: "predicate" as const,
       name: check.name,
       instructions: check.instructions,
@@ -142,7 +142,7 @@ export function visibleTestResults(
   model: string,
 ): VisibleTestResult[] {
   if (scores.model !== model) return [];
-  return enabledDecisionChecks(checks).flatMap((check) => {
+  return trimDecisionChecks(checks).flatMap((check) => {
     const result = scores.results[check.name];
     return result && scores.asked[check.name] === check.instructions ? [{ check, result }] : [];
   });
@@ -163,7 +163,6 @@ export function newDecisionCheckDraft(existing: readonly DecisionModelCheckDraft
     instructions: "",
     action: "block",
     threshold: DEFAULT_DECISION_THRESHOLD,
-    enabled: true,
   };
 }
 
