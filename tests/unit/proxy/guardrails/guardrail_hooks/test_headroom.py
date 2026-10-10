@@ -2009,38 +2009,42 @@ async def test_apply_guardrail_sends_textless_parts_rows_unflattened(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_drops_null_tool_calls_but_keeps_real_ones(
-    guardrail: HeadroomGuardrail,
-):
-    real_tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]
+async def test_sdk_echoed_null_tool_calls_never_reach_compression_service(guardrail: HeadroomGuardrail):
+    """LIT-6921: OpenAI SDK assistant messages echoed back as history carry
+    ``"tool_calls": null``, which headroom-ai 0.27-0.30 answer with a 503. The
+    chat handler sends no row carrying that null and forwards the echoed rows
+    unchanged."""
+    from openai.types.chat import ChatCompletionMessage
+
+    from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+
+    def _sdk_assistant(**fields: object) -> dict:
+        return ChatCompletionMessage.model_validate({"role": "assistant", **fields}).model_dump()
+
+    tool_call = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
     history = [
         {"role": "user", "content": "E" * 5000},
-        {"role": "assistant", "content": None, "tool_calls": real_tool_calls},
-        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
-        {"role": "assistant", "content": "summary", "tool_calls": None, "function_call": None},
+        _sdk_assistant(content=None, tool_calls=[tool_call]),
+        {"role": "tool", "tool_call_id": "call_1", "content": "R" * 5000},
+        _sdk_assistant(content="summary"),
+        {"role": "user", "content": "F" * 5000},
+        _sdk_assistant(content="noted"),
+        {"role": "user", "content": "and now?"},
     ]
-    inputs = GenericGuardrailAPIInputs(
-        texts=["E" * 5000],
-        structured_messages=json.loads(json.dumps(history))
-        + [{"role": "assistant", "content": "last turn"}, {"role": "user", "content": "and now?"}],
-    )
-    mock_response = _make_compress_response(json.loads(json.dumps(history)))
+    assert history[3]["tool_calls"] is None
+    sent: dict = {}
 
-    with patch.object(
-        guardrail.async_handler,
-        "post",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_post:
-        await guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data={"model": "claude-fable-5"},
-            input_type="request",
-        )
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
 
-    wire_messages = mock_post.call_args.kwargs["json"]["messages"]
-    assert wire_messages[1]["tool_calls"] == real_tool_calls
-    assert wire_messages[3] == {"role": "assistant", "content": "summary", "function_call": None}
+    data = {"model": "claude-sonnet-5", "messages": json.loads(json.dumps(history))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        result = await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert [row["role"] for row in sent["messages"]] == ["user", "tool", "user"]
+    assert all(row.get("tool_calls", []) is not None for row in sent["messages"])
+    assert [result["messages"][index] for index in (1, 3, 5)] == [history[index] for index in (1, 3, 5)]
 
 
 @pytest.mark.asyncio
