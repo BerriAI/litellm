@@ -21,9 +21,9 @@ from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.models.skills import LiteLLM_SkillsTable
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 DEFAULT_SKILL_SEARCH_TOP_K: Final = 5
 MAX_SKILL_SEARCH_TOP_K: Final = 100
