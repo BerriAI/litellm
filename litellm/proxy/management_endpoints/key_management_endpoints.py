@@ -4693,13 +4693,14 @@ async def generate_key_helper_fn(
         else:
             token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
 
-    if expires is None:
-        if duration is None:  # allow tokens that never expire
-            expires = None
-        else:
-            # Add duration to current time for exact expiration (not standardized reset time)
-            duration_seconds: Final = duration_in_seconds(duration)
-            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    key_expires: Final = (
+        expires
+        if expires is not None
+        # Add duration to current time for exact expiration (not standardized reset time)
+        else datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+        if duration is not None
+        else None  # allow tokens that never expire
+    )
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -4776,7 +4777,7 @@ async def generate_key_helper_fn(
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
-            "expires": expires,
+            "expires": key_expires,
             "models": models,
             "aliases": aliases_json,
             "config": config_json,
