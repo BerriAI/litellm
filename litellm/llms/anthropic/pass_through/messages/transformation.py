@@ -40,6 +40,7 @@ from .mid_conversation_system import (
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
 _CALLER_CREDENTIAL_HEADERS: Final = frozenset({"x-api-key", "authorization"})
+_MIN_TOP_P_WITH_THINKING: Final = 0.95
 
 
 def _carries_caller_credential(headers: Mapping[str, str]) -> bool:
@@ -540,34 +541,37 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 optional_params.pop("output_config", None)
 
     @staticmethod
-    def _drop_incompatible_temperature_for_thinking(
-        model: str, optional_params: dict, custom_llm_provider: str
+    def _drop_sampling_params_incompatible_with_thinking(
+        model: str, optional_params: dict[str, object], custom_llm_provider: str
     ) -> None:
-        """Anthropic rejects any ``temperature`` other than 1 while extended thinking
-        is enabled ("temperature may only be set to 1 when thinking is enabled").
+        """While thinking is on, Anthropic rejects ``temperature`` other than 1, any
+        ``top_k``, and ``top_p`` below 0.95, for legacy ``enabled`` and ``adaptive``
+        thinking alike ("temperature may only be set to 1 when thinking is enabled or
+        in adaptive mode").
 
-        Clients like Claude Code send ``thinking``/``output_config.effort`` together
-        with a pinned ``temperature`` (e.g. the safety classifier uses ``temperature=0``
-        for determinism). When the request lands on a non-adaptive model, the effort
-        interface is reshaped above into legacy ``thinking={type: enabled}`` (or kept
-        as ``output_config.effort`` on Opus 4.5), and the leftover ``temperature`` would
-        400. Preserving the thinking the caller asked for wins over an unhonorable
-        sampling value (Anthropic forces ``temperature=1`` under thinking regardless),
-        so drop it and let the API default apply.
-
-        Adaptive models (4.6+) own this natively and are left untouched.
+        Clients like Claude Code send thinking together with a pinned ``temperature``
+        (the safety classifier uses ``temperature=0``). Preserving the thinking the
+        caller asked for wins over a sampling value the API would refuse, so drop it
+        and let the API default apply. On a non-adaptive model a bare
+        ``output_config.effort`` (kept natively on Opus 4.5) also means thinking is on.
         """
-        if AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
-            return
-        temperature: Final = optional_params.get("temperature")
-        if temperature is None or temperature == 1:
-            return
         thinking: Final = optional_params.get("thinking")
         output_config: Final = optional_params.get("output_config")
-        thinking_enabled: Final = isinstance(thinking, dict) and thinking.get("type") == "enabled"
-        effort_enabled: Final = isinstance(output_config, dict) and output_config.get("effort") is not None
-        if thinking_enabled or effort_enabled:
-            optional_params.pop("temperature", None)
+        thinking_on: Final = isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")
+        effort_on: Final = (
+            isinstance(output_config, dict)
+            and output_config.get("effort") is not None
+            and not AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider)
+        )
+        if not (thinking_on or effort_on):
+            return
+        temperature: Final = optional_params.get("temperature")
+        top_p: Final = optional_params.get("top_p")
+        if temperature is not None and temperature != 1:
+            optional_params.pop("temperature")
+        if isinstance(top_p, int | float) and top_p < _MIN_TOP_P_WITH_THINKING:
+            optional_params.pop("top_p")
+        optional_params.pop("top_k", None)
 
     def transform_anthropic_messages_request(
         self,
@@ -616,9 +620,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        self._drop_incompatible_temperature_for_thinking(
+        self._drop_sampling_params_incompatible_with_thinking(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # override signature fixes this param as a bare dict
             custom_llm_provider=self._resolved_provider,
         )
 

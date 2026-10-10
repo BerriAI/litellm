@@ -248,15 +248,43 @@ def test_pinned_temperature_preserved_when_thinking_dropped():
     assert result["temperature"] == 0
 
 
-def test_pinned_temperature_preserved_for_adaptive_model():
-    """Adaptive models (4.6+) own the thinking/temperature relationship natively, so
-    the passthrough must not strip a pinned temperature for them."""
-    params = _claude_code_payload(effort="high")
-    params["temperature"] = 0
-    result = _transform("claude-sonnet-4-6", params)
+@pytest.mark.parametrize(
+    ("sampling_params", "kept"),
+    [
+        ({"temperature": 0}, {}),
+        ({"temperature": 1}, {"temperature": 1}),
+        ({"top_k": 5}, {}),
+        ({"top_p": 0.5}, {}),
+        ({"top_p": 0.97}, {"top_p": 0.97}),
+        ({"temperature": 0, "top_k": 5, "top_p": 0.5}, {}),
+    ],
+)
+def test_adaptive_thinking_keeps_only_sampling_values_anthropic_accepts(sampling_params, kept):
+    """#42886: Anthropic rejects temperature other than 1, any top_k, and top_p below 0.95
+    "when thinking is enabled or in adaptive mode", so adaptive thinking gets the same
+    reconciliation as legacy enabled thinking while the thinking itself is preserved."""
+    result = _transform("claude-sonnet-4-6", {**_claude_code_payload(effort="high"), **sampling_params})
 
     assert result["thinking"] == {"type": "adaptive"}
-    assert result["temperature"] == 0
+    assert {key: result[key] for key in ("temperature", "top_k", "top_p") if key in result} == kept
+
+
+def test_sampling_params_survive_on_an_adaptive_model_without_thinking():
+    """Without thinking there is no conflict, so the caller's sampling values pass through."""
+    result = _transform("claude-sonnet-4-6", {"max_tokens": 1024, "temperature": 0, "top_k": 5, "top_p": 0.5})
+
+    assert "thinking" not in result
+    assert (result["temperature"], result["top_k"], result["top_p"]) == (0, 5, 0.5)
+
+
+def test_top_k_dropped_with_legacy_enabled_thinking():
+    """The legacy enabled-thinking path drops top_k too, not only a pinned temperature."""
+    params = _claude_code_payload(effort="medium")
+    params["top_k"] = 5
+    result = _transform("claude-haiku-4-5", params)
+
+    assert result["thinking"]["type"] == "enabled"
+    assert "top_k" not in result
 
 
 def test_pinned_temperature_dropped_for_opus_4_5_effort():
