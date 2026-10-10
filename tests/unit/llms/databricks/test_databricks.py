@@ -393,14 +393,10 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
             "DATABRICKS_API_BASE",
             "https://my.workspace.cloud.databricks.com/serving-endpoints",
         )
-        monkeypatch.delenv(
-            "DATABRICKS_API_KEY",
-        )
+        monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
-        monkeypatch.delenv(
-            "DATABRICKS_API_BASE",
-        )
+        monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
 
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(

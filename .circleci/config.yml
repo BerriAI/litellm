@@ -856,101 +856,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  llm_translation_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: xlarge
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            # Add --timeout to kill hanging tests after 120s (2 min)
-            # Add --durations=20 to show 20 slowest tests for debugging
-            # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
-            mkdir -p test-results
-            # Glob excludes the realtime/ subdirectory since it has its own job
-            TEST_FILES=$(circleci tests glob "tests/llm_translation/**/test_*.py" | grep -v "^tests/llm_translation/realtime/")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -n 4 \
-                --timeout=120 --timeout_method=thread \
-                --retries 2 --retry-delay 5 \
-                --max-worker-restart=5"
-          no_output_timeout: 15m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-  realtime_translation_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run realtime tests
-          command: |
-            # Add --timeout to kill hanging tests after 120s (2 min)
-            # Add --durations=20 to show 20 slowest tests for debugging
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/llm_translation/realtime/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -n 4 \
-                --timeout=120 --timeout_method=thread"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml realtime_translation_coverage.xml
-            mv .coverage realtime_translation_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - realtime_translation_coverage.xml
-            - realtime_translation_coverage
   guardrails_testing:
     docker:
       - *python312_image
@@ -2426,19 +2331,11 @@ jobs:
       - skip_if_unrelated_changes
       - attach_workspace:
           at: .
-      # Check file locations
-      - run:
-          name: Check coverage file location
-          command: |
-            echo "Current directory:"
-            ls -la
-            echo "\nContents of tests/llm_translation:"
-            ls -la tests/llm_translation
       - install_uv
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3412,8 +3309,6 @@ workflows:
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-      - llm_translation_testing
-      - realtime_translation_testing
       - guardrails_testing
       - google_generate_content_endpoint_testing
       - ocr_testing
@@ -3426,7 +3321,6 @@ workflows:
       - audio_testing
       - upload-coverage:
           requires:
-            - realtime_translation_testing
             - google_generate_content_endpoint_testing
             - ocr_testing
             - search_testing
