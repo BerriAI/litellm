@@ -9813,7 +9813,7 @@ class TestSessionBearerEgressScrub:
             {},
         )
 
-    async def test_caller_admission_credential_does_not_fall_back_when_custom_header_is_absent(self) -> None:
+    async def test_caller_admission_credential_falls_back_to_standard_headers_when_custom_header_is_absent(self) -> None:
         caller_value: Final = "Bearer sk-caller-admission-key-123"
         headers: Final = Headers(
             {
@@ -9837,16 +9837,12 @@ class TestSessionBearerEgressScrub:
             admitted_credential=admitted_credential,
         )
 
+        assert admitted_credential == "sk-caller-admission-key-123"
         assert result == (
-            {"Authorization": caller_value},
-            {
-                "x-litellm-api-key": caller_value,
-                "authorization": caller_value,
-                "x-mcp-auth": caller_value,
-                "x-mcp-echo_srv-authorization": caller_value,
-            },
-            caller_value,
-            {"echo_srv": {"Authorization": caller_value}},
+            None,
+            {"x-litellm-api-key": caller_value},
+            None,
+            {},
         )
 
     async def test_caller_admission_credential_uses_master_key_alias_as_admission_gate(self) -> None:

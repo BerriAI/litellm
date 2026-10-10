@@ -110,7 +110,10 @@ def served_output_texts(response: object) -> ServedTexts | None:
 def served_stream_output_texts(chunks: Sequence[object]) -> ServedTexts | None:
     if chunks and all(isinstance(chunk, ModelResponseStream) for chunk in chunks):
         return _chat_stream_texts(tuple(chunk for chunk in chunks if isinstance(chunk, ModelResponseStream)))
-    from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_stream, is_anthropic_sse_stream
+    from litellm.llms.anthropic.pass_through.stream_assembly import (
+        assemble_anthropic_sse_stream,
+        is_anthropic_sse_stream,
+    )
 
     if not is_anthropic_sse_stream(chunks):
         return None
