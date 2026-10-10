@@ -9,6 +9,7 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -44,6 +45,129 @@ from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
 from tests._master_key import MASTER_KEY
+
+
+def _db_router_model() -> MagicMock:
+    record = MagicMock()
+    record.model_id = "db-id-1"
+    record.model_name = "fake-model"
+    record.litellm_params = {"model": "fake-model"}
+    record.model_info = {"id": "db-id-1"}
+    record.created_by = "default_user_id"
+    record.created_at = None
+    record.updated_at = None
+    record.updated_by = None
+    return record
+
+
+@pytest.mark.asyncio
+async def test_db_router_rebuild_serves_same_proxy_caller_from_cache_and_isolates_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DB router rebuild must cache without crossing authenticated callers."""
+    proxy_config: Final = ProxyConfig()
+    fake_model_list: Final = [
+        {
+            "model_name": "fake-model",
+            "litellm_params": {
+                "model": "openai/fake-model",
+                "api_key": "sk-fake",
+                "mock_response": "cached response",
+            },
+        }
+    ]
+    cache: Final = litellm.Cache()
+    monkeypatch.setattr(litellm, "cache", cache)
+    cache_write_complete: Final = asyncio.Event()
+    original_async_add_cache = cache.async_add_cache
+
+    async def tracked_async_add_cache(*args: object, **kwargs: object) -> object:
+        result = await original_async_add_cache(*args, **kwargs)
+        cache_write_complete.set()
+        return result
+
+    monkeypatch.setattr(cache, "async_add_cache", tracked_async_add_cache)
+    provider_calls: int = 0
+    litellm_main = importlib.import_module("litellm.main")
+    original_mock_completion = litellm_main.mock_completion
+
+    def tracked_mock_completion(*args: object, **kwargs: object) -> object:
+        nonlocal provider_calls
+        provider_calls += 1
+        return original_mock_completion(*args, **kwargs)
+
+    monkeypatch.setattr(litellm_main, "mock_completion", tracked_mock_completion)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    async def empty_config() -> dict:
+        return {}
+
+    async def no_router_settings(_router: object, _prisma: object) -> None:
+        return None
+
+    await proxy_config._update_llm_router(
+        new_models=[_db_router_model()],
+        proxy_logging_obj=MagicMock(),
+        config_loader=empty_config,
+        model_decryptor=lambda _models: fake_model_list,
+        router_settings_loader=no_router_settings,
+    )
+    router = __import__("litellm.proxy.proxy_server", fromlist=["llm_router"]).llm_router
+
+    request: Final = [{"role": "user", "content": "cache canary"}]
+    caller_a: Final = {"user_api_key_hash": "hash-a"}
+    caller_b: Final = {"user_api_key_hash": "hash-b"}
+    first = await router.acompletion(model="fake-model", messages=request, metadata=caller_a)
+    await cache_write_complete.wait()
+    same_caller = await router.acompletion(model="fake-model", messages=request, metadata=caller_a)
+    assert same_caller.id == first.id
+    assert provider_calls == 1
+
+    other_caller = await router.acompletion(model="fake-model", messages=request, metadata=caller_b)
+    assert other_caller.id != first.id
+    assert provider_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_db_router_rebuild_cache_disabled_does_not_reuse_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DB router must preserve uncached behavior when the global cache is absent."""
+    proxy_config: Final = ProxyConfig()
+    fake_model_list: Final = [
+        {
+            "model_name": "fake-model",
+            "litellm_params": {"model": "openai/fake-model", "api_key": "sk-fake", "mock_response": "uncached"},
+        }
+    ]
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    async def empty_config() -> dict:
+        return {}
+
+    async def no_router_settings(_router: object, _prisma: object) -> None:
+        return None
+
+    await proxy_config._update_llm_router(
+        new_models=[_db_router_model()],
+        proxy_logging_obj=MagicMock(),
+        config_loader=empty_config,
+        model_decryptor=lambda _models: fake_model_list,
+        router_settings_loader=no_router_settings,
+    )
+    router = __import__("litellm.proxy.proxy_server", fromlist=["llm_router"]).llm_router
+    request: Final = [{"role": "user", "content": "uncached canary"}]
+    first = await router.acompletion(model="fake-model", messages=request)
+    second = await router.acompletion(model="fake-model", messages=request)
+    assert router.cache_responses is False
+    assert second.id != first.id
 
 
 @pytest.mark.asyncio

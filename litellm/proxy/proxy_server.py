@@ -7645,6 +7645,10 @@ class ProxyConfig:
         self,
         new_models: Json | None,
         proxy_logging_obj: ProxyLogging,
+        *,
+        config_loader: Callable[[], Awaitable[Mapping[str, object]]] | None = None,
+        model_decryptor: Callable[[Sequence[object]], Sequence[object]] | None = None,
+        router_settings_loader: Callable[[Router | None, PrismaClient | None], Awaitable[None]] | None = None,
     ) -> frozenset[str] | None:
         global llm_router, llm_model_list, master_key, general_settings
 
@@ -7654,7 +7658,9 @@ class ProxyConfig:
         config_data: dict | None = None
         search_tools = None
         try:
-            config_data = await proxy_config.get_config()
+            config_data = await (
+                config_loader() if config_loader is not None else proxy_config.get_config()
+            )  # rebind-ok: config load is intentionally isolated
             search_tools = self.parse_search_tools(config_data)
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -7677,13 +7683,17 @@ class ProxyConfig:
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug("len new_models: %s", len(models_list))
 
-                _model_list: Final[list] = self.decrypt_model_list_from_db(new_models=models_list)
+                _model_list: Final[Sequence[object]] = (
+                    model_decryptor(models_list)
+                    if model_decryptor is not None
+                    else self.decrypt_model_list_from_db(new_models=models_list)
+                )
                 # Only create router if we have models or search_tools to route
                 # Router can function with model_list=[] if search_tools are configured
                 if len(_model_list) > 0 or search_tools:
                     verbose_proxy_logger.debug("_model_list: %s", _model_list)
                     llm_router = litellm.Router(
-                        model_list=_model_list,
+                        model_list=list(_model_list),
                         cache_responses=litellm.cache is not None,
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
@@ -7715,7 +7725,11 @@ class ProxyConfig:
             self._add_callbacks_from_db_config(config_data)
 
         # router settings
-        await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
+        await (
+            router_settings_loader(llm_router, prisma_client)
+            if router_settings_loader is not None
+            else self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
+        )
 
         return still_desired_ids
 
