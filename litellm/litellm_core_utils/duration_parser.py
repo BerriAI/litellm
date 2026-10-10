@@ -74,7 +74,9 @@ def duration_in_seconds(duration: str) -> int:
     elif unit == "w":
         return value * 604800
     elif unit == "mo":
-        return _months_in_seconds(start=datetime.fromtimestamp(time_module.time()), months=value)
+        return _months_in_seconds(
+            start=datetime.fromtimestamp(time_module.time(), tz=timezone.utc).astimezone(), months=value
+        )
 
     else:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")

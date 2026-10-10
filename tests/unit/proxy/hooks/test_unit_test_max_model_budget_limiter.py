@@ -1141,7 +1141,9 @@ async def test_usage_reports_when_the_open_window_resets(seconds_since_window_op
         now=_WINDOW_OPENED_AT + timedelta(seconds=seconds_since_window_opened),
     )
 
-    assert usage["gpt-4"]["budget_reset_at"] == expected_reset_at
+    assert usage == {
+        "gpt-4": {"current_spend": 0.4, "budget_limit": 1.0, "time_period": "1h", "budget_reset_at": expected_reset_at}
+    }
 
 
 _DAY: Final = 86400
@@ -1151,10 +1153,10 @@ _DAY: Final = 86400
 @pytest.mark.parametrize(
     "opened_at,read_after_days,window_days",
     [
-        (datetime(2026, 1, 15, 12), 26, 31),
-        (datetime(2026, 1, 15, 12), 29, 31),
-        (datetime(2026, 1, 31, 12), 20, 28),
-        (datetime(2026, 12, 15, 12), 30, 31),
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), 26, 31),
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), 29, 31),
+        (datetime(2026, 1, 31, 12, tzinfo=timezone.utc), 20, 28),
+        (datetime(2026, 12, 15, 12, tzinfo=timezone.utc), 30, 31),
     ],
     ids=["read_in_a_shorter_month", "read_past_the_shorter_month_length", "clamped_to_february", "across_new_year"],
 )
@@ -1179,23 +1181,28 @@ async def test_a_monthly_window_resets_a_calendar_month_after_it_opened(opened_a
         entity_id="user-1",
         model_max_budget={"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}},
         cache=dual_cache,
-        now=datetime.fromtimestamp(started_at + read_after_days * _DAY, tz=timezone.utc),
+        now=opened_at + timedelta(days=read_after_days),
     )
 
-    assert usage["gpt-4"]["budget_reset_at"] == (
-        datetime.fromtimestamp(started_at + window_days * _DAY, tz=timezone.utc).isoformat()
-    )
+    assert usage == {
+        "gpt-4": {
+            "current_spend": 0.0,
+            "budget_limit": 1.0,
+            "time_period": "1mo",
+            "budget_reset_at": (opened_at + timedelta(days=window_days)).isoformat(),
+        }
+    }
 
 
 @pytest.mark.asyncio
 async def test_a_monthly_window_reports_no_reset_once_its_month_has_passed():
     dual_cache = DualCache()
-    started_at: Final = datetime(2026, 1, 15, 12).timestamp()
+    opened_at: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
     await dual_cache.async_set_cache(
         key=model_budget_start_time_cache_key(
             entity_type=Litellm_EntityType.USER, entity_id="user-1", budget_model="gpt-4", budget_duration="1mo"
         ),
-        value=started_at,
+        value=opened_at.timestamp(),
     )
 
     usage = await build_model_max_budget_usage(
@@ -1203,10 +1210,12 @@ async def test_a_monthly_window_reports_no_reset_once_its_month_has_passed():
         entity_id="user-1",
         model_max_budget={"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}},
         cache=dual_cache,
-        now=datetime.fromtimestamp(started_at + 31 * _DAY, tz=timezone.utc),
+        now=opened_at + timedelta(days=31),
     )
 
-    assert usage["gpt-4"]["budget_reset_at"] is None
+    assert usage == {
+        "gpt-4": {"current_spend": 0.0, "budget_limit": 1.0, "time_period": "1mo", "budget_reset_at": None}
+    }
 
 
 @pytest.mark.asyncio
@@ -1235,9 +1244,21 @@ async def test_each_budgeted_model_reports_its_own_window_reset():
         now=_WINDOW_OPENED_AT,
     )
 
-    assert usage["gpt-4"]["budget_reset_at"] == "2026-10-10T13:00:00+00:00"
-    assert usage["claude-3"]["budget_reset_at"] == "2026-10-11T07:00:00+00:00"
-    assert usage["never-used"]["budget_reset_at"] is None
+    assert usage == {
+        "gpt-4": {
+            "current_spend": 0.0,
+            "budget_limit": 1.0,
+            "time_period": "1h",
+            "budget_reset_at": "2026-10-10T13:00:00+00:00",
+        },
+        "claude-3": {
+            "current_spend": 0.0,
+            "budget_limit": 1.0,
+            "time_period": "1d",
+            "budget_reset_at": "2026-10-11T07:00:00+00:00",
+        },
+        "never-used": {"current_spend": 0.0, "budget_limit": 1.0, "time_period": "1d", "budget_reset_at": None},
+    }
 
 
 @pytest.mark.asyncio
@@ -1649,10 +1670,14 @@ async def test_a_replica_reports_the_reset_of_a_window_another_replica_opened():
             entity_type=Litellm_EntityType.KEY, entity_id="vk-shared", budget_model="gpt-4", budget_duration="1h"
         )
     ]
-    assert (
-        usage_on_other["gpt-4"]["budget_reset_at"]
-        == (datetime.fromtimestamp(started_at, tz=timezone.utc) + timedelta(hours=1)).isoformat()
-    )
+    assert usage_on_other == {
+        "gpt-4": {
+            "current_spend": 0.5,
+            "budget_limit": 1.0,
+            "time_period": "1h",
+            "budget_reset_at": (datetime.fromtimestamp(started_at, tz=timezone.utc) + timedelta(hours=1)).isoformat(),
+        }
+    }
 
 
 def _log_success(limiter, **kwargs):

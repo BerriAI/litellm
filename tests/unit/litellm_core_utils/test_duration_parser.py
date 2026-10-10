@@ -4,6 +4,8 @@ from typing import Final
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
@@ -374,32 +376,33 @@ class TestGetBudgetWindowStart(unittest.TestCase):
         )
 
 
-class TestDurationInSecondsFrom(unittest.TestCase):
-    def test_a_month_lasts_as_long_as_the_month_it_starts_in(self):
-        cases: Final = (
-            (datetime(2026, 1, 15, 12), "1mo", 31),
-            (datetime(2026, 2, 10, 12), "1mo", 28),
-            (datetime(2026, 1, 31, 12), "1mo", 28),
-            (datetime(2028, 1, 31, 12), "1mo", 29),
-            (datetime(2026, 12, 15, 12), "1mo", 31),
-            (datetime(2026, 1, 15, 12), "2mo", 59),
-        )
-        for start, duration, days in cases:
-            with self.subTest(start=start, duration=duration):
-                self.assertEqual(duration_in_seconds_from(start, duration), days * 86400)
+@pytest.mark.parametrize(
+    "start,duration,days",
+    [
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), "1mo", 31),
+        (datetime(2026, 2, 10, 12, tzinfo=timezone.utc), "1mo", 28),
+        (datetime(2026, 1, 31, 12, tzinfo=timezone.utc), "1mo", 28),
+        (datetime(2028, 1, 31, 12, tzinfo=timezone.utc), "1mo", 29),
+        (datetime(2026, 12, 15, 12, tzinfo=timezone.utc), "1mo", 31),
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), "2mo", 59),
+    ],
+    ids=["january", "february", "clamped_to_february", "leap_february", "across_new_year", "two_months"],
+)
+def test_a_month_lasts_as_long_as_the_month_it_starts_in(start, duration, days):
+    assert duration_in_seconds_from(start, duration) == days * 86400
 
-    def test_fixed_length_units_do_not_depend_on_the_start(self):
-        for duration in ("45s", "30m", "1h", "1d", "7d", "2w", "30d", "daily", "monthly"):
-            with self.subTest(duration=duration):
-                self.assertEqual(
-                    duration_in_seconds_from(datetime(2026, 2, 10, 12), duration),
-                    duration_in_seconds(duration),
-                )
 
-    def test_a_month_starting_now_matches_duration_in_seconds(self):
-        now: Final = datetime(2026, 1, 31, 9, 30, 0, 250000)
-        with patch.object(duration_parser.time_module, "time", return_value=now.timestamp()):
-            self.assertEqual(duration_in_seconds("1mo"), duration_in_seconds_from(now, "1mo"))
+@pytest.mark.parametrize("duration", ["45s", "30m", "1h", "1d", "7d", "2w", "30d", "daily", "monthly"])
+def test_fixed_length_units_do_not_depend_on_the_start(duration):
+    assert duration_in_seconds_from(datetime(2026, 2, 10, 12, tzinfo=timezone.utc), duration) == duration_in_seconds(
+        duration
+    )
+
+
+def test_a_month_starting_now_matches_duration_in_seconds():
+    now: Final = datetime(2026, 1, 31, 9, 30, 0, 250000, tzinfo=timezone.utc).astimezone()
+    with patch.object(duration_parser.time_module, "time", return_value=now.timestamp()):
+        assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
 
 
 if __name__ == "__main__":

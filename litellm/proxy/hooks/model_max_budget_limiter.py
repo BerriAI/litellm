@@ -304,7 +304,7 @@ def _window_reset_at(started_at: float | None, budget_duration: str | None, now:
     if started_at is None or budget_duration is None:
         return None
     ends_at: Final = started_at + duration_in_seconds_from(
-        start=datetime.fromtimestamp(started_at), duration=budget_duration
+        start=datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone(), duration=budget_duration
     )
     if ends_at <= now:
         return None
