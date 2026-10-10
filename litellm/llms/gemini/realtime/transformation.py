@@ -161,6 +161,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
 
+    def _rejects_vad_tuning_with_detection_off(self) -> bool:
+        """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
+        return True
+
     @staticmethod
     def _usage_detail_alias(details: Mapping[str, int | None] | None, defaults: dict[str, int]) -> dict[str, int]:
         if not isinstance(details, dict):
@@ -279,13 +283,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         OpenAI ``semantic_vad`` has no Gemini Live equivalent — return an empty
         dict so callers omit ``realtimeInputConfig`` (mapping it with
-        ``disabled: true`` breaks native-audio sessions). Gemini Live closes the
-        socket (1007) when padding or silence tuning comes with ``disabled: true``,
-        so an explicit ``create_response: false`` maps to detection off alone.
+        ``disabled: true`` breaks native-audio sessions). An explicit
+        ``create_response: false`` maps to detection off alone where the backend
+        rejects tuning next to ``disabled: true``.
         """
         if isinstance(value, dict) and value.get("type") == "semantic_vad" and "create_response" not in value:
             return AutomaticActivityDetection()
-        if "create_response" in value and value["create_response"] is False:
+        auto_response_off: Final = "create_response" in value and value["create_response"] is False
+        if auto_response_off and self._rejects_vad_tuning_with_detection_off():
             return AutomaticActivityDetection(disabled=True)
 
         automatic_activity_dection: Final = AutomaticActivityDetection()
