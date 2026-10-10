@@ -544,7 +544,7 @@ def test_transform_request_collapses_single_plain_text_block_for_non_claude_mode
         result["messages"]
     )
 
-    assert outgoing_messages[0]["content"] == expected_content
+    assert outgoing_messages == [{**messages[0], "content": expected_content}]
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():
