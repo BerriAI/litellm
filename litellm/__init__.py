@@ -673,7 +673,7 @@ nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
 soniox_models: Set = set()
 sambanova_models: Set = set()
-scaledown_models: Set = set()
+scaledown_models: Final[Set[str]] = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
 assemblyai_models: Set = set()
@@ -756,7 +756,7 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def _populate_provider_model_sets(model_cost_map: Dict) -> None:
+def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
