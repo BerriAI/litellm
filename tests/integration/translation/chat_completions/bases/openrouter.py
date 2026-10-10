@@ -27,15 +27,18 @@ CLAUDE_SONNET_4_TEST_CASE: Final = TranslationTestCase(
         "reasoning": {"effort": "high"},
         "cache": {"no-cache": True},
     },
-    expected_provider_endpoint="/api/v1/chat/completions",
+    expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "authorization": "Bearer synthetic-openrouter-key",
         "content-type": "application/json",
+        "http-referer": "https://litellm.ai",
+        "x-title": "liteLLM",
     },
     expected_provider_request={
         "model": "anthropic/claude-sonnet-4",
         "messages": [{"role": "user", "content": "Hello world"}],
         "reasoning": {"effort": "high"},
+        "stream": False,
         "usage": {"include": True},
     },
     mock_provider_response=CLAUDE_SONNET_4_RESPONSE,
@@ -51,25 +54,26 @@ CLAUDE_SONNET_4_TEST_CASE: Final = TranslationTestCase(
                     "role": "assistant",
                     "content": CLAUDE_SONNET_4_MESSAGE["content"],
                     "reasoning_content": CLAUDE_SONNET_4_MESSAGE["reasoning"],
+                    "provider_specific_fields": {
+                        "reasoning": CLAUDE_SONNET_4_MESSAGE["reasoning"],
+                        "reasoning_details": CLAUDE_SONNET_4_MESSAGE["reasoning_details"],
+                        "refusal": CLAUDE_SONNET_4_MESSAGE["refusal"],
+                    },
                 },
                 "finish_reason": "stop",
+                "provider_specific_fields": {
+                    "native_finish_reason": CLAUDE_SONNET_4_CHOICE["native_finish_reason"],
+                },
             }
         ],
         "usage": {
-            "prompt_tokens": CLAUDE_SONNET_4_USAGE["prompt_tokens"],
-            "completion_tokens": CLAUDE_SONNET_4_USAGE["completion_tokens"],
-            "total_tokens": CLAUDE_SONNET_4_USAGE["total_tokens"],
-            "completion_tokens_details": {
-                "reasoning_tokens": JSON_OBJECT.validate_python(CLAUDE_SONNET_4_USAGE["completion_tokens_details"])[
-                    "reasoning_tokens"
-                ]
-            },
+            **CLAUDE_SONNET_4_USAGE,
             "prompt_tokens_details": {
-                "cached_tokens": JSON_OBJECT.validate_python(CLAUDE_SONNET_4_USAGE["prompt_tokens_details"])[
-                    "cached_tokens"
-                ]
+                **CLAUDE_SONNET_4_USAGE["prompt_tokens_details"],
+                "cache_creation_tokens": 0,
             },
         },
+        "provider": CLAUDE_SONNET_4_RESPONSE["provider"],
     },
 )
 
@@ -87,10 +91,12 @@ GEMINI_3_1_FLASH_IMAGE_TEST_CASE: Final = TranslationTestCase(
         "modalities": ["image", "text"],
         "cache": {"no-cache": True},
     },
-    expected_provider_endpoint="/api/v1/chat/completions",
+    expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "authorization": "Bearer synthetic-openrouter-key",
         "content-type": "application/json",
+        "http-referer": "https://litellm.ai",
+        "x-title": "liteLLM",
     },
     expected_provider_request={
         "model": "google/gemini-3.1-flash-image",
@@ -101,6 +107,7 @@ GEMINI_3_1_FLASH_IMAGE_TEST_CASE: Final = TranslationTestCase(
             }
         ],
         "modalities": ["image", "text"],
+        "stream": False,
         "usage": {"include": True},
     },
     mock_provider_response=GEMINI_3_1_FLASH_IMAGE_RESPONSE,
@@ -115,17 +122,33 @@ GEMINI_3_1_FLASH_IMAGE_TEST_CASE: Final = TranslationTestCase(
                 "message": {
                     "role": "assistant",
                     "content": None,
-                    "images": GEMINI_3_1_FLASH_IMAGE_MESSAGE["images"],
+                    "images": [
+                        {
+                            "image_url": GEMINI_3_1_FLASH_IMAGE_MESSAGE["images"][0]["image_url"],
+                            "index": 0,
+                            "type": GEMINI_3_1_FLASH_IMAGE_MESSAGE["images"][0]["type"],
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "reasoning": GEMINI_3_1_FLASH_IMAGE_MESSAGE["reasoning"],
+                        "reasoning_details": GEMINI_3_1_FLASH_IMAGE_MESSAGE["reasoning_details"],
+                        "refusal": GEMINI_3_1_FLASH_IMAGE_MESSAGE["refusal"],
+                    },
                 },
                 "finish_reason": "stop",
+                "provider_specific_fields": {
+                    "native_finish_reason": GEMINI_3_1_FLASH_IMAGE_CHOICE["native_finish_reason"],
+                },
             }
         ],
         "usage": {
-            "prompt_tokens": GEMINI_3_1_FLASH_IMAGE_USAGE["prompt_tokens"],
-            "completion_tokens": GEMINI_3_1_FLASH_IMAGE_USAGE["completion_tokens"],
-            "total_tokens": GEMINI_3_1_FLASH_IMAGE_USAGE["total_tokens"],
-            "completion_tokens_details": {"reasoning_tokens": 0},
-            "prompt_tokens_details": {"cached_tokens": 0},
+            **GEMINI_3_1_FLASH_IMAGE_USAGE,
+            "prompt_tokens_details": {
+                **GEMINI_3_1_FLASH_IMAGE_USAGE["prompt_tokens_details"],
+                "cache_creation_tokens": 0,
+            },
         },
+        "provider": GEMINI_3_1_FLASH_IMAGE_RESPONSE["provider"],
+        "service_tier": GEMINI_3_1_FLASH_IMAGE_RESPONSE["service_tier"],
     },
 )
