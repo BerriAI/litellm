@@ -477,6 +477,35 @@ class ChatResponse(BaseModel):
     guardrail_information: list[GuardrailInformationEntry] | None = None
 
 
+class ResponsesInputTokensDetails(BaseModel):
+    cached_tokens: int | None = None
+
+
+class ResponsesUsage(BaseModel):
+    """`/v1/responses` usage shape: input/output tokens, not prompt/completion."""
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: ResponsesInputTokensDetails | None = None
+
+
+class ResponsesApiResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str | None = None
+    usage: ResponsesUsage | None = None
+
+
+class ResponsesStreamEvent(BaseModel):
+    """One `/v1/responses` SSE event; `response.completed` carries the final response."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    response: ResponsesApiResponse | None = None
+
+
 # ---------- anthropic /v1/messages + count_tokens ----------
 
 
