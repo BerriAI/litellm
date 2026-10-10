@@ -3772,7 +3772,7 @@ def test_is_registered_pass_through_route_with_custom_root():
     }
 
     with patch("litellm.proxy.utils.get_server_root_path", return_value="/proxy"):
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
+        # Callers pass get_request_route() output, which is already root-relative.
         assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
 
     with patch("litellm.proxy.utils.get_server_root_path", return_value="/"):
@@ -3785,8 +3785,7 @@ def test_is_registered_pass_through_route_with_custom_root():
 
 def test_get_registered_pass_through_route_with_custom_root():
     """
-    get_registered_pass_through_route matches bare registry paths against
-    bare or SERVER_ROOT_PATH-prefixed incoming routes.
+    get_registered_pass_through_route matches root-relative registry paths.
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
@@ -3808,13 +3807,7 @@ def test_get_registered_pass_through_route_with_custom_root():
     _registered_pass_through_routes[route_key] = target_config
 
     with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"):
-        # Prefixed incoming route
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
-        assert result is not None
-        assert result["target"] == "http://api.example.com/v1/chat/completions"
-        assert result["headers"]["Authorization"] == "Bearer token123"
-
-        # Bare incoming route (get_request_route convention)
+        # get_request_route() supplies root-relative routes.
         result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
@@ -3835,14 +3828,7 @@ def test_get_registered_pass_through_route_with_custom_root():
         ("", "exact", "/ml", True),
         ("", "exact", "/ml/extra", False),
         ("/llmproxy", "subpath", "/ml/api/v1/time-series-forecast/predict", True),
-        (
-            "/llmproxy",
-            "subpath",
-            "/llmproxy/ml/api/v1/time-series-forecast/predict",
-            True,
-        ),
         ("/llmproxy", "exact", "/ml", True),
-        ("/llmproxy", "exact", "/llmproxy/ml", True),
         ("/llmproxy", "subpath", "/other/api", False),
     ],
 )
@@ -3850,8 +3836,8 @@ def test_db_registered_pass_through_route_bare_path_convention(
     server_root_path, route_type, incoming_route, should_match
 ):
     """
-    Regression: #28547 / SERVER_ROOT_PATH — registry stores bare /ml paths;
-    get_request_route() supplies bare paths; prefixed url.path must still match.
+    Regression: #28547 / SERVER_ROOT_PATH — registry stores bare /ml paths and
+    get_request_route() supplies root-relative paths for registry lookup.
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
@@ -3891,15 +3877,80 @@ def test_mapped_pass_through_routes_with_server_root_path():
     )
 
     with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"):
-        # prefixed route should match mapped routes like /vertex_ai
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route("/litellm/vertex_ai/v1/projects/foo")
-            is True
-        )
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/litellm/bedrock/model/invoke") is True
+        # get_request_route() supplies bare paths after stripping root_path.
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/vertex_ai/v1/projects/foo") is True
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/bedrock/model/invoke") is True
 
-        # bare route without prefix should not match when root is set
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/vertex_ai/v1/projects/foo") is False
+
+@pytest.mark.parametrize("server_root_path", ["", "/", "/api/v1", "/api/v1/", "/typesafe"])
+def test_typesafe_mapped_pass_through_route_with_server_root_path(server_root_path):
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch(
+        "litellm.proxy.utils.get_server_root_path", return_value=server_root_path
+    ):
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/typesafe/decisions") is True
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/anthropic/v1/messages") is True
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/typesafeevil/decisions") is False
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/not-a-passthrough/decisions") is False
+
+
+@pytest.mark.parametrize(
+    "root_path,request_path",
+    [
+        ("/typesafe", "/typesafe/typesafe/decisions"),
+        ("/api/v1", "/api/v1/typesafe/decisions"),
+    ],
+)
+def test_typesafe_passthrough_dispatches_after_root_path_normalization(
+    monkeypatch: pytest.MonkeyPatch, root_path: str, request_path: str
+):
+    """A root-relative TypeSafe route passes auth, registry validation, and dispatch."""
+    from litellm.proxy.auth.auth_utils import get_request_route
+    from litellm.proxy.auth.user_api_key_auth import (
+        check_api_key_for_custom_headers_or_pass_through_endpoints,
+        user_api_key_auth,
+    )
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    authenticated_routes: list[str] = []
+
+    async def authenticated_passthrough_request(request: Request) -> UserAPIKeyAuth:
+        route = get_request_route(request)
+        authenticated_routes.append(route)
+        assert await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route=route,
+            pass_through_endpoints=None,
+            api_key="sk-test",
+        ) == "sk-test"
+        return UserAPIKeyAuth(api_key="sk-test")
+
+    app = FastAPI(root_path=root_path)
+    app.add_api_route(
+        "/typesafe/{endpoint:path}",
+        create_pass_through_route(
+            endpoint="typesafe",
+            target="https://typesafe-upstream.test/decisions",
+            custom_headers={"Authorization": "Bearer upstream-key"},
+            custom_llm_provider="typesafe",
+        ),
+        methods=["POST"],
+    )
+    app.dependency_overrides[user_api_key_auth] = authenticated_passthrough_request
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream_request = upstream.post("https://typesafe-upstream.test/decisions").mock(
+            return_value=httpx.Response(200, json={"reached": "upstream"})
+        )
+        response = TestClient(app).post(request_path, json={"input": "test"})
+
+    assert response.status_code == 200
+    assert response.json() == {"reached": "upstream"}
+    assert authenticated_routes == ["/typesafe/decisions"]
+    assert upstream_request.called
 
 
 @pytest.mark.asyncio

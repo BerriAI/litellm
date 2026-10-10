@@ -42,7 +42,6 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    Union,
     cast,
     overload,
     runtime_checkable,
