@@ -176,3 +176,52 @@ fn unknown_caller_betas_are_preserved_with_derived_feature_betas() {
         )
     );
 }
+
+#[rstest]
+#[case::private_endpoint(None, "https://vpce.test/anthropic/v1/messages", "us-west-2")]
+#[case::regional_endpoint(
+    None,
+    "https://bedrock-mantle.eu-west-1.api.aws/anthropic/v1/messages",
+    "eu-west-1"
+)]
+#[case::explicit_base(
+    Some("https://bedrock-mantle.ap-south-1.api.aws/v1"),
+    "https://bedrock-mantle.ap-south-1.api.aws/anthropic/v1/messages",
+    "ap-south-1"
+)]
+fn runtime_endpoint_is_used_for_both_url_and_signing(
+    #[case] api_base: Option<&str>,
+    #[case] expected_url: &str,
+    #[case] expected_region: &str,
+) {
+    let endpoint = if api_base.is_some() {
+        "https://bedrock-mantle.eu-west-1.api.aws/v1"
+    } else {
+        expected_url.strip_suffix("/anthropic/v1/messages").unwrap()
+    };
+    let params = LitellmParams {
+        api_base: api_base.map(str::to_string),
+        aws: AwsParams {
+            aws_bedrock_runtime_endpoint: Some(endpoint.into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = |name: &str| match name {
+        "BEDROCK_MANTLE_API_BASE" => Some("https://ignored.test".into()),
+        "AWS_REGION_NAME" => Some("us-west-2".into()),
+        _ => None,
+    };
+    assert_eq!(
+        CONFIG
+            .get_complete_url(api_base, "claude-test", &params, false, &env)
+            .unwrap(),
+        expected_url
+    );
+    let environment = CONFIG
+        .validate_environment(vec![], None, "claude-test", &params, &env)
+        .unwrap();
+    assert!(
+        matches!(environment.auth, AuthScheme::AwsSigV4 { region, .. } if region == expected_region)
+    );
+}

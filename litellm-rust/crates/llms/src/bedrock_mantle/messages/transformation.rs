@@ -89,12 +89,8 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let region = mantle_region(api_base, model, params, env);
-        let configured = resolve_non_empty(
-            api_base.or(params.api_base.as_deref()),
-            env,
-            &[API_BASE_ENV],
-        )
-        .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
+        let configured = mantle_base(api_base, params, env)
+            .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
         let trimmed = configured.trim_end_matches('/');
         let stripped = BASE_SUFFIXES
             .iter()
@@ -203,6 +199,22 @@ fn mantle_host_region(base: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn mantle_base(
+    base: Option<&str>,
+    params: &LitellmParams,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let explicit = [
+        base,
+        params.api_base.as_deref(),
+        params.aws.aws_bedrock_runtime_endpoint.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|base| !base.trim().is_empty());
+    resolve_non_empty(explicit, env, &[API_BASE_ENV])
+}
+
 fn mantle_region(
     base: Option<&str>,
     model: &str,
@@ -211,10 +223,7 @@ fn mantle_region(
 ) -> String {
     resolve_non_empty(params.aws.aws_region_name.as_deref(), &|_| None, &[])
         .or_else(|| mantle_model(model).1)
-        .or_else(|| {
-            resolve_non_empty(base.or(params.api_base.as_deref()), env, &[API_BASE_ENV])
-                .and_then(|base| mantle_host_region(&base))
-        })
+        .or_else(|| mantle_base(base, params, env).and_then(|base| mantle_host_region(&base)))
         .or_else(|| resolve_non_empty(None, env, REGION_ENVS))
         .unwrap_or_else(|| "us-east-1".into())
 }
