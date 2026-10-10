@@ -500,7 +500,11 @@ def should_redact_message_logging(model_call_details: Mapping) -> bool:
     )
 
     # Get headers from the metadata
-    request_headers: Final = _str_keyed_mapping(metadata.get("headers"))
+    raw_headers: Final = metadata.get("headers", {})
+    if not isinstance(raw_headers, Mapping):
+        # Callers such as the complexity router read AttributeError as an undecidable request and redact
+        raise AttributeError(f"request headers are {type(raw_headers).__name__}, not a mapping")  # noqa: TRY004  # callers catch AttributeError
+    request_headers: Final = _str_keyed_mapping(raw_headers)
 
     # Check for headers that explicitly control redaction
     if request_headers and bool(request_headers.get("litellm-disable-message-redaction", False)):
