@@ -3899,6 +3899,10 @@ class TestDDSpanTaggerTagRequest:
         d.user_email = user_email
         return d
 
+    def _tracer_with_active_span_writing_to(self, tags: dict[str, str]) -> SimpleNamespace:
+        span = SimpleNamespace(set_tag_str=tags.__setitem__)
+        return SimpleNamespace(current_span=lambda: span)
+
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
         user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
@@ -3940,26 +3944,28 @@ class TestDDSpanTaggerTagRequest:
     def test_tags_user_email(self):
         """user_email is tagged so JWT-authenticated requests are traceable per person."""
         user_key = self._make_user_api_key_dict(user_email="user@example.com")
+        tags: dict[str, str] = {}
 
-        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
+        with patch("litellm.litellm_core_utils.dd_tracing.tracer", self._tracer_with_active_span_writing_to(tags)):
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model=None,
             )
 
-        mock_set_tag.assert_called_once_with("litellm.user_email", "user@example.com")
+        assert tags == {"litellm.user_email": "user@example.com"}
 
     def test_no_user_email_tag_when_absent(self):
         """No user email tag when the authenticated identity has no email."""
         user_key = self._make_user_api_key_dict(key_alias="my-prod-key", user_email=None)
+        tags: dict[str, str] = {}
 
-        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
+        with patch("litellm.litellm_core_utils.dd_tracing.tracer", self._tracer_with_active_span_writing_to(tags)):
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="gpt-4o",
             )
 
-        assert all(call.args[0] != "litellm.user_email" for call in mock_set_tag.call_args_list)
+        assert tags == {"litellm.key_alias": "my-prod-key", "litellm.requested_model": "gpt-4o"}
 
 
 class TestHasAttributeErrorInChain:
