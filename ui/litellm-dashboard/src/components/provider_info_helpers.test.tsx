@@ -220,6 +220,7 @@ describe("provider_info_helpers", () => {
         Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
+        Providers.ZeroGPU,
       ];
       const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
       expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());
@@ -351,6 +352,10 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return zerogpu/gpt-oss-120b placeholder for ZeroGPU provider", () => {
+      expect(getPlaceholder("ZeroGPU")).toBe("zerogpu/gpt-oss-120b");
     });
 
     it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
