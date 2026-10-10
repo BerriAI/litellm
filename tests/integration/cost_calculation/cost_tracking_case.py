@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-CASES_PATH: Final = Path(__file__).resolve().parent / "cost_tracking_cases.json"
 PRIOR_RESPONSE_ID_MARKER: Final = "$PRIOR_RESPONSE_ID"
 
 
@@ -487,15 +486,6 @@ class RealtimeCostCase(BaseModel):
     expected: ExactExpected
 
 
-class _CasesFile(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    cost_map: dict[str, CostMapEntry]
-    cases: tuple[CostTrackingTestCase, ...]
-    batch_cases: tuple[BatchCostCase, ...] = ()
-    realtime_cases: tuple[RealtimeCostCase, ...] = ()
-
-
 _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "anthropic": "anthropic",
@@ -568,183 +558,6 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     }
 )
 
-_LOADED: Final = _CasesFile.model_validate_json(CASES_PATH.read_bytes())
-COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(dict(_LOADED.cost_map))
-CASES: Final[tuple[CostTrackingTestCase, ...]] = _LOADED.cases
-BATCH_CASES: Final[tuple[BatchCostCase, ...]] = _LOADED.batch_cases
-REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = _LOADED.realtime_cases
-_ALL_CASES: Final = CASES + BATCH_CASES + REALTIME_CASES
-_LITELLM_MODELS: Final = tuple(case.litellm_model for case in _ALL_CASES)
-
-
-def data_errors() -> tuple[str, ...]:
-    case_models: Final = frozenset(case.model for case in _ALL_CASES) | frozenset(
-        case.session_model for case in REALTIME_CASES if case.session_model is not None
-    )
-    unknown_models: Final = sorted(model for model in case_models if model not in COST_MAP)
-    missing_cases: Final = sorted(model for model in COST_MAP if model not in case_models)
-    duplicate_names: Final = sorted(
-        name for name in {case.name for case in _ALL_CASES} if sum(case.name == name for case in _ALL_CASES) > 1
-    )
-    input_rates: Final = tuple(
-        (entry.litellm_provider, entry.input_cost_per_token, model)
-        for model, entry in COST_MAP.items()
-        if entry.mode != "realtime"
-    )
-    shared_input_rate_details: Final = tuple(
-        (
-            provider,
-            rate,
-            tuple(
-                model
-                for candidate_provider, value, model in input_rates
-                if candidate_provider == provider and value == rate
-            ),
-        )
-        for provider, rate in frozenset((provider, rate) for provider, rate, _ in input_rates if rate is not None)
-    )
-    shared_input_rates: Final = sorted(
-        f"{rate}: {models}" for _, rate, models in shared_input_rate_details if len(models) > 1
-    )
-    recount_mismatches: Final = sorted(
-        case.name
-        for case in CASES
-        if isinstance(case.expected, RecountExpected)
-        and case.model in COST_MAP
-        and (
-            case.expected.recount.input_cost_per_token != (COST_MAP[case.model].input_cost_per_token or 0.0)
-            or case.expected.recount.output_cost_per_token != (COST_MAP[case.model].output_cost_per_token or 0.0)
-        )
-    )
-    component_mismatches: Final = sorted(
-        case.name
-        for case in CASES
-        if isinstance(case.expected, ExactExpected)
-        and any(
-            component is not None
-            for component in (
-                case.expected.cache_read_cost,
-                case.expected.cache_creation_cost,
-                case.expected.reasoning_cost,
-                case.expected.tool_usage_cost,
-            )
-        )
-        and (
-            (case.expected.cache_read_cost or 0.0) + (case.expected.cache_creation_cost or 0.0)
-            > case.expected.input_cost
-            or (case.expected.reasoning_cost or 0.0) > case.expected.output_cost
-            or not _approx_equal(
-                case.expected.input_cost
-                + case.expected.output_cost
-                + (case.expected.tool_usage_cost or 0.0),
-                case.expected.spend,
-            )
-        )
-    )
-    failure_response_mismatches: Final = sorted(
-        case.name
-        for case in CASES
-        if (
-            isinstance(case.expected, FailureExpected)
-            and (
-                not isinstance(case.response, JsonResponse)
-                or not 400 <= case.response.status <= 599
-                or not 400 <= case.expected.failure.status <= 599
-            )
-        )
-        or (
-            not isinstance(case.expected, FailureExpected)
-            and isinstance(case.response, JsonResponse)
-            and case.response.status != 200
-        )
-    )
-    invalid_opt_outs: Final = sorted(
-        case.name
-        for case in CASES
-        if isinstance(case.expected, ExactExpected)
-        and (
-            (
-                not case.expected.breakdown_persisted
-                and case.passthrough_provider is None
-                and case.rates.mode != "image_generation"
-                and not case.reports_provider_cost
-            )
-            or (
-                not case.expected.cost_header
-                and case.passthrough_provider is None
-                and not isinstance(case.response, SseResponse)
-                and case.expected.spend != 0.0
-            )
-        )
-    )
-    invalid_fallbacks: Final = sorted(
-        case.name
-        for case in CASES
-        if case.fallback_from is not None
-        and (
-            not isinstance(case.fallback_from, JsonResponse)
-            or not 400 <= case.fallback_from.status <= 599
-        )
-    )
-    invalid_disconnects: Final = sorted(
-        case.name
-        for case in CASES
-        if case.disconnect_after_frames is not None
-        and (
-            not isinstance(case.response, SseResponse)
-            or case.response.frame_delay_ms <= 0
-            or not isinstance(case.expected, RecountExpected)
-        )
-    )
-    invalid_rollup_ids: Final = sorted(
-        case.name
-        for case in CASES
-        if isinstance(case.expected, ExactExpected)
-        and case.expected.rollups
-        and "$UNIQUE_ID" not in case.response.model_dump_json()
-    )
-    invalid_pinned_tool_ids: Final = sorted(
-        case.name
-        for case in CASES
-        if isinstance(case.expected, RecountExpected)
-        and (case.expected.prompt_tokens is not None or case.expected.completion_tokens is not None)
-        and any(
-            marker in case.response.model_dump_json()
-            for marker in ('"id": "call_$REQUEST_ID"', '"id": "toolu_$REQUEST_ID"')
-        )
-    )
-    invalid_prior_response_chains: Final = sorted(
-        case.name
-        for case in CASES
-        if PRIOR_RESPONSE_ID_MARKER in json.dumps(case.request) and not case.can_chain_prior_response
-    )
-    return tuple(
-        message
-        for message in (
-            f"case models absent from cost_map: {unknown_models}" if unknown_models else None,
-            f"cost-map entries without cases: {missing_cases}" if missing_cases else None,
-            f"duplicate case names: {duplicate_names}" if duplicate_names else None,
-            f"cost-map entries share input_cost_per_token: {shared_input_rates}" if shared_input_rates else None,
-            f"recount rates differ from cost-map rates: {recount_mismatches}" if recount_mismatches else None,
-            f"breakdown components are inconsistent: {component_mismatches}" if component_mismatches else None,
-            f"failure response statuses are inconsistent: {failure_response_mismatches}"
-            if failure_response_mismatches
-            else None,
-            f"invalid passthrough opt-outs: {invalid_opt_outs}" if invalid_opt_outs else None,
-            f"invalid fallback responses: {invalid_fallbacks}" if invalid_fallbacks else None,
-            f"invalid disconnect cases: {invalid_disconnects}" if invalid_disconnects else None,
-            f"rollup responses lack $UNIQUE_ID: {invalid_rollup_ids}" if invalid_rollup_ids else None,
-            f"pinned tool IDs contain $REQUEST_ID: {invalid_pinned_tool_ids}"
-            if invalid_pinned_tool_ids
-            else None,
-            f"{PRIOR_RESPONSE_ID_MARKER} needs a non-rollup, non-failure /v1/responses JSON response with a string id"
-            f" as previous_response_id: {invalid_prior_response_chains}"
-            if invalid_prior_response_chains
-            else None,
-        )
-        if message is not None
-    )
-
-
-def _approx_equal(actual: float, expected: float) -> bool:
-    return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
+COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
+    {model: CostMapEntry.model_validate(entry) for model, entry in COST_MAP_ENTRIES.items()}
+)
