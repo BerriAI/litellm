@@ -11598,7 +11598,7 @@ async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allow
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_admission_auth_sees_peeked_jsonrpc_body() -> None:
+async def test_streamable_http_admission_auth_sees_only_peeked_jsonrpc_method() -> None:
     from litellm.constants import MCP_PEEKED_BODY_SCOPE_KEY
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
@@ -11646,7 +11646,7 @@ async def test_streamable_http_admission_auth_sees_peeked_jsonrpc_body() -> None
     ):
         await mcp_module.handle_streamable_http_mcp(scope, receive, send)
 
-    assert auth_bodies == [_INITIALIZE]
+    assert auth_bodies == [b'{"method": "initialize"}']
     assert downstream_bodies == [_INITIALIZE]
     stateless_handle.assert_not_awaited()
     send.assert_not_awaited()
