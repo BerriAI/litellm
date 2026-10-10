@@ -35,6 +35,7 @@ thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }

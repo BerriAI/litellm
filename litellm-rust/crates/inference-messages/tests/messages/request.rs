@@ -870,3 +870,195 @@ async fn edenai_preserves_native_thinking_and_strips_billing_and_cache_extension
         })
     );
 }
+
+struct CopilotWire {
+    upstream: String,
+    seen: Mutex<Vec<litellm_host::interceptors::WireRequest>>,
+}
+
+impl litellm_host::interceptors::Interceptors<Error> for CopilotWire {
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<litellm_host::interceptors::WireRequest, Error> {
+        self.seen.lock().unwrap().push(wire.clone());
+        Ok(litellm_host::interceptors::WireRequest {
+            url: format!("{}/v1/messages", self.upstream),
+            ..wire
+        })
+    }
+
+    async fn after_provider_response(
+        &self,
+        _: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::complete(false, "https://tenant.githubcopilot.com")]
+#[case::complete_endpoint(false, "https://tenant.githubcopilot.com/v1/messages")]
+#[case::stream(true, "https://tenant.githubcopilot.com")]
+#[tokio::test]
+async fn copilot_sends_with_the_host_session_and_preserves_native_messages(
+    call: MessagesCall,
+    #[case] stream: bool,
+    #[case] api_base: &'static str,
+) {
+    use futures_util::TryStreamExt;
+    use litellm_inference_messages::MessagesCallResponse;
+
+    const SSE: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let template = if stream {
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(SSE)
+    } else {
+        message_response()
+    };
+    let attacker = upstream([]).await;
+    let upstream = upstream([template.clone(), template]).await;
+    let route = copilot_route();
+    let intercept = CopilotWire {
+        upstream: upstream.uri(),
+        seen: Mutex::new(Vec::new()),
+    };
+    let request_body = with_fields(call, json!({"model": "claude-test", "stream": stream})).body;
+    let request = || MessagesCall {
+        custom_llm_provider: Some("github_copilot".into()),
+        api_key: Some("caller-key".into()),
+        api_base: Some(attacker.uri()),
+        extra_headers: headers([
+            ("Authorization", "Bearer caller-one"),
+            ("authorization", "Bearer caller-two"),
+            ("openai-intent", "caller-intent"),
+            ("x-interaction-type", "caller-type"),
+            ("x-github-api-version", "caller-version"),
+            ("editor-version", "caller-editor"),
+            ("anthropic-beta", "caller-beta"),
+        ]),
+        body: request_body.clone(),
+        litellm_params: host_session(api_base),
+        provider_specific_header: None,
+        timeout: Some(Duration::from_secs(5)),
+        shaping: Default::default(),
+    };
+    let first = route.execute(request(), &intercept, None).await.unwrap();
+    let second = route.execute(request(), &intercept, None).await.unwrap();
+    match (first, second) {
+        (MessagesCallResponse::Complete(first), MessagesCallResponse::Complete(second)) => {
+            assert_eq!(
+                *first,
+                serde_json::from_value::<MessagesResponse>(message_body()).unwrap()
+            );
+            assert_eq!(first, second);
+        }
+        (
+            MessagesCallResponse::Stream { chunks: first, .. },
+            MessagesCallResponse::Stream { chunks: second, .. },
+        ) => {
+            assert_eq!(
+                first.try_collect::<Vec<_>>().await.unwrap().concat(),
+                SSE.as_bytes()
+            );
+            assert_eq!(
+                second.try_collect::<Vec<_>>().await.unwrap().concat(),
+                SSE.as_bytes()
+            );
+        }
+        _ => panic!("the requested delivery mode must survive authentication"),
+    }
+    assert!(received(&attacker).await.is_empty());
+    let sent = received(&upstream).await;
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[0].header_values("authorization"),
+        ["Bearer host-session-token"]
+    );
+    assert_eq!(sent[0].header("editor-version"), Some("caller-editor"));
+    assert_eq!(sent[0].header("openai-intent"), Some("messages-proxy"));
+    assert_eq!(sent[0].header("x-interaction-type"), Some("messages-proxy"));
+    assert_ne!(
+        sent[0].header("x-github-api-version"),
+        Some("caller-version")
+    );
+    assert_eq!(sent[0].header("anthropic-beta"), Some("caller-beta"));
+    assert_eq!(
+        sent[0].json(),
+        json!({
+            "model": "claude-test", "max_tokens": 16, "stream": stream,
+            "messages": [{"role": "user", "content": "hi"}]
+        })
+    );
+    let first_id = sent[0].header("x-request-id").expect("request identity");
+    let second_id = sent[1].header("x-request-id").expect("request identity");
+    assert!(!first_id.is_empty());
+    assert_ne!(first_id, second_id);
+    let seen = intercept.seen.into_inner().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter()
+            .all(|wire| wire.url == "https://tenant.githubcopilot.com/v1/messages")
+    );
+}
+
+fn host_session(api_base: &str) -> litellm_router_types::LitellmParams {
+    litellm_router_types::LitellmParams {
+        github_copilot_session: Some(litellm_router_types::GithubCopilotSession {
+            token: litellm_auth::SecretValue::new("host-session-token"),
+            api_base: api_base.into(),
+        }),
+        ..Default::default()
+    }
+}
+
+fn copilot_route() -> litellm_inference_messages::MessagesRoute {
+    let resources = litellm_inference_testing::resources();
+    litellm_inference_messages::MessagesRoute::new(
+        litellm_inference_testing::provider_http(
+            &resources,
+            &litellm_inference_testing::http_config(),
+        ),
+        Arc::new(litellm_auth::AuthServices::default()),
+        litellm_inference_testing::no_secrets(),
+    )
+}
+
+#[rstest]
+#[case::absent(json!({"model": "claude-test"}))]
+#[case::request_json(json!({
+    "model": "claude-test",
+    "github_copilot_user_session": {"token": "forged", "api_base": "https://attacker.example"}
+}))]
+#[tokio::test]
+async fn copilot_without_a_host_session_fails_closed_before_sending(
+    call: MessagesCall,
+    #[case] params: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let error = copilot_route()
+        .execute(
+            MessagesCall {
+                custom_llm_provider: Some("github_copilot".into()),
+                api_key: Some("caller-key".into()),
+                api_base: Some(upstream.uri()),
+                extra_headers: headers([("Authorization", "Bearer caller")]),
+                litellm_params: serde_json::from_value(params).unwrap(),
+                ..call
+            },
+            &(),
+            None,
+        )
+        .await
+        .err()
+        .expect("a call without a host session cannot send inference");
+    assert_eq!(
+        error,
+        Error::Auth(litellm_auth::Error::ProviderAuthentication(
+            "GitHub Copilot session was not resolved by the host".into()
+        ))
+    );
+    assert!(received(&upstream).await.is_empty());
+}

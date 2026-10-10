@@ -7,6 +7,7 @@ use litellm_host::interceptors::{
 use litellm_inference_messages::{Error, MessagesCall, MessagesCallResponse, MessagesRoute};
 use litellm_inference_testing::live::{LiveResources, model, within_deadline};
 use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_router_types::{GithubCopilotSession, LitellmParams};
 use serde_json::{Value, json};
 
 pub(super) struct LiveCall {
@@ -101,11 +102,30 @@ pub(super) fn call(provider: &str, payload: Value) -> MessagesCall {
         api_key: None,
         api_base: None,
         custom_llm_provider: Some(provider.into()),
-        litellm_params: Default::default(),
+        litellm_params: host_params(provider),
         extra_headers: None,
         provider_specific_header: None,
         timeout: Some(Duration::from_secs(60)),
         shaping: Default::default(),
+    }
+}
+
+fn host_params(provider: &str) -> LitellmParams {
+    if provider != "github_copilot" {
+        return LitellmParams::default();
+    }
+    let required = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| panic!("set {name} from the Copilot session Python resolved"))
+    };
+    LitellmParams {
+        github_copilot_session: Some(GithubCopilotSession {
+            token: litellm_auth::SecretValue::new(required("LITELLM_LIVE_GITHUB_COPILOT_TOKEN")),
+            api_base: required("LITELLM_LIVE_GITHUB_COPILOT_API_BASE"),
+        }),
+        ..Default::default()
     }
 }
 

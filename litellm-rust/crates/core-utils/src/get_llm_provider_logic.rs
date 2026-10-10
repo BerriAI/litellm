@@ -22,6 +22,8 @@ pub enum LlmProviders {
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    #[strum(serialize = "github_copilot")]
+    GithubCopilot,
     #[strum(serialize = "mistral")]
     Mistral,
     #[strum(serialize = "openai")]

@@ -192,3 +192,16 @@ async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
     assert_eq!(response.status(), 403);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
+
+#[rstest]
+#[tokio::test]
+async fn provider_login_failure_is_an_authentication_error() {
+    let error = litellm_gateway_inference::Error::Route(litellm_inference::RouteError::Auth(
+        litellm_auth::Error::ProviderAuthentication("session login failed".into()),
+    ));
+    let response = axum::response::IntoResponse::into_response(error);
+    assert_eq!(response.status(), 401);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "authentication_error");
+    assert_eq!(body["error"]["message"], "session login failed");
+}
