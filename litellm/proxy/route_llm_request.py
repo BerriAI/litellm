@@ -352,6 +352,24 @@ def _router_may_resume_claude_code_session(llm_router: LitellmRouter, data: Mapp
     )
 
 
+async def _claude_code_session_router_answers(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+    """Whether the router will send this Claude Code subagent turn to the auto, complexity,
+    adaptive or quality router its session's main turn is bound to, whatever model it names."""
+    if not _router_may_resume_claude_code_session(llm_router, data) or data.get("fallback_depth") not in (None, 0):
+        return False
+    cache_key: Final = llm_router._claude_code_session_router_cache_key(data)  # pyright: ignore[reportPrivateUsage]  # the router's own session key for the binding this reads
+    if cache_key is None:
+        return False
+    bound_model: Final = await llm_router._get_claude_code_session_router_binding(cache_key)  # pyright: ignore[reportPrivateUsage]  # the router's own binding read
+    return (
+        isinstance(bound_model, str)
+        and llm_router._select_pre_routing_strategy(  # pyright: ignore[reportPrivateUsage]  # the router drops a binding with no strategy left
+            llm_router.get_model_from_alias(model=bound_model) or bound_model, data
+        )
+        is not None
+    )
+
+
 def _router_falls_back_for_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
     """The router swaps an unknown model for its own `*` fallback whatever the request
     says; past that, it reads `fallbacks` from the request kwargs before its own, and key
@@ -398,18 +416,18 @@ _MATCHED_DEPLOYMENTS_ADAPTER: Final[TypeAdapter[tuple[_MatchedDeployment, ...]]]
 )
 
 
-def _wildcard_forwards_missing_model(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+async def _wildcard_forwards_missing_model(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
     """Whether the router would pick a wildcard deployment for a request with a null or
     empty model and every such deployment copies the requested name into its target
     (`openai/*`), so the provider would get a made-up or empty model instead of a fixed one
     like `openai/gpt-4o`. An empty one must not reach a provider: key and team model checks
     skip it, and some servers (vLLM) answer it with their default model. A null model is left
-    to a registered prompt manager when the request has a `prompt_id`, and to the session's
-    routing strategy on a Claude Code subagent turn; either may pick the model."""
+    to a registered prompt manager when the request has a `prompt_id`, and to the router a
+    Claude Code session is bound to on its subagent turns; either may pick the model."""
     model: Final = data.get("model")
     if model is None and (
         (data.get("prompt_id") and litellm.logging_callback_manager.callback_is_active(CustomPromptManagement))
-        or _router_may_resume_claude_code_session(llm_router, data)
+        or await _claude_code_session_router_answers(llm_router, data)
     ):
         return False
     matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
@@ -946,7 +964,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 and not (
                     not data["model"]
                     and route_type in _ROUTE_TYPES_REQUIRING_MODEL
-                    and _wildcard_forwards_missing_model(llm_router, data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes the request body as an untyped dict
+                    and await _wildcard_forwards_missing_model(llm_router, data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes the request body as an untyped dict
                 )
             ):
                 return getattr(llm_router, f"{route_type}")(**data)

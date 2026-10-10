@@ -2052,6 +2052,8 @@ async def test_missing_model_reaches_the_router_when_no_wildcard_matches_it() ->
     llm_router.model_names = []
     llm_router.is_recognized_model.return_value = False
     llm_router.router_general_settings.pass_through_all_models = False
+    llm_router.auto_routers = llm_router.complexity_routers = {}
+    llm_router.adaptive_routers = llm_router.quality_routers = {}
     llm_router.pattern_router.patterns = {"anthropic/(.*)": []}
     llm_router.pattern_router.get_deployments_by_pattern.return_value = []
     llm_router.acompletion.return_value = "served by a fallback"
@@ -2292,17 +2294,25 @@ def _router_with_a_complexity_router_and_a_forwarding_wildcard():
     )
 
 
-async def _claude_code_subagent_turn_after_a_main_turn(subagent_model: str | None) -> object:
+async def _claude_code_subagent_turn(
+    subagent_model: str | None, *, after_a_main_turn: bool = True, **subagent_fields: object
+) -> object:
     llm_router: Final = _router_with_a_complexity_router_and_a_forwarding_wildcard()
-    main_turn: Final = _claude_code_messages_request({})
-    await (
-        await route_request(
-            {**main_turn, "model": "smart-router", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
-            llm_router,
-            None,
-            "anthropic_messages",
+    if after_a_main_turn:
+        main_turn: Final = _claude_code_messages_request({})
+        await (
+            await route_request(
+                {
+                    **main_turn,
+                    "model": "smart-router",
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                llm_router,
+                None,
+                "anthropic_messages",
+            )
         )
-    )
     subagent_turn: Final = _claude_code_messages_request({"x-claude-code-agent-id": "agent-1"})
     return await (
         await route_request(
@@ -2311,6 +2321,7 @@ async def _claude_code_subagent_turn_after_a_main_turn(subagent_model: str | Non
                 "model": subagent_model,
                 "max_tokens": 16,
                 "messages": [{"role": "user", "content": "hi"}],
+                **subagent_fields,
             },
             llm_router,
             None,
@@ -2321,7 +2332,7 @@ async def _claude_code_subagent_turn_after_a_main_turn(subagent_model: str | Non
 
 @pytest.mark.asyncio
 async def test_null_model_on_a_claude_code_subagent_turn_is_left_to_the_session_router() -> None:
-    response: Final = await _claude_code_subagent_turn_after_a_main_turn(None)
+    response: Final = await _claude_code_subagent_turn(None)
 
     assert response["content"][0]["text"] == "from the session's router"  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]  # aanthropic_messages returns an untyped dict
 
@@ -2329,7 +2340,22 @@ async def test_null_model_on_a_claude_code_subagent_turn_is_left_to_the_session_
 @pytest.mark.asyncio
 async def test_empty_model_on_a_claude_code_subagent_turn_is_still_not_routed_to_a_forwarding_wildcard() -> None:
     with pytest.raises(ProxyModelNotFoundError):
-        await _claude_code_subagent_turn_after_a_main_turn("")
+        await _claude_code_subagent_turn("")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "subagent_turn",
+    [
+        pytest.param({"after_a_main_turn": False}, id="unbound-session"),
+        pytest.param({"fallback_depth": 1}, id="fallback-attempt"),
+    ],
+)
+async def test_null_model_on_a_claude_code_subagent_turn_the_session_router_skips_is_not_routed_to_a_forwarding_wildcard(
+    subagent_turn: dict[str, object],
+) -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await _claude_code_subagent_turn(None, **subagent_turn)  # pyright: ignore[reportArgumentType]  # the params mix the keyword-only flag with body fields
 
 
 @pytest.mark.asyncio

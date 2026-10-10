@@ -659,3 +659,23 @@ def test_claude_code_subagent_turn_with_an_empty_model_is_still_rejected_by_a_fo
     assert main_turn.status_code == 200, main_turn.text
     invalid_request(subagent_turn)
     assert_no_provider_call(session_router_wildcard_gateway.gateway, session_router_wildcard_gateway.identity)
+
+
+def test_claude_code_subagent_turn_without_a_model_on_an_unbound_session_is_rejected_by_a_forwarding_wildcard(
+    session_router_wildcard_gateway: _Wildcard,
+) -> None:
+    """No main turn bound the session, so the router would forward the missing model through the wildcard."""
+    with session_router_wildcard_gateway.gateway.scenario() as scenario:
+        invalid_request(
+            post(
+                session_router_wildcard_gateway.gateway,
+                "/v1/messages",
+                _body("messages", "null", stream=False),
+                key=scenario.key(),
+                headers={
+                    "x-claude-code-session-id": f"audit-session-{uuid.uuid4().hex}",
+                    "x-claude-code-agent-id": "audit-agent",
+                },
+            )
+        )
+    assert_no_provider_call(session_router_wildcard_gateway.gateway, session_router_wildcard_gateway.identity)
