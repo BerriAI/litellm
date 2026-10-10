@@ -4295,6 +4295,40 @@ async def test_post_call_failure_hook_releases_parallel_slot_v3():
 
 
 @pytest.mark.asyncio
+async def test_post_call_failure_hook_for_another_call_keeps_the_owner_slot_v3():
+    """
+    A native Responses WebSocket holds one parallel slot for the whole socket and books each failed turn
+    under that turn's own call id. A failed turn must not free the slot while the socket is still open.
+    """
+    _api_key = hash_token("sk-ws-turn-failure")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    connection_data: Dict[str, Any] = {"model": "gpt-4o-mini", "litellm_call_id": "socket-call"}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data=connection_data, call_type=""
+    )
+
+    await handler.async_post_call_failure_hook(
+        request_data={"model": "gpt-4o-mini", "litellm_call_id": "turn-2-call"},
+        original_exception=Exception("previous_response_not_found"),
+        user_api_key_dict=user_api_key_dict,
+    )
+    in_flight_after_turn_failure = handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=counter_key)
+    )
+    await handler.async_post_call_failure_hook(
+        request_data=connection_data,
+        original_exception=Exception("socket closed"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert in_flight_after_turn_failure == 1
+    assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
+
+
+@pytest.mark.asyncio
 async def test_success_event_releases_parallel_slot_v3(monkeypatch):
     """
     A successful completion must release exactly the slot its pre-call

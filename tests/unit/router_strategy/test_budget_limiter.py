@@ -56,7 +56,9 @@ async def _log_success(limiter: RouterBudgetLimiting, kwargs: dict[str, object])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call_type", ["aresponses", "anthropic_messages", "aembedding", "arerank"])
+@pytest.mark.parametrize(
+    "call_type", ["aresponses", "_aresponses_websocket", "anthropic_messages", "aembedding", "arerank"]
+)
 async def test_provider_spend_tracked_when_litellm_params_omits_provider(disable_budget_sync, call_type):
     """Non-chat surfaces carry the provider only on the standard logging payload."""
     limiter = RouterBudgetLimiting(

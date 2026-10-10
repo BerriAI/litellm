@@ -5377,7 +5377,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         that usage instead of refunding it.
         """
         try:
-            stash: Final = get_request_stash()
+            failed_request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(request_data)
+            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(failed_request))
             if stash is None:
                 return
             await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
