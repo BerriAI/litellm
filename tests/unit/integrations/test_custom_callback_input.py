@@ -177,7 +177,7 @@ def _provider_response(request: httpx.Request) -> httpx.Response:
             "id": "chatcmpl_test",
             "object": "chat.completion",
             "created": 1700000000,
-            "model": "test-model",
+            "model": body.get("model", "test-model"),
             "choices": [
                 {"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}
             ],

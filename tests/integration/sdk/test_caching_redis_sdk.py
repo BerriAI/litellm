@@ -461,6 +461,7 @@ async def test_redis_semantic_cache_acompletion(
     monkeypatch: pytest.MonkeyPatch, redis_search_enabled: None
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "scripted-embedding-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     index_name: Final = f"semantic-{uuid.uuid4().hex}"
     monkeypatch.setattr(
         litellm,
@@ -479,7 +480,7 @@ async def test_redis_semantic_cache_acompletion(
         "usage": {"prompt_tokens": 1, "total_tokens": 1},
     }
     with respx.mock(base_url="https://api.openai.com") as upstream:
-        upstream.post("/v1/embeddings").mock(
+        embeddings: Final = upstream.post("/v1/embeddings").mock(
             return_value=httpx.Response(200, json=embedding_response)
         )
         first: Final = await acompletion(
@@ -488,6 +489,7 @@ async def test_redis_semantic_cache_acompletion(
             max_tokens=20,
             mock_response="Summer sun shines bright and warm.",
         )
+        await _drain_cache_writes()
         second: Final = await acompletion(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "write a poem about summertime"}],
@@ -495,8 +497,10 @@ async def test_redis_semantic_cache_acompletion(
             mock_response="A different summer poem.",
         )
 
-    assert upstream.calls.call_count >= 2
+    embedded_inputs: Final = {json.loads(call.request.content)["input"] for call in embeddings.calls}
+    assert {"write a poem about summer", "write a poem about summertime"} <= embedded_inputs
     assert first.id == second.id
+    assert second.choices[0].message.content == "Summer sun shines bright and warm."
 
 
 def test_redis_semantic_cache_completion(
@@ -520,7 +524,7 @@ def test_redis_semantic_cache_completion(
         "usage": {"prompt_tokens": 1, "total_tokens": 1},
     }
     with respx.mock(base_url="https://api.openai.com") as upstream:
-        upstream.post("/v1/embeddings").mock(
+        embeddings: Final = upstream.post("/v1/embeddings").mock(
             return_value=httpx.Response(200, json=embedding_response)
         )
         first: Final = completion(
@@ -536,8 +540,10 @@ def test_redis_semantic_cache_completion(
             mock_response="A different summer poem.",
         )
 
-    assert upstream.calls.call_count >= 2
+    embedded_inputs: Final = {json.loads(call.request.content)["input"] for call in embeddings.calls}
+    assert {"write a poem about summer", "write a poem about summertime"} <= embedded_inputs
     assert first.id == second.id
+    assert second.choices[0].message.content == "Summer sun shines bright and warm."
 
 
 @pytest.mark.asyncio

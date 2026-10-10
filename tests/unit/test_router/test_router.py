@@ -19369,9 +19369,6 @@ async def test_router_max_parallel_requests_admits_the_cap_and_rejects_the_rest_
     assert outcomes.count("ok") == 2
     assert outcomes.count("rejected:429") == 8
     assert route.call_count == 2
-    assert frozenset(call.request.headers["authorization"] for call in route.calls) == (
-        frozenset({"Bearer first-test-key", "Bearer second-test-key"})
-    )
     assert tracker.peak == 2
     assert tracker.current == 0
 
@@ -25393,6 +25390,9 @@ def test_router_authentication_error_is_not_swallowed(
         )
 
     assert route.call_count == 2
+    assert frozenset(call.request.headers["authorization"] for call in route.calls) == (
+        frozenset({"Bearer first-test-key", "Bearer second-test-key"})
+    )
 
 
 def test_router_does_not_log_model_list_api_key_after_auth_failure(
