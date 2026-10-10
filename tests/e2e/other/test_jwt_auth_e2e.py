@@ -10,7 +10,7 @@ from typing import Final
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import UnauthorizedError, UnknownApiError, unwrap
-from idp import ADMIN_CLIENT_ID, SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
+from idp import SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, TeamNewBody, UserNewBody
 from other_client import OtherClient
@@ -159,21 +159,25 @@ class TestJwtAuth:
         )
     )
     def test_proxy_admin_token_is_blocked_once_its_personal_budget_is_spent(
-        self, client: OtherClient, identity: Identity
+        self, client: OtherClient, resources: ResourceManager
     ) -> None:
+        identity: Final = client.idp.provision_user(
+            marker=unique_marker(), groups=(), group_ids=(), defer=resources.defer
+        )
+        resources.defer(lambda: client.proxy.delete_user(identity.user_id))
         unwrap(
             client.user_new(
                 UserNewBody(
                     user_id=identity.user_id,
                     user_email=f"{identity.username}@example.com",
-                    user_role="internal_user",
+                    user_role="proxy_admin",
+                    auto_create_key=False,
                     max_budget=0.0,
                 )
             )
         )
-        admin: Final = client.idp.access_token(identity, client_id=ADMIN_CLIENT_ID)
 
-        blocked: Final = client.proxy.chat(admin, _ping())
+        blocked: Final = client.proxy.chat(client.idp.access_token(identity), _ping())
         assert isinstance(blocked, UnknownApiError), f"proxy_admin JWT must be stopped by its max_budget, got {blocked}"
         assert (blocked.status_code, "ExceededBudget" in blocked.body) == (422, True), blocked
         assert f"User={identity.user_id}" in blocked.body, f"budget denial must name the JWT's user: {blocked.body}"
