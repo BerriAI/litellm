@@ -167,7 +167,48 @@ def _count_text_tokens(model: str, text: object) -> int:
             stack.extend(item)
             continue
         if isinstance(item, dict):
-            token_count += litellm.token_counter(model=model, text=json.dumps(item))
+            token_count += litellm.token_counter(model=model, text=json.dumps(_without_inline_data(item)))
             continue
-        token_count += litellm.token_counter(model=model, text=str(item))
+        token_count += litellm.token_counter(model=model, text=str(_without_inline_data(item)))
     return token_count
+
+
+_DATA_URL_PREFIX: Final = "data:"
+_BASE64_MARKER: Final = ";base64,"
+
+
+def _without_inline_data(value: object) -> object:
+    """`value` with the payload of every base64 `data:` URL cut after `;base64,`.
+
+    Images and files a Responses `input` carries inline are priced by the
+    provider per image or file, not per character, so tokenizing their base64
+    as text inflates the count by orders of magnitude: one screenshot alone is
+    hundreds of thousands of "tokens". The Rust counter cuts the same strings.
+    Walks with an explicit stack: a request body's nesting is client-controlled."""
+    if not isinstance(value, (dict, list)):
+        return _without_inline_payload(value)
+    root: Final[dict | list] = {} if isinstance(value, dict) else []
+    stack: Final[list[tuple[dict | list, dict | list]]] = [(value, root)]
+    while stack:
+        source, target = stack.pop()
+        for key, item in source.items() if isinstance(source, dict) else enumerate(source):
+            copied: object
+            if isinstance(item, (dict, list)):
+                child: dict | list = {} if isinstance(item, dict) else []
+                stack.append((item, child))
+                copied = child
+            else:
+                copied = _without_inline_payload(item)
+            if isinstance(target, dict):
+                target[key] = copied
+            else:
+                target.append(copied)
+    return root
+
+
+def _without_inline_payload(value: object) -> object:
+    if isinstance(value, str) and value.startswith(_DATA_URL_PREFIX):
+        marker: Final = value.find(_BASE64_MARKER)
+        if marker != -1:
+            return value[: marker + len(_BASE64_MARKER)]
+    return value
