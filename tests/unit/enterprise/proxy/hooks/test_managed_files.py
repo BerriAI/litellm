@@ -322,6 +322,43 @@ def test_get_file_ids_from_messages_skips_bedrock_content_blocks_without_type():
     assert file_ids == ["file-keep"]
 
 
+_UNSCANNABLE_USER_CONTENT = [
+    pytest.param(22, id="int-content"),
+    pytest.param({"text": "hi"}, id="dict-content"),
+    pytest.param(["hi"], id="string-part"),
+]
+
+
+@pytest.mark.parametrize("content", _UNSCANNABLE_USER_CONTENT)
+def test_get_file_ids_from_messages_skips_content_it_cannot_scan(content):
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    messages = [
+        {"role": "user", "content": content},
+        {"role": "user", "content": [{"type": "file", "file": {"file_id": "file-keep"}}]},
+    ]
+    assert proxy_managed_files.get_file_ids_from_messages(messages) == ["file-keep"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", _UNSCANNABLE_USER_CONTENT)
+async def test_async_pre_call_hook_passes_unscannable_user_content_through_untouched(content):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+    data = {"messages": [{"role": "user", "content": content}], "model": "gpt-5.5"}
+
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="123", parent_otel_span=MagicMock()),
+        cache=DualCache(),
+        data=data,
+        call_type="acompletion",
+    )
+
+    assert result == {"messages": [{"role": "user", "content": content}], "model": "gpt-5.5"}
+    assert prisma_client.mock_calls == []
+
+
 @pytest.mark.asyncio
 async def test_async_pre_call_hook_batch_retrieve():
     from litellm.proxy._types import UserAPIKeyAuth
