@@ -1159,19 +1159,15 @@ class ModelParams(LiteLLMPydanticObjectBase):
         return values
 
 
-from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E402  # re-export after the definitions above
-    LiteLLM_ObjectPermissionBase as LiteLLM_ObjectPermissionBase,  # noqa: PLC0414  # public re-export
-)
-
-
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
-
-
 from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E402  # re-export after the definitions above
     GenerateRequestBase as GenerateRequestBase,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E402  # re-export after the definitions above
+    LiteLLM_ObjectPermissionBase as LiteLLM_ObjectPermissionBase,  # noqa: PLC0414  # public re-export
 )
 
 
