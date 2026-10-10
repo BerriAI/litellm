@@ -1182,15 +1182,16 @@ class Router:
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
-            # Track this router so a price data reload can rebuild its deployments'
-            # cost-map entries from the list it is serving at that moment.
-            _live_routers.add(self)
             self.healthy_deployments: list = self.model_list
             for m in model_list:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         else:
             self.model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
+
+        # Track every live router so price-data reload can rebuild cost-map entries
+        # even when the proxy started with an empty / omitted model_list.
+        _live_routers.add(self)
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
