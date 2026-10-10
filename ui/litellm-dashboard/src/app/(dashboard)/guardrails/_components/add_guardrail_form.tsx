@@ -17,6 +17,7 @@ import {
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
+  effectiveLoggingOnlyContinue,
   modeIncludesLoggingOnly,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
@@ -173,6 +174,7 @@ const INITIAL_VALUES: GuardrailFormValues = {
   mode: "pre_call",
   default_on: false,
   logging_only_scope_choice: "default",
+  logging_only_continue_on_input_failure: false,
   skip_system_message_choice: "inherit",
   skip_tool_message_choice: "inherit",
   stream_scope_by_mode: {},
@@ -294,6 +296,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       mode: preset.mode,
       default_on: preset.defaultOn,
       logging_only_scope_choice: "default",
+      logging_only_continue_on_input_failure: false,
       skip_system_message_choice: "inherit",
       skip_tool_message_choice: "inherit",
     };
@@ -493,6 +496,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       );
       if (modeIncludesLoggingOnly(values.mode) && loggingOnlyScope !== null) {
         guardrailData.litellm_params.logging_only_scope = loggingOnlyScope;
+      }
+      if (
+        modeIncludesLoggingOnly(values.mode) &&
+        effectiveLoggingOnlyContinue(
+          values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
+          values.logging_only_continue_on_input_failure,
+        )
+      ) {
+        guardrailData.litellm_params.logging_only_continue_on_input_failure = true;
       }
 
       // For Presidio PII, add the entity and action configurations

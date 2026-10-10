@@ -1807,11 +1807,16 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
 @pytest.mark.parametrize(
-    ("logging_only_scope", "scanned_directions"),
-    (("input", ("request",)), ("output", ("response",)), ("both", ("request", "response"))),
+    ("logging_only_settings", "scanned_directions"),
+    (
+        ({"logging_only_scope": "input"}, ("request",)),
+        ({"logging_only_scope": "output"}, ("response",)),
+        ({"logging_only_continue_on_input_failure": True}, ("request", "response")),
+    ),
+    ids=("input", "output", "continue_on_input_failure"),
 )
 def test_logging_only_scope_observes_only_the_configured_direction_without_blocking(
-    gateway: Gateway, tmp_path: Path, logging_only_scope: str, scanned_directions: tuple[str, ...]
+    gateway: Gateway, tmp_path: Path, logging_only_settings: dict[str, object], scanned_directions: tuple[str, ...]
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
     prompt: Final = "synthetic observed prompt " + identity
@@ -1848,7 +1853,7 @@ def test_logging_only_scope_observes_only_the_configured_direction_without_block
                 "litellm_params": {
                     "guardrail": "generic_guardrail_api",
                     "mode": "logging_only",
-                    "logging_only_scope": logging_only_scope,
+                    **logging_only_settings,
                     "default_on": True,
                     "api_base": policy.url,
                     "api_key": "synthetic-guardrail-key",

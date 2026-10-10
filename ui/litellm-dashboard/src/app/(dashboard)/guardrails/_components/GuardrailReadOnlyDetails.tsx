@@ -19,7 +19,11 @@ export const GuardrailReadOnlyDetails = ({
   guardrailId: string;
   guardrailName: string;
   displayName: string;
-  litellmParams: { mode?: unknown; logging_only_scope?: string | null };
+  litellmParams: {
+    mode?: unknown;
+    logging_only_scope?: string | null;
+    logging_only_continue_on_input_failure?: boolean | null;
+  };
   streamScope: unknown;
   defaultOn: boolean | undefined;
   piiEntityCount: number;
