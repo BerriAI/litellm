@@ -1427,6 +1427,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if log_span is not None:
                 self._emit_semantic_logs(kwargs, response_obj, log_span)
 
+        # Stamp team attributes onto the SERVER (root) span before it is
+        # closed, so the trace root carries them like every child span.
+        self._set_team_attributes_on_proxy_span_from_kwargs(kwargs)
+
         # 6. Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
         # However, proxy-created spans should be closed here.
@@ -1438,10 +1442,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and parent_span.is_recording()
         ):
             self._close_proxy_span_ok(parent_span, end_time)
-
-        # Stamp team attributes onto the SERVER (root) span before it is
-        # closed, so the trace root carries them like every child span.
-        self._set_team_attributes_on_proxy_span_from_kwargs(kwargs)
 
         # close the proxy span explicitly from kwargs metadata
         # after all child spans (litellm_request, guardrail, raw_request)
@@ -1552,9 +1552,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         Guarded to the LiteLLM-created proxy span (by name + recording) so
         externally provided parent spans are never mutated.
         """
-        litellm_params: Final = kwargs.get("litellm_params") or {}
-        metadata: Final = litellm_params.get("metadata") or {}
-        proxy_span: Final = metadata.get("litellm_parent_otel_span")
+        litellm_params_value: Final[Any] = cast(Any, kwargs.get("litellm_params"))  # cast-ok: dynamic logging kwargs
+        litellm_params: Final[Mapping[str, Any]] = (
+            litellm_params_value if isinstance(litellm_params_value, Mapping) else {}
+        )
+        metadata_value: Final[Any] = cast(Any, litellm_params.get("metadata"))  # cast-ok: dynamic metadata payload
+        metadata: Final[Mapping[str, Any]] = metadata_value if isinstance(metadata_value, Mapping) else {}
+        litellm_metadata_value: Final[Any] = cast(Any, litellm_params.get("litellm_metadata"))  # cast-ok: dynamic field
+        litellm_metadata: Final[Mapping[str, Any]] = (
+            litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
+        )
+        proxy_span: Final[Any] = metadata.get("litellm_parent_otel_span") or litellm_metadata.get(
+            "litellm_parent_otel_span"
+        )
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
