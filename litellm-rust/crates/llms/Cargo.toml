@@ -11,10 +11,11 @@ test-support = ["litellm-http/test-support"]
 [dependencies]
 litellm-llms-types.workspace = true
 litellm-core-utils.workspace = true
-litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp", "copilot"] }
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
+litellm-auth-copilot.workspace = true
 litellm-host.workspace = true
 litellm-framer.workspace = true
 litellm-http.workspace = true
@@ -35,6 +36,7 @@ thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }

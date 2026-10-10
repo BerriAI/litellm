@@ -27,9 +27,50 @@ pub fn outbound_request(
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<OutboundRequest, litellm_http::Error> {
-    let Authenticated { headers, signer } = authenticated;
+    let Authenticated {
+        headers,
+        signer,
+        url: authenticated_url,
+    } = authenticated;
+    let resolved_url = authenticated_url.unwrap_or(url);
     match signer {
-        None => OutboundRequest::json(url, headers, body, timeout),
-        Some(signer) => OutboundRequest::signed_json(url, headers, body, timeout, &signer),
+        None => OutboundRequest::json(resolved_url, headers, body, timeout),
+        Some(signer) => OutboundRequest::signed_json(resolved_url, headers, body, timeout, &signer),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use serde_json::json;
+
+    #[rstest]
+    #[case::caller_url(None, "https://caller.example/messages")]
+    #[case::authenticated_url(
+        Some("https://session.example/messages"),
+        "https://session.example/messages"
+    )]
+    fn authenticated_endpoints_outrank_the_requested_url(
+        #[case] authenticated_url: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let request = outbound_request(
+            Authenticated {
+                url: authenticated_url.map(str::to_string),
+                headers: vec![("authorization".into(), "Bearer session".into())],
+                signer: None,
+            },
+            "https://caller.example/messages".into(),
+            &json!({"model": "native-test"}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(request.url(), expected);
+        assert_eq!(request.header("authorization"), Some("Bearer session"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(request.body()).unwrap(),
+            json!({"model": "native-test"})
+        );
     }
 }

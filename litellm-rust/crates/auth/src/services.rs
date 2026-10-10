@@ -6,4 +6,6 @@ pub struct AuthServices {
     pub azure: litellm_auth_azure::AzureAuthService,
     #[cfg(feature = "gcp")]
     pub gcp: litellm_auth_gcp::VertexAuth,
+    #[cfg(feature = "copilot")]
+    pub copilot: litellm_auth_copilot::CopilotAuthService,
 }

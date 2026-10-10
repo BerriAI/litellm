@@ -10,9 +10,11 @@ default = []
 aws = ["dep:litellm-auth-aws"]
 azure = ["dep:litellm-auth-azure"]
 gcp = ["dep:litellm-auth-gcp"]
+copilot = ["dep:litellm-auth-copilot"]
 
 [dependencies]
 litellm-auth-types.workspace = true
 litellm-auth-aws = { workspace = true, optional = true }
 litellm-auth-azure = { workspace = true, optional = true }
 litellm-auth-gcp = { workspace = true, optional = true }
+litellm-auth-copilot = { workspace = true, optional = true }

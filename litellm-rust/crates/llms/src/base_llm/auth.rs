@@ -24,10 +24,17 @@ pub enum AuthScheme {
     },
     /// A bearer acquired when the request is sent, from a token source such as a cloud SDK
     /// or a caller-supplied callable.
-    Token { provider: TokenProviderHandle },
+    Token {
+        provider: TokenProviderHandle,
+    },
+    CopilotSession {
+        path: &'static str,
+    },
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
-    GcpAccessToken { config: Box<VertexConfig> },
+    GcpAccessToken {
+        config: Box<VertexConfig>,
+    },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
@@ -49,6 +56,7 @@ pub struct ValidatedEnvironment {
 pub struct Authenticated {
     pub headers: Headers,
     pub signer: Option<SigV4Signer>,
+    pub url: Option<String>,
 }
 
 pub async fn resolve_auth(
@@ -61,10 +69,12 @@ pub async fn resolve_auth(
         AuthScheme::Forwarded => Ok(Authenticated {
             headers,
             signer: None,
+            url: None,
         }),
         AuthScheme::Credential { placement, secret } => Ok(Authenticated {
             headers: with_credential(headers, placement, secret.expose()),
             signer: None,
+            url: None,
         }),
         AuthScheme::Token { provider } => {
             let token = provider.acquire().await?;
@@ -75,6 +85,24 @@ pub async fn resolve_auth(
                     token.secret().expose(),
                 ),
                 signer: None,
+                url: None,
+            })
+        }
+        AuthScheme::CopilotSession { path } => {
+            let session = services.copilot.session().await?;
+            let url = if session.api_base().ends_with(path) {
+                session.api_base().to_string()
+            } else {
+                format!("{}{path}", session.api_base())
+            };
+            Ok(Authenticated {
+                headers: with_credential(
+                    headers,
+                    CredentialPlacement::Bearer,
+                    session.token().expose(),
+                ),
+                signer: None,
+                url: Some(url),
             })
         }
         AuthScheme::GcpAccessToken { config } => {
@@ -82,6 +110,7 @@ pub async fn resolve_auth(
             Ok(Authenticated {
                 headers: with_credential(headers, CredentialPlacement::Bearer, &token),
                 signer: None,
+                url: None,
             })
         }
         AuthScheme::AwsSigV4 {
@@ -94,6 +123,7 @@ pub async fn resolve_auth(
                 SigV4Signer::resolve(&services.aws, region, service, *credentials, env_lookup)
                     .await?,
             ),
+            url: None,
         }),
     }
 }
