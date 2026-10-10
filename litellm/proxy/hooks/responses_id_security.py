@@ -244,7 +244,9 @@ class ResponsesIDSecurity(CustomLogger):
             return response_id, None, None
 
         if decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            # Expected format: "litellm_proxy:responses_api:response_id:{response_id};user_id:{user_id}"
+            # Formats:
+            # - "litellm_proxy:responses_api:response_id:{id};user_id:{user};team_id:{team}"
+            # - "litellm_proxy:responses_api:response_id:{id};user_id:{user}" (legacy / no team)
             parts: Final = decrypted_value.split(";")
 
             if len(parts) >= 2:
@@ -256,9 +258,11 @@ class ResponsesIDSecurity(CustomLogger):
                 user_id_part: Final = parts[1]
                 user_id: Final = user_id_part.split("user_id:")[-1]
 
-                # Extract team_id from "team_id:{team_id}"
-                team_id_part: Final = parts[2]
-                team_id: Final = team_id_part.split("team_id:")[-1]
+                # Team segment is optional; older two-segment ids omit it.
+                team_id: str | None = None
+                if len(parts) >= 3:
+                    team_id_part: Final = parts[2]
+                    team_id = team_id_part.split("team_id:")[-1]
 
                 return original_response_id, user_id, team_id
             else:
