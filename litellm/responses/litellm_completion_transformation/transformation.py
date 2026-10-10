@@ -25,8 +25,13 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseFunctionWebSearch,
+    ResponseReasoningItem,
+)
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.response_reasoning_item import Content as ReasoningContent
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -2533,6 +2538,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionToolCall
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
+        | ResponseReasoningItem
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -2542,6 +2548,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | ResponseReasoningItem
         ] = []
 
         responses_output.extend(
@@ -2618,7 +2625,7 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
-    ) -> list[GenericResponseOutputItem]:
+    ) -> list[ResponseReasoningItem]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
@@ -2627,22 +2634,23 @@ class LiteLLMCompletionResponsesConfig:
                 if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
-                        GenericResponseOutputItem(
+                        ResponseReasoningItem(
                             type="reasoning",
                             id=mint_reasoning_item_id(),
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
-                            ),
-                            role="assistant",
+                            # summary is required by the SDK/spec; the bridge has
+                            # no summarized reasoning, so it stays empty
+                            summary=[],
                             content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=text,
-                                    annotations=[],
-                                )
+                                ReasoningContent(type="reasoning_text", text=text)
                                 for text in (reasoning_content,)
                                 if text
                             ],
+                            status=cast(  # cast-ok: the map only returns completed/incomplete, both valid for a reasoning item's narrower status union
+                                "Literal['in_progress', 'completed', 'incomplete']",
+                                LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                    choice.finish_reason
+                                ),
+                            ),
                             encrypted_content=encrypted_content,
                         )
                     ]
