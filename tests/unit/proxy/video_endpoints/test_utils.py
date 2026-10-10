@@ -1,11 +1,12 @@
 """
 Pure-logic contract tests for litellm/proxy/video_endpoints/utils.py
 
-Four helpers the video proxy endpoints lean on:
+Five helpers the video proxy endpoints lean on:
   - extract_model_from_target_model_names: first model from a comma string / list
   - video_reference_to_id: normalize a video reference (dict / bare id / JSON string) to an id
   - get_custom_provider_from_data: provider precedence (top-level > extra_body)
   - encode_character_id_in_response: re-encode a response id in place
+  - encode_video_id_in_response: re-stamp a VideoObject id with the resolved model_id
 
 Every test asserts the exact result (or identity), so a mutation that flips a
 branch, drops a strip/filter, or changes precedence fails. The only collaborator
@@ -13,19 +14,24 @@ is encode_character_id_with_provider, which runs for real; encoding assertions
 are checked by the genuine decode round-trip.
 """
 
+from typing import Final
 
 import pytest
 
 
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
+    encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     video_reference_to_id,
 )
+from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
+    decode_video_id_with_provider,
     encode_character_id_with_provider,
+    encode_video_id_with_provider,
 )
 
 # =========================================================================== #
@@ -206,3 +212,89 @@ def test_encode__object_without_id_attr_returned_unchanged():
     out = encode_character_id_in_response(resp, "azure", "model-1")
     assert out is resp
     assert not hasattr(resp, "id")
+
+
+# =========================================================================== #
+# encode_video_id_in_response
+# =========================================================================== #
+
+
+def _video(video_id: str, hidden_params: dict[str, object] | None = None) -> VideoObject:
+    video: Final[VideoObject] = VideoObject(id=video_id, object="video", status="queued")
+    video._hidden_params = dict(hidden_params or {})  # pyright: ignore[reportPrivateUsage]  # the router sets hidden params; no public setter
+    return video
+
+
+def test_encode_video__fills_empty_model_id_from_hidden_params() -> None:
+    """Regression for #33423: the provider transform encodes the id with an empty
+    model_id; the router-recorded model_id must be stamped back in."""
+    original_id: Final = encode_video_id_with_provider("video_raw", "openai", "")
+    video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
+
+    assert isinstance(out, VideoObject)
+    assert decode_video_id_with_provider(out.id) == {
+        "custom_llm_provider": "openai",
+        "model_id": "deployment-1",
+        "video_id": "video_raw",
+    }
+    # a new object is returned; the input and its hidden params are left intact
+    assert out is not video
+    assert video.id == original_id
+    assert out._hidden_params == {"model_id": "deployment-1"}  # pyright: ignore[reportPrivateUsage]  # verify hidden params survive the copy
+    assert out.status == "queued"
+
+
+def test_encode_video__falls_back_to_given_model_id() -> None:
+    video: Final = _video(encode_video_id_with_provider("video_raw", "openai", ""))
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
+
+    assert isinstance(out, VideoObject)
+    decoded: Final = decode_video_id_with_provider(out.id)
+    assert decoded.get("model_id") == "sora-2"
+    assert decoded.get("video_id") == "video_raw"
+
+
+def test_encode_video__keeps_existing_model_id_over_fallback() -> None:
+    original_id: Final = encode_video_id_with_provider("video_raw", "azure", "deployment-1")
+
+    out: Final = encode_video_id_in_response(_video(original_id), fallback_provider="openai", fallback_model_id="other")
+
+    assert isinstance(out, VideoObject)
+    assert out.id == original_id
+
+
+def test_encode_video__plain_id_encoded_with_fallback_provider() -> None:
+    video: Final = _video("video_raw", hidden_params={"model_id": "deployment-1"})
+
+    out: Final = encode_video_id_in_response(video, fallback_provider="openai", fallback_model_id=None)
+
+    assert isinstance(out, VideoObject)
+    assert decode_video_id_with_provider(out.id) == {
+        "custom_llm_provider": "openai",
+        "model_id": "deployment-1",
+        "video_id": "video_raw",
+    }
+
+
+def test_encode_video__no_model_id_anywhere_unchanged() -> None:
+    video: Final = _video(encode_video_id_with_provider("video_raw", "openai", ""))
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id=None)
+
+    assert out is video
+
+
+def test_encode_video__no_provider_anywhere_unchanged() -> None:
+    video: Final = _video("video_raw")
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
+
+    assert out is video
+
+
+@pytest.mark.parametrize("response", [b"video-bytes", {"id": "video_raw"}, None])
+def test_encode_video__non_video_object_passthrough(response: object) -> None:
+    assert encode_video_id_in_response(response, "openai", "sora-2") is response
