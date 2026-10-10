@@ -126,13 +126,14 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
         int: The token count, defaulting to 0.
     """
     if isinstance(usage_obj, dict):
-        if (dict_value := usage_obj.get(standard_name)) is None and decision_name is not None:
-            return usage_obj.get(decision_name) if isinstance(usage_obj.get(decision_name), int) else 0
+        usage_dict = cast("dict[str, object]", usage_obj)
+        if (dict_value := usage_dict.get(standard_name)) is None and decision_name is not None:
+            decision_value = usage_dict.get(decision_name)
+            return decision_value if isinstance(decision_value, int) else 0
         return dict_value if isinstance(dict_value, int) else 0
     if (attr_value := getattr(usage_obj, standard_name, None)) is None and decision_name is not None:
-        return (
-            getattr(usage_obj, decision_name, None) if isinstance(getattr(usage_obj, decision_name, None), int) else 0
-        )
+        decision_value = getattr(usage_obj, decision_name, None)
+        return decision_value if isinstance(decision_value, int) else 0
     return attr_value if isinstance(attr_value, int) else 0
 
 
