@@ -22,6 +22,7 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLMRoutes,
@@ -4643,11 +4644,9 @@ async def test_centralized_common_checks_runs_for_standard_auth():
             setattr(_proxy_server_mod, k, v)
 
 
-@pytest.mark.asyncio
-async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_token():
-    """A proxy_admin token (JWT admin scope, SSO) stays subject to the DB row's
-    max_budget when the row is forced to the admin role, otherwise the personal
-    budget check in common_checks silently no-ops for admins."""
+async def _run_checks_for_cached_user(db_user: LiteLLM_UserTable, token: UserAPIKeyAuth) -> None:
+    """Run the centralized gate for `token` on /chat/completions with `db_user` as
+    the cached row its user_id resolves to."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
@@ -4655,11 +4654,8 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    db_user = LiteLLM_UserTable(user_id="admin-user", user_role="internal_user", spend=25.0, max_budget=10.0)
-    token = UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
-
     key_cache = UserApiKeyCache()
     key_cache.set_cache(key=db_user.user_id, value=db_user)
     attrs = {
@@ -4673,17 +4669,60 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
     try:
         for k, v in attrs.items():
             setattr(_proxy_server_mod, k, v)
-        with pytest.raises(litellm.BudgetExceededError) as exc_info:
-            await run_centralized_common_checks(
-                user_api_key_auth_obj=token,
-                request=request,
-                request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
-                route="/chat/completions",
-            )
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            route="/chat/completions",
+        )
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_token():
+    """A proxy_admin token (JWT admin scope, SSO) stays subject to the DB row's
+    max_budget when the row is forced to the admin role, otherwise the personal
+    budget check in common_checks silently no-ops for admins."""
+    from litellm.proxy.utils import ProxyLogging
+
+    db_user = LiteLLM_UserTable(
+        user_id="admin-user", user_role="internal_user", spend=25.0, max_budget=10.0, user_email="admin@example.com"
+    )
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with (
+        patch.object(ProxyLogging, "budget_alerts", new_callable=AsyncMock) as budget_alerts,
+        pytest.raises(litellm.BudgetExceededError) as exc_info,
+    ):
+        await _run_checks_for_cached_user(db_user, token)
     assert (exc_info.value.max_budget, exc_info.value.current_cost) == (10.0, 25.0)
+    user_alerts = [c.kwargs["user_info"] for c in budget_alerts.call_args_list if c.kwargs["type"] == "user_budget"]
+    assert [a.user_email for a in user_alerts] == ["admin@example.com"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row_models", [["no-default-models"], ["claude-haiku-4-5"]])
+async def test_centralized_common_checks_proxy_admin_token_ignores_row_model_list(row_models):
+    """A proxy_admin token keeps every model when its DB row carries a personal
+    model list, e.g. no-default-models from default_internal_user_params on a
+    user later promoted to admin; only the row's budget carries over."""
+    await _run_checks_for_cached_user(
+        LiteLLM_UserTable(user_id="admin-user", user_role="internal_user", models=row_models, spend=1.0),
+        UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [LITELLM_PROXY_MASTER_KEY_ALIAS, "sk-ui-session"])
+async def test_centralized_common_checks_admin_name_identity_ignores_its_row_budget(api_key):
+    """The master key and the UI username/password login both resolve to the
+    litellm_proxy_admin_name row; that row's max_budget does not apply to them,
+    even once its spend is past the budget."""
+    await _run_checks_for_cached_user(
+        LiteLLM_UserTable(user_id="admin", user_role="proxy_admin", spend=25.0, max_budget=10.0),
+        UserAPIKeyAuth(api_key=api_key, user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
 
 
 @pytest.mark.asyncio
