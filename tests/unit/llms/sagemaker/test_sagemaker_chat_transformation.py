@@ -318,8 +318,19 @@ def test_hf_model_name_becomes_the_body_model(monkeypatch):
     assert "hf_model_name" not in client.request_body
 
 
-@pytest.mark.parametrize("model", ["sagemaker_chat/my-endpoint", "sagemaker_nova/my-endpoint"])
-def test_body_carries_no_aws_credentials(monkeypatch: pytest.MonkeyPatch, model: str):
+@pytest.mark.parametrize(
+    ("model", "expected_body"),
+    [
+        (
+            "sagemaker_chat/my-endpoint",
+            {"model": "my-endpoint", "messages": [{"role": "user", "content": "hi"}], "top_k": 5},
+        ),
+        ("sagemaker_nova/my-endpoint", {"messages": [{"role": "user", "content": "hi"}], "top_k": 5}),
+    ],
+)
+def test_body_carries_no_aws_credentials(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected_body: dict[str, object]
+):
     client = _invoke_sagemaker_chat(
         monkeypatch,
         model=model,
@@ -327,9 +338,7 @@ def test_body_carries_no_aws_credentials(monkeypatch: pytest.MonkeyPatch, model:
         top_k=5,
     )
 
-    assert [key for key in client.request_body if key.startswith("aws_")] == []
-    assert client.request_body["top_k"] == 5
-    assert client.request_body["messages"] == [{"role": "user", "content": "hi"}]
+    assert client.request_body == expected_body
     assert "Credential=AKIATESTTESTTESTTEST/" in client.request_headers["Authorization"]
     assert client.request_headers["X-Amz-Security-Token"] == "test-session-token"
 
