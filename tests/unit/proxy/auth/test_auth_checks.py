@@ -2,12 +2,14 @@
 ## Tests if 'get_end_user_object' works as expected
 
 import sys, os, asyncio, time, random, uuid
+import hashlib
+import json
 import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,8 +32,11 @@ from litellm.proxy._types import (
     Litellm_EntityType,
 )
 from litellm.proxy.utils import PrismaClient
+import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
+    delete_cache_key_objects,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
     _team_soft_budget_check,
@@ -57,9 +62,9 @@ def test_lens_management_does_not_require_an_inference_user_parameter(route: str
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal - get_end_user_object returns the cached user
-    Scenario 2: user over budget - NOTE: budget enforcement now happens in 
+    Scenario 2: user over budget - NOTE: budget enforcement now happens in
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
-    
+
     This test verifies that get_end_user_object correctly retrieves the end user
     from cache. Budget enforcement is tested separately in test_check_end_user_budget().
     """
@@ -99,12 +104,12 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     Test _check_end_user_budget enforcement:
     - Scenario 1: customer_spend=0, customer_budget=10 - should pass (under budget)
     - Scenario 2: customer_spend=10, customer_budget=0 - should fail (over budget)
-    
-    Note: Budget enforcement for end users happens in common_checks() via 
+
+    Note: Budget enforcement for end users happens in common_checks() via
     _check_end_user_budget(), not in get_end_user_object().
     """
     from litellm.proxy.auth.auth_checks import check_end_user_budget
-    
+
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
     end_user_obj = LiteLLM_EndUserTable(
         user_id="my-test-customer",
@@ -112,9 +117,9 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
         litellm_budget_table=_budget,
         blocked=False,
     )
-    
+
     should_exceed = customer_spend > customer_budget
-    
+
     if not should_exceed:
         await check_end_user_budget(
             end_user_obj=end_user_obj,
@@ -185,7 +190,7 @@ async def test_can_key_call_model(model, expect_to_work):
     if expect_to_work:
         await can_key_call_model(**args)
     else:
-        with pytest.raises(Exception, match='is not available for this API key') as e:
+        with pytest.raises(Exception, match="is not available for this API key") as e:
             await can_key_call_model(**args)
 
         print(e)
@@ -457,16 +462,12 @@ async def test_is_valid_fallback_model():
     )
 
     try:
-        await is_valid_fallback_model(
-            model="gpt-3.5-turbo", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-3.5-turbo", llm_router=router, user_model=None)
     except Exception as e:
         pytest.fail(f"Expected is_valid_fallback_model to work, got exception: {e}")
 
     with pytest.raises(Exception, match="Invalid") as exc_info:
-        await is_valid_fallback_model(
-            model="gpt-4o", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-4o", llm_router=router, user_model=None)
     e = exc_info.value
     assert "Invalid" in str(e)
 
@@ -480,9 +481,7 @@ async def test_is_valid_fallback_model():
     ],
 )
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_check(
-    token_spend, max_budget, expect_budget_error
-):
+async def test_virtual_key_max_budget_check(token_spend, max_budget, expect_budget_error):
     """
     Test if virtual key budget checks work as expected:
     1. Triggers budget alert for all cases
@@ -597,9 +596,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_model_aliases=None,
         )
         if not expect_to_work:
-            pytest.fail(
-                f"Expected model access check to fail for model={model}, team_models={team_models}"
-            )
+            pytest.fail(f"Expected model access check to fail for model={model}, team_models={team_models}")
     except Exception as e:
         if expect_to_work:
             pytest.fail(
@@ -652,9 +649,9 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -707,9 +704,7 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     ],
 )
 @pytest.mark.asyncio
-async def test_team_soft_budget_check(
-    spend, soft_budget, expect_alert, metadata, expected_alert_emails
-):
+async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
     """
     Test cases for _team_soft_budget_check:
     1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
@@ -757,9 +752,9 @@ async def test_team_soft_budget_check(
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
     if expect_alert:
         assert captured_call_info is not None
@@ -771,10 +766,7 @@ async def test_team_soft_budget_check(
         if expected_alert_emails is not None:
             assert captured_call_info.alert_emails == expected_alert_emails
         else:
-            assert (
-                captured_call_info.alert_emails is None
-                or captured_call_info.alert_emails == []
-            )
+            assert captured_call_info.alert_emails is None or captured_call_info.alert_emails == []
 
 
 @pytest.mark.asyncio
@@ -905,9 +897,7 @@ async def test_get_fuzzy_user_object():
 
     # Test 5: Only email provided (no SSO ID)
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, user_email="test@example.com"
-    )
+    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, user_email="test@example.com")
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
         where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
@@ -916,9 +906,7 @@ async def test_get_fuzzy_user_object():
 
     # Test 6: Only SSO ID provided (no email)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, sso_user_id="sso_123"
-    )
+    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, sso_user_id="sso_123")
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
@@ -965,7 +953,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception, match='is not available for this API key') as e:
+        with pytest.raises(Exception, match="is not available for this API key") as e:
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
@@ -1051,9 +1039,7 @@ async def test_delete_cache_access_object():
     ],
 )
 @pytest.mark.asyncio
-async def test_get_resources_from_access_groups(
-    resource_field, access_group_data, expected
-):
+async def test_get_resources_from_access_groups(resource_field, access_group_data, expected):
     """Test _get_resources_from_access_groups returns correct resource list from access groups."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1643,9 +1629,160 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
         model_group_alias={"chain-entry": "local-free", "local-free": "paid-gpt"},
     )
     expected: Final = {"chain-entry": True, "local-free": False, "paid-gpt": False}
-    order: Final = ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+    order: Final = (
+        ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+    )
 
     verdicts: Final = {name: is_model_cost_zero(model=name, llm_router=router) for name in order}
 
     assert verdicts == expected
     assert {name: is_model_cost_zero(model=name, llm_router=router) for name in order} == expected
+
+
+class _SlowPublishRedisClient:
+    def __init__(self) -> None:
+        self.published: list[str] = []
+
+    async def publish(self, channel: str, message: str) -> int:
+        await asyncio.sleep(0.001)
+        self.published.append(message)
+        return 1
+
+
+class _PubSubRedisCache:
+    namespace = None
+
+    def __init__(self, client: _SlowPublishRedisClient) -> None:
+        self._client = client
+
+    def init_pubsub_client(self) -> _SlowPublishRedisClient:
+        return self._client
+
+
+@pytest.mark.asyncio
+async def test_evicting_more_keys_than_the_publisher_holds_pending_broadcasts_every_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    client = _SlowPublishRedisClient()
+    hashed_tokens: Final = tuple(f"token-{index}" for index in range(pubsub_module._MAX_PENDING_PUBLISHES + 476))  # pyright: ignore[reportPrivateUsage]  # the cap under test
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        await delete_cache_key_objects(
+            hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=None
+        )
+        await pubsub_module.await_publish_backlog()
+
+    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+
+
+class _WedgedPublishRedisClient:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+
+    async def publish(self, channel: str, message: str) -> int:
+        await self.release.wait()
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(pubsub_module.PUBLISH_BACKLOG_SLICE * 2 + 88)
+    )
+    for hashed_token in hashed_tokens:
+        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+    seeded: Final = tuple(
+        token for token in hashed_tokens if cache.in_memory_cache_for(token).get_cache(token) is not None
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+    ):
+        eviction: Final = asyncio.create_task(
+            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+        )
+        await asyncio.sleep(0.05)
+        still_cached: Final = tuple(
+            token for token in seeded if cache.in_memory_cache_for(token).get_cache(token) is not None
+        )
+        client.release.set()
+        await eviction
+        await pubsub_module.await_publish_backlog()
+
+    assert seeded == hashed_tokens
+    assert still_cached == ()
+
+
+class _AuthRedisCache:
+    namespace = None
+
+    def __init__(self, entries: dict[str, object]) -> None:
+        self.entries = dict(entries)
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
+        return self.entries.get(key)
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    def delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            self.entries.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_clears_the_redis_copies_before_pacing_broadcasts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(pubsub_module.PUBLISH_BACKLOG_SLICE * 2 + 88)
+    )
+    redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
+    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    for hashed_token in hashed_tokens:
+        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+    ):
+        eviction: Final = asyncio.create_task(
+            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+        )
+        await asyncio.sleep(0.05)
+        refilled: Final = [token for token in hashed_tokens if await cache.async_get_cache(key=token) is not None]
+        client.release.set()
+        await eviction
+        await pubsub_module.await_publish_backlog()
+
+    assert refilled == []
+    assert redis.entries == {}

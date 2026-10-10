@@ -245,6 +245,7 @@ def owned_proxy_process(
     workers: int = 1,
     database_setup: tuple[str, ...] = DB_PUSH,
     extra_arguments: tuple[str, ...] = (),
+    client_timeout: float = 15,
 ) -> Iterator[OwnedProxy]:
     root: Final = _proxy_root()
     environment: Final = _proxy_environment(gateway, overrides, remove_environment)
@@ -269,7 +270,7 @@ def owned_proxy_process(
     process: Final = launch.process
     try:
         with httpx.Client(
-            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=client_timeout, trust_env=False, limits=GATEWAY_LIMITS
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
     finally:

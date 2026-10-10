@@ -214,6 +214,92 @@ class DroppedConnectionRelay:
         )
 
 
+SSL_REQUEST_CODE: Final = 80877103
+GSSENC_REQUEST_CODE: Final = 80877104
+
+
+class FrontendStatementScanner:
+    """Counts the statements one Postgres client sends: a Sync closes every extended-protocol statement and a
+    Query is a simple-protocol statement, so the count moves with the number of statements, never their size."""
+
+    def __init__(self) -> None:
+        self._buffer = b""
+        self._started = False
+
+    def feed(self, chunk: bytes) -> int:
+        self._buffer += chunk  # rebind-ok: a message can span two reads
+        statements = 0  # rebind-ok: summed over the messages this chunk completes
+        while (frame := self._next_frame()) is not None:
+            length, is_statement = frame
+            statements += int(is_statement)
+            self._buffer = self._buffer[length:]  # rebind-ok: drops the parsed message
+        return statements
+
+    def _next_frame(self) -> tuple[int, bool] | None:
+        if not self._started:
+            if len(self._buffer) < 8:
+                return None
+            startup_length: Final = int.from_bytes(self._buffer[:4], "big")
+            if len(self._buffer) < startup_length:
+                return None
+            request_code: Final = int.from_bytes(self._buffer[4:8], "big")
+            self._started = request_code not in (SSL_REQUEST_CODE, GSSENC_REQUEST_CODE)
+            return startup_length, False
+        if len(self._buffer) < 5:
+            return None
+        frame_length: Final = 1 + int.from_bytes(self._buffer[1:5], "big")
+        if len(self._buffer) < frame_length:
+            return None
+        return frame_length, self._buffer[:1] in (b"S", b"Q")
+
+
+class StatementCountingRelay:
+    def __init__(self, upstream_host: str, upstream_port: int) -> None:
+        self.port: Final = _free_port()
+        self._upstream_host: Final = upstream_host
+        self._upstream_port: Final = upstream_port
+        self._loop: Final = asyncio.new_event_loop()
+        self.statements = 0
+        self._ready: Final = threading.Event()
+        self._thread: Final = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+        assert self._ready.wait(10), "Database relay did not start"
+
+    def stop(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(10)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(asyncio.start_server(self._serve, "127.0.0.1", self.port))
+        self._ready.set()
+        self._loop.run_forever()
+
+    async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
+
+        async def forward(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter, scanner: FrontendStatementScanner | None
+        ) -> None:
+            try:
+                while chunk := await reader.read(65536):
+                    if scanner is not None:
+                        self.statements += scanner.feed(chunk)
+                    writer.write(chunk)
+                    await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                return
+            finally:
+                writer.close()
+
+        await asyncio.gather(
+            forward(client_reader, server_writer, FrontendStatementScanner()),
+            forward(server_reader, client_writer, None),
+        )
+
+
 def _relayed_url(database_url: str, port: int) -> str:
     parts: Final = urlsplit(database_url)
     credentials: Final = f"{parts.username}:{parts.password}@" if parts.username else ""
@@ -249,6 +335,18 @@ def dropped_connection_relay(database_url: str, trigger: bytes) -> Generator[tup
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
     relay: Final = DroppedConnectionRelay(parts.hostname, parts.port, trigger)
+    relay.start()
+    try:
+        yield relay, _relayed_url(database_url, relay.port)
+    finally:
+        relay.stop()
+
+
+@contextmanager
+def statement_counting_relay(database_url: str) -> Generator[tuple[StatementCountingRelay, str]]:
+    parts: Final = urlsplit(database_url)
+    assert parts.hostname is not None and parts.port is not None, database_url
+    relay: Final = StatementCountingRelay(parts.hostname, parts.port)
     relay.start()
     try:
         yield relay, _relayed_url(database_url, relay.port)
