@@ -602,6 +602,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         else:
             await self._apply_guardrailed_texts(data, input_data, extracted, guardrail_to_apply, guardrailed_inputs)
+        if litellm_logging_obj is not None:
+            sanitized_input: Final = data.get("input")
+            sanitized_messages: Final = self.get_structured_messages(data) or []
+            litellm_logging_obj.messages = sanitized_messages
+            litellm_logging_obj.model_call_details["messages"] = sanitized_messages
+            litellm_logging_obj.model_call_details["input"] = sanitized_input
         verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
         return data
 

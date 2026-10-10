@@ -210,6 +210,27 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["model"] == "gpt-4"
 
     @pytest.mark.asyncio
+    async def test_rewritten_input_refreshes_logging_snapshot(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        logging_obj = MagicMock()
+        original_messages = [{"role": "user", "content": "sensitive-value"}]
+        logging_obj.messages = original_messages
+        logging_obj.model_call_details = {
+            "messages": original_messages,
+            "input": "sensitive-value",
+        }
+        data = {"input": "sensitive-value", "model": "gpt-4"}
+
+        result = await handler.process_input_messages(data, guardrail, logging_obj)
+
+        assert result["input"] == "sensitive-value [GUARDRAILED]"
+        sanitized_messages = [{"role": "user", "content": result["input"]}]
+        assert logging_obj.messages == sanitized_messages
+        assert logging_obj.model_call_details["messages"] == sanitized_messages
+        assert logging_obj.model_call_details["input"] == result["input"]
+
+    @pytest.mark.asyncio
     async def test_process_input_none(self):
         """Test processing when input is None"""
         handler = OpenAIResponsesHandler()
