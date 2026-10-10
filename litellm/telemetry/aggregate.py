@@ -1,12 +1,19 @@
+import logging
 import time
 from collections.abc import Callable
-from typing import Final
+from typing import Final, TypeVar
 
 from litellm.telemetry.records import AttemptRecord, InstanceInfo, RequestRecord, UIEvent
 from litellm.telemetry.report import AttemptKey, AttemptMetrics, Report, RequestKey, RequestMetrics
 from litellm.telemetry.sink import Exporter, ExportOutcome
 
 DEFAULT_MAX_ROWS: Final = 2000
+QUIET_RETRIES: Final = 3
+
+_LOGGER: Final = logging.getLogger(__name__)
+
+_Key: Final = TypeVar("_Key")
+_Row: Final = TypeVar("_Row")
 
 
 class AggregatingSink:
@@ -18,74 +25,83 @@ class AggregatingSink:
         *,
         clock: Callable[[], float] = time.time,
         max_rows: int = DEFAULT_MAX_ROWS,
+        logger: logging.Logger = _LOGGER,
     ) -> None:
         self._exporter: Final = exporter
         self._clock: Final = clock
         self._max_rows: Final = max_rows
+        self._logger: Final = logger
         self._instance: InstanceInfo | None = None
         self._window_start: float = clock()
         self._requests: dict[RequestKey, RequestMetrics] = {}  # mutable-ok: bounded fold, drained per flush
         self._attempts: dict[AttemptKey, AttemptMetrics] = {}  # mutable-ok: bounded fold, drained per flush
         self._ui_events: dict[UIEvent, int] = {}  # mutable-ok: bounded fold, drained per flush
         self._dropped: int = 0
+        self._flushing: bool = False
+        self._consecutive_retries: int = 0
 
     def _row_count(self) -> int:
         return len(self._requests) + len(self._attempts) + len(self._ui_events)
 
-    def _has_room_for(self, is_new_row: bool) -> bool:
-        if not is_new_row or self._row_count() < self._max_rows:
-            return True
-        self._dropped += 1
-        return False
+    def _row(self, rows: dict[_Key, _Row], key: _Key, empty: Callable[[], _Row], weight: int) -> _Row | None:
+        existing: Final = rows.get(key)
+        if existing is not None:
+            return existing
+        if self._row_count() >= self._max_rows:
+            self._dropped += weight
+            return None
+        row: Final = empty()
+        rows[key] = row
+        return row
+
+    def _add_ui_events(self, event: UIEvent, count: int) -> None:
+        existing: Final = self._ui_events.get(event)
+        if existing is None and self._row_count() >= self._max_rows:
+            self._dropped += count
+            return
+        self._ui_events[event] = (existing or 0) + count
 
     def set_instance(self, info: InstanceInfo) -> None:
         self._instance = info
 
     def record_request(self, record: RequestRecord) -> None:
-        key: Final = RequestKey.of(record)
-        existing: Final = self._requests.get(key)
-        if not self._has_room_for(existing is None):
-            return
-        self._add_request_metrics(key, RequestMetrics.of(record))
+        row: Final = self._row(self._requests, RequestKey.of(record), RequestMetrics.empty, 1)
+        if row is not None:
+            row.add(record)
 
     def record_attempt(self, record: AttemptRecord) -> None:
-        key: Final = AttemptKey.of(record)
-        existing: Final = self._attempts.get(key)
-        if not self._has_room_for(existing is None):
-            return
-        self._add_attempt_metrics(key, AttemptMetrics.of(record))
+        row: Final = self._row(self._attempts, AttemptKey.of(record), AttemptMetrics.empty, 1)
+        if row is not None:
+            row.add(record)
 
     def record_ui_event(self, event: UIEvent) -> None:
-        existing: Final = self._ui_events.get(event)
-        if not self._has_room_for(existing is None):
-            return
-        self._add_ui_event_count(event, 1)
-
-    def _add_request_metrics(self, key: RequestKey, metrics: RequestMetrics) -> None:
-        existing: Final = self._requests.get(key)
-        self._requests[key] = metrics if existing is None else existing.merge(metrics)
-
-    def _add_attempt_metrics(self, key: AttemptKey, metrics: AttemptMetrics) -> None:
-        existing: Final = self._attempts.get(key)
-        self._attempts[key] = metrics if existing is None else existing.merge(metrics)
-
-    def _add_ui_event_count(self, event: UIEvent, count: int) -> None:
-        self._ui_events[event] = self._ui_events.get(event, 0) + count
+        self._add_ui_events(event, 1)
 
     def _restore(self, report: Report) -> None:
         self._window_start = report.window_start
         self._dropped += report.dropped_records
         for request_key, request_metrics in report.requests:
-            self._add_request_metrics(request_key, request_metrics)
+            request_row = self._row(self._requests, request_key, RequestMetrics.empty, request_metrics.request_count)
+            if request_row is not None:
+                request_row.add_metrics(request_metrics)
         for attempt_key, attempt_metrics in report.attempts:
-            self._add_attempt_metrics(attempt_key, attempt_metrics)
+            attempt_row = self._row(self._attempts, attempt_key, AttemptMetrics.empty, attempt_metrics.attempt_count)
+            if attempt_row is not None:
+                attempt_row.add_metrics(attempt_metrics)
         for event, count in report.ui_events:
-            self._add_ui_event_count(event, count)
+            self._add_ui_events(event, count)
 
     async def flush(self) -> None:
         instance: Final = self._instance
-        if instance is None:
+        if instance is None or self._flushing:
             return
+        self._flushing = True
+        try:
+            await self._export_window(instance)
+        finally:
+            self._flushing = False
+
+    async def _export_window(self, instance: InstanceInfo) -> None:
         window_end: Final = self._clock()
         report: Final = Report(
             instance=instance,
@@ -100,5 +116,12 @@ class AggregatingSink:
         self._window_start = window_end
         outcome: Final = await self._exporter.export(report)
         if outcome is not ExportOutcome.RETRY:
+            self._consecutive_retries = 0
             return
+        self._consecutive_retries += 1
+        if self._consecutive_retries >= QUIET_RETRIES:
+            self._logger.error(
+                "telemetry: report export failed %d times in a row, keeping the window for the next flush",
+                self._consecutive_retries,
+            )
         self._restore(report)
