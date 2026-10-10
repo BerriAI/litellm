@@ -2,14 +2,29 @@ use litellm_llms_types::{
     formats::messages::{Message, SystemPrompt},
     providers::anthropic::{
         API_BASE, API_KEY_HEADER, API_VERSION, BETA_HEADER, COUNT_TOKENS_PATH, VERSION_HEADER,
-        count_tokens::AnthropicCountTokensRequest,
     },
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{Error, anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX};
 
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AnthropicCountTokensRequest {
+    pub model: String,
+    pub messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemPrompt>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnthropicCountTokensResponse {
+    pub input_tokens: u64,
+}
 
 pub trait AnthropicCountTokensConfig {
     fn endpoint(&self) -> String;

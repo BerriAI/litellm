@@ -5,9 +5,8 @@ use litellm_framer::{
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
-use litellm_llms_types::{
-    formats::messages::streaming::MessagesStreamEvent, providers::bedrock::InvokeChunkPayload,
-};
+use litellm_llms_types::formats::messages::streaming::MessagesStreamEvent;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
@@ -18,6 +17,11 @@ use crate::{
         messages::streaming::{ByteStream, EventStream},
     },
 };
+
+#[derive(Deserialize)]
+struct InvokeChunkPayload {
+    bytes: String,
+}
 
 pub fn decode_invoke_chunk(message: Message) -> Result<Value, Error> {
     let payload: InvokeChunkPayload =

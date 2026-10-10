@@ -1,14 +1,53 @@
 use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
 use litellm_llms_types::formats::messages::MessagesResponse;
-use litellm_llms_types::providers::anthropic::{
-    BATCHES_PATH, MESSAGES_PATH,
-    batches::{AnthropicBatchResult, AnthropicBatchResultRecord, AnthropicMessageBatch},
-};
+use litellm_llms_types::providers::anthropic::{BATCHES_PATH, MESSAGES_PATH};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnthropicBatchRequestCounts {
+    #[serde(default)]
+    pub processing: u64,
+    #[serde(default)]
+    pub succeeded: u64,
+    #[serde(default)]
+    pub errored: u64,
+    #[serde(default)]
+    pub canceled: u64,
+    #[serde(default)]
+    pub expired: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnthropicMessageBatch {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_processing_status")]
+    pub processing_status: String,
+    pub created_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub cancel_initiated_at: Option<String>,
+    pub archived_at: Option<String>,
+    #[serde(default)]
+    pub request_counts: AnthropicBatchRequestCounts,
+}
+
+#[derive(Deserialize)]
+struct BatchResultRecord {
+    result: BatchResult,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BatchResult {
+    Succeeded { message: Box<MessagesResponse> },
+    Errored { error: Value },
+}
 
 pub trait AnthropicBatchesConfig {
     fn create_batch_url(
@@ -47,6 +86,10 @@ pub struct AnthropicBatchesTransformation;
 
 pub const ANTHROPIC_BATCHES_TRANSFORMATION: AnthropicBatchesTransformation =
     AnthropicBatchesTransformation;
+
+fn default_processing_status() -> String {
+    "in_progress".into()
+}
 
 fn timestamp(value: Option<&str>) -> Option<i64> {
     value
@@ -172,8 +215,8 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
             .filter(|line| !line.trim().is_empty())
             .enumerate()
             .map(|(index, line)| {
-                let record: AnthropicBatchResultRecord = serde_json::from_str(line.trim())
-                    .map_err(|error| {
+                let record: BatchResultRecord =
+                    serde_json::from_str(line.trim()).map_err(|error| {
                         Error::InvalidResponse(crate::ErrorDetail::InvalidLine {
                             subject: "Anthropic batch result",
                             line: index + 1,
@@ -181,8 +224,8 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
                         })
                     })?;
                 match record.result {
-                    AnthropicBatchResult::Succeeded { message } => Ok(*message),
-                    AnthropicBatchResult::Errored { error } => {
+                    BatchResult::Succeeded { message } => Ok(*message),
+                    BatchResult::Errored { error } => {
                         Err(Error::InvalidResponse(crate::ErrorDetail::RemoteFailure {
                             operation: "Anthropic batch request",
                             detail: error,

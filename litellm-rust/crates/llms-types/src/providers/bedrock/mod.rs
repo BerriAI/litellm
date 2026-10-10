@@ -7,11 +7,6 @@ pub const INVOKE_STREAM_PATH: &str = "invoke-with-response-stream";
 pub const INVOCATION_METRICS_KEY: &str = "amazon-bedrock-invocationMetrics";
 
 #[derive(Debug, Deserialize)]
-pub struct InvokeChunkPayload {
-    pub bytes: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ConverseResponse {
     pub output: ConverseOutput,
     #[serde(default)]
