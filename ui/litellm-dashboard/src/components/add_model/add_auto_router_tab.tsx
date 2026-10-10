@@ -55,7 +55,6 @@ import {
 } from "./build_complexity_router_config";
 import { builderParamsFromValue } from "./complexity_router_builder_params";
 import { activeTierName, activeTierRows, getCustomTierRowsError, resolveComplexityDefaultModel } from "./tier_rows";
-import { tierRowLabel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import { AutoRouterConnectionTestDialog } from "./auto_router_connection_test";
 import {
@@ -77,7 +76,7 @@ import {
 } from "@/lib/autorouter_presets";
 import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { buildAutomaticRouterConfig, buildPreferredTierModels } from "./auto_setup";
+import { buildAutomaticRouterConfig, buildPreferredTierModels, prefillEmptyTiers } from "./auto_setup";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -119,15 +118,6 @@ const presetDisabledHint = (availability: PresetAvailability): string | null => 
 const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
 
 const NO_PRESETS: AutoRouterPreset[] = [];
-
-// A one-line summary of what's configured, shown when the detailed section is collapsed so a
-// caller can see the shape of the config without opening it.
-const tierConfigSummary = (config: ComplexityRouterConfigValue): string => {
-  const parts = activeTierRows(config)
-    .filter((row) => row.models.length > 0)
-    .map((row) => `${tierRowLabel(row, config.tier_labels)}: ${row.models.join(", ")}`);
-  return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
-};
 
 // Why the submit is unavailable, or null when it is available. The button reads this to disable
 // itself and to say what is missing, so the two can never give different answers. Checks the
@@ -353,20 +343,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEscalationKeywords(prefill.escalationKeywords);
   };
 
-  const handleAutomaticSetup = () => {
-    if (automaticRouterConfig === null) return;
-    setSelectedPreset(undefined);
-    setComplexityRouterConfig({
-      ...complexityRouterConfig,
-      tiers: { ...complexityRouterConfig.tiers, ...automaticRouterConfig.tiers },
-      tier_model_params: { ...complexityRouterConfig.tier_model_params, ...automaticRouterConfig.tier_model_params },
-    });
-
-    toast.success("Models selected", { description: tierConfigSummary(automaticRouterConfig) });
-  };
+  const [prefillAttempted, setPrefillAttempted] = useState(false);
+  const automaticPrefill = automaticSetupLoading || modelsUnverifiable ? null : automaticRouterConfig;
+  if (automaticPrefill && !prefillAttempted) {
+    setPrefillAttempted(true);
+    setComplexityRouterConfig((current) => prefillEmptyTiers(current, automaticPrefill));
+  }
 
   const handlePresetChange = (presetKey: string | undefined) => {
     if (!presetKey || presetKey === "custom") {
+      setPrefillAttempted(true);
       setSelectedPreset(presetKey);
       applyPrefill(buildEmptyPrefill());
 
@@ -380,6 +366,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const presetState = presetAvailability(preset);
     if (presetState.kind !== "available") return;
 
+    setPrefillAttempted(true);
     setSelectedPreset(presetKey);
     applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
   };
@@ -546,8 +533,68 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setIsTestModalVisible(true);
   };
 
+  const tierSetup = (
+    <div className="mb-4 space-y-2">
+      <div className="space-y-2">
+        <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+        <Select
+          items={templateItems}
+          value={selectedPreset ?? null}
+          onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+        >
+          <SelectTrigger data-testid="template-selector" className="w-full">
+            <SelectValue placeholder="Choose a template or select Custom to define your own" />
+          </SelectTrigger>
+          <SelectContent>
+            {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+              const disabledHint = presetDisabledHint(presetState);
+              const hintClass = isPresetHintAlarming(presetState) ? "text-destructive" : "text-muted-foreground";
+              const matchedHint =
+                presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+
+              return (
+                <SelectItem
+                  key={preset.key}
+                  value={preset.key}
+                  label={preset.label}
+                  disabled={disabledHint !== null}
+                  title={disabledHint ?? preset.description}
+                >
+                  <div>
+                    <div className="font-medium">{preset.label}</div>
+                    <div className="text-xs text-muted-foreground">{preset.description}</div>
+                    <div className="text-xs text-muted-foreground">Replaces classifier and model choices</div>
+                    {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                    {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
+                  </div>
+                </SelectItem>
+              );
+            })}
+            <SelectItem value="custom" label="Custom Configuration">
+              <div>
+                <div className="font-medium">Custom Configuration</div>
+                <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+              </div>
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
+        {presetsUnavailable && (
+          <div className="text-xs mt-1 text-destructive">
+            Could not load templates, so only Custom Configuration is shown.{" "}
+            <button type="button" className="underline" onClick={() => void refetchPresets()}>
+              Retry
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const configurationForm = (
     <ComplexityRouterConfig
+      creationFlow
+      tierSetup={tierSetup}
       editingTiers={editingTiers}
       onEditingTiersChange={setEditingTiers}
       modelInfo={modelInfo}
@@ -571,7 +618,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       showValidationErrors={showValidationErrors}
     />
   );
-  const forecast = isForecastClassifier(complexityRouterConfig.classifier_type);
 
   return (
     <AutoRouterAvailabilityContext.Provider value={routerAvailability}>
@@ -612,104 +658,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
               <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={handleClassifierChange}>
                 <FieldGroup>
-                  <div className="space-y-4 empty:hidden">
-                    {!forecast && (
-                      <>
-                        {!automaticSetupLoading && automaticRouterConfig && !complexityRouterConfig.custom_tier_set && (
-                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted px-4 py-3">
-                            <div>
-                              <p className="text-sm font-medium text-foreground">Choose models quickly</p>
-                              <p className="text-sm text-muted-foreground">
-                                Fill the tiers while keeping your classifier and settings.
-                              </p>
-                            </div>
-                            <Button
-                              type="button"
-                              data-testid="configure-automatically-button"
-                              onClick={handleAutomaticSetup}
-                            >
-                              Choose models for me
-                            </Button>
-                          </div>
-                        )}
-
-                        <div className="space-y-2">
-                          <label className="block text-sm font-medium text-foreground mb-2">Template</label>
-                          <Select
-                            items={templateItems}
-                            value={selectedPreset ?? null}
-                            onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
-                          >
-                            <SelectTrigger data-testid="template-selector" className="w-full">
-                              <SelectValue placeholder="Choose a template or select Custom to define your own" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                                const disabledHint = presetDisabledHint(presetState);
-                                const hintClass = isPresetHintAlarming(presetState)
-                                  ? "text-destructive"
-                                  : "text-muted-foreground";
-                                const matchedHint =
-                                  presetState.kind === "available" && presetState.viaDeployments
-                                    ? "Matches your deployments"
-                                    : null;
-
-                                return (
-                                  <SelectItem
-                                    key={preset.key}
-                                    value={preset.key}
-                                    label={preset.label}
-                                    disabled={disabledHint !== null}
-                                    title={disabledHint ?? preset.description}
-                                  >
-                                    <div>
-                                      <div className="font-medium">{preset.label}</div>
-                                      <div className="text-xs text-muted-foreground">{preset.description}</div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Replaces classifier and model choices
-                                      </div>
-                                      {disabledHint && (
-                                        <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>
-                                      )}
-                                      {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
-                                    </div>
-                                  </SelectItem>
-                                );
-                              })}
-                              <SelectItem value="custom" label="Custom Configuration">
-                                <div>
-                                  <div className="font-medium">Custom Configuration</div>
-                                  <div className="text-xs text-muted-foreground">
-                                    Define your auto router from scratch
-                                  </div>
-                                </div>
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                          {presetsPending && (
-                            <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>
-                          )}
-                          {presetsUnavailable && (
-                            <div className="text-xs mt-1 text-destructive">
-                              Could not load templates, so only Custom Configuration is shown.{" "}
-                              <button type="button" className="underline" onClick={() => void refetchPresets()}>
-                                Retry
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    )}
-                    {modelsUnverifiable && (
-                      <div className="text-xs mt-1 text-destructive">
-                        Could not load available models.{" "}
-                        <button type="button" className="underline" onClick={() => refetchModels()}>
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
+                  {modelsUnverifiable && (
+                    <p className="text-sm text-destructive">
+                      Could not load available models.{" "}
+                      <button type="button" className="underline" onClick={() => void refetchModels()}>
+                        Retry
+                      </button>
+                    </p>
+                  )}
                   {configurationForm}
 
                   {isAdmin && (

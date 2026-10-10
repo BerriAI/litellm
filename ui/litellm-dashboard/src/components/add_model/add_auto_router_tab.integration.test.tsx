@@ -55,7 +55,7 @@ const openTemplateDropdown = (): void => {
 };
 
 const expandDetailedConfiguration = (): void => {
-  expect(screen.getByText("Models by tier")).toBeVisible();
+  expect(screen.getByText("Define your tiers")).toBeVisible();
 };
 
 const visibleOptions = (): HTMLElement[] => screen.queryAllByRole("option");
@@ -77,6 +77,14 @@ const tierChips = (tier: string): HTMLElement => {
 const expectTierModel = (tier: string, model: string): void => {
   const chips = within(tierChips(tier)).getAllByLabelText(/.+/, { selector: '[data-slot="combobox-chip"]' });
   expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual([model]);
+};
+
+const waitForAutomaticTiers = async () => {
+  await waitFor(() =>
+    expect(
+      within(tierChips("Simple")).getAllByLabelText(/.+/, { selector: '[data-slot="combobox-chip"]' }).length,
+    ).toBeGreaterThan(0),
+  );
 };
 
 const selectTemplate = async (label: string): Promise<void> => {
@@ -182,6 +190,51 @@ describe("AddAutoRouterTab", () => {
     mockFetchAllModelDeployments.mockResolvedValue([]);
   });
 
+  it("shows Jev essentials before tiers and saves tuning from its own disclosure", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(screen.getByRole("radio", { name: "OSS Classifier" }));
+    expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
+    expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Choose models for me" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Classifier Timeout (ms)")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Advanced settings", exact: true })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Advanced classifier settings" }));
+    fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: "jev-custom" } });
+    fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4200" } });
+    fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "5" } });
+    await selectAutoRouterOption("How often to classify", "Every new user message");
+    await userEvent.click(screen.getByRole("button", { name: "Advanced classifier settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Advanced settings", exact: true }));
+    expect(screen.queryByRole("button", { name: "Classifier tuning", exact: true })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "jev-router" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    const expected = {
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: { provider: "jev", model: "jev-custom", timeout_ms: 4200 },
+      classifier_context_window_size: 5,
+      classification_mode: "user_turn",
+    };
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject(expected);
+  });
+
+  it("does not refill a tier cleared by the user when models refresh", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(within(tierChips("Simple")).getByRole("button", { name: "", exact: true }));
+    await act(async () => {
+      await testQueryClient.refetchQueries({ queryKey: ["availableModels"] });
+    });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+  });
+
   it.each([1, 0])("defaults to Rule-based with %s v2 slots remaining", async (remaining) => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       allowances: [{ key: "heuristic_v2", limit: 1, remaining, available: true }],
@@ -274,7 +327,7 @@ describe("AddAutoRouterTab", () => {
     });
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
-    await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
+    await waitForAutomaticTiers();
     await user.click(screen.getByRole("radio", { name: "OSS Classifier" }));
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith(
@@ -317,7 +370,7 @@ describe("AddAutoRouterTab", () => {
     const user = userEvent.setup();
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
-    await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
+    await waitForAutomaticTiers();
     await user.click(screen.getByRole("radio", { name: "OSS Classifier" }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
@@ -359,14 +412,21 @@ describe("AddAutoRouterTab", () => {
   });
 
   it.each(["LLM", "OSS Classifier"])(
-    "keeps %s and the frequency when choosing models automatically",
+    "keeps %s and the frequency selected before automatic models finish loading",
     async (family) => {
-      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      let complete: ((models: ModelGroup[]) => void) | undefined;
+      mockFetchAvailableModels.mockReturnValue(
+        new Promise<ModelGroup[]>((resolve) => {
+          complete = resolve;
+        }),
+      );
       renderWithProviders(<Harness />);
-      const automatic = await screen.findByRole("button", { name: "Choose models for me" });
       await userEvent.click(screen.getByRole("radio", { name: family }));
       await selectAutoRouterOption("How often to classify", "Every new user message");
-      await userEvent.click(automatic);
+      await act(async () => {
+        complete?.(ALL_FAMILY_MODELS);
+      });
+      await waitForAutomaticTiers();
       expect(screen.getByRole("radio", { name: family })).toBeChecked();
       expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
         "Every new user message",
@@ -452,14 +512,14 @@ describe("AddAutoRouterTab", () => {
     const user = userEvent.setup();
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
-    await screen.findByTestId("configure-automatically-button");
+    await waitForAutomaticTiers();
     await selectAutoRouterApproach("Capability");
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
     await selectAutoRouterApproach("Complexity");
-    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
     expect(screen.getByTestId("template-selector")).toBeInTheDocument();
     expandDetailedConfiguration();
-    expect(screen.getByText("Models by tier")).toBeInTheDocument();
+    expect(screen.getByText("Define your tiers")).toBeInTheDocument();
     for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
       openAutoRouterAdvanced(label);
       expect(screen.getAllByText(label)).not.toHaveLength(0);
@@ -507,9 +567,9 @@ describe("AddAutoRouterTab", () => {
 
     expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
 
-    expect(screen.getByText("Models by tier")).toBeVisible();
+    expect(screen.getByText("Define your tiers")).toBeVisible();
 
-    expect(screen.getByText("Models by tier")).toBeInTheDocument();
+    expect(screen.getByText("Define your tiers")).toBeInTheDocument();
   });
 
   it("hides automatic setup when no available model is recommended", async () => {
@@ -535,8 +595,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAllModelDeployments.mockResolvedValue([]);
     renderWithProviders(<Harness />);
 
-    const button = await screen.findByTestId("configure-automatically-button");
-    await userEvent.click(button);
+    await waitForAutomaticTiers();
 
     expectTierModel("Simple", "gpt-5.6-luna");
     expectTierModel("Medium", "claude-sonnet-5");
@@ -555,8 +614,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAllModelDeployments.mockResolvedValue([]);
     renderWithProviders(<Harness />);
 
-    const button = await screen.findByTestId("configure-automatically-button");
-    await userEvent.click(button);
+    await waitForAutomaticTiers();
 
     expectTierModel("Simple", "gpt-5.6-luna");
     expectTierModel("Medium", "claude-sonnet-5");
@@ -571,9 +629,9 @@ describe("AddAutoRouterTab", () => {
 
     expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
 
-    await userEvent.click(await screen.findByTestId("configure-automatically-button"));
+    await waitForAutomaticTiers();
 
-    expect(screen.getByText("Models by tier")).toBeInTheDocument();
+    expect(screen.getByText("Define your tiers")).toBeInTheDocument();
     expectTierModel("Simple", simpleModel);
   });
 
@@ -938,9 +996,7 @@ describe("AddAutoRouterTab", () => {
     );
     vi.mocked(handleAddAutoRouterSubmit).mockImplementationOnce(actualSubmit.handleAddAutoRouterSubmit);
     renderWithProviders(<Harness />);
-    const setup = await screen.findByRole("button", { name: "Choose models for me" });
-    await waitFor(() => expect(setup).toBeEnabled());
-    await userEvent.click(setup);
+    await waitForAutomaticTiers();
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "chained-router" } });
     await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
     await selectAutoRouterOption("Judge model", ALL_FAMILY_MODELS[0].model_group);
@@ -968,16 +1024,16 @@ describe("AddAutoRouterTab", () => {
     const user = userEvent.setup();
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
-    const automaticSetup = await screen.findByRole("button", { name: "Choose models for me" });
-    await waitFor(() => expect(automaticSetup).toBeEnabled());
-    await user.click(automaticSetup);
+    await waitForAutomaticTiers();
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "reset-threshold-router" } });
     openAutoRouterAdvanced("Classification Method");
     await selectAutoRouterOption("Heuristic", "Heuristic v2");
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
 
-    await user.click(automaticSetup);
+    await act(async () => {
+      await testQueryClient.refetchQueries({ queryKey: ["availableModels"] });
+    });
     expect(screen.getByRole("textbox", { name: "Success threshold" })).toHaveValue("1.1");
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "" } });
@@ -1014,9 +1070,7 @@ describe("AddAutoRouterTab", () => {
     const user = userEvent.setup();
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
-    const setup = await screen.findByRole("button", { name: "Choose models for me" });
-    await waitFor(() => expect(setup).toBeEnabled());
-    await user.click(setup);
+    await waitForAutomaticTiers();
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "cache-aware-router" } });
     openAutoRouterAdvanced("Cache-aware routing");
     const toggle = screen.getByRole("switch", { name: "Cache-aware routing" });
@@ -1534,7 +1588,7 @@ describe("AddAutoRouterTab", () => {
       await selectTemplate("Anthropic Family");
       expect(screen.queryByText("Keyword/Semantic Matching")).not.toBeInTheDocument();
 
-      expect(screen.getByText("Models by tier")).toBeVisible();
+      expect(screen.getByText("Define your tiers")).toBeVisible();
 
       openAutoRouterAdvanced("Keyword/Semantic Matching");
 

@@ -170,7 +170,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     <div className="flex flex-col gap-6">
       <fieldset>
         <legend className="mb-3 flex w-full items-center justify-between gap-3 text-sm font-medium">
-          What classifies your requests?
+          Choose your classifier
           <AutoRouterLimits />
         </legend>
         <RadioGroup value={family} onValueChange={changeFamily} className="grid gap-3 sm:grid-cols-3">
@@ -268,7 +268,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           </p>
         </div>
       )}
-      {(family === "llm" || family === "jev") && (
+      {family === "llm" && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-approach`}>Routing approach</Label>
           <ClassifierMenu
