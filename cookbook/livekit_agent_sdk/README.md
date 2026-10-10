@@ -15,12 +15,14 @@ pip install livekit-agents[xai] websockets
 ```bash
 # With xAI
 export XAI_API_KEY="your-xai-key"
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
 litellm --config config.yaml --port 4000
 ```
 
 ### 3. Run the voice agent
 
 ```bash
+export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
 python main.py
 ```
 
@@ -32,7 +34,7 @@ Set these environment variables if needed:
 
 ```bash
 export LITELLM_PROXY_URL="http://localhost:4000"
-export LITELLM_API_KEY="sk-1234"
+export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
 export LITELLM_MODEL="grok-voice-agent"
 ```
 
@@ -59,7 +61,7 @@ model_list:
       mode: realtime
 
 general_settings:
-  master_key: sk-1234
+  master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
 Then start: `litellm --config config.yaml --port 4000`
@@ -73,7 +75,7 @@ from livekit.plugins import xai
 
 model = xai.realtime.RealtimeModel(
     voice="ara",
-    api_key="sk-1234",              # LiteLLM proxy key
+    api_key=os.environ["LITELLM_MASTER_KEY"],
     base_url="http://localhost:4000", # Point to LiteLLM
 )
 ```

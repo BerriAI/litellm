@@ -3,11 +3,12 @@ Base repository class with common functionality.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 
 T = TypeVar("T", bound=BaseModel)
@@ -91,6 +92,10 @@ class BaseRepository(ABC, Generic[T]):
             order=order or None,
         )
         return self._to_model_list(records)
+
+    async def find_many_in(self, field: str, values: Iterable[Hashable]) -> list[T]:
+        """Records whose `field` is one of `values`, queried in chunks that stay under the bind-parameter cap."""
+        return self._to_model_list(await find_many_in(self.table, field, values))
 
     async def create(self, data: Mapping[str, object]) -> T:
         """Create a new record."""

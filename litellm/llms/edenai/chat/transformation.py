@@ -13,12 +13,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler, OpenAIGPTConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
@@ -31,11 +32,11 @@ if TYPE_CHECKING:
 _OPTIONAL_MAPPING: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
-class _EdenAIModel(BaseModel):
+class _EdenAIModel(LiteLLMBaseModel):
     id: str
 
 
-class _EdenAIModelCatalog(BaseModel):
+class _EdenAIModelCatalog(LiteLLMBaseModel):
     data: tuple[_EdenAIModel, ...]
 
 
@@ -61,7 +62,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
             if litellm.supports_reasoning(model=model, custom_llm_provider=litellm.LlmProviders.EDENAI.value)
             else ()
         )
-        return [*super().get_supported_openai_params(model), *reasoning]  # mutable-ok: inherited contract
+        return [*super().get_supported_openai_params(model), *reasoning]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -84,7 +85,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         )
         if not request.get("stream"):
             return request
-        return {**request, "stream_options": dict(_stream_options_with_usage(request))}  # mutable-ok: JSON body
+        return {**request, "stream_options": dict(_stream_options_with_usage(request))}
 
     def transform_response(
         self,
@@ -141,4 +142,4 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         if not response.is_success:
             raise EdenAIException(status_code=response.status_code, message=response.text, headers=response.headers)
         catalog: Final = _EdenAIModelCatalog.model_validate(response.json())
-        return [f"edenai/{model.id}" for model in catalog.data]  # mutable-ok: inherited contract
+        return [f"edenai/{model.id}" for model in catalog.data]

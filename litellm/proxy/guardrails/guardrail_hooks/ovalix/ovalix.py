@@ -194,7 +194,7 @@ class OvalixGuardrail(CustomGuardrail):
             "data_type": "TEXT",
             "data": {"content": content},
         }
-        response: Final = await self._async_handler.post(url, headers=headers, json=payload)
+        response: Final = await self._async_handler.post(url, headers=headers, json=payload, timeout=self.timeout)
         response.raise_for_status()
         return response.json()
 

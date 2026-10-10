@@ -16,8 +16,8 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -272,16 +272,14 @@ def _status_video_object(
         status="failed" if error else status,
         created_at=0,
         model=model_path,
-        error=(
-            {"code": "fal_error", "message": error} if error else None  # mutable-ok: VideoObject requires a dict
-        ),
+        error=({"code": "fal_error", "message": error} if error else None),
     )
 
 
 class FalAIVideoConfig(BaseVideoConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[], HTTPHandler] = _get_httpx_client,
+        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
         async_client_factory: Callable[[], AsyncHTTPHandler] = _get_fal_ai_async_httpx_client,
     ) -> None:
         super().__init__()
@@ -289,7 +287,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         self._async_client_factory: Final = async_client_factory
 
     def get_supported_openai_params(self, model: str) -> _SupportedParams:
-        supported_params: Final[_SupportedParams] = [  # mutable-ok: BaseVideoConfig requires a list
+        supported_params: Final[_SupportedParams] = [
             "model",
             "prompt",
             "input_reference",
@@ -316,11 +314,7 @@ class FalAIVideoConfig(BaseVideoConfig):
             if not isinstance(input_reference, str)
             else MappingProxyType(
                 {
-                    profile.reference_key: (
-                        [input_reference]  # mutable-ok: fal.ai expects a list for H3 references
-                        if profile.reference_as_list
-                        else input_reference
-                    ),
+                    profile.reference_key: ([input_reference] if profile.reference_as_list else input_reference),
                 }
             )
         )
@@ -344,9 +338,7 @@ class FalAIVideoConfig(BaseVideoConfig):
             **duration_params,
             **size_params,
             **user_params,
-            **{  # mutable-ok: BaseVideoConfig requires a mutable parameter mapping
-                key: value for key, value in video_create_optional_params.items() if key not in supported_params
-            },
+            **{key: value for key, value in video_create_optional_params.items() if key not in supported_params},
         }
         return mapped_params
 
@@ -399,11 +391,9 @@ class FalAIVideoConfig(BaseVideoConfig):
     ) -> tuple[_VideoParams, RequestFiles, str]:
         request_data: Final[_VideoParams] = {
             "prompt": prompt,
-            **{  # mutable-ok: HTTP JSON payload requires a mutable mapping
-                key: value for key, value in video_create_optional_request_params.items() if key != "model"
-            },
+            **{key: value for key, value in video_create_optional_request_params.items() if key != "model"},
         }
-        return request_data, [], f"{api_base.rstrip('/')}/{model}"  # mutable-ok: HTTP files payload requires a list
+        return request_data, [], f"{api_base.rstrip('/')}/{model}"
 
     def transform_video_create_response(
         self,
@@ -422,7 +412,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         resolution: Final[object] = request_params.get("resolution")
         seconds: Final[str | None] = _duration_value(request_params["duration"]) if duration is not None else None
         size: Final[str | None] = resolution if isinstance(resolution, str) else None
-        usage: Final[_VideoParams] = {  # mutable-ok: VideoObject requires a mutable usage mapping
+        usage: Final[_VideoParams] = {
             key: value
             for key, value in (
                 ("duration_seconds", duration),
@@ -456,7 +446,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         encoded_request_id: Final[str] = encode_url_path_segment(request_id, field_name="video_id")
         return (
             f"{api_base.rstrip('/')}/{_queue_request_base_path(model_id)}/requests/{encoded_request_id}/status",
-            {},  # mutable-ok: BaseVideoConfig requires a mutable mapping
+            {},
         )
 
     def transform_video_status_retrieve_response(
@@ -489,7 +479,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         try:
             result_response: Final[httpx.Response] = result_client.get(
                 url=result_url,
-                headers=dict(result_headers),  # mutable-ok: HTTPHandler.get only accepts a dict
+                headers=dict(result_headers),
             )
         except httpx.TransportError:
             return None
@@ -525,7 +515,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         try:
             result_response: Final[httpx.Response] = await result_client.get(
                 url=result_url,
-                headers=dict(result_headers),  # mutable-ok: AsyncHTTPHandler.get only accepts a dict
+                headers=dict(result_headers),
             )
         except httpx.TransportError:
             return None
@@ -552,7 +542,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         encoded_request_id: Final[str] = encode_url_path_segment(request_id, field_name="video_id")
         return (
             f"{api_base.rstrip('/')}/{_queue_request_base_path(model_id)}/requests/{encoded_request_id}",
-            {},  # mutable-ok: BaseVideoConfig requires a mutable mapping
+            {},
         )
 
     @staticmethod
@@ -578,7 +568,7 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise FalAIVideoError(
                 status_code=raw_response.status_code,
                 message=error,
-                headers=dict(raw_response.headers),  # mutable-ok: exception headers require a mutable dictionary
+                headers=dict(raw_response.headers),
                 request=raw_response.request,
                 response=raw_response,
             )
@@ -596,7 +586,7 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise FalAIVideoError(
                 status_code=raw_response.status_code,
                 message=error,
-                headers=dict(raw_response.headers),  # mutable-ok: exception headers require a mutable dictionary
+                headers=dict(raw_response.headers),
                 request=raw_response.request,
                 response=raw_response,
             )

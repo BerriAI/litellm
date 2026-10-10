@@ -13,6 +13,7 @@ import asyncio
 import functools
 import hashlib
 import inspect
+import itertools
 import json
 import logging
 import threading
@@ -21,12 +22,13 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._internal_context import current_service_caller
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
@@ -36,7 +38,7 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
@@ -92,9 +94,37 @@ class _AsyncRedisCommands(Protocol):
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
-_BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
-    {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
+_GENERIC_CALLER_MODULES: Final = frozenset(
+    {
+        __name__,
+        "litellm.caching.redis_batch",
+        "litellm.caching.dual_cache",
+        "litellm.caching.caching",
+        "litellm.rust_bridge.lifecycle",
+        "litellm.rust_bridge.streams",
+        "contextlib",
+    }
 )
+_GENERIC_CALLER_FRAME_NAMES: Final = frozenset(
+    {
+        "<lambda>",
+        "wrapper",
+        "_run_under_circuit_breaker",
+        "_run_under_circuit_breaker_sync",
+        "run_alone",
+        "_settle_alone",
+        "get_cache",
+        "set_cache",
+        "async_get_cache",
+        "async_set_cache",
+        "async_batch_get_cache",
+        "async_batch_get_cache_shared",
+        "async_set_cache_pipeline",
+        "async_increment_cache",
+        "async_delete_cache",
+    }
+)
+_CALL_STACK_END_MODULES: Final = ("asyncio", "concurrent", "threading")
 
 _INCREMENT_WITH_FLOOR_LUA: Final = (
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
@@ -113,18 +143,39 @@ def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, .
     )
 
 
+def _is_generic_caller_frame(frame: FrameType) -> bool:
+    module: Final = frame.f_globals.get("__name__")
+    return module in _GENERIC_CALLER_MODULES or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+
+
+def _ends_call_stack(frame: FrameType) -> bool:
+    module: Final = frame.f_globals.get("__name__")
+    return isinstance(module, str) and module.startswith(_CALL_STACK_END_MODULES)
+
+
+def _caller_frames(first: FrameType) -> Iterator[FrameType]:
+    frame: FrameType | None = first
+    while frame is not None and not _ends_call_stack(frame):
+        yield frame
+        frame = frame.f_back
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
-    Get the function names from the previous 1-2 functions in the call stack.
+    Get the function names of the nearest meaningful callers of the cache method.
 
-    Frames belonging to this module's circuit-breaker guards are skipped so the
-    reported callers stay the real ones even on guarded methods.
+    Frames that merely forward the call (this module's circuit-breaker guards, the
+    cache facades, the batch pipeline's retry path, generic cache verbs) are
+    skipped, and the walk stops at the event loop, so the chain names the litellm
+    code that wanted the call. When nothing but forwarding frames is found (the call
+    runs in a task of its own, like a batch op retried on the flush) the chain the
+    declaring code threaded through ``service_caller`` is reported, else ``unknown``.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
 
     Returns:
-        A string with format "current_function <- caller_function [<- grandparent_function]"
+        A string with format "caller_function [<- grandparent_function]"
     """
     try:
         current_frame: Final = inspect.currentframe()
@@ -135,22 +186,23 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         f_back: Final = current_frame.f_back
         if f_back is None:
             return "unknown"
-        frame = f_back.f_back
-        if frame is None:
+        first: Final = f_back.f_back
+        if first is None:
             return "unknown"
-        function_names: Final = []
+        frames: Final = _caller_frames(first)
+        leading: Final = tuple(itertools.islice(frames, num_frames))
+        leading_names: Final = tuple(frame.f_code.co_name for frame in leading if not _is_generic_caller_frame(frame))
+        further_names: Final = tuple(
+            itertools.islice(
+                (frame.f_code.co_name for frame in frames if not _is_generic_caller_frame(frame)),
+                num_frames - len(leading_names),
+            )
+        )
+        function_names: Final = leading_names + further_names
 
-        while frame is not None and len(function_names) < num_frames:
-            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_globals.get("__name__") == __name__:
-                frame = frame.f_back
-                continue
-            function_names.append(frame.f_code.co_name)
-            frame = frame.f_back
-
-        if not function_names:
-            return "unknown"
-
-        return " <- ".join(function_names)
+        if function_names:
+            return " <- ".join(function_names)
+        return current_service_caller() or "unknown"
     except Exception:
         return "unknown"
 
@@ -653,7 +705,7 @@ class RedisCache(BaseCache):
             self.redis_flush_size: int = 100
         else:
             self.redis_flush_size = redis_flush_size
-        self.redis_version = "Unknown"
+        self.redis_version: str = "Unknown"
         try:
             if not coroutine_checker.is_async_callable(self.redis_client):
                 self.redis_version = self.redis_client.info()["redis_version"]
@@ -827,9 +879,15 @@ class RedisCache(BaseCache):
             # Fallback for unparseable versions (e.g., "v7.0.0", "latest")
             return DEFAULT_REDIS_MAJOR_VERSION
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         ttl: Final = self.get_ttl(**kwargs)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}")
+        print_verbose(
+            "Set Redis Cache: key: %s\nValue %s\nttl=%s, redis_version=%s",
+            key,
+            value,
+            ttl,
+            self.redis_version,
+        )
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time: Final = time.time()
@@ -1082,7 +1140,7 @@ class RedisCache(BaseCache):
         raise ValueError("Redis client does not support Lua script registration")
 
     @_redis_circuit_breaker_guard
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str | None, value: object, **kwargs):
         from redis.asyncio import Redis
 
         if key is None:
@@ -1105,7 +1163,7 @@ class RedisCache(BaseCache):
                     error=e,
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                     call_type="async_set_cache",
                     caller=_get_call_stack_info(),
                 )
@@ -1118,7 +1176,7 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         ttl: Final = self.get_ttl(**kwargs)
         nx: Final = kwargs.get("nx", False)
-        print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose("Set ASYNC Redis Cache: key: %s\nValue %s\nttl=%s", key, value, ttl)
 
         try:
             if not hasattr(_redis_client, "set"):
@@ -1129,7 +1187,7 @@ class RedisCache(BaseCache):
                 nx=nx,
                 ex=ttl,
             )
-            print_verbose(f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+            print_verbose("Successfully Set ASYNC Redis Cache: key: %s\nValue %s\nttl=%s", key, value, ttl)
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1140,8 +1198,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                    event_metadata={"key": key},
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return result
@@ -1157,8 +1214,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                    event_metadata={"key": key},
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             log_redis_failure(
@@ -1179,7 +1235,7 @@ class RedisCache(BaseCache):
         # Iterate through each key-value pair in the cache_list and set them in the pipeline.
         for cache_key, cache_value in cache_list:
             cache_key = self.check_and_fix_namespace(key=cache_key)
-            print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}")
+            print_verbose("Set ASYNC Redis Cache PIPELINE: key: %s\nValue %s\nttl=%s", cache_key, cache_value, ttl)
             json_cache_value = json.dumps(cache_value)
             # Set the value with a TTL if it's provided.
             _td: timedelta | None = None
@@ -1208,7 +1264,12 @@ class RedisCache(BaseCache):
         _redis_client: Final = self.init_async_client()
         start_time: Final = time.time()
 
-        print_verbose(f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}")
+        print_verbose(
+            "Set Async Redis Cache: key list: %s\nttl=%s, redis_version=%s",
+            cache_list,
+            ttl,
+            self.redis_version,
+        )
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results: Final = await self._pipeline_helper(pipe, cache_list, ttl)
@@ -1226,7 +1287,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return
@@ -1243,7 +1304,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
 
@@ -1334,7 +1395,7 @@ class RedisCache(BaseCache):
                     error=e,
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                     call_type="async_set_cache_sadd",
                     caller=_get_call_stack_info(),
                 )
@@ -1346,10 +1407,10 @@ class RedisCache(BaseCache):
             raise e
 
         key = self.check_and_fix_namespace(key=key)
-        print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose("Set ASYNC Redis Cache: key: %s\nValue %s\nttl=%s", key, value, ttl)
         try:
             await self._set_cache_sadd_helper(redis_client=_redis_client, key=key, value=value, ttl=ttl)
-            print_verbose(f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}")
+            print_verbose("Successfully Set ASYNC Redis Cache SADD: key: %s\nValue %s\nttl=%s", key, value, ttl)
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1360,7 +1421,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
         except Exception as e:
@@ -1375,7 +1436,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             # NON blocking - notify users Redis is throwing an exception
@@ -1555,7 +1616,7 @@ class RedisCache(BaseCache):
                 end_time=end_time,
                 parent_otel_span=parent_otel_span,
             )
-            print_verbose(f"Got Redis Cache: key: {key}, cached_response {cached_response}")
+            print_verbose("Got Redis Cache: key: %s, cached_response %s", key, cached_response)
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             log_redis_failure(
@@ -1655,7 +1716,7 @@ class RedisCache(BaseCache):
         try:
             print_verbose(f"Get Async Redis Cache: key: {key}")
             cached_response: Final = await _redis_client.get(key)
-            print_verbose(f"Got Async Redis Cache: key: {key}, cached_response {cached_response}")
+            print_verbose("Got Async Redis Cache: key: %s, cached_response %s", key, cached_response)
             response: Final = self._get_cache_logic(cached_response=cached_response)
 
             end_time = time.time()
@@ -1669,7 +1730,6 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=parent_otel_span,
-                    event_metadata={"key": key},
                 )
             )
             return response
@@ -1686,7 +1746,6 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=parent_otel_span,
-                    event_metadata={"key": key},
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
@@ -1971,7 +2030,7 @@ class RedisCache(BaseCache):
         _redis_client: Final[Redis] = self.init_async_client()
         start_time: Final = time.time()
 
-        print_verbose(f"Increment Async Redis Cache Pipeline: increment list: {increment_list}")
+        print_verbose("Increment Async Redis Cache Pipeline: increment list: %s", increment_list)
 
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
@@ -1988,7 +2047,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return results
@@ -2005,7 +2064,7 @@ class RedisCache(BaseCache):
                     caller=_get_call_stack_info(),
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             log_redis_failure(

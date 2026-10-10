@@ -27,7 +27,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 FIREWORKS_RESPONSES_URL: Final = "https://api.fireworks.ai/inference/v1/responses"
-HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
+HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client"
 NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 NO_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -119,7 +119,7 @@ def test_responses_call_hits_native_endpoint_with_mcp_tool_untouched() -> None:
         response: Final = litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/kimi-k3",
             input="What is litellm?",
-            tools=[mcp_tool],  # mutable-ok: the Responses API takes tools as a JSON list
+            tools=[mcp_tool],
             api_key="fw-test-key",
         )
     url, headers, body = _sent_request(client)
@@ -151,7 +151,7 @@ def test_responses_call_forwards_previous_response_id_and_store() -> None:
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
             model="fireworks_ai/kimi-k3",
-            input=[tool_output],  # mutable-ok: the Responses API takes input items as a JSON list
+            input=[tool_output],
             previous_response_id="resp_0e946f2d46bf4b49bf8b29ff78083583",
             store=True,
             api_key="fw-test-key",
@@ -167,7 +167,7 @@ def test_responses_call_folds_developer_items_into_instructions() -> None:
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/kimi-k3",
-            input=[  # mutable-ok: the Responses API takes input as a JSON list
+            input=[
                 {"role": "user", "content": "Hi there"},
                 {"role": "developer", "content": "Answer with exactly one word."},
                 {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
@@ -188,7 +188,7 @@ def test_responses_call_folds_instructions_and_developer_item_into_instructions_
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             instructions="You are a coding agent running in the Codex CLI.",
-            input=[  # mutable-ok: the Responses API takes input as a JSON list
+            input=[
                 {
                     "role": "developer",
                     "content": [{"type": "input_text", "text": "<permissions instructions>read-only</permissions instructions>"}],
@@ -231,7 +231,7 @@ def test_responses_call_folds_instructions_and_developer_item_with_previous_resp
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             instructions="You are a terse assistant.",
-            input=[  # mutable-ok: the Responses API takes input as a JSON list
+            input=[
                 {"role": "developer", "content": "Answer with exactly one word."},
                 {"role": "user", "content": "And of Spain?"},
             ],
@@ -258,7 +258,7 @@ def test_responses_call_keeps_a_closing_developer_item_after_an_assistant_turn_i
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             instructions="Be terse.",
-            input=[  # mutable-ok: the Responses API takes input as a JSON list
+            input=[
                 {"role": "developer", "content": "Answer with exactly one word."},
                 {"role": "user", "content": "What is the capital of France?"},
                 assistant_turn,
@@ -280,7 +280,7 @@ def test_responses_call_keeps_a_mid_conversation_system_item_in_place() -> None:
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/kimi-k3",
-            input=[  # mutable-ok: the Responses API takes input as a JSON list
+            input=[
                 {"role": "user", "content": "Hi there"},
                 {"role": "system", "content": "Switch to French."},
                 {"role": "user", "content": "What is the capital of France?"},
@@ -309,7 +309,7 @@ def test_responses_call_keeps_a_developer_item_with_non_text_parts_in_place_as_a
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             instructions="Answer with one word.",
-            input=[developer_item, {"role": "user", "content": "What is the capital of France?"}],  # mutable-ok: JSON list
+            input=[developer_item, {"role": "user", "content": "What is the capital of France?"}],
             store=False,
             api_key="fw-test-key",
         )
@@ -340,10 +340,10 @@ def test_transform_request_forwards_non_string_instructions_and_input_untouched(
     user_item: Final = {"role": "user", "content": "What is the capital of France?"}
     request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
         model="accounts/fireworks/models/kimi-k3",
-        input=cast(ResponseInputParam, [developer_item, user_item]),  # mutable-ok: JSON list
-        response_api_optional_request_params={"instructions": ["not", "a", "string"]},  # mutable-ok: base takes a dict
+        input=cast(ResponseInputParam, [developer_item, user_item]),
+        response_api_optional_request_params={"instructions": ["not", "a", "string"]},
         litellm_params=GenericLiteLLMParams(),
-        headers={},  # mutable-ok: base takes a dict
+        headers={},
     )
     assert request["instructions"] == ["not", "a", "string"]
     assert tuple(request["input"]) == (
@@ -356,7 +356,7 @@ def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_outpu
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     pydantic_input: Final = cast(
         ResponseInputParam,
-        [  # mutable-ok: the Responses API takes input as a JSON list
+        [
             EasyInputMessage(role="developer", content="Answer with exactly one word.", type="message"),
             ResponseReasoningItem(id="rs_1", summary=(), type="reasoning"),
             ResponseFunctionToolCall(
@@ -608,3 +608,62 @@ def test_streaming_responses_call_hits_native_endpoint_and_yields_every_firework
     assert tuple(event.type for event in received) == tuple(event["type"] for event in FIREWORKS_SSE_EVENTS)
     assert "".join(event.delta for event in received if event.type == "response.output_text.delta") == "pong"
     assert received[-1].response.usage.output_tokens == 89
+
+
+@pytest.mark.parametrize(
+    "call_kwargs, expected_user",
+    [
+        pytest.param(
+            {"fireworks_forward_user_id": True, "litellm_metadata": {"user_api_key_user_id": "dev-alice"}},
+            "dev-alice",
+            id="opted-in-sends-litellm-user-id",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "litellm_metadata": {"user_api_key_user_id": "dev-alice"},
+                "user": "caller",
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="ignores-caller-responses-metadata",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "user": "caller"},
+            "caller",
+            id="no-litellm-user-id-keeps-caller-user",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="not-opted-in-sends-no-user",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "litellm_metadata": {"user_api_key_user_id": "dev-alice"},
+                "extra_body": {"user": "dev-bob"},
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-extra-body-user",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_user_id": "dev-alice"}, "extra_body": {"user": "dev-bob"}},
+            "dev-bob",
+            id="not-opted-in-keeps-extra-body-user",
+        ),
+    ],
+)
+def test_responses_call_forwards_litellm_user_id_as_user(
+    call_kwargs: Mapping[str, object], expected_user: str | None
+) -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(model="fireworks_ai/kimi-k3", input="hi", api_key="fw-test-key", **call_kwargs)
+    _, _, body = _sent_request(client)
+    assert body.get("user") == expected_user
+    assert "fireworks_forward_user_id" not in body

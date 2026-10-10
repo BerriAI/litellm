@@ -2,7 +2,7 @@
 import os
 import pytest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -71,7 +71,7 @@ async def test_mcp_server_manager_https_server():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         await mcp_server_manager.load_servers_from_config(
@@ -179,7 +179,7 @@ async def test_mcp_http_transport_list_tools_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -256,7 +256,7 @@ async def test_mcp_http_transport_call_tool_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -322,7 +322,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -464,7 +464,7 @@ async def test_sse_mcp_handler_mock():
 
     mock_sse = MagicMock()
     mock_sse.connect_sse.side_effect = connect_sse
-    run = AsyncMock()
+    serve = AsyncMock()
 
     # Mock scope, receive, send with proper ASGI scope format
     mock_scope = {
@@ -489,7 +489,7 @@ async def test_sse_mcp_handler_mock():
     )
 
     with (
-        patch("litellm.proxy._experimental.mcp_server.server.serve_loop", run),
+        patch("litellm.proxy._experimental.mcp_server.server.serve_loop", serve),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
@@ -505,13 +505,21 @@ async def test_sse_mcp_handler_mock():
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new=AsyncMock(),
+        ),
     ):
         from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
 
         # Call the handler
         await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
-        assert run.await_args.args[1:3] == (read_stream, write_stream)
+        assert serve.await_args.args[1:3] == (read_stream, write_stream)
         assert mock_sse.connect_sse.call_args.args[0]["path"] == "/mcp/sse"
 
 
@@ -918,13 +926,14 @@ async def test_get_tools_from_mcp_servers():
 
         # Create a mock manager
         mock_manager = AsyncMock()
+        mock_manager.catalog.operation = nullcontext
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
         mock_manager.get_mcp_server_by_id = lambda server_id: (
             mock_server_1 if server_id == "server1_id" else mock_server_2
         )
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -946,6 +955,7 @@ async def test_get_tools_from_mcp_servers():
             # Test Case 2: Without specific MCP servers
             # Create a different mock manager for the second test case
             mock_manager_2 = AsyncMock()
+            mock_manager_2.catalog.operation = nullcontext
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
@@ -963,12 +973,14 @@ async def test_get_tools_from_mcp_servers():
                 user_api_key_auth=None,
                 oauth2_headers=None,
                 proxy_logging_obj=None,
+                catalog_auth_header=None,
+                record_listing=True,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
                 return [mock_tool_2]
 
-            mock_manager_2._get_tools_from_server = AsyncMock(
+            mock_manager_2.get_tools_from_server = AsyncMock(
                 side_effect=mock_get_tools_side_effect
             )
             # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
@@ -994,6 +1006,7 @@ async def test_get_tools_from_mcp_servers():
         # Test Case 3: With specific MCP servers and access groups
         # Create a mock manager
         mock_manager = AsyncMock()
+        mock_manager.catalog.operation = nullcontext
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )
@@ -1002,7 +1015,7 @@ async def test_get_tools_from_mcp_servers():
             if server_id == "server1_id"
             else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         )
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -1013,7 +1026,7 @@ async def test_get_tools_from_mcp_servers():
             mock_manager,
         ):
             with patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
                 AsyncMock(return_value=["server3_id"]),
             ):
                 # Test with specific servers
@@ -1093,7 +1106,7 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Call list_tools
@@ -1390,11 +1403,11 @@ async def test_mcp_server_manager_alias_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
-        tools = await test_manager._get_tools_from_server(mock_server)
+        tools = await test_manager.get_tools_from_server(mock_server)
 
         # Verify tool is prefixed with alias
         assert len(tools) == 1
@@ -1450,11 +1463,11 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
-        tools = await test_manager._get_tools_from_server(mock_server)
+        tools = await test_manager.get_tools_from_server(mock_server)
 
         # Verify tool is prefixed with server_name (normalized)
         assert len(tools) == 1
@@ -1510,11 +1523,11 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
-        tools = await test_manager._get_tools_from_server(mock_server)
+        tools = await test_manager.get_tools_from_server(mock_server)
 
         # Verify tool is prefixed with server_id
         assert len(tools) == 1
@@ -1984,12 +1997,12 @@ async def test_get_tools_for_single_server():
     with patch(
         "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
     ) as mock_manager:
-        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
 
         # Verify the manager was called with correct parameters
-        mock_manager._get_tools_from_server.assert_called_once_with(
+        mock_manager.get_tools_from_server.assert_called_once_with(
             server=mock_server,
             mcp_auth_header="Bearer test_token",
             extra_headers=None,
@@ -1998,6 +2011,7 @@ async def test_get_tools_for_single_server():
             client_ip=None,
             user_api_key_auth=None,
             proxy_logging_obj=ANY,
+            record_listing=False,
         )
 
         # Verify the result
@@ -2044,7 +2058,7 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
     with patch(
         "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
     ) as mock_manager:
-        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
 
@@ -2098,7 +2112,7 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
         "get_allowed_tools_for_server",
         AsyncMock(return_value=[f"{server_id}-read_wiki_contents"]),
     ):
-        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
         mock_server_manager.get_mcp_server_by_id.return_value = mock_server
 
         result = await _get_tools_for_single_server(
@@ -2129,15 +2143,15 @@ async def test_list_tool_rest_api_with_server_specific_auth():
 
     # Mock the MCPRequestHandler methods
     with patch.object(
-        MCPRequestHandler, "_get_mcp_auth_header_from_headers"
+        MCPRequestHandler, "get_mcp_auth_header_from_headers"
     ) as mock_get_auth:
         with patch.object(
-            MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers"
+            MCPRequestHandler, "get_mcp_server_auth_headers_from_headers"
         ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {
-                "zapier": "Bearer zapier_token",
-                "slack": "Bearer slack_token",
+                "zapier": {"Authorization": "Bearer zapier_token"},
+                "slack": {"Authorization": "Bearer slack_token"},
             }
 
             # Mock the global_mcp_server_manager
@@ -2204,7 +2218,7 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                     call_args = mock_get_tools.call_args
                     assert call_args[0][0] == mock_server  # server
                     assert (
-                        call_args[0][1] == "Bearer zapier_token"
+                        call_args[0][1] == {"Authorization": "Bearer zapier_token"}
                     )  # server_auth_header
 
 
@@ -2226,10 +2240,10 @@ async def test_list_tool_rest_api_with_default_auth():
 
     # Mock the MCPRequestHandler methods
     with patch.object(
-        MCPRequestHandler, "_get_mcp_auth_header_from_headers"
+        MCPRequestHandler, "get_mcp_auth_header_from_headers"
     ) as mock_get_auth:
         with patch.object(
-            MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers"
+            MCPRequestHandler, "get_mcp_server_auth_headers_from_headers"
         ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {}  # No server-specific headers
@@ -2321,15 +2335,15 @@ async def test_list_tool_rest_api_all_servers_with_auth():
 
     # Mock the MCPRequestHandler methods
     with patch.object(
-        MCPRequestHandler, "_get_mcp_auth_header_from_headers"
+        MCPRequestHandler, "get_mcp_auth_header_from_headers"
     ) as mock_get_auth:
         with patch.object(
-            MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers"
+            MCPRequestHandler, "get_mcp_server_auth_headers_from_headers"
         ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {
-                "zapier": "Bearer zapier_token",
-                "slack": "Bearer slack_token",
+                "zapier": {"Authorization": "Bearer zapier_token"},
+                "slack": {"Authorization": "Bearer slack_token"},
             }
 
             # Mock the global_mcp_server_manager
@@ -2422,10 +2436,10 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     }
 
                     assert (
-                        server_auth_map.get(mock_zapier_server) == "Bearer zapier_token"
+                        server_auth_map.get(mock_zapier_server) == {"Authorization": "Bearer zapier_token"}
                     )
                     assert (
-                        server_auth_map.get(mock_slack_server) == "Bearer slack_token"
+                        server_auth_map.get(mock_slack_server) == {"Authorization": "Bearer slack_token"}
                     )
 
 
@@ -2502,11 +2516,11 @@ async def test_filter_tools_by_allowed_tools_integration():
         )
 
         # Mock the _get_tools_from_server method to return all tools
-        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2541,7 +2555,7 @@ async def test_filter_tools_by_allowed_tools_integration():
             # Note: get_mcp_server_by_id is now called for each server ID instead of batch
             # Verify it was called with the correct server ID
             assert mock_manager.get_mcp_server_by_id.call_count > 0
-            mock_manager._get_tools_from_server.assert_called_once()
+            mock_manager.get_tools_from_server.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -2616,11 +2630,11 @@ async def test_filter_tools_by_disallowed_tools_integration():
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
         )
         # Mock the _get_tools_from_server method to return all tools
-        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2655,7 +2669,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
             # Note: get_mcp_server_by_id is now called for each server ID instead of batch
             # Verify it was called with the correct server ID
             assert mock_manager.get_mcp_server_by_id.call_count > 0
-            mock_manager._get_tools_from_server.assert_called_once()
+            mock_manager.get_tools_from_server.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -2718,11 +2732,11 @@ async def test_filter_tools_no_restrictions_integration():
         )
 
         # Mock the _get_tools_from_server method to return all tools
-        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_manager.get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2982,7 +2996,7 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         ),
         patch.object(
             global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=mock_server,
         ) as mock_get_server,
         patch(
@@ -3058,7 +3072,7 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         ),
         patch.object(
             global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=mock_server,
         ) as mock_get_server,
         patch(

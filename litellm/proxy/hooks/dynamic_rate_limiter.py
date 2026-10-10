@@ -1,7 +1,6 @@
 # What is this?
 ## Allocates dynamic tpm/rpm quota for a project based on current traffic
 ## Tracks num active projects per minute
-
 import asyncio
 import os
 from collections.abc import Callable
@@ -10,10 +9,12 @@ from typing import Final
 
 import litellm
 from litellm import ModelResponse, Router
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -21,7 +22,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 from litellm.utils import get_utc_datetime
 
 
@@ -37,6 +38,7 @@ class DynamicRateLimiterCache:
         self.ttl = 60  # 1 min ttl
         self.time_fn = time_fn
 
+    @with_service_target("rate_limits")
     async def async_get_cache(self, model: str) -> int | None:
         dt: Final = self.time_fn()
         current_minute: Final = dt.strftime("%H-%M")
@@ -47,6 +49,7 @@ class DynamicRateLimiterCache:
             response = len(_response)
         return response
 
+    @with_service_target("rate_limits")
     async def async_set_cache_sadd(self, model: str, value: list):
         """
         Add value to set.
@@ -79,9 +82,10 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     def __init__(self, internal_usage_cache: DualCache, time_fn: Callable[[], datetime] = get_utc_datetime):
         self.internal_usage_cache = DynamicRateLimiterCache(cache=internal_usage_cache, time_fn=time_fn)
 
-    def update_variables(self, llm_router: Router):
+    def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
 
+    @with_service_target("rate_limits")
     async def check_available_usage(
         self, model: str, priority: str | None = None
     ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
@@ -179,6 +183,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
             return None, None, None, None, None
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -234,13 +239,17 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
         return None
 
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    @with_service_target("rate_limits")
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> LLMResponseTypes | None:
         try:
             if isinstance(response, ModelResponse):
-                model_info: Final = self.llm_router.get_model_info(id=response._hidden_params["model_id"])
-                assert model_info is not None, "Model info for model with id={} is None".format(
-                    response._hidden_params["model_id"]
-                )
+                model_id: Final = response.hidden_params["model_id"]
+                if not isinstance(model_id, str):
+                    return response
+                model_info: Final = self.llm_router.get_model_info(id=model_id)
+                assert model_info is not None, f"Model info for model with id={model_id} is None"
                 key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
                 (
                     available_tpm,
@@ -249,14 +258,18 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                     model_rpm,
                     active_projects,
                 ) = await self.check_available_usage(model=model_info["model_name"], priority=key_priority)
-                response._hidden_params["additional_headers"] = {  # Add additional response headers - easier debugging
-                    "x-litellm-model_group": model_info["model_name"],
-                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
-                    "x-ratelimit-remaining-litellm-project-requests": available_rpm,
-                    "x-ratelimit-remaining-model-tokens": model_tpm,
-                    "x-ratelimit-remaining-model-requests": model_rpm,
-                    "x-ratelimit-current-active-projects": active_projects,
-                }
+                set_hidden_param(
+                    response,
+                    "additional_headers",
+                    {
+                        "x-litellm-model_group": model_info["model_name"],
+                        "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                        "x-ratelimit-remaining-litellm-project-requests": available_rpm,
+                        "x-ratelimit-remaining-model-tokens": model_tpm,
+                        "x-ratelimit-remaining-model-requests": model_rpm,
+                        "x-ratelimit-current-active-projects": active_projects,
+                    },
+                )
 
                 return response
             return await super().async_post_call_success_hook(
@@ -269,3 +282,6 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - %s", e
             )
             return response
+
+
+PROXY_DynamicRateLimitHandler: Final = _PROXY_DynamicRateLimitHandler

@@ -3,13 +3,10 @@ use std::{collections::BTreeSet, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
-use litellm_core_utils::{
-    call_arguments::CallArguments,
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
-};
+use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
+use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
@@ -20,11 +17,13 @@ use crate::base_llm::ocr::{
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
+        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
         ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
@@ -55,37 +54,20 @@ pub enum DocumentIntelligenceRequest {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(
+    Clone, Debug, PartialEq, strum::EnumString, strum::Display, serde_with::DeserializeFromStr,
+)]
 enum OperationStatus {
+    #[strum(serialize = "succeeded")]
     Succeeded,
+    #[strum(serialize = "running")]
     Running,
+    #[strum(serialize = "notStarted")]
     NotStarted,
+    #[strum(serialize = "failed")]
     Failed,
+    #[strum(default, transparent)]
     Unknown(String),
-}
-
-impl<'de> Deserialize<'de> for OperationStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "succeeded" => Self::Succeeded,
-            "running" => Self::Running,
-            "notStarted" => Self::NotStarted,
-            "failed" => Self::Failed,
-            value => Self::Unknown(value.to_string()),
-        })
-    }
-}
-
-impl std::fmt::Display for OperationStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Succeeded => "succeeded",
-            Self::Running => "running",
-            Self::NotStarted => "notStarted",
-            Self::Failed => "failed",
-            Self::Unknown(value) => value,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -671,6 +653,43 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[rstest]
+    #[case::succeeded("succeeded", OperationStatus::Succeeded)]
+    #[case::running("running", OperationStatus::Running)]
+    #[case::not_started("notStarted", OperationStatus::NotStarted)]
+    #[case::failed("failed", OperationStatus::Failed)]
+    fn operation_status_parses_known_values(
+        #[case] input: &str,
+        #[case] expected: OperationStatus,
+    ) {
+        let parsed = serde_json::from_value::<OperationStatus>(json!(input)).unwrap();
+
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.to_string(), input);
+    }
+
+    #[rstest]
+    #[case::unknown("queued")]
+    #[case::case_sensitive("NotStarted")]
+    #[case::escaped("future\"\\\n")]
+    #[case::empty("")]
+    fn operation_status_preserves_unknown_values(#[case] input: &str) {
+        let parsed = serde_json::from_value::<OperationStatus>(json!(input)).unwrap();
+
+        assert_eq!(parsed, OperationStatus::Unknown(input.into()));
+        assert_eq!(parsed.to_string(), input);
+    }
+
+    #[rstest]
+    #[case::number(json!(1))]
+    #[case::boolean(json!(true))]
+    #[case::array(json!([]))]
+    #[case::null(Value::Null)]
+    #[case::object(json!({"status": "succeeded"}))]
+    fn operation_status_rejects_non_string_json(#[case] input: Value) {
+        assert!(serde_json::from_value::<OperationStatus>(input).is_err());
+    }
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
         let arguments = serde_json::from_value(value).unwrap();

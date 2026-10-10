@@ -17,4 +17,4 @@ def error_body_call_id(general_settings: Mapping[str, object], call_id: str | No
 def with_call_id(error: dict[str, object], call_id: str | None) -> dict[str, object]:  # mutable-ok: JSONResponse input
     if call_id is None:
         return error
-    return {**error, LITELLM_CALL_ID_BODY_KEY: call_id}  # mutable-ok: JSONResponse input
+    return {**error, LITELLM_CALL_ID_BODY_KEY: call_id}

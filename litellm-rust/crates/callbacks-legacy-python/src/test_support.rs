@@ -84,7 +84,7 @@ FAKES = {
         'success', response, call_type
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
-    'stream_opened': lambda logger: logger.record('stream_opened', None),
+    'stream_opened': lambda logger, head: logger.record('stream_opened', head),
     'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
         'stream_success', list(chunks)
     ),
@@ -173,21 +173,23 @@ pub(crate) fn local<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, 
     locals.get_item(name).unwrap().unwrap()
 }
 
-/// A legacy call over the namespace's `kwargs` (or none) and `request` (or `None`).
+pub(crate) fn local_dict<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, PyDict> {
+    local(locals, name).cast_into().unwrap()
+}
+
+/// A legacy call over the namespace's `kwargs` and `bound` dicts, each empty when absent.
 pub(crate) fn legacy_call(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> LegacyLogging {
-    let request = locals
-        .get_item("request")
-        .unwrap()
-        .unwrap_or_else(|| py.None().into_bound(py));
-    let kwargs = locals
-        .get_item("kwargs")
-        .unwrap()
-        .map(|kwargs| kwargs.cast_into::<PyDict>().unwrap())
-        .unwrap_or_else(|| PyDict::new(py));
-    let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
-    LegacyLogging::new(py, litellm_types::Operation::Ocr, call, asynchronous)
+    let dict = |name: &str| {
+        locals
+            .get_item(name)
+            .unwrap()
+            .map(|value| value.cast_into::<PyDict>().unwrap())
+            .unwrap_or_else(|| PyDict::new(py))
+    };
+    let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
+    LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
 }

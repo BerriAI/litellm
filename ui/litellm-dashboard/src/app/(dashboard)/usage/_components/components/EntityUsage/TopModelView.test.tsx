@@ -96,7 +96,7 @@ describe("TopModelView", () => {
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
   });
 
-  it("renders one cyan bar per model with model names on the axis in chart view", async () => {
+  it("renders one brand-blue bar per model with model names on the axis in chart view", async () => {
     const user = userEvent.setup();
     const { container } = render(
       <TopModelView
@@ -126,7 +126,7 @@ describe("TopModelView", () => {
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(2);
     const fills = new Set(Array.from(bars).map((bar) => bar.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    expect(fills).toEqual(new Set(["#2b3fd6"]));
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
     expect(screen.getAllByText("claude-3").length).toBeGreaterThan(0);
   });
