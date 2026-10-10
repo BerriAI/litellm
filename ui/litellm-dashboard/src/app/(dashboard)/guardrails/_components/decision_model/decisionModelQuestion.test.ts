@@ -12,6 +12,7 @@ import {
   runTestShortcutLabel,
   visibleTestResults,
   type DecisionTestRun,
+  type DecisionTestScores,
 } from "./decisionModelQuestion";
 
 const groups = [
@@ -112,47 +113,90 @@ describe("decisionTestChip", () => {
     expect(decisionTestChip(result, draft({ action: "block", threshold: 0.5 }))).toBe("block");
     expect(decisionTestChip(result, draft({ action: "log", threshold: 0.5 }))).toBe("logged");
     expect(decisionTestChip(result, draft({ action: "block", threshold: 0.9 }))).toBe("pass");
-    expect(decisionTestChip({ kind: "refused" }, draft({}))).toBe("no_answer");
-    expect(decisionTestChip({ kind: "missing" }, draft({}))).toBe("no_answer");
   });
+
+  it("blocks an unanswered block question, as the saved fail-closed guardrail does", () => {
+    expect(decisionTestChip({ kind: "refused" }, draft({ action: "block" }))).toBe("block");
+    expect(decisionTestChip({ kind: "missing" }, draft({ action: "block" }))).toBe("block");
+    expect(decisionTestChip({ kind: "refused" }, draft({ action: "log" }))).toBe("no_answer");
+    expect(decisionTestChip({ kind: "missing" }, draft({ action: "log" }))).toBe("no_answer");
+  });
+});
+
+const scores = (results: DecisionTestScores["results"], checks: DecisionModelCheckDraft[]): DecisionTestScores => ({
+  model: "jev-latest",
+  asked: Object.fromEntries(checks.map((check) => [check.name, check.instructions])),
+  results,
 });
 
 describe("decisionTestOverall", () => {
   it("is block when any result would block under current thresholds", () => {
     const checks = [draft({ name: "invoice_policy", threshold: 0.9 }), draft({ name: "jailbreak", threshold: 0.5 })];
+    const run = scores(
+      {
+        invoice_policy: { kind: "probability", probability: 0.6 },
+        jailbreak: { kind: "probability", probability: 0.8 },
+      },
+      checks,
+    );
+    const raised = checks.map((check) => (check.name === "jailbreak" ? { ...check, threshold: 0.9 } : check));
 
-    expect(
-      decisionTestOverall(
-        {
-          invoice_policy: { kind: "probability", probability: 0.6 },
-          jailbreak: { kind: "probability", probability: 0.8 },
-        },
-        checks,
-      ),
-    ).toBe("block");
-    expect(
-      decisionTestOverall(
-        {
-          invoice_policy: { kind: "probability", probability: 0.6 },
-          jailbreak: { kind: "probability", probability: 0.8 },
-        },
-        checks.map((check) => (check.name === "jailbreak" ? { ...check, threshold: 0.9 } : check)),
-      ),
-    ).toBe("pass");
+    expect(decisionTestOverall(visibleTestResults(run, checks, "jev-latest"))).toBe("block");
+    expect(decisionTestOverall(visibleTestResults(run, raised, "jev-latest"))).toBe("pass");
+  });
+
+  it("is block when a block question got no answer", () => {
+    const checks = [draft({ name: "jailbreak" })];
+    const run = scores({ jailbreak: { kind: "missing" } }, checks);
+
+    expect(decisionTestOverall(visibleTestResults(run, checks, "jev-latest"))).toBe("block");
+  });
+
+  it("ignores a question disabled after the run", () => {
+    const checks = [draft({ name: "jailbreak" })];
+    const run = scores({ jailbreak: { kind: "probability", probability: 0.99 } }, checks);
+    const disabled = [draft({ name: "jailbreak", enabled: false })];
+
+    expect(decisionTestOverall(visibleTestResults(run, disabled, "jev-latest"))).toBe("pass");
   });
 });
 
 describe("visibleTestResults", () => {
   it("drops results for questions deleted since the run", () => {
-    const results = {
-      invoice_policy: { kind: "probability" as const, probability: 0.9 },
-      deleted_question: { kind: "probability" as const, probability: 0.1 },
-    };
+    const checks = [draft({ name: "invoice_policy" }), draft({ name: "deleted_question" })];
+    const run = scores(
+      {
+        invoice_policy: { kind: "probability", probability: 0.9 },
+        deleted_question: { kind: "probability", probability: 0.1 },
+      },
+      checks,
+    );
 
-    const visible = visibleTestResults(results, [draft({ name: "invoice_policy" })]);
-
-    expect(visible).toEqual([
+    expect(visibleTestResults(run, [draft({ name: "invoice_policy" })], "jev-latest")).toEqual([
       { check: draft({ name: "invoice_policy" }), result: { kind: "probability", probability: 0.9 } },
+    ]);
+  });
+
+  it("drops a score whose question text changed since the run, even under the same name", () => {
+    const run = scores({ invoice_policy: { kind: "probability", probability: 0.9 } }, [draft({})]);
+
+    expect(visibleTestResults(run, [draft({ instructions: "Does the text ask for a refund?" })], "jev-latest")).toEqual(
+      [],
+    );
+  });
+
+  it("drops every score when the decision model changed since the run", () => {
+    const run = scores({ invoice_policy: { kind: "probability", probability: 0.9 } }, [draft({})]);
+
+    expect(visibleTestResults(run, [draft({})], "pplx-decider-v1-27b")).toEqual([]);
+  });
+
+  it("keeps a score when only the threshold or action changed", () => {
+    const run = scores({ invoice_policy: { kind: "probability", probability: 0.9 } }, [draft({})]);
+    const retuned = draft({ threshold: 0.95, action: "log" });
+
+    expect(visibleTestResults(run, [retuned], "jev-latest")).toEqual([
+      { check: retuned, result: { kind: "probability", probability: 0.9 } },
     ]);
   });
 });
@@ -166,10 +210,12 @@ describe("runTestShortcutLabel", () => {
 
 describe("prependTestRun", () => {
   it("prepends the latest run and caps history at 20", () => {
-    const run: DecisionTestRun = { id: 1, input: "new", results: {} };
+    const run: DecisionTestRun = { id: 1, input: "new", model: "jev-latest", asked: {}, results: {} };
     const old = Array.from({ length: DECISION_TEST_HISTORY_CAP }, (_, i) => ({
       id: i + 2,
       input: `old ${i}`,
+      model: "jev-latest",
+      asked: {},
       results: {},
     }));
 

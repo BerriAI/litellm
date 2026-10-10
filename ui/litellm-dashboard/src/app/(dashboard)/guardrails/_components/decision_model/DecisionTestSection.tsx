@@ -44,7 +44,7 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    const names = runnableQuestions.map((check) => check.name);
+    const asked = Object.fromEntries(runnableQuestions.map((check) => [check.name, check.instructions]));
     const id = nextRunId.current++;
     setRunning(true);
     try {
@@ -53,7 +53,14 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
         buildDecisionTestBody(model, input, checks),
         controller.signal,
       );
-      setRuns((prev) => prependTestRun(prev, { id, input, results: parseDecisionTestResponse(data, names) }));
+      const run: DecisionTestRun = {
+        id,
+        input,
+        model,
+        asked,
+        results: parseDecisionTestResponse(data, Object.keys(asked)),
+      };
+      setRuns((prev) => prependTestRun(prev, run));
     } catch (error) {
       if (controller.signal.aborted) return;
       setRuns((prev) =>
@@ -103,47 +110,54 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
             Latest first. Each run keeps its input so you can compare.
           </p>
           <div className="space-y-2" data-slot="decision-test-history">
-            {runs.map((run) => (
-              <div key={run.id} className="rounded-md border border-border px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="m-0 min-w-0 truncate text-xs font-medium text-foreground" title={run.input}>
-                    {run.input}
-                  </p>
-                  {"results" in run && (
-                    <Badge variant={decisionTestOverall(run.results, checks) === "block" ? "destructive" : "secondary"}>
-                      {decisionTestOverall(run.results, checks) === "block" ? "Block" : "Pass"}
-                    </Badge>
+            {runs.map((run) => {
+              const visible = "error" in run ? [] : visibleTestResults(run, checks, model);
+              return (
+                <div key={run.id} className="rounded-md border border-border px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="m-0 min-w-0 truncate text-xs font-medium text-foreground" title={run.input}>
+                      {run.input}
+                    </p>
+                    {visible.length > 0 && (
+                      <Badge variant={decisionTestOverall(visible) === "block" ? "destructive" : "secondary"}>
+                        {decisionTestOverall(visible) === "block" ? "Block" : "Pass"}
+                      </Badge>
+                    )}
+                  </div>
+                  {"error" in run && <p className="m-0 mt-1.5 text-xs text-destructive">{run.error}</p>}
+                  {!("error" in run) && visible.length === 0 && (
+                    <p className="m-0 mt-1.5 text-xs text-muted-foreground">
+                      The model or questions changed since this run. Run it again to score them.
+                    </p>
+                  )}
+                  {visible.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {visible.map(({ check, result }) => {
+                        const chip = decisionTestChip(result, check);
+                        const score = result.kind === "probability" ? result.probability.toFixed(2) : "No answer";
+                        let label = "";
+                        if (chip === "block") label = "Block";
+                        else if (chip === "logged") label = "Pass · logged";
+                        else if (chip === "pass") label = "Pass";
+                        return (
+                          <span
+                            key={check.name}
+                            className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
+                              chip === "block"
+                                ? "border-destructive font-semibold text-destructive"
+                                : "border-border text-muted-foreground"
+                            }`}
+                          >
+                            {check.name} {score}
+                            {label && ` ${label}`}
+                          </span>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
-                {"error" in run ? (
-                  <p className="m-0 mt-1.5 text-xs text-destructive">{run.error}</p>
-                ) : (
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {visibleTestResults(run.results, checks).map(({ check, result }) => {
-                      const chip = decisionTestChip(result, check);
-                      const score = result.kind === "probability" ? result.probability.toFixed(2) : "No answer";
-                      let label = "";
-                      if (chip === "block") label = "Block";
-                      else if (chip === "logged") label = "Pass · logged";
-                      else if (chip === "pass") label = "Pass";
-                      return (
-                        <span
-                          key={check.name}
-                          className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
-                            chip === "block"
-                              ? "border-destructive font-semibold text-destructive"
-                              : "border-border text-muted-foreground"
-                          }`}
-                        >
-                          {check.name} {score}
-                          {label && ` ${label}`}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}

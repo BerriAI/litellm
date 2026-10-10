@@ -1,6 +1,6 @@
 import { isDecisionMode } from "@/lib/decisionModels";
 
-import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
+import { enabledDecisionChecks, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
 
 export interface DecisionModelGroup {
   model_group: string;
@@ -59,8 +59,14 @@ export type DecisionTestResult =
 
 export type DecisionTestResults = Record<string, DecisionTestResult>;
 
+export interface DecisionTestScores {
+  model: string;
+  asked: Record<string, string>;
+  results: DecisionTestResults;
+}
+
 export type DecisionTestRun =
-  | { id: number; input: string; results: DecisionTestResults }
+  | ({ id: number; input: string } & DecisionTestScores)
   | { id: number; input: string; error: string };
 
 interface DecisionsApiAnswer {
@@ -92,30 +98,29 @@ export function parseDecisionTestResponse(body: unknown, questionNames: readonly
 export type DecisionTestChip = "block" | "pass" | "logged" | "no_answer";
 
 export function decisionTestChip(result: DecisionTestResult, check: DecisionModelCheckDraft): DecisionTestChip {
-  if (result.kind !== "probability") return "no_answer";
+  if (result.kind !== "probability") return check.action === "block" ? "block" : "no_answer";
   if (result.probability >= check.threshold) return check.action === "block" ? "block" : "logged";
   return "pass";
 }
 
-export function decisionTestOverall(
-  results: DecisionTestResults,
-  checks: readonly DecisionModelCheckDraft[],
-): "block" | "pass" {
-  const byName = new Map(checks.map((check) => [check.name, check]));
-  for (const [name, result] of Object.entries(results)) {
-    const check = byName.get(name);
-    if (check && decisionTestChip(result, check) === "block") return "block";
-  }
-  return "pass";
+export interface VisibleTestResult {
+  check: DecisionModelCheckDraft;
+  result: DecisionTestResult;
+}
+
+export function decisionTestOverall(visible: readonly VisibleTestResult[]): "block" | "pass" {
+  return visible.some(({ check, result }) => decisionTestChip(result, check) === "block") ? "block" : "pass";
 }
 
 export function visibleTestResults(
-  results: DecisionTestResults,
+  scores: DecisionTestScores,
   checks: readonly DecisionModelCheckDraft[],
-): Array<{ check: DecisionModelCheckDraft; result: DecisionTestResult }> {
-  return checks.flatMap((check) => {
-    const result = results[check.name];
-    return result ? [{ check, result }] : [];
+  model: string,
+): VisibleTestResult[] {
+  if (scores.model !== model) return [];
+  return enabledDecisionChecks(checks).flatMap((check) => {
+    const result = scores.results[check.name];
+    return result && scores.asked[check.name] === check.instructions ? [{ check, result }] : [];
   });
 }
 
