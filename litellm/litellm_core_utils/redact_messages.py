@@ -225,9 +225,12 @@ def redact_error_information(
     )
 
 
-def _request_turn_off_message_logging(request_data: Mapping[str, object]) -> object:
+def _request_turn_off_message_logging(request_data: object) -> object:
     """``turn_off_message_logging`` resolves like ``initialize_standard_callback_dynamic_params``:
-    the top-level value when present, else the first client-metadata slot carrying it."""
+    the top-level value when present, else the first client-metadata slot carrying it.
+    A body that is not a JSON object carries no value."""
+    if not isinstance(request_data, Mapping):
+        return None
     return (
         request_data["turn_off_message_logging"]
         if "turn_off_message_logging" in request_data
@@ -242,7 +245,7 @@ def _request_turn_off_message_logging(request_data: Mapping[str, object]) -> obj
     )
 
 
-def request_opts_into_message_redaction(headers: Mapping[str, str], request_data: Mapping[str, object]) -> bool:
+def request_opts_into_message_redaction(headers: Mapping[str, str], request_data: object) -> bool:
     """Opt-in signals only: usable at auth time before the key's
     ``allow_client_message_redaction_opt_out`` permission is known, so the disable
     header and the global flag are deliberately not consulted."""

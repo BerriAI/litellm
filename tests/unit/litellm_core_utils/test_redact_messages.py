@@ -1229,6 +1229,13 @@ class TestRequestOptsIntoMessageRedaction:
 
         assert request_opts_into_message_redaction({}, {"turn_off_message_logging": False}) is False
 
+    @pytest.mark.parametrize("body", ([1], "x", None, 123, True))
+    def test_non_object_body_is_not_an_opt_in(self, body: object) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, body) is False
+        assert request_opts_into_message_redaction({"x-litellm-enable-message-redaction": "true"}, body) is True
+
 
 @pytest.mark.parametrize("callback_only", (False, True))
 @pytest.mark.parametrize("with_standard_payload", (False, True))
