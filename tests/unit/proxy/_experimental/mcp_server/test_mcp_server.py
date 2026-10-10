@@ -1,5 +1,8 @@
 # Create server parameters for stdio connection
+import asyncio
 import os
+from typing import Final
+
 import pytest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager, nullcontext
@@ -3105,3 +3108,204 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
     assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
     # Permissions check should be invoked with the resolved server name
     mock_is_allowed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_admission_body_peek_times_out_without_losing_the_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    try:
+        from litellm.proxy._experimental.mcp_server import server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    monkeypatch.setattr(server, "MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS", 0.01)
+    jsonrpc_body: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    message: Final = {"type": "http.request", "body": jsonrpc_body, "more_body": False}
+    body_arrived: Final = asyncio.Event()
+
+    async def stalled_receive() -> dict[str, object]:
+        await body_arrived.wait()
+        return message
+
+    peek: Final = server._LazyPeekedBody(stalled_receive)
+    assert await asyncio.wait_for(peek.admission_body(), timeout=1) == b""
+    body_arrived.set()
+    assert await asyncio.wait_for(peek.body(), timeout=1) == jsonrpc_body
+    assert await peek.receive() == message
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_stashes_peeked_body_for_auth():
+    try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_PEEKED_BODY_SCOPE_KEY,
+            _admission_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    jsonrpc_body: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(side_effect=[{"type": "http.request", "body": jsonrpc_body, "more_body": False}])
+    send = AsyncMock()
+    stateless_called = []
+
+    async def stateless_handle(s, r, se) -> None:
+        stateless_called.append(1)  # mutable-ok: records the manager the handler dispatched to
+
+    with (
+        patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
+        patch(  # test-quality-ok: init flag is a module global; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "handle_request", side_effect=stateless_handle
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "_server_instances", {}
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateful, "_server_instances", {}
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert stateless_called, "tools/list without a session should route to the stateless manager"
+    assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == jsonrpc_body
+    request_data: Final = await _read_request_body(_admission_request(scope))
+    assert request_data.get("method") == "tools/list"
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_batch_body_is_not_stashed_for_auth():
+    try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_PEEKED_BODY_SCOPE_KEY,
+            _admission_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    batch_body: Final = b'[{"jsonrpc":"2.0","id":1,"method":"tools/list"},{"jsonrpc":"2.0","id":2,"method":"tools/call"}]'
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(side_effect=[{"type": "http.request", "body": batch_body, "more_body": False}])
+    send = AsyncMock()
+
+    with (
+        patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
+        patch(  # test-quality-ok: init flag is a module global; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "handle_request", new=AsyncMock()
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "_server_instances", {}
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == b"{}"
+    assert await _read_request_body(_admission_request(scope)) == {}
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_truncated_json_body_is_not_stashed_for_auth():
+    try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_PEEKED_BODY_SCOPE_KEY,
+            _admission_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    truncated_body: Final = b'{"jsonrpc":"2.0","id":1,"method":"tools'
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(side_effect=[{"type": "http.request", "body": truncated_body, "more_body": False}])
+    send = AsyncMock()
+
+    with (
+        patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
+        patch(  # test-quality-ok: init flag is a module global; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "handle_request", new=AsyncMock()
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "_server_instances", {}
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == b"{}"
+    assert await _read_request_body(_admission_request(scope)) == {}

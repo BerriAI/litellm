@@ -409,14 +409,14 @@
         "supports_vision": true
     },
     "apac.amazon.nova-2-lite-v1:0": {
-        "cache_read_input_token_cost": 8.25e-08,
-        "input_cost_per_token": 3.3e-07,
+        "cache_read_input_token_cost": 9.9e-08,
+        "input_cost_per_token": 3.96e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 2.75e-06,
+        "output_cost_per_token": 3.311e-06,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -448,14 +448,14 @@
         "supports_vision": true
     },
     "eu.amazon.nova-2-lite-v1:0": {
-        "cache_read_input_token_cost": 8.25e-08,
-        "input_cost_per_token": 3.3e-07,
+        "cache_read_input_token_cost": 1.0725e-07,
+        "input_cost_per_token": 4.29e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 2.75e-06,
+        "output_cost_per_token": 3.597e-06,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -558,6 +558,22 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "amazon.nova-premier-v1:0": {
+        "cache_read_input_token_cost": 6.25e-07,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 10000,
+        "max_tokens": 10000,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-05,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "amazon.nova-pro-v1:0": {
         "cache_read_input_token_cost": 2e-07,
@@ -783,22 +799,22 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "amazon.titan-text-express-v1": {
-        "input_cost_per_token": 1.3e-06,
+        "input_cost_per_token": 2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 42000,
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 1.7e-06
+        "output_cost_per_token": 6e-07
     },
     "amazon.titan-text-lite-v1": {
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 42000,
         "max_output_tokens": 4000,
         "max_tokens": 4000,
         "mode": "chat",
-        "output_cost_per_token": 4e-07
+        "output_cost_per_token": 2e-07
     },
     "amazon.titan-text-premier-v1:0": {
         "input_cost_per_token": 5e-07,
@@ -13197,28 +13213,30 @@
     },
     "bedrock/moonshotai.kimi-k2-thinking": {
         "deprecation_date": "2027-03-30",
-        "input_cost_per_token": 7.3e-07,
-        "input_cost_per_token_flex": 3.6e-07,
+        "input_cost_per_token": 6e-07,
+        "input_cost_per_token_flex": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
         "max_output_tokens": 16000,
         "max_tokens": 16000,
         "mode": "chat",
-        "output_cost_per_token": 3.03e-06,
-        "output_cost_per_token_flex": 1.52e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html",
+        "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json",
         "supports_function_calling": true,
         "supports_reasoning": true
     },
     "bedrock/moonshotai.kimi-k2.5": {
         "input_cost_per_token": 6e-07,
+        "input_cost_per_token_flex": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
         "max_output_tokens": 16000,
         "max_tokens": 16000,
         "mode": "chat",
-        "output_cost_per_token": 3.03e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html",
+        "output_cost_per_token": 3e-06,
+        "output_cost_per_token_flex": 1.5e-06,
+        "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
@@ -14655,7 +14673,7 @@
         "output_vector_size": 1536
     },
     "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0": {
-        "input_cost_per_token": 2e-07,
+        "input_cost_per_token": 1.1e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
@@ -14664,13 +14682,13 @@
         "output_vector_size": 1024
     },
     "bedrock/us-gov-west-1/amazon.titan-text-express-v1": {
-        "input_cost_per_token": 1.3e-06,
+        "input_cost_per_token": 8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 42000,
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 1.7e-06
+        "output_cost_per_token": 1.6e-06
     },
     "bedrock/us-gov-west-1/amazon.titan-text-lite-v1": {
         "input_cost_per_token": 3e-07,
@@ -45103,7 +45121,6 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
-        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.04e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -45260,7 +45277,6 @@
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 3e-08,
-        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -71826,5 +71842,51 @@
             "image"
         ],
         "supports_embedding_image_input": true
+    },
+    "scaledown/extract": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/summarize": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/compress": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_vision": false
+    },
+    "scaledown/classify": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/decisions": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
     }
 }

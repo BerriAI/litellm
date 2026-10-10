@@ -14,7 +14,6 @@ from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
-from typing import List
 
 
 @pytest.fixture
@@ -728,11 +727,14 @@ async def _build_streaming(client_events, backend_ws):
     client_ws.send_text = send_text
     client_ws.receive_text = input_queue.get
 
-    logging_obj = MagicMock()
-    logging_obj.pre_call = MagicMock()
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.success_handler = MagicMock()
-    logging_obj.model_call_details = {}
+    logging_obj: Final = MagicMock(
+        pre_call=MagicMock(),
+        async_success_handler=AsyncMock(),
+        success_handler=MagicMock(),
+        dispatch_success_handlers=AsyncMock(),
+        dispatch_failure_handlers=AsyncMock(),
+        model_call_details={},
+    )
 
     streaming = RealTimeStreaming(
         websocket=client_ws,
@@ -754,7 +756,7 @@ async def test_voice_transcript_blocked_by_guardrail():
     guardrail = _make_guardrail(GuardrailEventHooks.realtime_input_transcription)
     litellm.callbacks = [guardrail]
 
-    client_events: List[dict] = []
+    client_events: list[dict] = []
 
     # Build the transcript event that would come from the OpenAI backend
     transcript_event = json.dumps(

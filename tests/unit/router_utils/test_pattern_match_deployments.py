@@ -359,6 +359,25 @@ def test_pattern_matching_router_with_default_wildcard_and_model_wildcard():
     assert deployments[0]["model_name"] == "llmengine/*"
 
 
+def test_pattern_matching_router_uses_default_wildcard_for_unmatched_model() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "*"},
+            },
+            {
+                "model_name": "anthropic-*",
+                "litellm_params": {"model": "anthropic/claude"},
+            },
+        ]
+    )
+
+    deployments: Final = router.pattern_router.route("gpt-4o-mini")
+
+    assert tuple(deployment["model_name"] for deployment in deployments) == ("*",)
+
+
 def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly
