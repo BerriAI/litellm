@@ -144,9 +144,7 @@ export function MCPServerPermissions({
       {blocksAllMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
           <ServerIcon className="h-4 w-4 text-destructive" />
-          <p className="text-destructive text-sm">
-            No MCP servers — this key is blocked from all MCP servers, including its team&apos;s servers
-          </p>
+          <p className="text-destructive text-sm">No MCP servers. Access to all MCP servers is blocked</p>
         </div>
       ) : grantsAllProxyMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20">

@@ -27,6 +27,7 @@ interface MCPToolPermissionsProps {
   toolPermissions: Record<string, string[]>;
   onChange: (toolPermissions: Record<string, string[]>) => void;
   disabled?: boolean;
+  initializeDefaultPermissions?: boolean;
 }
 
 const NO_SELECTION: readonly string[] = [];
@@ -57,6 +58,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   toolPermissions,
   onChange,
   disabled = false,
+  initializeDefaultPermissions = true,
 }) => {
   const {
     data: allServers = [],
@@ -110,6 +112,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       } else {
         const fetchedTools: MCPTool[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
+        if (!initializeDefaultPermissions) return;
 
         // Default only unrestricted direct servers to non-delete tools.
         // Read latest permissions from the ref to avoid clobbering concurrent results.

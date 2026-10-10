@@ -22,6 +22,36 @@ describe("MCPToolPermissions", () => {
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
   });
 
+  it("preserves an unrestricted stored grant until a tool permission is edited", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const tools = [
+      { name: "list_records", description: "List records" },
+      { name: "delete_record", description: "Delete a record" },
+    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([{ server_id: mockServerId, server_name: mockServerName }]);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools, error: false });
+    renderWithProviders(
+      <MCPToolPermissions
+        accessToken={mockAccessToken}
+        selectedServers={[mockServerId]}
+        toolPermissions={{}}
+        onChange={onChange}
+        initializeDefaultPermissions={false}
+      />,
+    );
+
+    expect(await screen.findByText("delete_record")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Flat List" }));
+
+    expect(screen.getByRole("checkbox", { name: "delete_record" })).toBeChecked();
+    expect(onChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("checkbox", { name: "delete_record" }));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ [mockServerId]: ["list_records"] });
+  });
+
   it("should update tool permissions when user selects a tool", async () => {
     /**
      * Tests that clicking a tool checkbox calls onChange with updated permissions.
