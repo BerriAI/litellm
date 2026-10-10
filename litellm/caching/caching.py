@@ -448,8 +448,8 @@ class Cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
         else:
             cache_key += self._get_proxy_cache_scope(
-                cast(Mapping[str, object], kwargs)
-            )  # cast-ok: cache kwargs are string-keyed
+                cast(Mapping[str, object], kwargs)  # cast-ok: cache kwargs are string-keyed
+            )
 
         reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
         reasoning_summary_material: Final = (
