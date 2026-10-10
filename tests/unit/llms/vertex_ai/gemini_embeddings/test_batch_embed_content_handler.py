@@ -1,3 +1,4 @@
+import json
 from typing import Final
 
 import httpx
@@ -31,26 +32,49 @@ def test_resolve_file_references_fetches_the_file_metadata_for_both_reference_fo
     assert resolved == {reference: {"mime_type": "video/mp4", "uri": FILES_URI}}
 
 
-def test_gemini_embedding_sends_batch_request_and_parses_vectors(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("embedding_input", ["good morning from litellm", ["good morning from litellm"]])
+@pytest.mark.asyncio
+async def test_gemini_embedding_sends_batch_request_and_parses_vectors(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    embedding_input: str | list[str],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(GEMINI_BATCH_EMBEDDINGS_URL).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "embeddings": [{"values": [0.1, 0.2, 0.3]}],
-                "usageMetadata": {"promptTokenCount": 2, "totalTokenCount": 2},
-            },
+            json={"embeddings": [{"values": [0.1, 0.2, 0.3]}]},
         )
     )
 
-    response: Final = litellm.embedding(
-        model="gemini/gemini-embedding-001",
-        input=["hello"],
-        api_key="gemini-test-key",
+    response: Final = (
+        litellm.embedding(model="gemini/gemini-embedding-001", input=embedding_input, api_key="gemini-test-key")
+        if sync_mode
+        else await litellm.aembedding(
+            model="gemini/gemini-embedding-001", input=embedding_input, api_key="gemini-test-key"
+        )
     )
 
-    request_body: Final = route.calls.last.request.read().decode()
-    assert "hello" in request_body
-    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "good morning from litellm"}]},
+            }
+        ]
+    }
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
+    local_token_count: Final = litellm.token_counter(
+        model="gemini-embedding-001", text="good morning from litellm"
+    )
+    assert local_token_count > 0
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (
+        local_token_count,
+        local_token_count,
+    )
 
 
 @pytest.mark.asyncio
