@@ -21,9 +21,14 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
+import litellm  # noqa: E402  # sys.path must be patched before importing litellm
+from litellm.llms.custom_httpx.http_handler import (
+    HTTPHandler,  # noqa: E402  # sys.path must be patched before importing litellm
+)
 from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)
@@ -47,6 +52,38 @@ def test_is_anthropic_messages_url(url: str, expected: bool) -> None:
     from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
 
     assert is_anthropic_messages_url(url) is expected
+
+
+def test_anthropic_model_not_found_maps_to_not_found_but_authentication_error_does_not() -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                404,
+                json={"type": "error", "error": {"type": "not_found_error", "message": "model not found"}},
+            )
+        )
+        with pytest.raises(litellm.NotFoundError):
+            litellm.completion(
+                model="anthropic/claude-opus-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-api-key",
+                client=HTTPHandler(),
+            )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                401,
+                json={"type": "error", "error": {"type": "authentication_error", "message": "invalid key"}},
+            )
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            litellm.completion(
+                model="anthropic/claude-opus-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-api-key",
+                client=HTTPHandler(),
+            )
 
 
 @pytest.mark.parametrize(
