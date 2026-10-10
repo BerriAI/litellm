@@ -29,7 +29,7 @@ export default function HomePage() {
           <PageHeaderControls>
             <Button render={<a href={uiHref("api-keys?create=true")} />}>
               <Plus />
-              Create New Key
+              Create New Virtual Key
             </Button>
           </PageHeaderControls>
         )}

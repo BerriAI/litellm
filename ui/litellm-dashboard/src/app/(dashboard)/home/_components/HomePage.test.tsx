@@ -97,22 +97,22 @@ describe("HomePage", () => {
     usage.results = [day("2026-10-08", "gpt-6.1-sol", 900), day("2026-10-09", "claude-haiku-5-5", 100)];
   });
 
-  it("shows the usage totals and links Create New Key to the key creation flow", () => {
+  it("shows the usage totals and links Create New Virtual Key to the key creation flow", () => {
     renderHome();
     expect(screen.getByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
     expect(screen.getByText("$501.74")).toBeInTheDocument();
     expect(screen.getByText("5,118")).toBeInTheDocument();
     expect(screen.getByText("98.6M")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /create new key/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /create new virtual key/i })).toHaveAttribute(
       "href",
       expect.stringMatching(/\/api-keys\?create=true$/),
     );
   });
 
-  it("hides Create New Key from view-only users", () => {
+  it("hides Create New Virtual Key from view-only users", () => {
     auth.isViewOnly = true;
     renderHome();
-    expect(screen.queryByRole("link", { name: /create new key/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create new virtual key/i })).not.toBeInTheDocument();
   });
 
   it("lists the curated launches newest first with their links", () => {
