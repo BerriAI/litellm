@@ -100,6 +100,7 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
+from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 
 # register_async_client_cleanup is lazy-loaded and called on first access
 
@@ -420,8 +421,8 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
 )
-client_session: Optional[httpx.Client] = None
-aclient_session: Optional[httpx.AsyncClient] = None
+client_session: Optional[Union[httpx.Client, DefaultHttpxClient]] = None
+aclient_session: Optional[Union[httpx.AsyncClient, DefaultAsyncHttpxClient]] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
@@ -1687,11 +1688,17 @@ if TYPE_CHECKING:
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
     )
+    from .llms.databricks.decisions.transformation import (
+        DatabricksDecisionsConfig as DatabricksDecisionsConfig,
+    )
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure_ai.decisions.transformation import (
+        AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

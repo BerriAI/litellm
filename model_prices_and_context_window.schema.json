@@ -113,11 +113,6 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
-        "cache_creation_input_token_cost_above_200k_tokens_batches": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
-        },
         "cache_creation_input_token_cost_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -987,6 +982,9 @@
           "type": "boolean"
         },
         "supports_audio_output": {
+          "type": "boolean"
+        },
+        "supports_bedrock_converse_tool_result_images": {
           "type": "boolean"
         },
         "supports_bedrock_runtime_chat_completions_inline_reasoning": {

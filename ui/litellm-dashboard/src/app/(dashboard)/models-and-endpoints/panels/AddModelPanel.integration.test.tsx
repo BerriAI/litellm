@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { act, renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddModelPanel from "./AddModelPanel";
@@ -70,6 +70,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         provider_display_name: "Anthropic",
         litellm_provider: "anthropic",
         default_model_placeholder: "claude-3-opus",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
+      {
+        provider: "TypeSafe",
+        provider_display_name: "TypeSafe",
+        litellm_provider: "typesafe",
+        default_model_placeholder: "jev-latest",
         credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
       },
     ],
@@ -536,5 +543,63 @@ describe("AddModelPanel behaviours the removed Advanced Settings form instance n
       },
       model_info: { ...baseModelInfo },
     });
+  });
+});
+
+describe("AddModelPanel decision models", () => {
+  const DECISION_COST_MAP = {
+    "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+    "gpt-4o-2024-08-06": { litellm_provider: "openai", mode: "chat" },
+    "gpt-6-luna": { litellm_provider: "openai", mode: "chat", supported_endpoints: ["/v1/decisions"] },
+    "claude-sonnet-4-5": { litellm_provider: "anthropic", mode: "chat" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: DECISION_COST_MAP });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  const decisionNotice = () => screen.queryByRole("note", { name: "Decision model notice" });
+
+  it("finds a provider by the name of one of its decision models", async () => {
+    const { user } = await setup();
+    await user.type(screen.getByRole("combobox", { name: /provider/i }), "jev");
+
+    expect(await screen.findByRole("option", { name: /TypeSafe/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
+  });
+
+  it("points a decision-only provider at the decision routes, the docs, and the playground", async () => {
+    const { user } = await setup();
+    await user.type(screen.getByRole("combobox", { name: /provider/i }), "TypeSafe");
+    await user.click(await screen.findByRole("option", { name: /TypeSafe/ }));
+
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(within(note).getByRole("link", { name: "How to call decision models" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
+    );
+    expect(within(note).getByRole("link", { name: "test it in the System One playground" })).toHaveAttribute(
+      "href",
+      "/ui/playground?tab=system-one",
+    );
+  });
+
+  it("shows the notice on a chat provider only once one of its decision models is picked", async () => {
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+    await user.click(await screen.findByText("gpt-4o-2024-08-06"));
+    expect(decisionNotice()).not.toBeInTheDocument();
+
+    await user.click(await screen.findByText("gpt-6-luna"));
+
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(note).not.toHaveTextContent("/chat/completions");
   });
 });

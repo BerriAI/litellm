@@ -9015,10 +9015,14 @@ class ProviderConfigManager:
             return litellm.CloudflareDecisionsConfig()
         if provider == LlmProviders.STRANDS_DECIDER:
             return litellm.StrandsDeciderDecisionsConfig()
+        if provider == LlmProviders.DATABRICKS:
+            return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
+        if provider == LlmProviders.AZURE_AI:
+            return litellm.AzureAIDecisionsConfig()
         return None
 
     @staticmethod
