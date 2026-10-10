@@ -80,7 +80,7 @@ def _redact_streaming_response(streaming_response):
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
         if getattr(streaming_response, "instructions", None) is not None:
-            streaming_response.instructions = REDACTED_BY_LITELLM
+            streaming_response.instructions = REDACTED_BY_LITELLM  # rebind-ok: redact the logged stream in place
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
             streaming_response.reasoning = None
 
