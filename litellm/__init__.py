@@ -651,6 +651,7 @@ zai_models: Set = set()
 deepseek_models: Set = set()
 tencent_models: Set = set()
 runwayml_models: Set = set()
+bytedance_models: set = set()  # mutable-ok: populated by _populate_provider_model_sets
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
@@ -876,6 +877,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             tencent_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
+        elif value.get("litellm_provider") == "bytedance":
+            bytedance_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
             llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
@@ -1077,6 +1080,7 @@ model_list = list(
     | perplexity_models
     | set(maritalk_models)
     | runwayml_models
+    | bytedance_models
     | vertex_language_models
     | watsonx_models
     | gemini_models
@@ -1193,6 +1197,7 @@ def _build_models_by_provider() -> dict:
         "deepseek": deepseek_models,
         "tencent": tencent_models,
         "runwayml": runwayml_models,
+        "bytedance": bytedance_models,
         "mistral": mistral_chat_models,
         "azure_ai": azure_ai_models,
         "voyage": voyage_models,

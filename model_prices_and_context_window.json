@@ -23691,6 +23691,81 @@
             "/v1/images/generations"
         ]
     },
+    "bytedance/dreamina-seedance-2-0-260128": {
+        "litellm_provider": "bytedance",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1512,
+        "output_cost_per_second_480p": 0.06726,
+        "output_cost_per_second_720p": 0.1512,
+        "output_cost_per_second_1080p": 0.3742,
+        "output_cost_per_second_4k": 0.7776,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "bytedance/dreamina-seedance-2-0-fast-260128": {
+        "litellm_provider": "bytedance",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.12,
+        "output_cost_per_second_480p": 0.06,
+        "output_cost_per_second_720p": 0.12,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "bytedance/dreamina-seedance-2-0-mini-260615": {
+        "litellm_provider": "bytedance",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.04,
+        "output_cost_per_second_720p": 0.08,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "bytedance/dreamina-seedance-2-5-260628": {
+        "litellm_provider": "bytedance",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2312,
+        "output_cost_per_second_480p": 0.1028,
+        "output_cost_per_second_720p": 0.2312,
+        "output_cost_per_second_1080p": 0.5686,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "fal_ai/bytedance/seedance-2.5/text-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",

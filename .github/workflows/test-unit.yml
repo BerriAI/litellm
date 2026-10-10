@@ -234,6 +234,7 @@ jobs:
               tests/unit/llms/base_llm
               tests/unit/llms/baseten
               tests/unit/llms/black_forest_labs
+              tests/unit/llms/bytedance
               tests/unit/llms/bytez
               tests/unit/llms/cerebras
               tests/unit/llms/chat

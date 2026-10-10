@@ -83,7 +83,9 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     Params here: https://platform.openai.com/docs/api-reference/videos/create
     """
 
-    input_reference: FileTypes | None  # File reference for input image
+    input_reference: FileTypes | None  # File reference for input image (first frame)
+    last_frame: ReadOnly[FileTypes | None]  # File reference for last frame image
+    reference_images: ReadOnly[tuple[str, ...] | None]  # Reference image URLs (up to 9)
     image: object | None  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
     parameters: dict[str, object] | None  # Provider-specific parameters block passed directly to the API
     model: str | None

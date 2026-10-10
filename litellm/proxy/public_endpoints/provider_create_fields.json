@@ -3660,6 +3660,24 @@
     "default_model_placeholder": "volcengine/<any-model-on-volcengine>"
   },
   {
+    "provider": "ByteDance",
+    "provider_display_name": "ByteDance (Seedance)",
+    "litellm_provider": "bytedance",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "ark-...",
+        "tooltip": "BytePlus ModelArk API key (BYTEDANCE_API_KEY or ARK_API_KEY)",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "bytedance/dreamina-seedance-2-0-260128"
+  },
+  {
     "provider": "Voyage",
     "provider_display_name": "VoyageAI by MongoDB",
     "litellm_provider": "voyage",

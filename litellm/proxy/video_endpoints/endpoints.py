@@ -49,14 +49,15 @@ async def video_generation(
     request: Request,
     fastapi_response: Response,
     input_reference: UploadFile | None = File(None),
+    last_frame: UploadFile | None = File(None),  # noqa: B008  # FastAPI requires File() as default for multipart
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Video generation endpoint for creating videos from text prompts.
-    
+
     Follows the OpenAI Videos API spec:
     https://platform.openai.com/docs/api-reference/videos
-    
+
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos" \
@@ -84,10 +85,16 @@ async def video_generation(
 
     # Read request body
     data: Final = await read_request_body(request=request)
-    if input_reference is not None:
+    # isinstance, not `is not None`: an omitted multipart field arrives as FastAPI's
+    # File(None) sentinel rather than None when the endpoint is called directly.
+    if isinstance(input_reference, UploadFile):
         input_reference_file: Final = await batch_to_bytesio([input_reference])
         if input_reference_file:
             data["input_reference"] = input_reference_file[0]
+    if isinstance(last_frame, UploadFile):
+        last_frame_file: Final = await batch_to_bytesio([last_frame])
+        if last_frame_file:
+            data["last_frame"] = last_frame_file[0]
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
