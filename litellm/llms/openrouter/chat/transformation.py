@@ -277,6 +277,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 usage=chunk.get("usage"),
                 model=chunk["model"],
                 choices=new_choices,
+                provider_specific_fields={"provider": chunk["provider"]} if chunk.get("provider") else None,
             )
         except KeyError as e:
             raise OpenRouterException(

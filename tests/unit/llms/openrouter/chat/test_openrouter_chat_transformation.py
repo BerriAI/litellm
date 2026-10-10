@@ -1,8 +1,13 @@
 
+import json
+from typing import Final
+from unittest.mock import MagicMock
+
 import httpx
 import pytest
 
 
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
@@ -78,6 +83,34 @@ class TestOpenRouterChatCompletionStreamingHandler:
 
         assert "KeyError" in str(exc_info.value)
         assert exc_info.value.status_code == 400
+
+
+def test_streamed_chunks_keep_the_upstream_provider() -> None:
+    upstream_chunks: Final = [
+        {
+            "id": "gen-1",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "google/gemma-4-26b-a4b-it",
+            "provider": "Cloudflare",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}}],
+        }
+        for text in ("Hel", "lo")
+    ]
+    sse_lines: Final = [f"data: {json.dumps(chunk)}\n".encode() for chunk in upstream_chunks]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=OpenRouterChatCompletionStreamingHandler(iter(sse_lines), sync_stream=True),
+        model="openrouter/google/gemma-4-26b-a4b-it",
+        custom_llm_provider="openrouter",
+        logging_obj=MagicMock(),
+    )
+
+    content_chunks: Final = [chunk for chunk in wrapper if chunk.choices[0].delta.content]
+
+    assert [chunk.choices[0].delta.content for chunk in content_chunks] == ["Hel", "lo"]
+    for chunk in content_chunks:
+        served: dict[str, object] = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+        assert served["provider"] == "Cloudflare"
 
 
 def test_openrouter_extra_body_transformation():
