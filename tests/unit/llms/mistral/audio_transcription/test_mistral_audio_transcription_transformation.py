@@ -2,11 +2,14 @@ import os
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
+
 import litellm
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.mistral.audio_transcription.transformation import (
     MistralAudioTranscriptionConfig,
 )
@@ -193,3 +196,89 @@ def test_mistral_audio_transcription_response_transform_empty():
 
     assert isinstance(response, TranscriptionResponse)
     assert response.text == ""
+
+
+def test_mistral_audio_transcription_response_uses_prompt_audio_seconds_for_cost():
+    """Mistral bills on usage.prompt_audio_seconds, so that is the duration cost reads"""
+    config = MistralAudioTranscriptionConfig()
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "text": "hello",
+        "usage": {"prompt_audio_seconds": 600, "total_tokens": 10},
+    }
+
+    response = config.transform_audio_transcription_response(mock_response)
+
+    assert response.hidden_params["audio_transcription_duration"] == 600.0
+    assert response.hidden_params["usage"] == {"prompt_audio_seconds": 600, "total_tokens": 10}
+    assert getattr(response, "duration", None) is None
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_audio_seconds": None},
+        {"prompt_audio_seconds": "not-a-number"},
+        "not-an-object",
+    ],
+)
+def test_mistral_audio_transcription_response_without_usable_usage_has_no_duration(usage):
+    config = MistralAudioTranscriptionConfig()
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = {"text": "hello", "usage": usage}
+
+    response = config.transform_audio_transcription_response(mock_response)
+
+    assert "audio_transcription_duration" not in response.hidden_params
+
+
+def test_mistral_transcription_cost_uses_provider_billed_seconds():
+    """
+    End to end through litellm.transcription: the seconds Mistral reports win over the
+    local file measurement (about 17s for this wav), so spend matches what Mistral bills
+    """
+    billed_seconds = 30
+    wav_path = os.path.join(
+        os.path.dirname(__file__),
+        "../../../../..",
+        "tests",
+        "llm_translation",
+        "gettysburg.wav",
+    )
+    with open(wav_path, "rb") as f:
+        audio_bytes = f.read()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "voxtral-mini-2602",
+                "text": "a tone",
+                "language": None,
+                "segments": [],
+                "usage": {"prompt_audio_seconds": billed_seconds, "total_tokens": 3},
+            },
+            request=request,
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+    response = litellm.transcription(
+        model="mistral/voxtral-mini-2602",
+        file=("gettysburg.wav", audio_bytes, "audio/wav"),
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert response.hidden_params["audio_transcription_duration"] == float(billed_seconds)
+
+    cost_per_second = litellm.get_model_info("mistral/voxtral-mini-2602")["input_cost_per_second"]
+    assert cost_per_second
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="mistral/voxtral-mini-2602",
+        call_type="transcription",
+    )
+    assert cost == pytest.approx(billed_seconds * cost_per_second)

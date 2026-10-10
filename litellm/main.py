@@ -7892,7 +7892,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if response is not None and not isinstance(response, Coroutine) and file is not None:
             existing_duration: Final = getattr(response, "duration", None)
-            if existing_duration is None:
+            if existing_duration is None and response.hidden_params.get("audio_transcription_duration") is None:
                 calculated_duration: Final = calculate_request_duration(file)
                 if calculated_duration is not None:
                     response.hidden_params["audio_transcription_duration"] = calculated_duration
@@ -8165,12 +8165,12 @@ def transcription(
     # exposing it in the response body (see sync path comment above).
     if response is not None and not isinstance(response, Coroutine):
         existing_duration: Final = getattr(response, "duration", None)
-        if existing_duration is None:
+        response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+        )
+        if existing_duration is None and response_hidden_params.get("audio_transcription_duration") is None:
             calculated_duration: Final = calculate_request_duration(file)
             if calculated_duration is not None:
-                response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
-                    dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
-                )
                 response_hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:

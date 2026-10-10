@@ -276,6 +276,31 @@ class TestCalculateRequestDuration:
             wav_header
         ), "File position should be restored to original position"
 
+    @pytest.mark.skipif(
+        os.environ.get("SKIP_AUDIO_TESTS") == "true",
+        reason="Skipping audio tests - soundfile may not be available",
+    )
+    def test_flac_without_sample_count_counts_decoded_frames(self):
+        """
+        A FLAC whose STREAMINFO has no total sample count (what ffmpeg writes to a
+        pipe) makes libsndfile report SF_COUNT_MAX frames. The duration must come
+        from the decoded audio, not a ~2^63 frame count and not a free 0 or None
+        """
+        np = pytest.importorskip("numpy")
+        sf = pytest.importorskip("soundfile")
+
+        buffer = io.BytesIO()
+        sf.write(buffer, np.zeros(1600, dtype="int16"), 16000, format="FLAC")
+        known_length = buffer.getvalue()
+        assert calculate_request_duration(known_length) == pytest.approx(0.1)
+
+        # STREAMINFO starts at byte 8; the low 36 bits of bytes 18..25 hold the total sample count
+        unknown_length = bytearray(known_length)
+        packed = int.from_bytes(unknown_length[18:26], "big") & ~((1 << 36) - 1)
+        unknown_length[18:26] = packed.to_bytes(8, "big")
+
+        assert calculate_request_duration(bytes(unknown_length)) == pytest.approx(0.1)
+
 
 class TestGetAudioFileContentHash:
     """Test the get_audio_file_content_hash function for cache key generation"""

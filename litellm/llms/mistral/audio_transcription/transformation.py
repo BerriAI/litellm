@@ -7,6 +7,7 @@ API reference: https://docs.mistral.ai/api/#tag/audio/operation/audio_transcript
 from typing import Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -24,6 +25,26 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 
 class MistralAudioTranscriptionException(BaseLLMException):
     pass
+
+
+class _MistralTranscriptionUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    prompt_audio_seconds: float | None = None
+
+
+class _MistralTranscriptionBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    usage: _MistralTranscriptionUsage | None = None
+
+
+def _billed_audio_seconds(body: object) -> float | None:
+    try:
+        parsed: Final = _MistralTranscriptionBody.model_validate(body)
+    except ValidationError:
+        return None
+    return parsed.usage.prompt_audio_seconds if parsed.usage is not None else None
 
 
 class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -147,5 +168,12 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if "language" in response_json:
             response["language"] = response_json["language"]
 
-        response.hidden_params = response_json
+        # Mistral bills transcription on usage.prompt_audio_seconds, so cost uses it
+        # instead of measuring the uploaded file locally
+        billed_seconds: Final = _billed_audio_seconds(response_json)
+        response.hidden_params = (
+            response_json
+            if billed_seconds is None
+            else {**response_json, "audio_transcription_duration": billed_seconds}
+        )
         return response
