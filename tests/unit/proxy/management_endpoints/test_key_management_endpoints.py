@@ -7709,7 +7709,7 @@ async def test_process_single_key_update():
                 mock_delete_cache.return_value = None
 
                 # Mock hash_token (imported from litellm.proxy._types)
-                with patch("litellm.proxy._types.hash_token") as mock_hash:
+                with patch("litellm.types.proxy.auth.user_api_key_auth.hash_token") as mock_hash:
                     mock_hash.return_value = "hashed-test-key-123"
 
                     # Mock _hash_token_if_needed
@@ -7855,7 +7855,7 @@ async def test_bulk_update_keys_success(monkeypatch):
             with patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object"
             ):
-                with patch("litellm.proxy._types.hash_token") as mock_hash:
+                with patch("litellm.types.proxy.auth.user_api_key_auth.hash_token") as mock_hash:
                     mock_hash.side_effect = ["hashed-key-1", "hashed-key-2"]
 
                     def _hash_for_bulk_success(token: str) -> str:
@@ -7983,7 +7983,7 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
             with patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object"
             ):
-                with patch("litellm.proxy._types.hash_token") as mock_hash:
+                with patch("litellm.types.proxy.auth.user_api_key_auth.hash_token") as mock_hash:
                     mock_hash.return_value = "hashed-key-1"
 
                     def _hash_for_bulk_partial(token: str) -> str:
