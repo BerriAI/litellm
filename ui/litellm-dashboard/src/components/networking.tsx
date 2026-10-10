@@ -141,6 +141,7 @@ import type {
   DailyActivityKeyPageResponse,
   DailyActivityKeySearchResponse,
   DailyActivityRequest,
+  DailyActivityUserPageResponse,
   ExportFormat,
   ExportType,
   ModelTopKeysResponse,
@@ -1381,6 +1382,16 @@ export const dailyActivityExportCall = (
   apiClient.getBlob(`/${entity}/daily/activity/export`, {
     accessToken: req.accessToken,
     query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+  });
+
+export const userDailyActivityUserPageCall = (
+  req: DailyActivityRequest,
+  offset: number,
+  limit: number,
+): Promise<DailyActivityUserPageResponse> =>
+  apiClient.get<DailyActivityUserPageResponse>(`/user/daily/activity/aggregated/users`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery("user", req, { offset, limit }),
   });
 
 export const cacheLeakageKeysCall = (req: DailyActivityRequest, limit?: number): Promise<CacheLeakageKeysResponse> =>

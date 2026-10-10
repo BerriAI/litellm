@@ -18274,6 +18274,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/daily/activity/aggregated/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Aggregated Users */
+        get: operations["get_user_daily_activity_aggregated_users_user_daily_activity_aggregated_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/daily/activity/export": {
         parameters: {
             query?: never;
@@ -30844,6 +30861,17 @@ export interface components {
         DailyActivityKeySearchResponse: {
             /** Api Keys */
             api_keys: components["schemas"]["KeyActivityRow"][];
+        };
+        /** DailyActivityUserPageResponse */
+        DailyActivityUserPageResponse: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total Users */
+            total_users: number;
+            /** Users */
+            users: components["schemas"]["UserActivityRow"][];
         };
         /** DailySpendData */
         DailySpendData: {
@@ -48263,6 +48291,50 @@ export interface components {
             user_spend?: number | null;
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
+        };
+        /** UserActivityRow */
+        UserActivityRow: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /** UserBanner */
         UserBanner: {
@@ -73811,6 +73883,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DailyActivityKeySearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_aggregated_users_user_daily_activity_aggregated_users_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityUserPageResponse"];
                 };
             };
             /** @description Validation Error */

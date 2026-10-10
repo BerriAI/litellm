@@ -13,6 +13,8 @@ export type DailyActivityKeySearchResponse = components["schemas"]["DailyActivit
 export type DailyActivityKeyPageResponse = components["schemas"]["DailyActivityKeyPageResponse"];
 export type ModelTopKeysResponse = components["schemas"]["ModelTopKeysResponse"];
 export type CacheLeakageKeysResponse = components["schemas"]["CacheLeakageKeysResponse"];
+export type UserActivityRow = components["schemas"]["UserActivityRow"];
+export type DailyActivityUserPageResponse = components["schemas"]["DailyActivityUserPageResponse"];
 
 export interface DailyActivityRequest {
   accessToken: string;
