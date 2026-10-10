@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 from fastapi import HTTPException
 
@@ -88,6 +90,30 @@ class TestChangedTeamFields:
     def test_folded_field_sent_inside_metadata_is_named_not_metadata(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["b"]})
         assert changed_team_fields(data, _team(metadata={"guardrails": ["a"]})) == frozenset({"guardrails"})
+
+    def test_top_level_require_trace_id_change_is_attributed_to_the_folded_field(self):
+        existing: Final = _team(metadata={"require_trace_id": True})
+        data: Final = UpdateTeamRequest(team_id="team-1", require_trace_id=False)
+
+        assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
+        assert team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"})) == TeamAdminFieldNotPermitted(
+            field="require_trace_id"
+        )
+        assert changed_team_fields(UpdateTeamRequest(team_id="team-1", require_trace_id=True), existing) == frozenset()
+
+    def test_metadata_replacement_cannot_drop_stored_require_trace_id(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={})
+        existing: Final = _team(metadata={"require_trace_id": True})
+
+        assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
+        assert team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"})) == TeamAdminFieldNotPermitted(
+            field="require_trace_id"
+        )
+
+    def test_resending_stored_require_trace_id_is_not_a_change(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={"require_trace_id": True})
+
+        assert changed_team_fields(data, _team(metadata={"require_trace_id": True})) == frozenset()
 
     def test_custom_metadata_key_change_is_attributed_to_metadata(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["a"], "cost_center": "b"})

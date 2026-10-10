@@ -146,6 +146,7 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "guardrails",
   "opted_out_global_guardrails",
   "disable_global_guardrails",
+  "require_trace_id",
 ]);
 
 const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
@@ -418,6 +419,7 @@ const teamUpdateFieldsSchema = z.object({
     .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message),
   guardrails: z.array(z.string()).optional(),
   disable_global_guardrails: z.boolean().optional(),
+  require_trace_id: z.boolean().optional(),
   policies: z.array(z.string()).optional(),
   access_group_ids: z.array(z.string()).optional(),
   vector_stores: z.array(z.string()).optional(),
@@ -476,6 +478,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   default_estimated_output_tokens_per_model: "",
   guardrails: [],
   disable_global_guardrails: false,
+  require_trace_id: false,
   policies: [],
   access_group_ids: [],
   vector_stores: [],
@@ -538,6 +541,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     : "",
   guardrails: effectiveGuardrails,
   disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
+  require_trace_id: info.metadata?.require_trace_id === true,
   policies: info.policies || [],
   access_group_ids: info.access_group_ids || [],
   vector_stores: info.object_permission?.vector_stores || [],
@@ -628,11 +632,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole } = useAuthorized();
+  const { userRole, isViewOnly } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
+  const canEditAsProxyAdmin = is_proxy_admin && !isViewOnly;
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
@@ -1033,6 +1038,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
           ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
           : {};
+      const storedRequireTraceIdMetadata =
+        info.metadata && Object.prototype.hasOwnProperty.call(info.metadata, "require_trace_id")
+          ? { require_trace_id: info.metadata.require_trace_id }
+          : {};
+      const requireTraceIdMetadata =
+        canEditAsProxyAdmin && values.require_trace_id !== (info.metadata?.require_trace_id === true)
+          ? { require_trace_id: values.require_trace_id === true }
+          : storedRequireTraceIdMetadata;
 
       const updateData: any = {
         team_id: teamId,
@@ -1053,6 +1066,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
+          ...requireTraceIdMetadata,
           ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: estimatedOutputTokens } : {}),
           ...(estimatedOutputTokensPerModel !== undefined
             ? { default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel }
@@ -1351,6 +1365,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
                   : "Default"}
               </p>
+            </div>
+          </Card>
+
+          <Card className="block p-6">
+            <p>Request Settings</p>
+            <div className="mt-2">
+              <p>Require Trace ID: {info.metadata?.require_trace_id === true ? "Enabled" : "Disabled"}</p>
             </div>
           </Card>
 
@@ -1960,6 +1981,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             applyKillSwitchToGuardrails(checked);
                           }}
                         />
+                      )}
+                    </FormField>
+                  )}
+
+                  {canEditAsProxyAdmin && (
+                    <FormField
+                      control={form.control}
+                      name="require_trace_id"
+                      label={labelWithHint(
+                        "Require Trace ID",
+                        "Reject LLM, MCP and agent requests from this team that do not send a trace ID (x-litellm-trace-id header, LLM requests can also use traceparent or metadata.trace_id)",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <Switch id={id} checked={value === true} onCheckedChange={onChange} />
                       )}
                     </FormField>
                   )}

@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
-from typing import Final, Optional
+from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import httpx
 import pytest
@@ -5618,14 +5619,14 @@ def _enter_relay_logging_mocks(stack, parsed_body):
     return mock_proxy_logging, mock_success_handler
 
 
-def _relay_client_request(method="GET"):
-    mock_request = MagicMock(spec=Request)
+def _relay_client_request(method: str = "GET", headers: Mapping[str, str] | None = None) -> Request:
+    mock_request: Final = MagicMock(spec=Request)
     mock_request.method = method
     mock_request.url = httpx.URL("http://localhost:4000/passthrough-relay/results")
     mock_request.body = AsyncMock(return_value=b"")
-    mock_request.headers = Headers({})
+    mock_request.headers = Headers({} if headers is None else headers)
     mock_request.query_params = QueryParams({})
-    return mock_request
+    return cast(Request, mock_request)
 
 
 @pytest.mark.asyncio
@@ -6140,7 +6141,12 @@ def _enter_upstream_usage_mocks(stack, parsed_body):
     return mock_proxy_logging, enqueued
 
 
-async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200, cost_per_request=None):
+async def _run_upstream_reporting_passthrough(
+    upstream_headers: Mapping[str, str],
+    status_code: int = 200,
+    cost_per_request: float | None = None,
+    request_headers: Mapping[str, str] | None = None,
+) -> tuple[list[object], MagicMock]:
     """Drive a generic pass-through against an upstream that reports its own
     cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
     from litellm.proxy._types import UserAPIKeyAuth
@@ -6158,7 +6164,7 @@ async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200,
             mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, {})
             with _recording_success_callback() as recorder:
                 await pass_through_request(
-                    request=_relay_client_request(method="POST"),
+                    request=_relay_client_request(method="POST", headers=request_headers),
                     target="http://internal-api.test/v1/summarize",
                     custom_headers={},
                     user_api_key_dict=UserAPIKeyAuth(api_key="sk-upstream-usage", team_id="team-fil"),
@@ -6170,6 +6176,22 @@ async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200,
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_logging_uses_trace_header_and_generates_without_one() -> None:
+    trace_id: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
+    trace_payloads, _ = await _run_upstream_reporting_passthrough(
+        upstream_headers=MappingProxyType({}),
+        request_headers=MappingProxyType({"x-litellm-trace-id": trace_id}),
+    )
+    logged_trace_id: Final[str] = cast(types_utils.StandardLoggingPayload, trace_payloads[0])["trace_id"]
+    assert logged_trace_id == trace_id
+
+    generated_payloads, _ = await _run_upstream_reporting_passthrough(upstream_headers=MappingProxyType({}))
+    generated_trace_id: Final[str] = cast(types_utils.StandardLoggingPayload, generated_payloads[0])["trace_id"]
+    assert str(UUID(generated_trace_id)) == generated_trace_id
+    assert generated_trace_id != trace_id
 
 
 @pytest.mark.asyncio

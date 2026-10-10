@@ -540,11 +540,7 @@ class LiteLLMRoutes(enum.Enum):
     #########################################################
     passthrough_routes_wildcard = [f"{route}/*" for route in mapped_pass_through_routes]
 
-    litellm_native_routes = [
-        "/rag/ingest",
-        "/v1/rag/ingest",
-        "/rag/query",
-        "/v1/rag/query",
+    trace_telemetry_routes = (
         "/v1/traces",
         "/v1/logs",
         "/v1/traces/query",
@@ -552,6 +548,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
         "/v1/traces/{trace_id}/spans/{span_id}/error",
+    )
+
+    litellm_native_routes = [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+        *trace_telemetry_routes,
     ]
 
     anthropic_routes = [
@@ -2215,6 +2219,7 @@ class NewTeamRequest(TeamBase):
     allowed_passthrough_routes: list | None = None
     denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
+    require_trace_id: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput"] | None = (
@@ -2289,6 +2294,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     policies: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     disable_global_guardrails: bool | None = None
+    require_trace_id: bool | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
     team_member_rpm_limit: int | None = None
@@ -5156,6 +5162,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "throttle_on_budget_exceeded",
     "enable_prompt_caching",
     "end_user_budget_id",
+    "require_trace_id",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
