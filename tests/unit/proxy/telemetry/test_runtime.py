@@ -3,10 +3,13 @@ from typing import Final
 
 import httpx
 import pytest
+
+import litellm
 from pydantic import HttpUrl
 
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
-from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hasher
+from litellm.constants import MAX_CALLBACKS
+from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hasher, register_attempt_logger
 from litellm.proxy.telemetry.settings import TelemetrySettings
 from litellm.telemetry.consent import ConsentGatedSink, TelemetryConsent
 from litellm.telemetry.records import AttemptRecord, InstanceInfo, RequestRecord, TelemetryGroup, UIEvent
@@ -205,3 +208,31 @@ async def test_settle_timeout_reads_the_configured_value_after_start_and_the_def
     )
     assert runtime.settings.settle_timeout_seconds == 7.5
     await runtime.stop()
+
+
+@pytest.fixture
+def full_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [f"callback_{i}" for i in range(MAX_CALLBACKS)])
+
+
+@pytest.mark.usefixtures("full_callbacks")
+def test_a_full_callback_list_warns_that_attempts_will_not_be_recorded(caplog: pytest.LogCaptureFixture) -> None:
+    logger: Final = TelemetryAttemptLogger(lambda: None, deployment_hasher(b"secret"))
+
+    register_attempt_logger(logger)
+
+    assert logger not in litellm.callbacks
+    assert "provider attempts will not be recorded" in caplog.text
+
+
+def test_registering_the_attempt_logger_adds_it_once_without_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logger: Final = TelemetryAttemptLogger(lambda: None, deployment_hasher(b"secret"))
+
+    register_attempt_logger(logger)
+    register_attempt_logger(logger)
+
+    assert litellm.callbacks == [logger]
+    assert "will not be recorded" not in caplog.text

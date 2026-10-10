@@ -754,7 +754,7 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
 )
 from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
-from litellm.proxy.telemetry.runtime import TelemetryRuntime
+from litellm.proxy.telemetry.runtime import TelemetryRuntime, register_attempt_logger
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 
@@ -1752,7 +1752,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
                         getattr(prisma_client.db, "writer", prisma_client.db) if prisma_client is not None else None
                     ),
-                    register=litellm.logging_callback_manager.add_litellm_callback,
+                    register=register_attempt_logger,
                 )
             )
         )

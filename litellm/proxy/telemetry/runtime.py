@@ -9,7 +9,9 @@ from typing import Final, TypeAlias
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_CALLBACKS
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # legacy params: dict signature
 )
@@ -43,6 +45,15 @@ async def deployment_hash_secret(store: TelemetryStore | None, fallback: Callabl
             "telemetry: hashing deployments with the salt key, stored secret unreadable: %s", e
         )
         return fallback()
+
+
+def register_attempt_logger(logger: TelemetryAttemptLogger) -> None:
+    litellm.logging_callback_manager.add_litellm_callback(logger)
+    if logger not in litellm.callbacks:
+        verbose_proxy_logger.warning(
+            "telemetry: litellm.callbacks already holds %s callbacks, provider attempts will not be recorded",
+            MAX_CALLBACKS,
+        )
 
 
 def deployment_hasher(secret: bytes) -> Callable[[str], str]:
