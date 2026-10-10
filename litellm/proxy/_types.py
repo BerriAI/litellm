@@ -545,18 +545,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        "/lens",
-        "/lens/{lens_id}",
-        "/lens/{lens_id}/runs",
-        "/lens/{lens_id}/runs/{job_id}",
-        "/lens/{lens_id}/executions/{execution_id}",
-        "/lens/{lens_id}/cancel",
-        "/lens/{lens_id}/findings/{finding_id}",
-        "/lens/feedback",
-        "/lens/feedback/summary",
-        "/lens/preview/sample",
-        "/lens/workers/register",
-        "/lens/workers/{worker_id}",
         "/v1/traces",
         "/v1/logs",
         "/v1/traces/query",
@@ -948,6 +936,8 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/lens",
+        "/lens/{path:path}",
         # update_team resolves proxy/org/team admin itself and filters team admins
         # through the team_admin_editable_team_fields setting
         "/team/update",
@@ -1069,6 +1059,7 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/traces/signals",
             "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",

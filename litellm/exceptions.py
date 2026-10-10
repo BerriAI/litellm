@@ -172,6 +172,12 @@ class AuthenticationError(openai.AuthenticationError):
         return _message
 
 
+class CallerCredentialAuthenticationError(AuthenticationError):
+    """401 raised when the CALLING user's own stored provider credential is
+    missing or rejected (e.g. a per-user OAuth connection). Scoped to one
+    caller's credential, so routers must not cool down the shared deployment."""
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(
@@ -529,6 +535,12 @@ class RateLimitError(openai.RateLimitError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+class CallerCredentialRateLimitError(RateLimitError):
+    """429 raised when a per-user credential exchange is rate limited by the
+    provider (e.g. GitHub's token endpoint). Scoped to one caller's
+    credential, so routers must not cool down the shared deployment."""
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
