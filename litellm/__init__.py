@@ -173,6 +173,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "posthog",
     "levo",
     "compression_interception",
+    "tickerr",
     "newrelic",
     "signoz",
 ]
