@@ -126,21 +126,14 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
         int: The token count, defaulting to 0.
     """
     if isinstance(usage_obj, dict):
-        usage_dict: dict[str, object] = cast(  # cast-ok: decisions dict-like payloads
-            dict[str, object], usage_obj
+        if (dict_value := usage_obj.get(standard_name)) is None and decision_name is not None:
+            return usage_obj.get(decision_name) if isinstance(usage_obj.get(decision_name), int) else 0
+        return dict_value if isinstance(dict_value, int) else 0
+    if (attr_value := getattr(usage_obj, standard_name, None)) is None and decision_name is not None:
+        return (
+            getattr(usage_obj, decision_name, None) if isinstance(getattr(usage_obj, decision_name, None), int) else 0
         )
-        value = usage_dict.get(standard_name)
-        if value is None and decision_name is not None:
-            value = usage_dict.get(decision_name)
-        return value if isinstance(value, int) else 0
-    value = cast(  # cast-ok: decisions models expose fields via attributes
-        object, getattr(usage_obj, standard_name, None)
-    )
-    if value is None and decision_name is not None:
-        value = cast(  # cast-ok: decisions models expose fields via attributes
-            object, getattr(usage_obj, decision_name, None)
-        )
-    return value if isinstance(value, int) else 0
+    return attr_value if isinstance(attr_value, int) else 0
 
 
 def _extract_cache_read_input_tokens(usage_obj: object) -> int:
