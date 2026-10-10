@@ -1522,13 +1522,18 @@ class Router:
 
     @staticmethod
     def _register_router_selector(selector: RouterStrategySelector) -> None:
+        # Strategy selectors are per-instance stateful callbacks (each holds
+        # its own Router cache), so they must be deduped by identity: the
+        # class-level key would treat a second Router's selector as a duplicate
+        # of the first one and silently drop it, leaving the new Router's
+        # latency/usage cache permanently empty (issue #44575).
         if isinstance(selector, LeastBusyLoggingHandler):
             if isinstance(litellm.input_callback, list):
-                litellm.logging_callback_manager.add_litellm_input_callback(selector)
+                litellm.logging_callback_manager.add_litellm_input_callback(selector, dedupe_by_identity=True)
             else:
                 litellm.input_callback = [selector]
         if isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(selector)
+            litellm.logging_callback_manager.add_litellm_callback(selector, dedupe_by_identity=True)
 
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """

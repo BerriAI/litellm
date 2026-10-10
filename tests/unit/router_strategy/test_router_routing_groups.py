@@ -2254,3 +2254,44 @@ async def test_update_settings_changed_routing_strategy_args_flushes_replaced_se
                 await t
             except asyncio.CancelledError:
                 pass
+
+
+def test_two_routers_same_latency_strategy_both_register_selectors(monkeypatch):
+    """
+    Two Routers with `latency-based-routing` in one process must both see their
+    default selector registered: the latency handler's class-level dedup key is
+    identical for every instance (no scalar instance attributes), so key-based
+    dedup silently dropped the second Router's selector and its latency cache
+    never got populated (issue #44575).
+    """
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+
+    first = _build_router(routing_strategy="latency-based-routing")
+    second = _build_router(routing_strategy="latency-based-routing")
+
+    first_selector = first.lowestlatency_logger
+    second_selector = second.lowestlatency_logger
+    assert first_selector is not None and second_selector is not None
+    assert first_selector is not second_selector
+    assert any(c is first_selector for c in litellm.callbacks)
+    assert any(c is second_selector for c in litellm.callbacks), (
+        "second Router's latency selector was dropped by the callback dedup"
+    )
+
+    # Each selector feeds its own Router's cache: an event delivered through
+    # the global callback list must land in the emitting router's cache.
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "filtered-model"},
+            "model_info": {"id": "deploy-1"},
+        }
+    }
+    start_time = datetime.datetime.now()
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, start_time, start_time + datetime.timedelta(seconds=0.5))
+
+
+    assert first.cache.get_cache("filtered-model_map") is not None
+    assert second.cache.get_cache("filtered-model_map") is not None
