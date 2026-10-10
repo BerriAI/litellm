@@ -1346,8 +1346,9 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
+    submitted_names: Final = frozenset(key.removesuffix("[]") for key in body)
     for param in _server_owned_wif_litellm_params:
-        if param in body:
+        if param in submitted_names:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation parameter "
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
