@@ -136,6 +136,18 @@ def test_zerogpu_completion_is_charged_at_the_cost_map_rates(model: str):
     assert expected_cost > 0
 
 
+@pytest.mark.parametrize("model", ZEROGPU_MODELS)
+def test_trim_messages_fits_zerogpu_history_into_the_model_context_window(model: str):
+    budget: Final = 20
+    trim_ratio: Final = budget / litellm.model_cost[f"zerogpu/{model}"]["max_input_tokens"]
+    messages: Final = [{"role": "user", "content": "lorem ipsum " * 300}]
+
+    trimmed: Final = litellm.utils.trim_messages(messages, model=f"zerogpu/{model}", trim_ratio=trim_ratio)
+
+    trimmed_tokens: Final = litellm.token_counter(model=f"zerogpu/{model}", messages=trimmed)
+    assert trimmed_tokens <= budget, trimmed
+
+
 @pytest.mark.parametrize(
     ("model", "forwards_tools", "forwards_reasoning_effort"),
     [("gpt-5.6-luna", True, True), ("gpt-oss-120b", True, False), ("LFM2.5-1.2B-Instruct", False, False)],
