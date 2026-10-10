@@ -1,9 +1,22 @@
 from dataclasses import FrozenInstanceError
+from typing import Final
 
 import pytest
+from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.operations import prepare_context
 from litellm.proxy._types import UserAPIKeyAuth
+
+
+def test_guardrail_bearer_stays_out_of_egress_and_context_representations() -> None:
+    token: Final = SecretStr("caller.jwt.signature")
+    context: Final = prepare_context(incoming_bearer_token=token)
+    assert context.incoming_bearer_token is token
+    assert token.get_secret_value() not in repr(context)
+    assert token not in context.legacy_auth()
+    assert context.raw_headers is None
+    assert context.oauth2_headers is None
+    assert context.mcp_server_auth_headers is None
 
 
 def test_operation_context_isolates_nested_headers_and_caller_permissions():

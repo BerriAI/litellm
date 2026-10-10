@@ -26,6 +26,24 @@ from litellm.proxy._types import (
 from litellm.types.agents import AgentCaller
 
 
+@pytest.mark.parametrize("headers,expected", [
+    ({"Authorization": "Bearer caller.jwt.signature"}, "caller.jwt.signature"),
+    ({"AUTHORIZATION": "bEaReR caller.jwt.signature"}, "caller.jwt.signature"),
+    ({"authorization": "Bearer "}, ""),
+    ({"authorization": "Basic credentials"}, None),
+    ({"authorization-extra": "Bearer wrong.jwt.signature"}, None),
+    ({"x-litellm-api-key": "sk-key"}, None),
+    ({}, None),
+])
+def test_incoming_guardrail_bearer_requires_exact_authorization_header(
+    headers: dict[str, str], expected: str | None,
+) -> None:
+    token: Final = MCPRequestHandler.get_incoming_bearer_token(headers)
+    assert (token.get_secret_value() if token is not None else None) == expected
+    if expected:
+        assert expected not in repr(token)
+
+
 @pytest.mark.asyncio
 class TestMCPRequestHandler:
     @pytest.mark.parametrize(
