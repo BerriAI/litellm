@@ -3,7 +3,7 @@ Native OpenAI Chat Completions on Amazon Bedrock Runtime.
 
 AWS serves this surface at
 ``https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions``
-for Grok 4.6, gpt-oss and GPT 5.6 and newer. GPT 5.6 and newer take it by default
+for Grok, gpt-oss and GPT 5.6 and newer. Grok and GPT 5.6 and newer take it by default
 (``bedrock_runtime_chat_completions_is_default`` in ``common_utils``), so their chat
 completions stay chat completions instead of being rewritten to Converse; the
 ``chat_completions/`` route prefix opts any other model in, and ``converse/`` pins a
@@ -15,6 +15,8 @@ Converse-only feature (``bedrock_request_needs_converse`` in ``common_utils``) i
 still served by Converse.
 """
 
+import re
+import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -36,6 +38,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
+    bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
 )
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
 
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
+POSITIONAL_TOOL_CALL_ID: Final = re.compile(r"call_\d+")
 
 _PARAMS_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _PARAMS_LIST_ADAPTER: Final = TypeAdapter(list[str])
@@ -191,6 +195,30 @@ class ReasoningTagSplitter:
         return drained, "", self.pending
 
 
+def is_positional_tool_call_id(tool_call_id: str | None) -> bool:
+    return tool_call_id is not None and POSITIONAL_TOOL_CALL_ID.fullmatch(tool_call_id) is not None
+
+
+def mint_tool_call_id() -> str:
+    return f"call_{uuid.uuid4().hex}"
+
+
+def _mint_unique_tool_call_ids(response: ModelResponse) -> None:
+    """Replace AWS's positional tool call ids with unique ones.
+
+    bedrock-runtime's native Chat Completions numbers the tool calls of a response from zero (``call_0``,
+    ``call_1``), seen live on Grok 4.6, Grok 4.7 and GPT 5.6 (2026-10-09; GPT 5.6 returned unique ids
+    earlier the same day, so the format is not fixed per model). A multi-turn history then holds the same
+    id for different calls, and clients that match ``tool_result`` ids against it, Claude Code among them,
+    pair results with the wrong call. Ids that are already unique (``call_<32 hex>``, ``chatcmpl-tool-...``)
+    do not match ``POSITIONAL_TOOL_CALL_ID`` and pass through.
+    """
+    for choice in response.choices:
+        for tool_call in choice.message.tool_calls or ():
+            if is_positional_tool_call_id(tool_call.id):
+                tool_call.id = mint_tool_call_id()
+
+
 def _split_streamed_content(
     splitter: ReasoningTagSplitter, content: str | None, finished: bool
 ) -> tuple[ReasoningTagSplitter, str, str]:
@@ -229,9 +257,23 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
     ) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode)
         self._splitters: Mapping[int, ReasoningTagSplitter] = MappingProxyType({})
+        self._minted_tool_call_ids: Mapping[tuple[int, int], str] = MappingProxyType({})
+
+    def _minted_tool_call_id(self, choice_index: int, tool_call_index: int) -> str:
+        key: Final = (choice_index, tool_call_index)
+        minted: Final = self._minted_tool_call_ids.get(key) or mint_tool_call_id()
+        self._minted_tool_call_ids = MappingProxyType({**self._minted_tool_call_ids, key: minted})
+        return minted
+
+    def _mint_streamed_tool_call_ids(self, parsed: ModelResponseStream) -> None:
+        for choice in parsed.choices:
+            for tool_call in choice.delta.tool_calls or ():
+                if is_positional_tool_call_id(tool_call.id):
+                    tool_call.id = self._minted_tool_call_id(choice.index, tool_call.index)
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
         parsed: Final = super().chunk_parser(chunk)
+        self._mint_streamed_tool_call_ids(parsed)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
             return parsed
         for choice in parsed.choices:
@@ -405,10 +447,13 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 ),
                 status_code=400,
             )
+        rejected_stop: Final = frozenset(("stop",)) if bedrock_rejects_stop_sequences(model) else frozenset[str]()
         return dict(
             without_refused_reasoning_effort(
                 model,
-                with_max_completion_tokens(_without_params(mapped, refused_while_reasoning | malformed_effort)),
+                with_max_completion_tokens(
+                    _without_params(mapped, refused_while_reasoning | malformed_effort | rejected_stop)
+                ),
             )
         )
 
@@ -483,6 +528,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
         set_provider_response_headers_in_hidden_params(response, raw_response.headers)
+        _mint_unique_tool_call_ids(response)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(model):
             return response
         for choice in response.choices:

@@ -1,8 +1,10 @@
 import { isMaskedSecret } from "@/utils/maskedSecretUtils";
+import type { CredentialItem } from "../networking";
 import {
   ANTHROPIC_FEDERATION_FIELDS,
   ANTHROPIC_FEDERATION_VALUE_KEYS,
   identitySourceById,
+  inferIdentitySource,
   isAnthropicProvider,
   otherIdentitySourceKeys,
   type IdentitySourceId,
@@ -77,6 +79,25 @@ export const providerFieldValidators = (selection: CredentialSelection): Provide
 
 const identitySourceOf = (selection: CredentialSelection): IdentitySourceId | null =>
   selection.authMethod === "federation" && selection.provider === "anthropic" ? selection.identitySource : null;
+
+export type JwksPanel =
+  | { readonly kind: "hidden" }
+  | { readonly kind: "after_save" }
+  | { readonly kind: "saved"; readonly credentialName: string };
+
+export const jwksPanelFor = (storedCredential: CredentialItem | null, selection: CredentialSelection): JwksPanel => {
+  if (identitySourceOf(selection) !== "internal_issuer") {
+    return { kind: "hidden" };
+  }
+  if (
+    storedCredential === null ||
+    !isAnthropicProvider(storedCredential.credential_info.custom_llm_provider) ||
+    inferIdentitySource(storedCredential.credential_values) !== "internal_issuer"
+  ) {
+    return { kind: "after_save" };
+  }
+  return { kind: "saved", credentialName: storedCredential.credential_name };
+};
 
 const toStoredType = (field: FederationField | undefined, value: unknown): unknown => {
   if (field === undefined || isBlank(value)) {

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption } from "../../../tests/test-utils";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
@@ -38,6 +38,35 @@ vi.mock("../networking", async () => {
           { key: "api_base", label: "Azure API Base", field_type: "text" },
           { key: "api_version", label: "API Version", field_type: "text" },
           { key: "api_key", label: "Azure API Key", field_type: "password" },
+        ],
+      },
+      {
+        provider: "MICROSOFT_365_COPILOT",
+        provider_display_name: Providers.MICROSOFT_365_COPILOT,
+        litellm_provider: "microsoft_365_copilot",
+        credential_fields: [
+          { key: "token_exchange_endpoint", label: "Token Endpoint URL", field_type: "text" },
+          {
+            key: "token_exchange_profile",
+            label: "Exchange Grant",
+            field_type: "select",
+            options: ["jwt_bearer_obo", "rfc8693"],
+            default_value: "jwt_bearer_obo",
+          },
+          { key: "client_id", label: "Client ID", field_type: "text" },
+          { key: "client_secret", label: "Client Secret", field_type: "password" },
+          { key: "token_exchange_scope", label: "Scope", field_type: "text" },
+          { key: "token_exchange_audience", label: "Audience", field_type: "text" },
+          { key: "api_key", label: "Delegated Access Token", field_type: "password" },
+        ],
+      },
+      {
+        provider: "GITHUB_COPILOT",
+        provider_display_name: Providers.GITHUB_COPILOT,
+        litellm_provider: "github_copilot",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
         ],
       },
     ]),
@@ -84,6 +113,19 @@ const unknownSourceCredential: CredentialItem = {
   credential_info: { custom_llm_provider: "anthropic" },
 };
 
+const microsoftCopilotCredential: CredentialItem = {
+  credential_name: "microsoft-copilot",
+  credential_values: {
+    token_exchange_endpoint: "https://identity.example.com/stored-token",
+    token_exchange_profile: "jwt_bearer_obo",
+    client_id: "stored-client",
+    client_secret: "stored-secret",
+    token_exchange_scope: "https://graph.microsoft.com/.default",
+    token_exchange_audience: "https://graph.microsoft.com",
+  },
+  credential_info: { custom_llm_provider: "MICROSOFT_365_COPILOT" },
+};
+
 const renderModal = (props: Partial<React.ComponentProps<typeof CredentialModal>> = {}) => {
   const onSubmit = vi.fn();
   render(
@@ -109,6 +151,34 @@ const chooseProvider = async (user: ReturnType<typeof userEvent.setup>, provider
 };
 
 describe("CredentialModal with Anthropic workload identity federation", () => {
+  it("deletes stored exchange fields when switching to a static token", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: microsoftCopilotCredential });
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+      "OAuth token exchange (on-behalf-of)",
+    );
+    await screen.findByLabelText("Token Endpoint URL");
+    await chooseOption(user, /^Auth Type:/, "Static delegated access token");
+    fill("Delegated Access Token", "delegated-graph-token");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    expect(values).toEqual({
+      credential_name: "microsoft-copilot",
+      custom_llm_provider: "MICROSOFT_365_COPILOT",
+      api_key: "delegated-graph-token",
+    });
+    expect([...valuesToDelete].sort()).toEqual([
+      "client_id",
+      "client_secret",
+      "token_exchange_audience",
+      "token_exchange_endpoint",
+      "token_exchange_profile",
+      "token_exchange_scope",
+    ]);
+  });
+
   it("does not carry the previous provider's base URL into the Anthropic form or its payload", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal();
@@ -440,6 +510,160 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       },
       [],
     );
+  });
+});
+
+describe("CredentialModal with GitHub Copilot auth types", () => {
+  const perUserCopilotCredential: CredentialItem = {
+    credential_name: "copilot-per-user",
+    credential_values: { github_copilot_auth_type: "per_user_oauth" },
+    credential_info: { custom_llm_provider: "GITHUB_COPILOT" },
+  };
+
+  it("saves a per-user GitHub OAuth credential with only the auth type and no secret", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Shared device login");
+    expect(await screen.findByLabelText("API Key")).toBeInTheDocument();
+    await chooseOption(user, /^Auth Type:/, "Per-user GitHub OAuth");
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
+    fill("Credential Name:", "copilot-per-user");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "copilot-per-user",
+        custom_llm_provider: "GITHUB_COPILOT",
+        github_copilot_auth_type: "per_user_oauth",
+      },
+      [],
+    );
+  });
+
+  it("keeps the shared device login credential free of the per-user auth type", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
+
+    await screen.findByLabelText("API Key");
+    fill("Credential Name:", "copilot-shared");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "copilot-shared", custom_llm_provider: "GITHUB_COPILOT" },
+      [],
+    );
+  });
+
+  it("opens a stored per-user credential on its auth type and deletes it when switched to shared", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: perUserCopilotCredential });
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
+    await chooseOption(user, /^Auth Type:/, "Shared device login");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    expect(values).toEqual({ credential_name: "copilot-per-user", custom_llm_provider: "GITHUB_COPILOT" });
+    expect(valuesToDelete).toEqual(["github_copilot_auth_type"]);
+  });
+});
+
+describe("CredentialModal public JWKS for a LiteLLM-signed Anthropic credential", () => {
+  const signedCredential: CredentialItem = {
+    credential_name: "anthropic-signed",
+    credential_values: {
+      anthropic_identity_source: "internal_issuer",
+      anthropic_issuer_url: "http****",
+      anthropic_issuer_subject: "lite****",
+      anthropic_issuer_signing_key_ref: "os.e****",
+    },
+    credential_info: { custom_llm_provider: "Anthropic" },
+  };
+  const jwks = { keys: [{ kty: "RSA", kid: "kid-1", use: "sig", alg: "RS256", n: "modulus", e: "AQAB" }] };
+  const fetchMock = vi.fn<(request: Request) => Promise<Response>>();
+  const requestedPaths = () => fetchMock.mock.calls.map(([request]) => new URL(request.url).pathname);
+  const respondWith = (status: number, body: unknown) =>
+    fetchMock.mockImplementation(async () => Response.json(body, { status }));
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the JWKS the proxy serves for the saved credential and copies it verbatim", async () => {
+    const user = userEvent.setup();
+    respondWith(200, jwks);
+    renderModal({ mode: "edit", existingCredential: signedCredential });
+
+    const shown = await screen.findByLabelText("Public JWKS");
+    expect(JSON.parse(shown.textContent ?? "")).toEqual(jwks);
+    expect(requestedPaths()).toEqual(["/credentials/anthropic-signed/jwks"]);
+
+    await user.click(screen.getByRole("button", { name: "Copy JWKS" }));
+
+    expect(await navigator.clipboard.readText()).toBe(shown.textContent);
+  });
+
+  it("waits for a fresh JWKS instead of offering the one cached from an earlier open", async () => {
+    const rotatedJwks = { keys: [{ ...jwks.keys[0], kid: "kid-2", n: "rotated-modulus" }] };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const modal = (open: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        {open && (
+          <CredentialModal
+            open
+            mode="edit"
+            existingCredential={signedCredential}
+            onCancel={vi.fn()}
+            onSubmit={vi.fn()}
+          />
+        )}
+      </QueryClientProvider>
+    );
+    respondWith(200, jwks);
+    const { rerender } = render(modal(true));
+    await screen.findByLabelText("Public JWKS");
+    rerender(modal(false));
+
+    const rotated = Promise.withResolvers<Response>();
+    fetchMock.mockReturnValue(rotated.promise);
+    rerender(modal(true));
+
+    expect(await screen.findByText("Loading JWKS...")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy JWKS" })).not.toBeInTheDocument();
+
+    rotated.resolve(Response.json(rotatedJwks));
+
+    expect(JSON.parse((await screen.findByLabelText("Public JWKS")).textContent ?? "")).toEqual(rotatedJwks);
+  });
+
+  it("shows why the proxy cannot build the JWKS", async () => {
+    respondWith(400, { detail: { error: "anthropic_issuer_signing_key_ref did not resolve to a PEM private key" } });
+    renderModal({ mode: "edit", existingCredential: signedCredential });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "anthropic_issuer_signing_key_ref did not resolve to a PEM private key",
+    );
+    expect(screen.queryByRole("button", { name: "Copy JWKS" })).not.toBeInTheDocument();
+  });
+
+  it("asks the admin to save first while the credential is not stored as LiteLLM-signed", async () => {
+    const user = userEvent.setup();
+    renderModal({ mode: "edit", existingCredential: federatedCredential });
+    await screen.findByLabelText("Upstream API Base");
+    expect(screen.queryByText(/copy the public JWKS/)).not.toBeInTheDocument();
+
+    await chooseOption(user, /Identity Source/, "Token signed by LiteLLM (internal issuer)");
+
+    expect(await screen.findByText(/Once saved, reopen this credential/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Public JWKS")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
