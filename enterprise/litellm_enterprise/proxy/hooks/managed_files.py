@@ -880,13 +880,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_object: OpenAIFileObject,
         size_bytes: int | None,
     ) -> None:
-        """Save a batch output's details; a measured size is retried over a concurrent refresh so it is never lost."""
+        """Save a batch output's details; after losing to a refresh, size the refreshed details instead of replacing them."""
         current_row: LiteLLM_ManagedFileTable | None = stored  # rebind-ok: the row as last read
+        details: OpenAIFileObject = file_object  # rebind-ok: a concurrent refresh's details replace the job's copy
         for _ in range(_MEASURED_SIZE_SAVE_ATTEMPTS):
             if current_row is None:
                 return
             saved = await self._save_refreshed_file_object(  # rebind-ok: per attempt
-                current_row, _with_measured_size(file_object, size_bytes)
+                current_row, _with_measured_size(details, size_bytes)
             )
             if saved is not None or not size_bytes:
                 return
@@ -896,6 +897,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             current_row = (
                 None if latest_row is None else LiteLLM_ManagedFileTable.model_validate(latest_row.model_dump())
             )
+            latest_object = None if current_row is None else current_row.file_object  # rebind-ok: per attempt
+            if latest_object is not None and not latest_object.litellm_details_fallback:
+                details = latest_object
 
     async def store_batch_output_file(
         self,

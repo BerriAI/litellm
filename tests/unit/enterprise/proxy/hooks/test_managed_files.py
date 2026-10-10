@@ -2640,6 +2640,63 @@ async def test_store_batch_output_file_from_a_batch_read_leaves_a_newer_row_alon
     assert len(managed_file_table.find_first_calls) - reads_before_store == 1
 
 
+class _RefreshLandsBeforeTheFirstWriteTable(_InMemoryManagedFileTable):
+    def __init__(self, row: LiteLLM_ManagedFileTable, refreshed_file_object: OpenAIFileObject) -> None:
+        super().__init__(row)
+        self.pending_refreshes: Final = [refreshed_file_object]
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        if self.pending_refreshes:
+            refreshed_row: Final = self.rows["unified-output"]
+            self.rows["unified-output"] = refreshed_row.model_copy(
+                update={"file_object": self.pending_refreshes.pop()}
+            )
+        return await super().update_many(where, data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("refreshed_bytes", "expected_bytes"), [(0, 2565), (836, 836)])
+async def test_store_batch_output_file_sizes_the_refreshed_details_instead_of_restoring_its_placeholder(
+    refreshed_bytes: int, expected_bytes: int
+):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    placeholder_row: Final = _batch_output_row("xai", size_bytes=0, fallback=True)
+    assert placeholder_row.file_object is not None
+    recent_placeholder: Final = placeholder_row.file_object.model_copy(update={"created_at": int(time.time())})
+    table: Final = _RefreshLandsBeforeTheFirstWriteTable(
+        placeholder_row.model_copy(update={"file_object": recent_placeholder}),
+        recent_placeholder.model_copy(
+            update={
+                "filename": f"{_XAI_BATCH_ID}_results.jsonl",
+                "bytes": refreshed_bytes,
+                "litellm_details_fallback": None,
+            }
+        ),
+    )
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=_InMemoryManagedFilesPrismaClient(table)
+    )
+    with patch.object(proxy_server_module, "llm_router", _provider_router("xai")):
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id=_provider_file_id("xai"),
+            model_id="model-123",
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+            size_bytes=2565,
+        )
+
+    stored: Final = table.rows["unified-output"].file_object
+    assert stored is not None
+    assert (stored.filename, stored.bytes, stored.litellm_details_fallback) == (
+        f"{_XAI_BATCH_ID}_results.jsonl",
+        expected_bytes,
+        None,
+    )
+
+
 class _LaggingReplicaManagedFileTable:
     def __init__(self, replica: _InMemoryManagedFileTable, writer: _InMemoryManagedFileTable) -> None:
         self.replica: Final = replica
