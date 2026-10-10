@@ -1,11 +1,12 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cva.config";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
+import { useTheme } from "next-themes";
 import { useId, useRef } from "react";
 import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { vs, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 SyntaxHighlighter.registerLanguage("json", json);
@@ -14,9 +15,32 @@ const EDITOR_TEXT = "m-0 whitespace-pre-wrap wrap-anywhere py-3 font-mono text-x
 const GUTTER_WIDTH = "w-11";
 type LineRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["renderer"]>>[0];
 const CONTENT_INSET = "pl-14 pr-3";
-const CODE_TAG_PROPS = { className: "language-json", style: { whiteSpace: "pre-wrap" } } as const;
-
-const TRANSPARENT_PRE = { background: "transparent", margin: 0, padding: 0 } as const;
+const VS_CODE_LIGHT_PLUS = {
+  ...vs,
+  property: { color: "#0451a5" },
+  string: { color: "#a31515" },
+  number: { color: "#098658" },
+  boolean: { color: "#0000ff" },
+  punctuation: { color: "#000000" },
+  operator: { color: "#000000" },
+} as const;
+const INHERIT_TEXT = {
+  fontFamily: "inherit",
+  fontSize: "inherit",
+  lineHeight: "inherit",
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+  textShadow: "none",
+} as const;
+const CODE_TAG_PROPS = { className: "language-json", style: INHERIT_TEXT } as const;
+const TRANSPARENT_PRE = {
+  ...INHERIT_TEXT,
+  background: "transparent",
+  border: 0,
+  margin: 0,
+  padding: 0,
+  overflow: "visible",
+} as const;
 
 interface JsonEditorProps {
   value: string;
@@ -67,7 +91,9 @@ function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
     const lineElement = { node: row, stylesheet, useInlineStyles, key: line };
     return (
       <div key={line} className="flex">
-        <span className={cn(GUTTER_WIDTH, "shrink-0 select-none pr-3 text-right text-zinc-500")}>{line + 1}</span>
+        <span className={cn(GUTTER_WIDTH, "shrink-0 select-none pr-3 text-right text-zinc-400 dark:text-zinc-500")}>
+          {line + 1}
+        </span>
         <span className="min-h-5 min-w-0 flex-1 px-3">{createElement(lineElement)}</span>
       </div>
     );
@@ -77,6 +103,7 @@ function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
 export default function JsonEditor({ value, onChange, validation }: JsonEditorProps) {
   const issuesId = useId();
   const highlightRef = useRef<HTMLDivElement>(null);
+  const syntaxTheme = useTheme().resolvedTheme === "dark" ? vscDarkPlus : VS_CODE_LIGHT_PLUS;
   const lineCount = value.split("\n").length;
   const hasErrors = !validation.isValid;
 
@@ -96,15 +123,18 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           {lineCount} {lineCount === 1 ? "line" : "lines"}
         </span>
       </div>
-      <div className="relative min-h-80 flex-1 bg-[#1e1e1e]">
+      <div className="relative min-h-80 flex-1 bg-background dark:bg-[#1e1e1e]">
         <div
           aria-hidden="true"
-          className={cn(GUTTER_WIDTH, "absolute inset-y-0 left-0 border-r border-zinc-700 bg-zinc-800/60")}
+          className={cn(
+            GUTTER_WIDTH,
+            "absolute inset-y-0 left-0 border-r bg-muted/50 dark:border-zinc-700 dark:bg-zinc-800/60",
+          )}
         />
         <div ref={highlightRef} aria-hidden="true" className={cn("absolute inset-0 overflow-hidden", EDITOR_TEXT)}>
           <SyntaxHighlighter
             language="json"
-            style={vscDarkPlus}
+            style={syntaxTheme}
             customStyle={TRANSPARENT_PRE}
             PreTag="div"
             codeTagProps={CODE_TAG_PROPS}
@@ -131,7 +161,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           className={cn(
             EDITOR_TEXT,
             CONTENT_INSET,
-            "absolute inset-0 size-full resize-none overflow-y-auto bg-transparent text-transparent caret-zinc-100 outline-none selection:bg-zinc-100/20 placeholder:text-zinc-500",
+            "absolute inset-0 size-full resize-none overflow-y-auto bg-transparent text-transparent caret-foreground outline-none selection:bg-primary/20 placeholder:text-muted-foreground",
           )}
         />
       </div>
