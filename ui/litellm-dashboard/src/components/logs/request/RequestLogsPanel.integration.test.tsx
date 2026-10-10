@@ -534,7 +534,7 @@ describe("RequestLogsPanel", () => {
       renderPanel();
 
       await waitFor(() => expect(row("req-1")).not.toBeNull());
-      await user.click(row("req-1") as HTMLElement);
+      await user.click(within(row("req-1") as HTMLElement).getByText("gpt-4o"));
 
       await waitFor(() => expect(urlParams().get("log_id")).toBe("req-1"));
       expect(historyModes()).toEqual(["push"]);
@@ -542,6 +542,20 @@ describe("RequestLogsPanel", () => {
         expect(drawer()).toHaveTextContent("open");
       });
       expect(drawer()).toHaveAttribute("data-log-id", "req-1");
+    });
+
+    it("opens the drawer from a focused row and exposes its accessible name", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-keyboard" })]);
+      renderPanel();
+
+      const requestRow = await screen.findByRole("row", { name: "Open request req-keyboard" });
+      requestRow.focus();
+      expect(requestRow).toHaveFocus();
+      await user.keyboard("{Enter}");
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-keyboard"));
+      expect(urlParams().get("log_id")).toBe("req-keyboard");
     });
 
     it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {

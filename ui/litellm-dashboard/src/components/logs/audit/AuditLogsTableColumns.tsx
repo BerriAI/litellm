@@ -40,11 +40,7 @@ export const auditActionLabel = (action: string): string => {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : words;
 };
 
-interface AuditLogsTableColumnsDeps {
-  onViewLog: (log: AuditLogEntry) => void;
-}
-
-export const getAuditLogsTableColumns = ({ onViewLog }: AuditLogsTableColumnsDeps): ColumnDef<AuditLogEntry>[] => [
+export const getAuditLogsTableColumns = (): ColumnDef<AuditLogEntry>[] => [
   {
     id: "updated_at",
     accessorKey: "updated_at",
@@ -82,9 +78,8 @@ export const getAuditLogsTableColumns = ({ onViewLog }: AuditLogsTableColumnsDep
     cell: ({ row }) => (
       <IdentityCell
         title={row.original.object_id}
-        titleClassName="font-mono text-xs font-normal text-primary"
+        titleClassName="font-mono text-xs font-normal"
         className="max-w-72"
-        onClick={() => onViewLog(row.original)}
       />
     ),
   },

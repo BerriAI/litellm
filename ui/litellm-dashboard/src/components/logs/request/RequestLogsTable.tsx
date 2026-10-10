@@ -116,6 +116,7 @@ export function RequestLogsTable({
       noDataMessage={<RequestLogsEmptyState filtered={isFiltered} />}
       size="compact"
       onRowClick={onRowClick}
+      getRowLabel={(row) => `Open request ${row.request_id}`}
       toolbar={(table) => (
         <>
           <DataTableToolbar

@@ -157,10 +157,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       allTeams,
       organizations,
       teamMemberBudgets,
-      onSelectKey: (key: KeyResponse) => void setSelectedKeyId(key.token),
       applyUserBudgetToTeamKeys,
     }),
-    [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys],
+    [allTeams, organizations, teamMemberBudgets, applyUserBudgetToTeamKeys],
   );
   const columns = useMemo(() => getKeyTableColumns(columnDeps), [columnDeps]);
 
@@ -253,6 +252,10 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         data={keyList}
         columns={columns}
         getRowId={(row) => row.token}
+        onRowClick={(key) => {
+          void setSelectedKeyId(key.token);
+        }}
+        getRowLabel={(key) => `Open key ${key.key_alias ?? key.key_name ?? key.token}`}
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={onColumnVisibilityChange}
         sortingMode="server"

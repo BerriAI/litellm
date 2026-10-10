@@ -427,20 +427,33 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
   });
 });
 
-it("clicking the key cell deep-links via ?key=", async () => {
+it("clicking a plain key cell opens the key details", async () => {
+  const user = userEvent.setup();
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
   renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
-  await waitFor(() => {
-    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-  });
-
-  fireEvent.click(screen.getByText("Test Key Alias"));
+  const row = await screen.findByRole("row", { name: "Open key Test Key Alias" });
+  await user.click(within(row).getByText("Test Key Alias"));
 
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
   });
   expect(lastHistoryMode(onUrlUpdate)).toBe("push");
+  expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+});
+
+it("opens a focused key row with Enter", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+  const row = await screen.findByRole("row", { name: "Open key Test Key Alias" });
+  row.focus();
+  expect(row).toHaveFocus();
+  await user.keyboard("{Enter}");
+
+  await waitFor(() => expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token));
+  expect(screen.getByText("Back to Keys")).toBeInTheDocument();
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
@@ -554,6 +567,18 @@ describe("entity links out of the key rows", () => {
       "/ui/users?user=user-1",
     );
     expect(within(row).getByRole("link", { name: "Test Team" })).toHaveAttribute("href", "/ui/teams?team=team-1");
+  });
+
+  it("does not open key details when the Team link is clicked", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    const row = await keyRow();
+    await user.click(within(row).getByRole("link", { name: "Test Team" }));
+
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByText("Back to Keys")).not.toBeInTheDocument();
   });
 
   it("points the Organization cell at the org's detail page", async () => {

@@ -276,9 +276,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const modelColumns = useMemo(() => getPublicModelHubColumns({ onModelClick: showModal }), [showModal]);
-  const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
-  const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
+  const modelColumns = useMemo(() => getPublicModelHubColumns(), []);
+  const agentColumns = useMemo(() => getPublicAgentHubColumns(), []);
+  const mcpColumns = useMemo(() => getPublicMCPHubColumns(), []);
 
   const hasAgents = Array.isArray(agentHubData) && agentHubData.length > 0;
   const hasMcpServers = Array.isArray(mcpHubData) && mcpHubData.length > 0;
@@ -489,6 +489,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     data={models.rows}
                     columns={modelColumns}
                     getRowId={(model, index) => model.model_group || String(index)}
+                    onRowClick={showModal}
+                    getRowLabel={(model) => `Open model ${model.model_group}`}
                     sortingMode="server"
                     sorting={models.sorting}
                     onSortingChange={models.onSortingChange}
@@ -557,6 +559,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       paginationMode="client"
                       columns={agentColumns}
                       getRowId={(agent, index) => agent.name || String(index)}
+                      onRowClick={showAgentModal}
+                      getRowLabel={(agent) => `Open agent ${agent.name}`}
                       sortingMode="client"
                       sorting={agentSorting}
                       onSortingChange={setAgentSorting}
@@ -624,6 +628,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       paginationMode="client"
                       columns={mcpColumns}
                       getRowId={(server, index) => server.server_id || String(index)}
+                      onRowClick={showMcpModal}
+                      getRowLabel={(server) => `Open MCP server ${server.server_name}`}
                       sortingMode="client"
                       sorting={mcpSorting}
                       onSortingChange={setMcpSorting}
