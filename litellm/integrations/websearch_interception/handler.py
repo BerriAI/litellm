@@ -1912,7 +1912,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in internal_params
         }
 
-        full_model_name: Final = qualify_provider_stripped_model(model, kwargs.get("custom_llm_provider", ""))
+        custom_llm_provider: Final = kwargs["custom_llm_provider"] if "custom_llm_provider" in kwargs else ""
+        full_model_name: Final = qualify_provider_stripped_model(
+            model, custom_llm_provider if isinstance(custom_llm_provider, str) else ""
+        )
 
         verbose_logger.debug(
             "WebSearchInterception: Built chat completion request patch model=%s messages=%d",
