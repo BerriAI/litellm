@@ -31,6 +31,8 @@ CLAUDE_CODE_REASONING_BETAS: Final = (
     "interleaved-thinking-2025-05-14",
     "thinking-token-count-2026-05-13",
 )
+CLAUDE_CODE_CACHING_BETAS: Final = ("extended-cache-ttl-2025-04-11", "prompt-caching-scope-2026-01-05")
+CACHING_CLI_BETA: Final = f"{CLI_BETA},extended-cache-ttl-2025-04-11"
 REASONING_FIELDS: Final = ("thinking", "output_config", "reasoning_effort", "temperature")
 _OUTPUT_USAGE_KEYS: Final = frozenset({"output_tokens", "output_tokens_details"})
 METADATA_USER_ID: Final = json.dumps(
@@ -731,6 +733,114 @@ def forwarded(sent: Mapping[str, JsonValue], request: Request) -> Forwarded:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class CacheForwarded:
+    breakpoints: dict[str, JsonValue]
+    other_changes: dict[str, JsonValue]
+    caching_betas: tuple[str, ...]
+
+
+def _marked(prefix: str, blocks: JsonValue) -> tuple[tuple[str, JsonValue], ...]:
+    if not isinstance(blocks, list):
+        return ()
+    return tuple(
+        (f"{prefix}[{index}]", block["cache_control"])
+        for index, block in enumerate(blocks)
+        if isinstance(block, dict) and "cache_control" in block
+    )
+
+
+def _marked_message(index: int, message: JsonValue) -> tuple[tuple[str, JsonValue], ...]:
+    return _marked(f"messages[{index}].content", message.get("content")) if isinstance(message, dict) else ()
+
+
+def _marked_messages(messages: JsonValue) -> tuple[tuple[str, JsonValue], ...]:
+    if not isinstance(messages, list):
+        return ()
+    return tuple(chain.from_iterable(_marked_message(index, message) for index, message in enumerate(messages)))
+
+
+def cache_breakpoints(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    top_level: Final = (("cache_control", body["cache_control"]),) if "cache_control" in body else ()
+    return dict(
+        (
+            *top_level,
+            *_marked("system", body.get("system")),
+            *_marked("tools", body.get("tools")),
+            *_marked_messages(body.get("messages")),
+        )
+    )
+
+
+def _unmarked_block(block: JsonValue) -> JsonValue:
+    if not isinstance(block, dict):
+        return block
+    return {key: value for key, value in block.items() if key != "cache_control"}
+
+
+def _unmarked_blocks(blocks: JsonValue) -> JsonValue:
+    return [_unmarked_block(block) for block in blocks] if isinstance(blocks, list) else blocks
+
+
+def _unmarked_message(message: JsonValue) -> JsonValue:
+    if not isinstance(message, dict) or "content" not in message:
+        return message
+    return {**message, "content": _unmarked_blocks(message["content"])}
+
+
+def _unmarked_value(key: str, value: JsonValue) -> JsonValue:
+    match key, value:
+        case ("system" | "tools", _):
+            return _unmarked_blocks(value)
+        case ("messages", list()):
+            return [_unmarked_message(message) for message in value]
+        case _:
+            return value
+
+
+def with_block_breakpoint(
+    body: Mapping[str, JsonValue], field: str, index: int, control: Mapping[str, JsonValue]
+) -> dict[str, JsonValue]:
+    blocks: Final = body[field]
+    assert isinstance(blocks, list), body
+    return {
+        **body,
+        field: [
+            {**block, "cache_control": dict(control)} if position == index and isinstance(block, dict) else block
+            for position, block in enumerate(blocks)
+        ],
+    }
+
+
+def without_cache_breakpoints(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {key: _unmarked_value(key, value) for key, value in body.items() if key != "cache_control"}
+
+
+def caching_betas(anthropic_beta: str) -> tuple[str, ...]:
+    return tuple(sorted(beta for beta in anthropic_beta.split(",") if beta in CLAUDE_CODE_CACHING_BETAS))
+
+
+def _without_model(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {key: value for key, value in without_cache_breakpoints(body).items() if key != "model"}
+
+
+def cache_forwarded(sent: Mapping[str, JsonValue], request: Request) -> CacheForwarded:
+    body: Final = JSON_OBJECT.validate_json(request.body)
+    return CacheForwarded(
+        breakpoints=cache_breakpoints(body),
+        other_changes=body_diff(_without_model(sent), _without_model(body)),
+        caching_betas=caching_betas(request.headers.get("anthropic-beta", "")),
+    )
+
+
+def streamed_start_usage(stream: str) -> JsonValue:
+    return next(
+        JSON_OBJECT.validate_python(data["message"]).get("usage")
+        for event, data in _client_events(stream)
+        if event == "message_start"
+    )
+
+
 def _appended(block: Mapping[str, JsonValue], key: str, text: str) -> dict[str, JsonValue]:
     return {**block, key: f"{block.get(key) or ''}{text}"}
 
@@ -848,7 +958,11 @@ def message_reply(
 
 
 def message_stream(
-    identity: str, model: str, content: tuple[dict[str, JsonValue], ...], usage: dict[str, JsonValue]
+    identity: str,
+    model: str,
+    content: tuple[dict[str, JsonValue], ...],
+    usage: dict[str, JsonValue],
+    final_usage: Mapping[str, JsonValue] | None = None,
 ) -> tuple[bytes, ...]:
     start: Final = sse_frame(
         "message_start",
@@ -871,7 +985,7 @@ def message_stream(
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": _delta_usage(usage),
+            "usage": _delta_usage(usage) if final_usage is None else dict(final_usage),
         },
     )
     blocks: Final = chain.from_iterable(_block_frames(index, block) for index, block in enumerate(content))
