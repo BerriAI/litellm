@@ -1561,18 +1561,7 @@ class Router:
         selector_ids: Final = {id(s) for s in selectors if s is not None}
         if not selector_ids:
             return
-        if isinstance(litellm.callbacks, list):
-            litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
-        if isinstance(litellm.input_callback, list):
-            litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
-        if isinstance(litellm.success_callback, list):
-            litellm.success_callback = [c for c in litellm.success_callback if id(c) not in selector_ids]
-        if isinstance(litellm.failure_callback, list):
-            litellm.failure_callback = [c for c in litellm.failure_callback if id(c) not in selector_ids]
-        if isinstance(litellm._async_success_callback, list):
-            litellm._async_success_callback = [c for c in litellm._async_success_callback if id(c) not in selector_ids]
-        if isinstance(litellm._async_failure_callback, list):
-            litellm._async_failure_callback = [c for c in litellm._async_failure_callback if id(c) not in selector_ids]
+        litellm.logging_callback_manager.remove_callbacks_by_id(selector_ids)
 
     def _apply_updated_routing_strategy_args(self) -> None:
         """

@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence, Set
 from typing import TYPE_CHECKING, Final
 from weakref import WeakSet
 
@@ -450,6 +450,35 @@ class LoggingCallbackManager:
             litellm._async_failure_callback,
         ):
             self.remove_callback_from_list_by_object(callback_list, obj, require_self=require_self)
+
+    def remove_callbacks_by_id(self, selector_ids: Set[int]) -> None:
+        """
+        Remove every callback whose object identity is in ``selector_ids`` from
+        each callback list it may have been promoted into.
+
+        Router strategy selectors are registered by identity (see
+        ``add_litellm_callback(..., dedupe_by_identity=True)``), so discarding a
+        Router must drop them by ``id()`` rather than by class key.
+        """
+        for callback_list in (
+            litellm.callbacks,
+            litellm.input_callback,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # internal callback list promoted into by `function_setup`
+            litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # internal callback list promoted into by `function_setup`
+        ):
+            self._remove_callbacks_by_id_in_place(callback_list, selector_ids)
+
+    def _remove_callbacks_by_id_in_place(
+        self,
+        callback_list: Sequence[CustomLogger | Callable[..., object] | str],
+        selector_ids: Set[int],
+    ) -> None:
+        if not isinstance(callback_list, list):  # immutable sequence -> nothing to filter
+            return
+        for callback in [c for c in callback_list if id(c) in selector_ids]:
+            callback_list.remove(callback)
 
     def get_active_additional_logging_utils_from_custom_logger(
         self,
