@@ -468,7 +468,7 @@ async def test_async_post_call_failure_hook_non_llm_route():
         (None, "/key/list", True),
     ],
 )
-async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(
+async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
     team_id: str | None, route: str, written: bool
 ) -> None:
     """An expired Admin UI session key refetching dashboard info routes must not
