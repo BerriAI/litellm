@@ -31080,6 +31080,27 @@ export interface components {
              */
             total_tokens: number;
         };
+        /**
+         * DecisionModelCheck
+         * @description One predicate the decision model scores the request or response against.
+         */
+        DecisionModelCheck: {
+            /**
+             * Action
+             * @default block
+             * @enum {string}
+             */
+            action: "block" | "log";
+            /** Instructions */
+            instructions: string;
+            /** Name */
+            name: string;
+            /**
+             * Threshold
+             * @default 0.7
+             */
+            threshold: number;
+        };
         /** DecisionsResponse */
         DecisionsResponse: {
             /** Answers */
@@ -31106,27 +31127,6 @@ export interface components {
             output_tokens: number;
         } & {
             [key: string]: unknown;
-        };
-        /**
-         * DecisionModelCheck
-         * @description One predicate the decision model scores the request or response against.
-         */
-        DecisionModelCheck: {
-            /**
-             * Action
-             * @default block
-             * @enum {string}
-             */
-            action: "block" | "log";
-            /** Instructions */
-            instructions: string;
-            /** Name */
-            name: string;
-            /**
-             * Threshold
-             * @default 0.7
-             */
-            threshold: number;
         };
         /**
          * DefaultInternalUserParams
