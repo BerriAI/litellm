@@ -3,10 +3,7 @@ use litellm_llms_types::{
     formats::messages::{
         ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
     },
-    providers::anthropic::{
-        DEFAULT_HEADERS,
-        beta::{AnthropicBeta, BetaProvider, BetaSet},
-    },
+    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;

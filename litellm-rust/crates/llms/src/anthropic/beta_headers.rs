@@ -1,8 +1,5 @@
 use litellm_http::request::{with_header, without_headers};
-use litellm_llms_types::providers::anthropic::{
-    BETA_HEADER,
-    beta::{BetaProvider, BetaSet},
-};
+use litellm_llms_types::providers::anthropic::{BETA_HEADER, BetaProvider, BetaSet};
 
 use crate::{anthropic::common_utils::existing_betas, base_llm::auth::Headers};
 
@@ -39,7 +36,7 @@ impl BetaPolicy {
 #[cfg(test)]
 mod tests {
     use crate::anthropic::beta_headers::BetaPolicy;
-    use litellm_llms_types::providers::anthropic::beta::BetaProvider;
+    use litellm_llms_types::providers::anthropic::BetaProvider;
     use rstest::rstest;
 
     fn headers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {

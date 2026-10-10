@@ -10,7 +10,8 @@
 
 - `formats/<format>/` holds a provider-neutral API format, `providers/<provider>/` holds one provider's shared pieces
 - Every format and provider is a folder with a `mod.rs` entrypoint and its own `AGENTS.md`. No standalone `<name>.rs` next to a folder
-- A provider `mod.rs` only declares modules and re-exports them (`pub use constants::*`). Constants go in `constants.rs`, types in a file named for what they describe
+- A `mod.rs` only declares modules and glob re-exports them (`pub use request::*`). Constants go in `constants.rs`, types in a file named for what they describe (`request.rs`, `response.rs`, `streaming.rs`)
+- A submodule stays namespaced (`pub mod streaming`) only when its names would clash with the parent's
 - Format-independent helpers (`headers`, `recognized`, `serde_compat`, `json_schema`) stay at the crate root
 - AGENTS.md files follow the convention in `../llms/AGENTS.md`. Nested files: `src/formats/<format>/` for every format, `src/providers/<provider>/` for every provider
 

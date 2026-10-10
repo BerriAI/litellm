@@ -2,7 +2,7 @@ use litellm_auth::VertexParams;
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
-    providers::anthropic::beta::{AnthropicBeta, BetaSet},
+    providers::anthropic::{AnthropicBeta, BetaSet},
 };
 use litellm_router_types::LitellmParams;
 use rstest::rstest;

@@ -10,8 +10,8 @@ use litellm_llms_types::{
         SystemPrompt,
     },
     providers::anthropic::{
-        API_BASE, API_KEY_HEADER, BETA_HEADER, DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
-        beta::{AnthropicBeta, BetaSet},
+        API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
+        DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
     },
     recognized::Recognized,
 };
