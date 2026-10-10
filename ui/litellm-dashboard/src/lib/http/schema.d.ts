@@ -24901,6 +24901,7 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by?: string | null;
+            created_by_user?: components["schemas"]["AccessGroupResource"] | null;
             /** Description */
             description?: string | null;
             /**
@@ -24910,6 +24911,7 @@ export interface components {
             updated_at: string;
             /** Updated By */
             updated_by?: string | null;
+            updated_by_user?: components["schemas"]["AccessGroupResource"] | null;
         };
         /** AccessGroupUpdateRequest */
         AccessGroupUpdateRequest: {

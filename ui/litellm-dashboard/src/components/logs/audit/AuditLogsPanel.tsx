@@ -1,10 +1,11 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ColumnFiltersState, OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiAuditLogsCall } from "../../networking";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 import { AuditLogEntry } from "./AuditLogsTableColumns";
 import { AuditLogsTable } from "./AuditLogsTable";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
@@ -98,6 +99,10 @@ export default function AuditLogsPanel({
     setDrawerOpen(true);
   }, []);
 
+  const changedByIds = useMemo(() => (query.data?.audit_logs ?? []).map((log) => log.changed_by), [query.data]);
+  const { data: displayNames } = useUserDisplayNames(changedByIds);
+  const resolveUserName = useCallback((userId: string) => displayNames?.[userId], [displayNames]);
+
   if (!premiumUser) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto text-center">
@@ -129,6 +134,7 @@ export default function AuditLogsPanel({
   return (
     <>
       <AuditLogsTable
+        resolveUserName={resolveUserName}
         data={query.data?.audit_logs ?? []}
         rowCount={query.data?.total ?? 0}
         isLoading={query.isLoading}
@@ -143,7 +149,12 @@ export default function AuditLogsPanel({
         onViewLog={handleViewLog}
       />
 
-      <AuditLogDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} log={selectedLog} />
+      <AuditLogDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        log={selectedLog}
+        userDisplayName={selectedLog ? displayNames?.[selectedLog.changed_by] : undefined}
+      />
     </>
   );
 }

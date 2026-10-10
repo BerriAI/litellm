@@ -45,5 +45,7 @@ class AccessGroupResponse(LiteLLMBaseModel):
     assigned_keys: tuple[AccessGroupResource, ...]
     created_at: datetime
     created_by: str | None = None
+    created_by_user: AccessGroupResource | None = None
     updated_at: datetime
     updated_by: str | None = None
+    updated_by_user: AccessGroupResource | None = None

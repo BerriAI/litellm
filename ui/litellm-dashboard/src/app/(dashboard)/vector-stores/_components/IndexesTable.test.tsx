@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { VectorStoreIndex } from "./IndexesTab";
 import IndexesTable from "./IndexesTable";
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
 
 vi.mock("next/navigation", async () => ({
   ...(await vi.importActual("next/navigation")),

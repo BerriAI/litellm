@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { userDetailHref } from "@/utils/entityLinks";
+import { UserReference } from "@/components/shared/EntityReference";
 
 import { extractModel, getProviderFromModelHub, ModelGroupInfo } from "./prompt_utils";
 
@@ -111,6 +111,7 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
 }
 
 interface PromptTableColumnsDeps {
+  resolveUserName?: (userId: string) => string | undefined;
   modelHubData: Map<string, ModelGroupInfo>;
   isAdmin: boolean;
   onPromptClick?: (id: string, environment: string) => void;
@@ -118,6 +119,7 @@ interface PromptTableColumnsDeps {
 }
 
 export const getPromptTableColumns = ({
+  resolveUserName = () => undefined,
   modelHubData,
   isAdmin,
   onPromptClick,
@@ -196,12 +198,8 @@ export const getPromptTableColumns = ({
         return <span className="text-muted-foreground">-</span>;
       }
       return (
-        <span className="block max-w-60" title={createdBy}>
-          <IdentityCell
-            title={createdBy}
-            titleClassName="font-normal text-muted-foreground"
-            href={userDetailHref(createdBy)}
-          />
+        <span className="block max-w-60">
+          <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
         </span>
       );
     },

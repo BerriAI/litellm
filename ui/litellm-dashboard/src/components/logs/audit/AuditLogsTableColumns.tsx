@@ -3,8 +3,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DateCell, IdCell, IdentityCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
-
-import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
+import { UserReference } from "@/components/shared/EntityReference";
 
 export type AuditLogEntry = {
   id: string;
@@ -42,9 +41,13 @@ export const auditActionLabel = (action: string): string => {
 
 interface AuditLogsTableColumnsDeps {
   onViewLog: (log: AuditLogEntry) => void;
+  resolveUserName?: (userId: string) => string | undefined;
 }
 
-export const getAuditLogsTableColumns = ({ onViewLog }: AuditLogsTableColumnsDeps): ColumnDef<AuditLogEntry>[] => [
+export const getAuditLogsTableColumns = ({
+  onViewLog,
+  resolveUserName = () => undefined,
+}: AuditLogsTableColumnsDeps): ColumnDef<AuditLogEntry>[] => [
   {
     id: "updated_at",
     accessorKey: "updated_at",
@@ -94,7 +97,9 @@ export const getAuditLogsTableColumns = ({ onViewLog }: AuditLogsTableColumnsDep
     header: "Changed By",
     size: 200,
     enableSorting: false,
-    cell: ({ row }) => <DefaultProxyAdminTag userId={row.original.changed_by} />,
+    cell: ({ row }) => (
+      <UserReference userId={row.original.changed_by} displayName={resolveUserName(row.original.changed_by)} />
+    ),
   },
   {
     id: "changed_by_api_key",

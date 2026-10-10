@@ -5,6 +5,8 @@ import { useUrlTab } from "@/hooks/useUrlTab";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
+import { UserReference } from "@/components/shared/EntityReference";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -57,6 +59,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const { onTabChange, hasVisited } = useVisitedTabs(tab);
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+  const { data: displayNames } = useUserDisplayNames(useMemo(() => [orgData?.created_by ?? ""], [orgData?.created_by]));
 
   const handleTabChange = (value: OrganizationTab) => {
     setTab(value);
@@ -128,6 +131,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   }
 
   const orgMemberById = new Map((orgData.members || []).map((m) => [m.user_id, m]));
+  const createdByMember = orgData.created_by ? orgMemberById.get(orgData.created_by) : undefined;
+  const createdByName =
+    createdByMember?.user?.user_alias ??
+    createdByMember?.user?.user_email ??
+    (orgData.created_by ? displayNames?.[orgData.created_by] : undefined);
   const orgMemberFor = (record: Member) => (record.user_id != null ? orgMemberById.get(record.user_id) : undefined);
 
   const orgExtraColumns: MemberTableColumn[] = [
@@ -186,7 +194,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="mt-2 text-sm text-foreground">
                   <p>Created: {new Date(orgData.created_at).toLocaleDateString()}</p>
                   <p>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</p>
-                  <p>Created By: {orgData.created_by}</p>
+                  <p>
+                    Created By:{" "}
+                    {orgData.created_by ? (
+                      <UserReference userId={orgData.created_by} displayName={createdByName} />
+                    ) : (
+                      "-"
+                    )}
+                  </p>
                 </div>
               </CardContent>
             </Card>

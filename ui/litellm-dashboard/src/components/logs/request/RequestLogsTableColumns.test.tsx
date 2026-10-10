@@ -7,6 +7,8 @@ import { DataTable } from "@/components/shared/DataTable";
 import type { LogEntry } from "../types";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
 
 vi.mock("@/utils/dataUtils", async (importOriginal) => ({

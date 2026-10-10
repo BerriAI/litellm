@@ -4,17 +4,19 @@ import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdentityCell } from "@/components/shared/table_cells";
-import { userDetailHref } from "@/utils/entityLinks";
+import { UserReference } from "@/components/shared/EntityReference";
 
 import type { VectorStoreIndex } from "./IndexesTab";
 
 interface IndexesTableColumnsDeps {
   resolveVectorStoreId: (name: string) => string | undefined;
+  resolveUserName?: (userId: string) => string | undefined;
   onViewVectorStore: (vectorStoreId: string) => void;
 }
 
 export const getIndexesTableColumns = ({
   resolveVectorStoreId,
+  resolveUserName = () => undefined,
   onViewVectorStore,
 }: IndexesTableColumnsDeps): ColumnDef<VectorStoreIndex>[] => [
   {
@@ -84,12 +86,9 @@ export const getIndexesTableColumns = ({
       const createdBy = row.original.created_by;
       if (createdBy) {
         return (
-          <IdentityCell
-            title={createdBy}
-            titleClassName="font-normal"
-            className="max-w-48"
-            href={userDetailHref(createdBy)}
-          />
+          <span className="block max-w-48">
+            <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
+          </span>
         );
       }
       return <span className="block max-w-48 truncate text-sm">-</span>;

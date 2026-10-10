@@ -1,8 +1,8 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { BadgeLink } from "@/components/shared/BadgeLink";
+import { UserReference } from "@/components/shared/EntityReference";
 import CopyButton from "@/components/shared/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -136,7 +136,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.created_by && (
                 <>
                   <span>by</span>
-                  <DefaultProxyAdminTag userId={accessGroup.created_by} />
+                  <UserReference userId={accessGroup.created_by} displayName={accessGroup.created_by_user?.name} />
                 </>
               )}
             </dd>
@@ -146,7 +146,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.updated_by && (
                 <>
                   <span>by</span>
-                  <DefaultProxyAdminTag userId={accessGroup.updated_by} />
+                  <UserReference userId={accessGroup.updated_by} displayName={accessGroup.updated_by_user?.name} />
                 </>
               )}
             </dd>

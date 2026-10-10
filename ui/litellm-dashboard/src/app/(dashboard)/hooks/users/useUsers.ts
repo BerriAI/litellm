@@ -56,6 +56,27 @@ export const useUserEmailLookup = (userIds: readonly string[]) => {
   });
 };
 
+const userDisplayNameKeys = createQueryKeys("userDisplayNames");
+
+export const useUserDisplayNames = (userIds: readonly string[]) => {
+  const { accessToken, userRole } = useAuthorized();
+  const distinctIds = Array.from(new Set(userIds.filter((id) => id !== ""))).sort();
+  return useQuery<Record<string, string>>({
+    queryKey: userDisplayNameKeys.list({ filters: { ids: JSON.stringify(distinctIds) } }),
+    queryFn: async () => {
+      const ids = distinctIds.slice(0, USER_LIST_MAX_PAGE_SIZE);
+      const response = await userListCall(accessToken!, ids, 1, ids.length);
+      return Object.fromEntries(
+        response.users.flatMap((user) => {
+          const name = user.user_alias || user.user_email;
+          return name ? [[user.user_id, name]] : [];
+        }),
+      );
+    },
+    enabled: Boolean(accessToken) && distinctIds.length > 0 && canListUsers(userRole),
+  });
+};
+
 export const useUserLookup = (userId: string | null) => {
   const { accessToken, userRole } = useAuthorized();
   return useQuery<UserInfo | null>({

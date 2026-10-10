@@ -6,6 +6,7 @@ import { Copy, Info, MoreHorizontal } from "lucide-react";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { MCP_REACHABLE_DESCRIPTION } from "@/components/mcp_tools/types";
 import { IdentityCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
+import { UserReference } from "@/components/shared/EntityReference";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -88,9 +89,13 @@ function MCPHubRowActions({ server, onServerClick }: MCPHubRowActionsProps) {
 
 interface MCPHubTableColumnsDeps {
   onServerClick: (server: MCPServerData) => void;
+  resolveUserName?: (userId: string) => string | undefined;
 }
 
-export const getMCPHubTableColumns = ({ onServerClick }: MCPHubTableColumnsDeps): ColumnDef<MCPServerData>[] => [
+export const getMCPHubTableColumns = ({
+  onServerClick,
+  resolveUserName = () => undefined,
+}: MCPHubTableColumnsDeps): ColumnDef<MCPServerData>[] => [
   {
     id: "server_name",
     accessorKey: "server_name",
@@ -194,11 +199,14 @@ export const getMCPHubTableColumns = ({ onServerClick }: MCPHubTableColumnsDeps)
     size: 140,
     enableSorting: true,
     sortingFn: "alphanumeric",
-    cell: ({ row }) => (
-      <span className="block max-w-60 truncate text-xs" title={row.original.created_by || undefined}>
-        {row.original.created_by || "-"}
-      </span>
-    ),
+    cell: ({ row }) =>
+      row.original.created_by ? (
+        <span className="block max-w-60 truncate text-xs">
+          <UserReference userId={row.original.created_by} displayName={resolveUserName(row.original.created_by)} />
+        </span>
+      ) : (
+        <span className="block max-w-60 truncate text-xs">-</span>
+      ),
   },
   {
     id: "is_public",

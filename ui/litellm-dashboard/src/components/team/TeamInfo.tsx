@@ -25,8 +25,9 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { BadgeLink } from "@/components/shared/BadgeLink";
+import { EntityReference } from "@/components/shared/EntityReference";
 import { Badge } from "@/components/ui/badge";
-import { modelGroupHref, modelOrAccessGroupHref } from "@/utils/entityLinks";
+import { modelGroupHref, modelOrAccessGroupHref, orgDetailHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -2347,8 +2348,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 )}
               </div>
               <div>
-                <p className="font-medium">Organization ID</p>
-                <div>{info.organization_id}</div>
+                <p className="font-medium">Organization</p>
+                <div>
+                  {info.organization_id ? (
+                    <EntityReference
+                      id={info.organization_id}
+                      name={organization?.organization_alias}
+                      href={orgDetailHref(info.organization_id)}
+                    />
+                  ) : (
+                    "-"
+                  )}
+                </div>
               </div>
               <div>
                 <p className="font-medium">Status</p>

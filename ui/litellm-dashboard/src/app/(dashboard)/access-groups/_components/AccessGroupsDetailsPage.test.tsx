@@ -143,6 +143,20 @@ describe("AccessGroupDetail", () => {
     expect(screen.getByText("A test access group")).toBeInTheDocument();
   });
 
+  it("shows the creator and updater names instead of their raw user ids", () => {
+    renderWith({
+      created_by: "user-abc",
+      created_by_user: { id: "user-abc", name: "Ada Reviewer" },
+      updated_by: "user-def",
+      updated_by_user: { id: "user-def", name: null },
+    });
+
+    const creatorLink = screen.getByRole("link", { name: "Ada Reviewer" });
+    expect(creatorLink).toHaveAttribute("href", expect.stringContaining("user-abc"));
+    expect(screen.queryByText("user-abc")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "user-def" })).toHaveAttribute("href", expect.stringContaining("user-def"));
+  });
+
   it("should display em dash when description is empty", () => {
     renderWith({ description: null });
 

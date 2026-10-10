@@ -4,6 +4,8 @@ import React from "react";
 
 import { MemoryRow } from "@/components/networking";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { UserReference } from "@/components/shared/EntityReference";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 
 interface MemoryDetailDrawerProps {
   row: MemoryRow | null;
@@ -25,6 +27,9 @@ function formatTimestamp(ts?: string): string {
 }
 
 export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
+  const { data: displayNames } = useUserDisplayNames(
+    React.useMemo(() => [row?.created_by ?? "", row?.updated_by ?? ""], [row]),
+  );
   return (
     <Sheet
       open={!!row}
@@ -69,12 +74,26 @@ export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>
                 Created {formatTimestamp(row.created_at)}
-                {row.created_by ? ` by ${row.created_by}` : ""}
+                {row.created_by ? (
+                  <>
+                    {" by "}
+                    <UserReference userId={row.created_by} displayName={displayNames?.[row.created_by]} />
+                  </>
+                ) : (
+                  ""
+                )}
               </span>
               <span aria-hidden="true">·</span>
               <span>
                 Updated {formatTimestamp(row.updated_at)}
-                {row.updated_by ? ` by ${row.updated_by}` : ""}
+                {row.updated_by ? (
+                  <>
+                    {" by "}
+                    <UserReference userId={row.updated_by} displayName={displayNames?.[row.updated_by]} />
+                  </>
+                ) : (
+                  ""
+                )}
               </span>
             </div>
           </div>

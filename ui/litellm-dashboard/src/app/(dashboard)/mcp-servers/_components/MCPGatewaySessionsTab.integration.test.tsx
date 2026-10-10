@@ -7,6 +7,8 @@ import { MCPGatewaySessionsTab, describeTerminateResult, formatIdleSeconds } fro
 import * as networking from "@/components/networking";
 import type { MCPGatewaySessionsResponse, MCPGatewaySessionsTerminateResponse } from "@/components/mcp_tools/types";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/components/networking", () => ({
   fetchMCPGatewaySessions: vi.fn(),
   terminateMCPGatewaySessions: vi.fn(),

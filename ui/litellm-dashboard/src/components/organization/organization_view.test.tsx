@@ -375,6 +375,10 @@ describe("organization detail tab in the URL (?org_tab=)", () => {
   });
 
   test("falls back to Overview for an unknown ?org_tab= and removes it from the URL", async () => {
+    vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+      ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+      useUserDisplayNames: () => ({ data: undefined }),
+    }));
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     render(renderOrgView(), {
       wrapper: ({ children }) => (

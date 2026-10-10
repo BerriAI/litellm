@@ -7,6 +7,7 @@ from typing import Final
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import AgentsRepository, MCPServerRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -59,3 +60,12 @@ async def key_display_names(prisma_client: PrismaClient, tokens: Sequence[str]) 
     where: Final = {"token": {"in": tuple(frozenset(tokens))}}
     rows: Final = await VerificationTokenRepository(prisma_client).table.find_many(where=where)
     return MappingProxyType({row.token: row.key_alias for row in rows if row.key_alias})
+
+
+async def user_display_names(prisma_client: PrismaClient, user_ids: Sequence[str]) -> Mapping[str, str]:
+    """user_id -> user_alias, else user_email, for the users that have either."""
+    if not user_ids:
+        return MappingProxyType({})
+    where: Final = {"user_id": {"in": tuple(frozenset(user_ids))}}
+    rows: Final = await UserRepository(prisma_client).table.find_many(where=where)
+    return MappingProxyType({row.user_id: name for row in rows if (name := row.user_alias or row.user_email)})

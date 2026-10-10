@@ -6,8 +6,9 @@ import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
+import { UserReference } from "@/components/shared/EntityReference";
 import CopyButton from "@/components/shared/CopyButton";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,9 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
   const { userId } = useAuthorized();
+  const { data: displayNames } = useUserDisplayNames(
+    useMemo(() => [project?.created_by ?? "", project?.updated_by ?? ""], [project]),
+  );
   const canEditProject = useCanManageProjects(
     isUserTeamAdminForSingleTeam(teamInfo?.members_with_roles ?? null, userId ?? ""),
   );
@@ -116,7 +120,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               {project.created_by && (
                 <>
                   <span>by</span>
-                  <DefaultProxyAdminTag userId={project.created_by} />
+                  <UserReference userId={project.created_by} displayName={displayNames?.[project.created_by]} />
                 </>
               )}
             </dd>
@@ -126,7 +130,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               {project.updated_by && (
                 <>
                   <span>by</span>
-                  <DefaultProxyAdminTag userId={project.updated_by} />
+                  <UserReference userId={project.updated_by} displayName={displayNames?.[project.updated_by]} />
                 </>
               )}
             </dd>

@@ -17,6 +17,8 @@ import { toast } from "@/lib/toast";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { UserReference } from "@/components/shared/EntityReference";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 
 export interface PromptInfoProps {
   promptId: string;
@@ -51,6 +53,12 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   const [versionHistory, setVersionHistory] = useState<PromptSpec[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [loadingVersions, setLoadingVersions] = useState(false);
+  const { data: displayNames } = useUserDisplayNames(
+    React.useMemo(
+      () => [promptData?.created_by ?? "", ...versionHistory.map((v) => v.created_by ?? "")],
+      [promptData, versionHistory],
+    ),
+  );
 
   // Fetches the requested environment (or the serve-time default when omitted) plus the environments list
   const fetchPromptInfo = async (environment?: string) => {
@@ -329,7 +337,16 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
               <Card className="block p-6">
                 <p>Created By</p>
                 <div className="mt-2">
-                  <h3 className="text-sm font-medium">{promptData.created_by || "-"}</h3>
+                  <h3 className="text-sm font-medium">
+                    {promptData.created_by ? (
+                      <UserReference
+                        userId={promptData.created_by}
+                        displayName={displayNames?.[promptData.created_by]}
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </h3>
                 </div>
               </Card>
 
@@ -379,7 +396,13 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
                             )}
                           </TableCell>
                           <TableCell>
-                            <span className="text-sm">{v.created_by || "-"}</span>
+                            <span className="text-sm">
+                              {v.created_by ? (
+                                <UserReference userId={v.created_by} displayName={displayNames?.[v.created_by]} />
+                              ) : (
+                                "-"
+                              )}
+                            </span>
                           </TableCell>
                           <TableCell>
                             <span className="text-sm">{formatDate(v.created_at)}</span>

@@ -9,6 +9,8 @@ import MCPServers, { compareServers, type SortKey } from "./mcp_servers";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),

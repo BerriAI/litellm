@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { AuditLogsTable } from "./AuditLogsTable";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 import type { AuditLogEntry } from "./AuditLogsTableColumns";
 
 const ROWS: AuditLogEntry[] = [
@@ -67,6 +69,15 @@ describe("AuditLogsTable", () => {
     // Object ID + API key hash
     expect(screen.getByText("team-obj-123")).toBeInTheDocument();
     expect(screen.getByText("sk-hash-abc")).toBeInTheDocument();
+  });
+
+  it("shows the resolved user name in the Changed By column when provided", () => {
+    renderTable({ resolveUserName: (userId) => (userId === "user-42" ? "Ada Reviewer" : undefined) });
+
+    expect(screen.getByRole("link", { name: "Ada Reviewer" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("user-42"),
+    );
   });
 
   it("opens the detail drawer from the Object ID identity cell with the full row", async () => {
