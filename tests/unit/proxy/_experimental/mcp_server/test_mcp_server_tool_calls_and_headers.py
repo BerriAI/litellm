@@ -19,6 +19,7 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     BlobResourceContents,
     CallToolResult,
+    Tool as MCPTool,
     Prompt,
     ResourceTemplate,
     TextContent,
@@ -7468,6 +7469,140 @@ async def test_create_mcp_client_sampling_enabled():
 
     client = await manager._create_mcp_client(server=server)
     assert client._sampling_callback is not None
+
+
+@pytest.mark.asyncio
+async def test_call_tool_warms_cold_mapping_with_caller_credentials():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="credential-server-id",
+        name="credential_server",
+        server_name="credential_server",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+    )
+    manager.registry[server.server_id] = server
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+
+    async def fake_get_tools_from_server(**kwargs):
+        manager.tool_name_to_mcp_server_name_mapping["target"] = server.name
+        manager.tool_name_to_mcp_server_name_mapping["credential_server-target"] = server.name
+        return [MCPTool(name="credential_server-target", description="", inputSchema={})]
+
+    with (
+        patch.object(
+            manager,
+            "_get_tools_from_server",
+            new=AsyncMock(side_effect=fake_get_tools_from_server),
+        ) as get_tools,
+        patch.object(
+            manager,
+            "_resolve_oauth2_headers_for_tool_call",
+            new=AsyncMock(return_value={"authorization": "Bearer stored-oauth-token"}),
+        ) as resolve_oauth,
+        patch.object(manager, "_call_regular_mcp_tool", new=AsyncMock(return_value=result)),
+    ):
+        response = await manager.call_tool(
+            server_name="credential_server",
+            name="target",
+            arguments={},
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="user-id"),
+            mcp_auth_header="Bearer caller-token",
+            oauth2_headers={"authorization": "Bearer inbound-token"},
+            raw_headers={"authorization": "Bearer caller-token"},
+        )
+
+    assert response is result
+    assert resolve_oauth.await_count == 1
+    assert get_tools.await_count == 1
+    assert get_tools.await_args.kwargs["server"] is server
+    assert get_tools.await_args.kwargs["mcp_auth_header"] == "Bearer caller-token"
+    assert get_tools.await_args.kwargs["extra_headers"] == {"authorization": "Bearer stored-oauth-token"}
+    assert get_tools.await_args.kwargs["oauth2_headers"] == {"authorization": "Bearer inbound-token"}
+    assert get_tools.await_args.kwargs["user_api_key_auth"].user_id == "user-id"
+    assert get_tools.await_args.kwargs["raw_headers"] == {"authorization": "Bearer caller-token"}
+
+
+@pytest.mark.asyncio
+async def test_call_tool_warms_requested_tool_when_server_has_other_mapped_tool():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="partial-server-id",
+        name="partial_server",
+        server_name="partial_server",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+    )
+    manager.registry[server.server_id] = server
+    manager.tool_name_to_mcp_server_name_mapping["other"] = server.name
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+
+    async def fake_get_tools_from_server(**kwargs):
+        manager.tool_name_to_mcp_server_name_mapping["target"] = server.name
+        manager.tool_name_to_mcp_server_name_mapping["partial_server-target"] = server.name
+        return [MCPTool(name="partial_server-target", description="", inputSchema={})]
+
+    with (
+        patch.object(
+            manager,
+            "_get_tools_from_server",
+            new=AsyncMock(side_effect=fake_get_tools_from_server),
+        ) as get_tools,
+        patch.object(manager, "_call_regular_mcp_tool", new=AsyncMock(return_value=result)),
+    ):
+        response = await manager.call_tool(server_name="partial_server", name="target", arguments={})
+
+    assert response is result
+    assert get_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_call_tool_coalesces_concurrent_cold_mapping_warmups():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="concurrent-server-id",
+        name="concurrent_server",
+        server_name="concurrent_server",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+    )
+    manager.registry[server.server_id] = server
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+
+    async def fake_get_tools_from_server(**kwargs):
+        await asyncio.sleep(0.01)
+        manager.tool_name_to_mcp_server_name_mapping["target"] = server.name
+        manager.tool_name_to_mcp_server_name_mapping["concurrent_server-target"] = server.name
+        return [MCPTool(name="concurrent_server-target", description="", inputSchema={})]
+
+    with (
+        patch.object(
+            manager,
+            "_get_tools_from_server",
+            new=AsyncMock(side_effect=fake_get_tools_from_server),
+        ) as get_tools,
+        patch.object(manager, "_call_regular_mcp_tool", new=AsyncMock(return_value=result)) as call_regular,
+    ):
+        responses = await asyncio.gather(
+            manager.call_tool(server_name="concurrent_server", name="target", arguments={}),
+            manager.call_tool(server_name="concurrent_server", name="target", arguments={}),
+        )
+
+    assert responses == [result, result]
+    assert get_tools.await_count == 1
+    assert call_regular.await_count == 2
 
 
 @pytest.mark.asyncio

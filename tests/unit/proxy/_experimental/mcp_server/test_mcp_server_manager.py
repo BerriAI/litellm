@@ -6259,6 +6259,103 @@ class TestMCPServerManager:
         with pytest.raises(ValueError, match="Tool create_zap not found"):
             manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
 
+    @pytest.mark.asyncio
+    async def test_ensure_tool_mapping_for_server_warms_cold_mapping(self):
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="zapier-id",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry[server.server_id] = server
+
+        async def populate_mapping(server):
+            manager.tool_name_to_mcp_server_name_mapping["create_zap"] = server.name
+
+        with patch.object(
+            manager,
+            "_get_tools_from_server",
+            new=AsyncMock(side_effect=populate_mapping),
+        ) as get_tools:
+            await manager._ensure_tool_mapping_for_server(server)
+
+        get_tools.assert_awaited_once_with(server)
+
+        resolved = manager._resolve_mcp_server_for_tool_call(
+            "zapier-alias",
+            "create_zap",
+        )
+
+        assert resolved is server
+
+    @pytest.mark.asyncio
+    async def test_ensure_tool_mapping_for_server_skips_warm_mapping(self):
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="zapier-id",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry[server.server_id] = server
+
+        manager.tool_name_to_mcp_server_name_mapping["create_zap"] = server.name
+
+        with patch.object(
+            manager,
+            "_get_tools_from_server",
+            new=AsyncMock(),
+        ) as get_tools:
+            await manager._ensure_tool_mapping_for_server(server)
+
+        get_tools.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_call_tool_warms_cold_mapping_before_resolution(self):
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="zapier-id",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry[server.server_id] = server
+
+        async def populate_mapping(server):
+            manager.tool_name_to_mcp_server_name_mapping["create_zap"] = server.name
+
+        with (
+            patch.object(
+                manager,
+                "_get_tools_from_server",
+                new=AsyncMock(side_effect=populate_mapping),
+            ) as get_tools,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager._resolve_byok_mcp_auth_header",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                manager,
+                "pre_call_tool_check",
+                new=AsyncMock(return_value={}),
+            ),
+            patch.object(
+                manager,
+                "_call_regular_mcp_tool",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+        ):
+            await manager.call_tool(
+                server_name="zapier-alias",
+                name="create_zap",
+                arguments={},
+            )
+
+        get_tools.assert_awaited_once_with(server)
     def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
         """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""
         manager = MCPServerManager()
