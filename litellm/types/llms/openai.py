@@ -64,6 +64,7 @@ from openai.types.responses.response_create_params import (
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from openai.types.responses.response_tool_search_call import ResponseToolSearchCall
 from pydantic import (
     ConfigDict,
     Discriminator,
@@ -1075,6 +1076,7 @@ class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
     eager_input_streaming: ReadOnly[bool]
+    defer_loading: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
@@ -1443,6 +1445,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | ResponseToolSearchCall
         ]
     )
     parallel_tool_calls: bool | None = None

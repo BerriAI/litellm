@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Final, Literal
 
 import pytest
+from openai.types.responses import ResponseToolSearchCall
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -1669,6 +1670,62 @@ class TestContentTypeTransformation:
         ]
 
 
+def _deferred_tools_with_server_tool_search() -> list[dict[str, object]]:
+    return [
+        {"type": "tool_search", "execution": "server"},
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather for a city",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            "defer_loading": True,
+        },
+        {
+            "type": "namespace",
+            "name": "finance",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_stock_price",
+                    "parameters": {"type": "object", "properties": {"ticker": {"type": "string"}}},
+                    "defer_loading": True,
+                }
+            ],
+        },
+    ]
+
+
+def _chat_response_with_tool_search_call(search_arguments: str) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-tool-search",
+        created=1748575031,
+        model="claude-sonnet-5-5",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "srvtoolu_01Search",
+                            "type": "function",
+                            "function": {"name": "tool_search_tool_regex", "arguments": search_arguments},
+                        },
+                        {
+                            "id": "toolu_01Weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        },
+                    ],
+                },
+            }
+        ],
+    )
+
+
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
 
@@ -1811,6 +1868,115 @@ class TestToolTransformation:
         assert all(tool.get("type") == "function" for tool in result_tools)
         assert len(result_tools) == function_and_custom_count
         assert web_search_options is not None
+
+    def test_server_tool_search_becomes_anthropic_tool_search_for_claude(self) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
+        result: Final = transform(
+            model="anthropic/claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="anthropic",
+        )
+
+        chat_tools: Final = result["tools"]
+        assert chat_tools[0] == {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
+        assert [tool["function"]["name"] for tool in chat_tools[1:]] == ["get_weather", "finance__get_stock_price"]
+        assert [tool["defer_loading"] for tool in chat_tools[1:]] == [True, True]
+
+    def test_server_tool_search_dropped_for_models_without_tool_search(self) -> None:
+        model: Final = "gemini/gemini-2.5-flash"
+        assert litellm.supports_tool_search(model) is False
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="gemini",
+        )
+
+        assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
+
+    def test_anthropic_tool_search_call_becomes_tool_search_call_item(self) -> None:
+        response: Final = _chat_response_with_tool_search_call('{"pattern": "weather|forecast"}')
+        with_tool_search: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=response,
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+        )
+        without_tool_search: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+                chat_completion_response=response,
+                responses_api_request={"tools": _deferred_tools_with_server_tool_search()[1:]},
+            )
+        )
+
+        assert [item.type for item in with_tool_search] == ["tool_search_call", "function_call"]
+        search_call: Final = with_tool_search[0]
+        assert isinstance(search_call, ResponseToolSearchCall)
+        assert search_call.id == "tsc_srvtoolu_01Search"
+        assert search_call.call_id == "srvtoolu_01Search"
+        assert search_call.arguments == {"pattern": "weather|forecast"}
+        assert search_call.execution == "server"
+        assert search_call.status == "completed"
+        assert with_tool_search[1].name == "get_weather"
+        assert [item.type for item in without_tool_search] == ["function_call", "function_call"]
+
+        full_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="What is the weather in Paris right now?",
+                responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+                chat_completion_response=response,
+            )
+        )
+        assert [item.type for item in full_response.output] == ["tool_search_call", "function_call"]
+
+    def test_tool_search_call_with_unparseable_arguments_is_incomplete(self) -> None:
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_call('{"pattern": '),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+        )
+
+        search_call: Final = items[0]
+        assert isinstance(search_call, ResponseToolSearchCall)
+        assert search_call.status == "incomplete"
+        assert search_call.arguments == {}
+
+    def test_tool_search_items_are_not_replayed_to_chat_messages(self) -> None:
+        tools: Final = _deferred_tools_with_server_tool_search()
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {"type": "message", "role": "user", "content": "What is the weather in Paris right now?"},
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_srvtoolu_01Search",
+                    "call_id": "srvtoolu_01Search",
+                    "arguments": {"pattern": "weather|forecast"},
+                    "execution": "server",
+                    "status": "completed",
+                },
+                {
+                    "type": "tool_search_output",
+                    "id": "tso_srvtoolu_01Search",
+                    "call_id": "srvtoolu_01Search",
+                    "execution": "server",
+                    "status": "completed",
+                    "tools": [tools[1]],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_toolu_01Weather",
+                    "call_id": "toolu_01Weather",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "status": "completed",
+                },
+                {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+        assert [call["id"] for call in messages[1]["tool_calls"]] == ["toolu_01Weather"]
+        assert "tool_search" not in json.dumps(messages)
 
     def test_transform_local_shell_tools_dropped(self) -> None:
         (
@@ -3963,6 +4129,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}
         iterator._queued_web_search_call_ids = set()
+        iterator._tool_search_requested = False
+        iterator._tool_search_call_ids = set()
         return iterator
 
     def _make_text_chunk(self):

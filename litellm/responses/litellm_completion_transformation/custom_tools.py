@@ -30,7 +30,9 @@ from litellm.types.llms.openai import (
 
 _MAX_ARGUMENTS_LEN: Final = 1_000_000
 
-TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE: Final = MappingProxyType({"function_call": "fc", "custom_tool_call": "ctc"})
+TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE: Final = MappingProxyType(
+    {"function_call": "fc", "custom_tool_call": "ctc", "tool_search_call": "tsc"}
+)
 
 
 def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:

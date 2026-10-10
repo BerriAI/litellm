@@ -26063,6 +26063,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ResponseToolSearchCall"
                       }
                     ]
                   },
@@ -45747,6 +45750,10 @@
             },
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
+            "defer_loading": {
+              "title": "Defer Loading",
+              "type": "boolean"
             },
             "eager_input_streaming": {
               "title": "Eager Input Streaming",
