@@ -1,24 +1,205 @@
+import json
 import os
+import uuid
 from contextlib import ExitStack
 from hashlib import sha256
 from typing import Final
 
+import httpx
 import psycopg
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, object_value, team_admin_permissions
 from tests.integration._support.database import read_rows
 from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from tests.integration._support.wire import Reply, Request, wire_server
+
+_CHAT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+_EXPECTED_CHAT: Final = ("POST", "/v1/chat/completions")
+
+
+class _Usage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class _AssistantMessage(BaseModel):
+    content: str
+
+
+class _Choice(BaseModel):
+    message: _AssistantMessage
+
+
+class _ChatResponse(BaseModel):
+    id: str
+    choices: tuple[_Choice, ...]
+    usage: _Usage
+
+
+class _ModelEntry(BaseModel):
+    id: str
+
+
+class _ModelList(BaseModel):
+    data: tuple[_ModelEntry, ...]
+
+
+class _KeyInfo(BaseModel):
+    blocked: bool
+
+
+class _KeyInfoResponse(BaseModel):
+    info: _KeyInfo
+
+
+class _BlockedRow(BaseModel):
+    blocked: bool
+
+
+class _AuthError(BaseModel):
+    type: str
+
+
+class _ErrorResponse(BaseModel):
+    error: _AuthError
+
+
+def _chat_body(model: str, prompt: str) -> dict[str, JsonValue]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+
+def _wire_completion(identity: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": identity,
+                "object": "chat.completion",
+                "created": 1,
+                "model": "integration-keys-auth-block",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "wire response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40},
+            }
+        ).encode()
+    )
+
+
+def _wire_chat(gateway: Gateway, model: str, key: str, prompt: str) -> httpx.Response:
+    return gateway.request("POST", "/v1/chat/completions", _chat_body(model, prompt), key=key)
+
+
+def _assert_wire_success(response: httpx.Response) -> _ChatResponse:
+    assert response.status_code == 200, response.text
+    payload: Final = _ChatResponse.model_validate_json(response.content)
+    assert payload.choices[0].message.content == "wire response", response.text
+    assert payload.usage == _Usage(prompt_tokens=20, completion_tokens=20, total_tokens=40), response.text
+    return payload
+
+
+def _model_is_available(gateway: Gateway, model: str) -> bool:
+    response: Final = gateway.request("GET", "/v1/models")
+    if response.status_code != 200:
+        return False
+    models: Final = _ModelList.model_validate_json(response.content)
+    return model in tuple(entry.id for entry in models.data)
+
+
+@pytest.mark.parametrize("hashed", (False, True), ids=("plaintext", "hashed"))
+def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer: Gateway, hashed: bool) -> None:
+    backend: Final = "integration-keys-auth-block"
+    prompts: Final = (
+        "block warm primary " + uuid.uuid4().hex,
+        "block warm peer " + uuid.uuid4().hex,
+        "block rejected primary " + uuid.uuid4().hex,
+        "block rejected peer " + uuid.uuid4().hex,
+        "unblock primary " + uuid.uuid4().hex,
+        "unblock peer " + uuid.uuid4().hex,
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        body: Final = _CHAT_REQUEST.validate_json(request.body)
+        assert body in tuple(_chat_body(backend, prompt) for prompt in prompts), body
+        return _wire_completion("chatcmpl-" + uuid.uuid4().hex)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/{backend}", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        eventually(lambda: _model_is_available(peer, model), bool, seconds=30)
+        key: Final = scenario.key(models=[model])
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        endpoint_key: Final = key_hash if hashed else key
+        warmed: Final = tuple(
+            _assert_wire_success(_wire_chat(worker, model, key, prompt))
+            for worker, prompt in zip((gateway, peer), prompts[:2], strict=True)
+        )
+        assert len(warmed) == 2
+        assert tuple((request.method, request.target) for request in wire.drain()) == (_EXPECTED_CHAT,) * 2
+
+        blocked: Final = gateway.request("POST", "/key/block", {"key": endpoint_key})
+        assert blocked.status_code == 200, blocked.text
+        assert _KeyInfo.model_validate_json(blocked.content).blocked is True, blocked.text
+        primary_refusal: Final = _wire_chat(gateway, model, key, prompts[2])
+        assert primary_refusal.status_code == 401, primary_refusal.text
+        assert _ErrorResponse.model_validate_json(primary_refusal.content).error.type == "auth_error", (
+            primary_refusal.text
+        )
+        peer_refusal: Final = eventually(
+            lambda: _wire_chat(peer, model, key, prompts[3]),
+            lambda response: response.status_code == 401,
+            seconds=3,
+        )
+        assert _ErrorResponse.model_validate_json(peer_refusal.content).error.type == "auth_error", peer_refusal.text
+        assert wire.drain() == (), "blocked requests reached the upstream"
+        blocked_info: Final = gateway.request("GET", "/key/info", params={"key": key})
+        assert blocked_info.status_code == 200, blocked_info.text
+        assert _KeyInfoResponse.model_validate_json(blocked_info.content).info.blocked is True, blocked_info.text
+        blocked_rows: Final = TypeAdapter(tuple[_BlockedRow, ...]).validate_python(
+            read_rows('SELECT blocked FROM "LiteLLM_VerificationToken" WHERE token=%s', (key_hash,))
+        )
+        assert blocked_rows == (_BlockedRow(blocked=True),)
+
+        unblocked: Final = gateway.request("POST", "/key/unblock", {"key": endpoint_key})
+        assert unblocked.status_code == 200, unblocked.text
+        assert _KeyInfo.model_validate_json(unblocked.content).blocked is False, unblocked.text
+        served: Final = tuple(
+            _assert_wire_success(_wire_chat(worker, model, key, prompt))
+            for worker, prompt in zip((gateway, peer), prompts[4:], strict=True)
+        )
+        assert len(served) == 2
+        assert tuple((request.method, request.target) for request in wire.drain()) == (_EXPECTED_CHAT,) * 2
+        unblocked_info: Final = gateway.request("GET", "/key/info", params={"key": key})
+        assert unblocked_info.status_code == 200, unblocked_info.text
+        assert _KeyInfoResponse.model_validate_json(unblocked_info.content).info.blocked is False, unblocked_info.text
+        unblocked_rows: Final = TypeAdapter(tuple[_BlockedRow, ...]).validate_python(
+            read_rows('SELECT blocked FROM "LiteLLM_VerificationToken" WHERE token=%s', (key_hash,))
+        )
+        assert unblocked_rows == (_BlockedRow(blocked=False),)
 
 
 def assert_serving(gateway: Gateway, model: str, key: str, status: int, error_type: str = "auth_error") -> None:
     response: Final = eventually(
         lambda: gateway.request(
-            "POST", "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": "warmed policy control"}]}, key=key,
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "warmed policy control"}]},
+            key=key,
         ),
         lambda value: value.status_code == status,
         seconds=3,
@@ -117,9 +298,12 @@ def test_scim_deactivation_blocks_null_and_false_keys_but_preserves_other_owners
             assert_serving(gateway, model, token, 200)
         for active in (False, True):
             response: Final = gateway.request(
-                "PATCH", f"/scim/v2/Users/{user}",
-                {"schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-                 "Operations": [{"op": "replace", "path": "active", "value": active}]},
+                "PATCH",
+                f"/scim/v2/Users/{user}",
+                {
+                    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                    "Operations": [{"op": "replace", "path": "active", "value": active}],
+                },
             )
             assert response.status_code == 200, response.text
             for token in (null_key, false_key):
@@ -160,22 +344,24 @@ def test_warmed_team_role_demotion_prevents_later_management_writes(gateway: Gat
             "POST", "/team/update", {"team_id": control_team, "tpm_limit": 7000}, key=caller
         )
         assert unrelated.status_code == 403, unrelated.text
-        assert read_rows(
-            'SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (control_team,)
-        ) == unrelated_before
+        assert (
+            read_rows('SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (control_team,))
+            == unrelated_before
+        )
         gateway.post("/team/member_update", {"team_id": team, "user_id": user, "role": "user"})
         for target in (team, control_team):
             before: Final = read_rows('SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (target,))
-            denied: Final = gateway.request(
-                "POST", "/team/update", {"team_id": target, "tpm_limit": 9000}, key=caller
-            )
+            denied: Final = gateway.request("POST", "/team/update", {"team_id": target, "tpm_limit": 9000}, key=caller)
             assert denied.status_code == 403, denied.text
             after: Final = read_rows('SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (target,))
             assert after == before
         roster: Final = read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,))
         members: Final = roster[0]["members_with_roles"]
         assert isinstance(members, list)
-        assert next(object_value(member)["role"] for member in members if object_value(member)["user_id"] == user) == "user"
+        assert (
+            next(object_value(member)["role"] for member in members if object_value(member)["user_id"] == user)
+            == "user"
+        )
         assert_serving(gateway, model, caller, 200)
 
 
