@@ -42,7 +42,7 @@ EXTRA_BODY_KEYS: Final[Mapping[str, frozenset[str]]] = {
 }
 
 # Set by the LiteLLM router and proxy on every call; handled by LiteLLM, never sent upstream.
-ROUTER_PARAMS: Final = frozenset({"max_retries"})
+ROUTER_PARAMS: Final = frozenset({"max_retries", "stream_options"})
 
 STATE_DOCUMENT_KEYS: Final = ("document", "document_mime_type")
 
@@ -233,7 +233,7 @@ class ScaleDownChatConfig(BaseConfig):
         operation: Final = _operation(model)
         if operation in DECISIONS_MODELS:
             return _decisions_response(operation, raw, model_response)
-        return _native_response(operation, raw, model_response)
+        return _native_response(operation, raw, model_response, request_data.get("entities"))
 
     def get_error_class(
         self,
@@ -273,6 +273,22 @@ def _last_user_text(operation: str, messages: Sequence[AllMessageValues]) -> str
     if not texts:
         _reject(f"ScaleDown {operation} requires the text in the last user message.")
     return texts[-1]
+
+
+def _text_and_document(operation: str, messages: Sequence[AllMessageValues]) -> Mapping[str, str]:
+    """The text and/or the single image or document in the last user message that has either."""
+    user_messages: Final = [message for message in messages if message.get("role") == "user"]
+    found: Final = next(
+        (
+            {**({"text": text} if text else {}), **_image_document(message)}
+            for message in reversed(user_messages)
+            if (text := _text_of(message)) or _image_document(message)
+        ),
+        {},
+    )
+    if not found:
+        _reject(f"ScaleDown {operation} requires the text or an image in the last user message.")
+    return found
 
 
 def _child(node: object, key: str) -> object:
@@ -325,7 +341,7 @@ def _extract_request(
             "'properties' map; each property becomes an entity and its description the extraction hint."
         )
     return {
-        "text": _last_user_text("extract", messages),
+        **_text_and_document("extract", messages),
         "entities": _schema_to_entities(properties, schema),
         **{key: optional_params[key] for key in ("threshold", "top_n") if key in optional_params},
     }
@@ -338,7 +354,7 @@ def _summarize_request(
         text for message in messages if message.get("role") == "system" and (text := _text_of(message))
     ]
     return {
-        "text": _last_user_text("summarize", messages),
+        **_text_and_document("summarize", messages),
         **({"instructions": "\n".join(instructions)} if instructions else {}),
         **({"max_tokens": optional_params["max_tokens"]} if "max_tokens" in optional_params else {}),
     }
@@ -368,9 +384,11 @@ def _image_document(message: AllMessageValues) -> Mapping[str, str]:
     ]
     if not urls:
         return {}
+    if len(urls) > 1:
+        _reject("ScaleDown takes one image or document per request; send the images in separate requests.")
     url: Final = urls[0]
     if not isinstance(url, str) or not url.startswith("data:") or ";base64," not in url:
-        _reject("ScaleDown decisions takes images as base64 data URLs (data:<mime>;base64,<data>).")
+        _reject("ScaleDown takes images as base64 data URLs (data:<mime>;base64,<data>).")
     header, data = url.split(";base64,", 1)
     try:
         base64.b64decode(data, validate=True)
@@ -459,22 +477,31 @@ def _validate_questions(questions: object) -> None:
             )
 
 
-def _clean_extraction(value: object) -> object:
-    """Reduce an extraction result to the plain fields the caller's schema asked for.
-
-    Drops the `<field>_span_anchor` siblings and unwraps `{"_value": ..., "_span_anchor": ...}`
-    wrappers; the untouched payload stays on `_hidden_params["scaledown_response"]`.
-    """
-    if isinstance(value, Mapping):
-        if "_value" in value:
-            return _clean_extraction(value["_value"])
-        return {key: _clean_extraction(item) for key, item in value.items() if not str(key).endswith("_span_anchor")}
-    if isinstance(value, list):
-        return [_clean_extraction(item) for item in value]
+def _unwrap(value: object) -> object:
+    wrapper_keys: Final = {"_value", "_span_anchor"}
+    if isinstance(value, Mapping) and "_value" in value and set(value) <= wrapper_keys:
+        return value["_value"]
     return value
 
 
-def _native_response(operation: str, raw: object, model_response: ModelResponse) -> ModelResponse:
+def _clean_extraction(value: object, requested: object) -> object:
+    """Reduce an extraction result to the fields the caller's schema asked for.
+
+    The request's entity map says which keys are real fields, so provider-added keys such as
+    `<field>_span_anchor` and `{"_value": ..., "_span_anchor": ...}` wrappers are dropped without
+    touching a requested field that happens to share one of those names. The untouched payload
+    stays on `_hidden_params["scaledown_response"]`.
+    """
+    if isinstance(requested, Mapping) and isinstance(value, Mapping):
+        return {key: _clean_extraction(value[key], requested[key]) for key in requested if key in value}
+    if isinstance(requested, list) and requested and isinstance(value, list):
+        return [_clean_extraction(item, requested[0]) for item in value]
+    return _unwrap(value)
+
+
+def _native_response(
+    operation: str, raw: object, model_response: ModelResponse, requested: object = None
+) -> ModelResponse:
     """Wrap a native /extract, /summarization/abstractive or /compress/raw/ payload.
 
     Summarize and compress return the upstream payload as JSON on choices[0].message.content.
@@ -495,7 +522,7 @@ def _native_response(operation: str, raw: object, model_response: ModelResponse)
         if operation == "compress"
         else None
     )
-    content: Final = _clean_extraction(raw.get("structured_result") or {}) if operation == "extract" else raw
+    content: Final = _clean_extraction(raw.get("structured_result") or {}, requested) if operation == "extract" else raw
 
     model_response.id = f"chatcmpl-{uuid.uuid4().hex}"  # rebind-ok: LiteLLM fills the response object it passes in
     model_response.created = int(time.time())  # rebind-ok: LiteLLM fills the response object it passes in

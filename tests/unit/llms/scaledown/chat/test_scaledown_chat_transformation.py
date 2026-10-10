@@ -26,7 +26,9 @@ def scaledown_api_key(monkeypatch):
     monkeypatch.delenv("SCALEDOWN_API_BASE", raising=False)
 
 
-def _transform_response(config: ScaleDownChatConfig, model: str, payload: dict) -> ModelResponse:
+def _transform_response(
+    config: ScaleDownChatConfig, model: str, payload: dict, request_data: dict | None = None
+) -> ModelResponse:
     return config.transform_response(
         model=model,
         raw_response=httpx.Response(
@@ -36,7 +38,7 @@ def _transform_response(config: ScaleDownChatConfig, model: str, payload: dict) 
         ),
         model_response=ModelResponse(),
         logging_obj=None,
-        request_data={},
+        request_data=request_data or {},
         messages=[],
         optional_params={},
         litellm_params={},
@@ -425,7 +427,8 @@ def test_extract_content_is_the_clean_fields_and_raw_payload_is_kept(config):
         "input_tokens": 171,
     }
 
-    response = _transform_response(config, "scaledown/extract", payload)
+    requested = {"invoice": {"vendor": "v", "customer": "c", "amount": "a"}}
+    response = _transform_response(config, "scaledown/extract", payload, {"entities": requested})
 
     assert json.loads(response.choices[0].message.content) == {
         "invoice": {"vendor": "Northwind", "customer": "Ada Lovelace", "amount": 500}
@@ -434,6 +437,62 @@ def test_extract_content_is_the_clean_fields_and_raw_payload_is_kept(config):
     assert response.usage.prompt_tokens == 171
     assert response.usage.completion_tokens == 0
     assert response._hidden_params["scaledown_response"] == payload
+
+
+def test_extract_cleaning_keeps_requested_fields_named_like_provider_keys(config):
+    payload = {"structured_result": {"_value": "x", "vendor": "y", "note_span_anchor": "z", "note": "n"}}
+    requested = {"_value": "v", "vendor": "v", "note_span_anchor": "s", "note": "n"}
+
+    response = _transform_response(config, "scaledown/extract", payload, {"entities": requested})
+
+    assert json.loads(response.choices[0].message.content) == payload["structured_result"]
+
+
+def test_extract_cleaning_handles_lists_of_objects(config):
+    payload = {"structured_result": {"items": [{"sku": "a", "sku_span_anchor": "s"}, {"sku": {"_value": "b"}}]}}
+
+    response = _transform_response(config, "scaledown/extract", payload, {"entities": {"items": [{"sku": "code"}]}})
+
+    assert json.loads(response.choices[0].message.content) == {"items": [{"sku": "a"}, {"sku": "b"}]}
+
+
+def test_extract_and_summarize_send_an_image_as_a_native_document(config):
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,aGVsbG8="}}],
+        }
+    ]
+    schema = {
+        "response_format": {"type": "json_schema", "json_schema": {"name": "n", "schema": {"properties": {"a": {}}}}}
+    }
+
+    extract = config.transform_request("scaledown/extract", messages, schema, {}, {})
+    summarize = config.transform_request("scaledown/summarize", messages, {}, {}, {})
+
+    for body in (extract, summarize):
+        assert body["document"] == "aGVsbG8="
+        assert body["document_mime_type"] == "application/pdf"
+        assert "text" not in body
+
+
+def test_more_than_one_image_is_rejected(config):
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+
+    with pytest.raises(ScaleDownError, match="one image or document"):
+        _build_decisions(config, [{"role": "user", "content": [image, image]}], {"questions": {"q": {"type": "noul"}}})
+
+
+def test_stream_options_is_accepted_and_not_forwarded(config):
+    assert (
+        config.map_openai_params(
+            non_default_params={"stream_options": {"include_usage": True}},
+            optional_params={},
+            model="scaledown/summarize",
+            drop_params=False,
+        )
+        == {}
+    )
 
 
 def test_extract_schema_follows_local_refs(config):
@@ -782,7 +841,7 @@ def test_completion_cost_comes_from_input_tokens_not_upstream_usage_cost():
     )
 
     cost = litellm.completion_cost(completion_response=response, model="scaledown/classify")
-    assert cost == pytest.approx(1000 * 5e-08)
+    assert cost == pytest.approx(1000 * litellm.model_cost["scaledown/classify"]["input_cost_per_token"])
 
 
 @respx.mock
