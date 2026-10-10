@@ -1078,11 +1078,14 @@ _OPENAI_CHAT_REPLY: Final = {
 }
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.respx(assert_all_called=True)
-def test_openai_pdf_url_is_downloaded_into_file_data(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+@pytest.mark.asyncio
+async def test_openai_pdf_url_is_downloaded_into_file_data(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool
 ) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     pdf_url: Final = "https://files.example.test/pdf-url-download.pdf"
     pdf_content: Final = b"%PDF-1.7\nmock-pdf"
     in_memory_cache.delete_cache(pdf_url)
@@ -1093,19 +1096,19 @@ def test_openai_pdf_url_is_downloaded_into_file_data(
         return_value=Response(200, json=_OPENAI_CHAT_REPLY)
     )
 
-    litellm.completion(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What is the first page of the PDF?"},
-                    {"type": "file", "file": {"file_id": pdf_url}},
-                ],
-            }
-        ],
-        api_key="sk-openai-test",
-    )
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the first page of the PDF?"},
+                {"type": "file", "file": {"file_id": pdf_url}},
+            ],
+        }
+    ]
+    if sync_mode:
+        litellm.completion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
+    else:
+        await litellm.acompletion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
 
     assert download.call_count == 1
     assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {

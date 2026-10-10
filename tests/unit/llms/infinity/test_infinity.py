@@ -65,9 +65,8 @@ async def test_infinity_rerank():
         assert response.meta["tokens"]["input_tokens"] == 100
         assert response.meta["tokens"]["output_tokens"] == 50  # total_tokens - prompt_tokens
 
-        assert isinstance(response.id, str)
-        assert isinstance(response.results, list)
-        assert isinstance(response.meta, dict)
+        assert response.id == "cmpl-mockid"
+        assert response.results == [{"index": 0, "relevance_score": 0.95}]
 
 
 @pytest.mark.asyncio()
@@ -100,9 +99,8 @@ async def test_infinity_rerank_with_return_documents():
             api_base="https://api.infinity.ai",
         )
         assert response.results[0]["document"] == {"text": "hello"}
-        assert isinstance(response.id, str)
-        assert isinstance(response.results, list)
-        assert isinstance(response.meta, dict)
+        assert response.id == "cmpl-mockid"
+        assert response.results == [{"index": 0, "relevance_score": 0.95, "document": {"text": "hello"}}]
 
 
 @pytest.mark.asyncio()
@@ -164,9 +162,8 @@ async def test_infinity_rerank_with_env(monkeypatch):
         assert response.meta["tokens"]["input_tokens"] == 100
         assert response.meta["tokens"]["output_tokens"] == 50  # total_tokens - prompt_tokens
 
-        assert isinstance(response.id, str)
-        assert isinstance(response.results, list)
-        assert isinstance(response.meta, dict)
+        assert response.id == "cmpl-mockid"
+        assert response.results == [{"index": 0, "relevance_score": 0.95}]
 
 
 #### Embedding Tests

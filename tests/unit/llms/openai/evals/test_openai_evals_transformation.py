@@ -554,3 +554,27 @@ def test_update_eval_sends_name_to_requested_id_and_parses_eval(respx_mock: resp
     assert _request_json(request) == {"name": "Renamed evaluation"}
     assert response.id == _EVAL_ID
     assert response.name == "Sentiment evaluation"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_delete_eval_sends_delete_to_requested_id_and_parses_confirmation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.delete(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
+        return_value=httpx.Response(200, json={"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID})
+    )
+
+    response: Final = (
+        litellm.delete_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
+        if sync_mode
+        else await litellm.adelete_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
+    )
+
+    request: Final = route.calls[0].request
+    assert len(route.calls) == 1
+    assert request.method == "DELETE"
+    assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert response.model_dump() == {"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID}

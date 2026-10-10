@@ -131,17 +131,13 @@ class TestReasoningEffort:
         reasoning_content: Final[str | None] = TypeAdapter[str | None](str | None).validate_python(
             message.model_extra.get("reasoning_content") if message.model_extra else None
         )
-        response_content: Final[str | None] = TypeAdapter[str | None](str | None).validate_python(message.content)
-        visible_reasoning_lines: Final = (
-            tuple(line for line in response_content.splitlines() if line.strip()) if response_content else ()
-        )
         usage: Final = response.usage
         reasoning_tokens: Final = (
             usage.completion_tokens_details.reasoning_tokens
             if usage is not None and usage.completion_tokens_details is not None
             else 0
         )
-        assert reasoning_content or reasoning_tokens or len(visible_reasoning_lines) > 1, (
+        assert reasoning_content or reasoning_tokens, (
             f"{route_name} response contained no reasoning output or reasoning tokens: {response!r}"
         )
 
