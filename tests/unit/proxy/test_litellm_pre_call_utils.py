@@ -7790,7 +7790,7 @@ def test_oauth_credential_entry_is_scoped_to_anthropic_alone():
     assert [entry["custom_llm_provider"] for entry in credential_entries] == ["anthropic"]
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+@pytest.mark.parametrize("custom_llm_provider", ["anthropic", "bedrock", "bedrock_mantle", "github_copilot", "vertex_ai"])
 def test_client_anthropic_api_headers_reach_every_anthropic_messages_provider(custom_llm_provider):
     client_headers = {
         "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
