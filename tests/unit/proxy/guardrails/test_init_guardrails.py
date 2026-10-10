@@ -371,6 +371,113 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     assert "healthy_presidio" in guardrail_names
 
 
+def test_init_guardrails_v2_stops_boot_when_a_default_on_guardrail_cannot_be_initialized():
+    """
+    BerriAI/litellm#45028: a `default_on` guardrail whose type this release does not know
+    (a config written for a newer LiteLLM, for example) used to be skipped with one error
+    line, and the proxy started without it. For a guardrail that is meant to run on every
+    request that is fail-open: every request reaches the provider carrying whatever the
+    guardrail was configured to withhold. Initialization of a default_on guardrail is fatal.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "pii-redaction",
+            "litellm_params": {
+                "guardrail": "a_guardrail_type_this_release_does_not_know",
+                "mode": "pre_call",
+                "default_on": True,
+            },
+        },
+    ]
+
+    with pytest.raises(ValueError, match="'pii-redaction' is default_on and could not be initialized"):
+        init_guardrails_v2(all_guardrails=all_guardrails)
+
+
+@pytest.mark.parametrize("default_on", [True, "true", "True", 1, "1", "yes"])
+def test_default_on_is_read_the_way_litellm_params_would_parse_it(default_on):
+    """The config value reaches this check raw, before LitellmParams parses it. Every spelling
+    pydantic accepts as true must stop the boot too; `default_on: "true"` from a YAML string
+    is as required as `default_on: true`."""
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "pii-redaction",
+            "litellm_params": {
+                "guardrail": "a_guardrail_type_this_release_does_not_know",
+                "mode": "pre_call",
+                "default_on": default_on,
+            },
+        },
+    ]
+
+    with pytest.raises(ValueError, match="is default_on and could not be initialized"):
+        init_guardrails_v2(all_guardrails=all_guardrails)
+
+
+def test_default_on_is_read_from_a_parsed_litellm_params_object_too():
+    """A config entry can arrive with `litellm_params` already parsed into a model, not a dict;
+    the attribute is read the same way. `None` and an unknown spelling count as not default_on."""
+    from litellm.proxy.guardrails.init_guardrails import _is_default_on
+    from litellm.types.guardrails import LitellmParams
+
+    parsed = LitellmParams(guardrail="presidio", mode="pre_call", default_on=True)
+    assert _is_default_on({"litellm_params": parsed}) is True
+    assert _is_default_on({"litellm_params": LitellmParams(guardrail="presidio", mode="pre_call")}) is False
+    assert _is_default_on({"litellm_params": {"default_on": None}}) is False
+    assert _is_default_on({"litellm_params": {"default_on": "sometimes"}}) is False
+    assert _is_default_on({}) is False
+
+
+def test_init_guardrails_v2_still_skips_an_optional_guardrail_it_cannot_initialize():
+    """
+    The skip (#34940) stays for guardrails that are not default_on: nothing runs them
+    unless a request names them, so starting without one withholds nothing by default.
+    The healthy guardrail beside it is still registered.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "optional-unknown",
+            "litellm_params": {
+                "guardrail": "a_guardrail_type_this_release_does_not_know",
+                "mode": "pre_call",
+                "default_on": False,
+            },
+        },
+        {
+            "guardrail_name": "healthy_presidio",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "optional-unknown" not in guardrail_names
+    assert "healthy_presidio" in guardrail_names
+
+
 def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_compile():
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 

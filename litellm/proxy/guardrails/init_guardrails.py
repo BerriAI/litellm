@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, cast
 
 import litellm
@@ -34,6 +35,11 @@ def init_guardrails_v2(
                 source="config",
             )
         except (ValueError, TypeError) as init_error:
+            if _is_default_on(guardrail):
+                raise ValueError(
+                    f"Guardrail '{guardrail.get('guardrail_name')}' is default_on and could not be "
+                    f"initialized, so the proxy will not start without it: {init_error}"
+                ) from init_error
             verbose_proxy_logger.error(
                 "Skipping guardrail '%s': invalid configuration, proxy is starting WITHOUT this guardrail: %s",
                 guardrail.get("guardrail_name"),
@@ -47,6 +53,30 @@ def init_guardrails_v2(
 
     # Populate router's guardrail_list for load balancing support
     _populate_router_guardrail_list(guardrail_list=guardrail_list)
+
+
+_TRUE_WORDS: Final = frozenset({"true", "1", "yes", "on", "t", "y"})
+
+
+def _is_default_on(guardrail: Mapping[str, object]) -> bool:
+    """Whether a config entry asks to run on every request (`litellm_params.default_on`).
+
+    Read from the raw config, before `LitellmParams` has parsed it, so the same values
+    pydantic would accept as true (`true`, `"true"`, `1`, `"yes"`) count as true here.
+    """
+    litellm_params: Final = guardrail.get("litellm_params")
+    value: Final = (
+        litellm_params.get("default_on")
+        if isinstance(litellm_params, Mapping)
+        else getattr(litellm_params, "default_on", None)
+    )
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_WORDS
+    return False
 
 
 def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
