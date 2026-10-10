@@ -109,6 +109,23 @@ class _UsageObject(Protocol):
     def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
 
 
+def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
+    """Chat-shaped view of a response's usage.
+
+    /v1/responses carries ResponseAPIUsage (input_tokens/output_tokens), and an
+    assembled /v1/responses stream carries a plain dict of chat usage fields.
+    Any other usage object is returned unchanged.
+    """
+    if isinstance(raw_usage, ResponseAPIUsage):
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
+    usage_fields: Final = _object_mapping(raw_usage)
+    if usage_fields is not None and (
+        ResponseAPILoggingUtils.is_response_api_usage(usage_fields) or "prompt_tokens" in usage_fields
+    ):
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_fields)
+    return raw_usage
+
+
 def _extract_cache_read_input_tokens(usage_obj) -> int:
     """
     Extract cache_read_input_tokens from usage object.
@@ -816,13 +833,8 @@ class LangFuseLogger:
             if response_obj is not None:
                 if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
                     generation_id = _logging_id(start_time, response_obj)
-                _raw_usage_obj: Final = getattr(response_obj, "usage", None)
-                _usage_obj: Final[_UsageObject | None] = (
-                    ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_raw_usage_obj)
-                    if isinstance(_raw_usage_obj, ResponseAPIUsage)
-                    or (isinstance(_raw_usage_obj, dict) and ResponseAPILoggingUtils.is_response_api_usage(_raw_usage_obj))
-                    else _raw_usage_obj
-                )
+                _raw_usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
+                _usage_obj: Final = _chat_usage(_raw_usage_obj)
 
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
