@@ -147,6 +147,17 @@ class _ToolCallChoice(TypedDict, total=False):
 _ToolCallKey: TypeAlias = tuple[int, int]
 
 
+def _append_fragment(current: str | None, fragment: str | None) -> str | None:
+    # equal consecutive fragments are a whole-value repeat, not an extension (#44392)
+    if not fragment:
+        return current
+    if not current:
+        return fragment
+    if fragment == current:
+        return current
+    return current + fragment
+
+
 class _ToolCallChunk(TypedDict):
     choices: ReadOnly[Sequence[_ToolCallChoice]]
 
@@ -541,38 +552,48 @@ class ChunkProcessor:
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
                         if fragment_id := tool_call.get("id"):
-                            tool_call_map[index]["id"] = fragment_id
+                            tool_call_map[index]["id"] = _append_fragment(tool_call_map[index]["id"], fragment_id)
                         if fragment_type := tool_call.get("type"):
                             tool_call_map[index]["type"] = fragment_type
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
                             if fragment_name := function.get("name"):
-                                tool_call_map[index]["name"] = fragment_name
+                                tool_call_map[index]["name"] = _append_fragment(
+                                    tool_call_map[index]["name"], fragment_name
+                                )
                         else:
                             # function is an object
                             if function_name := getattr(function, "name", None):
-                                tool_call_map[index]["name"] = function_name
+                                tool_call_map[index]["name"] = _append_fragment(
+                                    tool_call_map[index]["name"], function_name
+                                )
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom_name := custom.get("name"):
-                                tool_call_map[index]["custom_name"] = custom_name
+                                tool_call_map[index]["custom_name"] = _append_fragment(
+                                    tool_call_map[index]["custom_name"], custom_name
+                                )
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
-                            tool_call_map[index]["id"] = tool_call.id
+                            tool_call_map[index]["id"] = _append_fragment(tool_call_map[index]["id"], tool_call.id)
                         if hasattr(tool_call, "type") and tool_call.type:
                             tool_call_map[index]["type"] = tool_call.type
                         if object_function_name := getattr(getattr(tool_call, "function", None), "name", None):
-                            tool_call_map[index]["name"] = object_function_name
+                            tool_call_map[index]["name"] = _append_fragment(
+                                tool_call_map[index]["name"], object_function_name
+                            )
 
                         object_custom: ChatCompletionDeltaCustomToolCallPayload | None = getattr(
                             tool_call, "custom", None
                         )
                         if object_custom is not None:
                             if getattr(object_custom, "name", None):
-                                tool_call_map[index]["custom_name"] = object_custom.name
+                                tool_call_map[index]["custom_name"] = _append_fragment(
+                                    tool_call_map[index]["custom_name"], object_custom.name
+                                )
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields: object = None
