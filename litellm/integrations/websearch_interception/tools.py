@@ -160,16 +160,17 @@ def is_web_search_tool_responses(tool: Mapping[str, object]) -> bool:
     return tool_type == "web_search" or tool_type.startswith("web_search_")
 
 
-def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
+def is_web_search_tool_chat_completion(tool: dict[str, Any], *, recognize_conventional_name: bool = False) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).
 
-    This is a stricter version that ONLY checks for the exact LiteLLM web search tool name.
+    This is a stricter version that checks the recognized web search tool names.
     Use this for Chat Completions API to avoid false positives with user-defined tools.
 
     Detects ONLY:
     - LiteLLM standard: name == "litellm_web_search" (Anthropic format)
     - OpenAI format: type == "function" with function.name == "litellm_web_search"
+    - Optionally (recognize_conventional_name=True): name-only function ``web_search``
 
     Args:
         tool: Tool dictionary to check
@@ -193,8 +194,19 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "litellm_web_search"}}
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
+        if not isinstance(function_def, dict):
+            return False
         function_name: Final = function_def.get("name", "")
         if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
+        # Name-only ``web_search`` is opt-in: without the flag, a valid
+        # user-defined function with only a name still reaches the client.
+        if (
+            recognize_conventional_name
+            and function_name == "web_search"
+            and len(function_def) == 1
+            and "name" in function_def
+        ):
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
@@ -225,7 +237,7 @@ def is_anthropic_native_web_search_tool(tool: Mapping[str, object]) -> bool:
     return tool_type.startswith("web_search_") and tool_type != "function"
 
 
-def is_web_search_tool(tool: dict[str, Any]) -> bool:
+def is_web_search_tool(tool: dict[str, Any], *, recognize_conventional_name: bool = False) -> bool:
     """
     Check if a tool is a web search tool (native or LiteLLM standard).
 
@@ -277,8 +289,19 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "..."}}
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
+        if not isinstance(function_def, dict):
+            return False
         function_name: Final = function_def.get("name", "")
         if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
+        # Name-only ``web_search`` is opt-in: without the flag, a valid
+        # user-defined function with only a name still reaches the client.
+        if (
+            recognize_conventional_name
+            and function_name == "web_search"
+            and len(function_def) == 1
+            and "name" in function_def
+        ):
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
