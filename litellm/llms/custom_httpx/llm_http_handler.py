@@ -37,7 +37,10 @@ from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
-from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_followup_kwargs import (
+    build_agentic_followup_kwargs,
+    resolve_agentic_followup_model,
+)
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -5821,9 +5824,12 @@ class BaseLLMHTTPHandler:
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
 
-        full_model_name = patch.model or model
-        if "/" not in full_model_name:
-            full_model_name = f"{custom_llm_provider}/{full_model_name}"
+        full_model_name: Final = resolve_agentic_followup_model(
+            request_model=model,
+            patch_model=patch.model,
+            custom_llm_provider=custom_llm_provider,
+            known_providers=litellm.provider_list,
+        )
 
         optional_params_for_followup: Final = dict(optional_params)
         optional_params_for_followup.update(patch.optional_params)
