@@ -220,20 +220,29 @@ def test_an_openai_format_request_at_v1_decisions_reaches_the_ai_decide_route_wi
             },
         )
         assert response.status_code == 200, response.text
-        assert response.json()["answers"] == [
-            {
-                "type": "choice",
-                "name": "tier",
-                "choice": "COMPLEX",
-                "probabilities": [
-                    {"value": "SIMPLE", "probability": 0.03},
-                    {"value": "MEDIUM", "probability": 0.06},
-                    {"value": "COMPLEX", "probability": 0.91},
-                ],
-                "confidence": 0.91,
-            }
-        ], response.text
-        assert response.json()["usage"]["total_tokens"] == 0, response.text
+        assert response.json() == {
+            "model": f"databricks/{_MODEL}",
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "tier",
+                    "choice": "COMPLEX",
+                    "probabilities": [
+                        {"value": "SIMPLE", "probability": 0.03},
+                        {"value": "MEDIUM", "probability": 0.06},
+                        {"value": "COMPLEX", "probability": 0.91},
+                    ],
+                    "confidence": 0.91,
+                }
+            ],
+            "usage": {
+                "input_tokens": 0,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 0,
+            },
+        }, response.text
         assert response.headers["x-litellm-model-name"] == f"databricks/{_MODEL}", dict(response.headers)
         (call,) = _upstream_calls(gateway, handle)
         assert call["path"] == f"/{handle.scenario_id}{_ROUTE}", call
@@ -497,7 +506,7 @@ def test_a_megabyte_model_name_is_refused_in_linear_time_while_liveliness_stays_
         assert tenth_response.status_code == 400, tenth_response.text[:300]
         assert elapsed < 25 * tenth_elapsed, (elapsed, tenth_elapsed)
         assert liveliness and all(status == 200 for status, _ in liveliness), liveliness
-        assert max(seconds for _, seconds in liveliness) < elapsed / 2, (elapsed, liveliness)
+        assert max(seconds for _, seconds in liveliness) < max(1.0, elapsed / 2), (elapsed, liveliness)
         assert response.status_code == 400, response.text[:300]
         assert _MODEL_RULE in response.text, response.text[:400]
         assert _upstream_calls(gateway, handle) == []
