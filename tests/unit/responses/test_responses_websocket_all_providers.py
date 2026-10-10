@@ -3027,6 +3027,177 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert backend_ws.send.await_args_list[0][0][0] == frame
 
     @pytest.mark.asyncio
+    async def test_response_inject_targets_the_upstream_id_and_its_result_echoes_the_client_id(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        inject_input = [{"type": "function_call_output", "call_id": "call_1", "output": "sunny"}]
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.created", "response": {"id": "resp_upstream", "output": []}}),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={"litellm_metadata": {"model_info": {"id": "dep-1"}}},
+            custom_llm_provider="openai",
+        )
+        await handler.backend_to_client()
+        client_id = json.loads(websocket.send_text.await_args_list[0][0][0])["response"]["id"]
+        websocket.receive_text = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.inject", "response_id": client_id, "input": inject_input}),
+                Exception("stop"),
+            ]
+        )
+
+        await handler.client_to_backend()
+
+        sent = json.loads(backend_ws.send.await_args_list[0][0][0])
+        assert sent == {"type": "response.inject", "response_id": "resp_upstream", "input": inject_input}
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.inject.created", "sequence_number": 1, "response_id": "resp_upstream"}),
+                Exception("stop"),
+            ]
+        )
+        await handler.backend_to_client()
+        result = json.loads(websocket.send_text.await_args_list[1][0][0])
+        assert result == {"type": "response.inject.created", "sequence_number": 1, "response_id": client_id}
+
+    @pytest.mark.asyncio
+    async def test_response_inject_with_an_unwrapped_id_round_trips_the_raw_id(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        frame = json.dumps({"type": "response.inject", "response_id": "resp_raw", "input": []})
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.inject.created", "sequence_number": 1, "response_id": "resp_raw"}),
+                Exception("stop"),
+            ]
+        )
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[frame, Exception("stop")])
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={"litellm_metadata": {"model_info": {"id": "dep-1"}}},
+            custom_llm_provider="openai",
+        )
+
+        await handler.client_to_backend()
+        await handler.backend_to_client()
+
+        assert backend_ws.send.await_args_list[0][0][0] == frame
+        result = json.loads(websocket.send_text.await_args_list[0][0][0])
+        assert result == {"type": "response.inject.created", "sequence_number": 1, "response_id": "resp_raw"}
+
+    @pytest.mark.asyncio
+    async def test_response_inject_restores_wrapped_input_items(self):
+        from unittest.mock import AsyncMock
+
+        frame = {
+            "type": "response.inject",
+            "response_id": "resp_raw",
+            "input": [_wrapped_reasoning_item(), {"type": "message", "role": "user", "content": "hi"}],
+        }
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket = MagicMock()
+        websocket.receive_text = AsyncMock(side_effect=[json.dumps(frame), Exception("stop")])
+        handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, request_data={})
+
+        await handler.client_to_backend()
+
+        sent = json.loads(backend_ws.send.await_args_list[0][0][0])
+        assert sent["response_id"] == "resp_raw"
+        assert sent["input"][0]["id"] == "rs_orig"
+        assert sent["input"][0]["encrypted_content"] == "gAAAA-blob"
+        assert sent["input"][1] == {"type": "message", "role": "user", "content": "hi"}
+
+    @staticmethod
+    async def _inject_session(client_frames, upstream_results):
+        from unittest.mock import AsyncMock
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.created", "response": {"id": "resp_upstream", "output": []}}),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={"litellm_metadata": {"model_info": {"id": "dep-1"}}},
+            custom_llm_provider="openai",
+        )
+        await handler.backend_to_client()
+        wrapped_id = json.loads(websocket.send_text.await_args_list[0][0][0])["response"]["id"]
+        websocket.receive_text = AsyncMock(
+            side_effect=[*(json.dumps(frame(wrapped_id)) for frame in client_frames), Exception("stop")]
+        )
+        await handler.client_to_backend()
+        backend_ws.recv = AsyncMock(side_effect=[*(json.dumps(event) for event in upstream_results), Exception("stop")])
+        await handler.backend_to_client()
+        echoed = [json.loads(call[0][0])["response_id"] for call in websocket.send_text.await_args_list[1:]]
+        return wrapped_id, echoed
+
+    @pytest.mark.asyncio
+    async def test_overlapping_injects_for_one_response_each_echo_their_own_id(self):
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        result = {"type": "response.inject.created", "sequence_number": 1, "response_id": "resp_upstream"}
+
+        wrapped_id, echoed = await self._inject_session(
+            client_frames=[
+                lambda wrapped: {"type": "response.inject", "response_id": wrapped, "input": []},
+                lambda _: {"type": "response.inject", "response_id": "resp_upstream", "input": []},
+            ],
+            upstream_results=[result, {**result, "sequence_number": 2}],
+        )
+
+        assert echoed == [wrapped_id, "resp_upstream"]
+
+    @pytest.mark.parametrize("result_type", ["response.inject.created", "response.inject.failed"])
+    @pytest.mark.asyncio
+    async def test_inject_result_releases_the_client_id_so_a_later_result_gets_the_default_wrap(self, result_type):
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        result = {"type": result_type, "sequence_number": 1, "response_id": "resp_upstream"}
+
+        wrapped_id, echoed = await self._inject_session(
+            client_frames=[lambda _: {"type": "response.inject", "response_id": "resp_upstream", "input": []}],
+            upstream_results=[result, {**result, "sequence_number": 2}],
+        )
+
+        assert echoed == ["resp_upstream", wrapped_id]
+
+    @pytest.mark.asyncio
     async def test_backend_to_client_wraps_ids_when_affinity_is_enabled(self):
         import asyncio
         from unittest.mock import AsyncMock
