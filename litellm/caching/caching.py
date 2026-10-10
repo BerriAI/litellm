@@ -390,17 +390,20 @@ class Cache:
         def as_mapping(value: object) -> Mapping[str, object]:
             return value if isinstance(value, Mapping) else {}
 
-        litellm_params = as_mapping(kwargs.get("litellm_params"))
-        metadata_sources: list[Mapping[str, object]] = [
+        litellm_params: Final = as_mapping(kwargs.get("litellm_params"))
+        metadata_sources: Final = tuple(  # comprehension-ok: flatten trusted metadata containers
             as_mapping(source.get(key))
             for source in (kwargs, litellm_params)
             for key in ("metadata", "litellm_metadata")
-        ]
+        )
 
-        scope_values: list[tuple[str, object | None]] = []
-        for field in self._PROXY_CACHE_SCOPE_FIELDS:
-            value = next((source[field] for source in metadata_sources if source.get(field) is not None), None)
-            scope_values.append((field, value))
+        scope_values: Final = tuple(
+            (
+                field,
+                next((source[field] for source in metadata_sources if source.get(field) is not None), None),
+            )
+            for field in self._PROXY_CACHE_SCOPE_FIELDS
+        )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
     def get_cache_key(self, **kwargs) -> str:
