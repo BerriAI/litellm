@@ -311,7 +311,7 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
             ),
-            "evaluation": lambda: litellm.adecisions(
+            "evaluation": lambda: litellm.asystemone(
                 **DECISIONS_CALL_PARAMS.validate_python(
                     {
                         "state": prompt or "health check",

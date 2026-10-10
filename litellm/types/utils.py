@@ -489,6 +489,8 @@ class CallTypes(str, Enum):
     asearch = "asearch"
     decisions = "decisions"
     adecisions = "adecisions"
+    systemone = "systemone"
+    asystemone = "asystemone"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -677,6 +679,8 @@ CallTypesLiteral = Literal[
     "asearch",
     "decisions",
     "adecisions",
+    "systemone",
+    "asystemone",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -788,8 +792,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/search": [CallTypes.asearch, CallTypes.search],
     "/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
-    "/systemone": [CallTypes.adecisions, CallTypes.decisions],
-    "/v1/systemone": [CallTypes.adecisions, CallTypes.decisions],
+    "/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
