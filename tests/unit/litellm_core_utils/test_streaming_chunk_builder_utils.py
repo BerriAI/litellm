@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Mapping, Sequence
 from typing import Final
@@ -2098,3 +2099,42 @@ def test_stream_chunk_builder_openai_audio_output_usage() -> None:
     assert response is not None
     assert response.choices[0].message.content == "Yes."
     assert response.usage.model_dump(exclude_none=True) == usage.model_dump(exclude_none=True)
+
+
+def _openai_audio_stream_chunk(delta: Mapping[str, object], finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        **{
+            "id": "chatcmpl-audio",
+            "created": 1,
+            "model": "gpt-audio-1.5",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason, "logprobs": None}],
+        }
+    )
+
+
+def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
+    first_pcm: Final = b"\x01\x02"
+    second_pcm: Final = b"\x03\x04\x05\x06"
+    chunks: Final = (
+        _openai_audio_stream_chunk(
+            {"role": "assistant", "content": None, "audio": {"id": "audio_yes", "transcript": "Ye"}}
+        ),
+        _openai_audio_stream_chunk({"audio": {"transcript": "s."}}),
+        _openai_audio_stream_chunk({"audio": {"data": base64.b64encode(first_pcm).decode()}}),
+        _openai_audio_stream_chunk({"audio": {"data": base64.b64encode(second_pcm).decode()}}),
+        _openai_audio_stream_chunk({"audio": {"id": "audio_yes", "expires_at": 1767225600}}),
+        _openai_audio_stream_chunk({}, finish_reason="stop"),
+    )
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    audio: Final = response.choices[0].message.audio
+    assert audio is not None
+    assert audio.model_dump() == {
+        "id": "audio_yes",
+        "data": base64.b64encode(first_pcm + second_pcm).decode(),
+        "expires_at": 1767225600,
+        "transcript": "Yes.",
+    }

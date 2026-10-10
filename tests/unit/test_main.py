@@ -2068,6 +2068,135 @@ def test_parallel_function_call_stream_reassembles_each_arguments_payload():
     ]
 
 
+def _responses_sse(events: tuple[Mapping[str, object], ...]) -> bytes:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+@respx.mock
+def test_parallel_function_call_stream_over_responses_bridge_ignores_events_it_does_not_translate():
+    response_stub: Final = {
+        "id": "resp_parallel",
+        "object": "response",
+        "created_at": 1,
+        "status": "in_progress",
+        "model": "gpt-6-luna",
+        "output": [],
+    }
+    sf_args: Final = '{"location":"San Francisco, CA"}'
+    tokyo_args: Final = '{"location":"Tokyo"}'
+    sf_call: Final = {
+        "type": "function_call",
+        "id": "fc_sf",
+        "call_id": "call_sf",
+        "name": "get_current_weather",
+        "arguments": "",
+        "status": "in_progress",
+    }
+    tokyo_call: Final = {**sf_call, "id": "fc_tokyo", "call_id": "call_tokyo"}
+    events: Final = (
+        {"type": "response.created", "sequence_number": 0, "response": response_stub},
+        {"type": "response.in_progress", "sequence_number": 1, "response": response_stub},
+        {"type": "response.output_item.added", "sequence_number": 2, "output_index": 0, "item": sf_call},
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 3,
+            "item_id": "fc_sf",
+            "output_index": 0,
+            "delta": sf_args[:12],
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 4,
+            "item_id": "fc_sf",
+            "output_index": 0,
+            "delta": sf_args[12:],
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 5,
+            "item_id": "fc_sf",
+            "output_index": 0,
+            "arguments": sf_args,
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 6,
+            "output_index": 0,
+            "item": {**sf_call, "arguments": sf_args, "status": "completed"},
+        },
+        {"type": "response.output_item.added", "sequence_number": 7, "output_index": 1, "item": tokyo_call},
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 8,
+            "item_id": "fc_tokyo",
+            "output_index": 1,
+            "delta": tokyo_args,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 9,
+            "item_id": "fc_tokyo",
+            "output_index": 1,
+            "arguments": tokyo_args,
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 10,
+            "output_index": 1,
+            "item": {**tokyo_call, "arguments": tokyo_args, "status": "completed"},
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 11,
+            "response": {
+                **response_stub,
+                "status": "completed",
+                "output": [
+                    {**sf_call, "arguments": sf_args, "status": "completed"},
+                    {**tokyo_call, "arguments": tokyo_args, "status": "completed"},
+                ],
+                "usage": {"input_tokens": 80, "output_tokens": 40, "total_tokens": 120},
+            },
+        },
+    )
+    route: Final = respx.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events)
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="gpt-6-luna",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "What's the weather like in San Francisco and Tokyo?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+        complete_response=True,
+    )
+
+    assert route.call_count == 1
+    message: Final = response.choices[0].message
+    assert message.content is None
+    assert [(call.id, call.function.name, call.function.arguments) for call in message.tool_calls] == [
+        ("call_sf", "get_current_weather", sf_args),
+        ("call_tokyo", "get_current_weather", tokyo_args),
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
@@ -5630,6 +5759,11 @@ def test_completion_logprobs_parses_top_logprobs():
     assert [
         item.token for item in response.choices[0].logprobs.content[0].top_logprobs
     ] == ["hello", "hi", "hey"]
+    choice: Final = response.choices[0]
+    assert "logprobs" in choice
+    assert "content" in choice.logprobs
+    assert "delta" not in choice
+    assert "token" not in choice.logprobs
 
 
 @respx.mock
