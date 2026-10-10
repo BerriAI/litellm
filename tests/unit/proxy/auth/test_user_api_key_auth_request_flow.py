@@ -10501,3 +10501,93 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
     else:
         assert error.value.code == "400"
         assert "No connected db" in error.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data, expect_blocked",
+    [
+        ("/mcp-rest/tools/list", {}, False),
+        ("/v1/mcp/tools", {}, False),
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize"}, False),
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, False),
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call"}, True),
+        ("/mcp", {}, True),
+        ("/mcp-rest/tools/call", {}, True),
+    ],
+)
+async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
+    route: str, request_data: dict[str, object], expect_blocked: bool
+) -> None:
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-exhausted-mcp-discovery"
+    hashed_token: Final = hash_token(api_key)
+    user_api_key_cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(token=hashed_token, max_budget=2.0, spend=5.0),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+
+    mock_request: Final = MagicMock()
+    mock_request.url.path = route
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    async def authenticate() -> UserAPIKeyAuth:
+        return await user_api_key_auth_builder(
+            request=mock_request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.virtual_key_max_budget_alert_check",
+            new_callable=AsyncMock,
+        ),
+    ):
+        if expect_blocked:
+            with pytest.raises(ProxyException) as exc_info:
+                await authenticate()
+            assert "Budget has been exceeded! Key=key Current cost: 5.0, Max budget: 2.0" in exc_info.value.message
+        else:
+            result: Final = await authenticate()
+            assert result.token == hashed_token
+            assert result.spend == 5.0
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/mcp-rest/tools/list", {}, True),
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "ping"}, True),
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call"}, False),
+        ("/mcp-rest/tools/call", {}, False),
+    ],
+)
+def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
+    route: str, request_data: dict[str, object], expected: bool
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+    assert (
+        _should_skip_budget_checks(request_data=request_data, route=route, request=None, llm_router=None) is expected
+    )
