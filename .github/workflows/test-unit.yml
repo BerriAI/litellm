@@ -214,7 +214,7 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: llms-a-to-g
+          - shard: llms-providers
             test-path: |-
               tests/unit/llms/test_cache_control_and_reasoning.py
               tests/unit/llms/test_custom_llm.py
@@ -272,16 +272,6 @@ jobs:
               tests/unit/llms/github_copilot
               tests/unit/llms/gradient_ai
               tests/unit/llms/groq
-              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: llms-h-to-z
-            test-path: |-
               tests/unit/llms/heroku
               tests/unit/llms/hosted_vllm
               tests/unit/llms/huggingface
@@ -362,6 +352,7 @@ jobs:
               tests/unit/llms/xinference
               tests/unit/llms/you_com
               tests/unit/llms/zai
+              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -1235,6 +1226,48 @@ jobs:
           uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
           uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
           uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
+  helm:
+    name: helm
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm 3.11.1
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: "3.11.1"
+
+      - name: Download and verify Helm Unit Test Plugin
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/helm-unittest.tgz" https://github.com/helm-unittest/helm-unittest/releases/download/v0.8.2/helm-unittest-linux-amd64-0.8.2.tgz
+          echo "56ab3091e6fa52a7c92ee951def9bed957f295d9ce98483aed404e748d7b3a94  $RUNNER_TEMP/helm-unittest.tgz" | sha256sum -c -
+
+      - name: Install Helm Unit Test Plugin
+        run: |
+          PLUGIN_DIR="$(helm env HELM_PLUGINS)/helm-unittest"
+          mkdir -p "$PLUGIN_DIR"
+          tar -xzf "$RUNNER_TEMP/helm-unittest.tgz" -C "$PLUGIN_DIR"
+          helm plugin list
+
+      - name: Run unit tests
+        run: |
+          for chart in helm/litellm-helm helm/litellm; do
+            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+            output="$(mktemp)"
+            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+            if [ "$declared" != "$executed" ]; then
+              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+              exit 1
+            fi
+            echo "$chart: all $declared declared test suites ran"
+          done
   coverage:
     name: coverage
     needs: unit
@@ -1283,7 +1316,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, assert-shard-coverage, unit, ui-unit, docs]
+    needs: [rust-bridge, assert-shard-coverage, unit, ui-unit, docs, helm]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
