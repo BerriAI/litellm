@@ -20,6 +20,17 @@ describe("WhatsNewBanner", () => {
     expect(screen.getAllByRole("link")).toHaveLength(WHATS_NEW_ITEMS.length);
   });
 
+  it("lists launches newest first with their publish date", () => {
+    render(<WhatsNewBanner />);
+    const titles = screen.getAllByRole("link").map((link) => link.textContent ?? "");
+    expect(titles[0]).toContain("Claude Haiku 5.5");
+    expect(titles[0]).toContain("Oct 7");
+    expect(titles.at(-1)).toContain("TypeSafe Jev");
+    expect(titles.at(-1)).toContain("Sep 20");
+    const dates = WHATS_NEW_ITEMS.map((item) => item.publishedOn);
+    expect(dates).toEqual([...dates].sort().reverse());
+  });
+
   it("hides itself and persists the dismissal when the dismiss button is clicked", () => {
     render(<WhatsNewBanner />);
     expect(screen.getByText("What's new")).toBeInTheDocument();
