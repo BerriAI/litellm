@@ -817,8 +817,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         always sees consistent input) and hands the result back out of band.
         """
         raw_by_index: Final = self._accumulate_string_content_by_choice_index(responses_so_far)
-        if not raw_by_index:
+        commentary_by_index: Final = self._combine_streaming_commentary(responses_so_far)
+        if not raw_by_index and not commentary_by_index:
             sink.mutated_text_per_choice = {}
+            sink.mutated_commentary_per_choice = {}  # rebind-ok: write-once sink output parameter
             sink.holdback_per_choice = {}
             return
 
@@ -829,7 +831,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # wrong choice indices when we rebuild the sink dicts by
         # ``enumerate(indices)``.
         indices: Final = sorted(raw_by_index.keys())
-        texts_to_check: Final = [raw_by_index[i] for i in indices]
+        commentary_indices: Final = sorted(commentary_by_index.keys())
+        texts_to_check: Final = [raw_by_index[i] for i in indices] + [
+            commentary_by_index[i] for i in commentary_indices
+        ]
 
         if request_data is None:
             request_data = {"responses": responses_so_far}
@@ -866,6 +871,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         sink.mutated_text_per_choice = {
             idx: returned_texts[i] for i, idx in enumerate(indices) if i < len(returned_texts)
         }
+        sink.mutated_commentary_per_choice = {  # rebind-ok: write-once sink output parameter
+            idx: returned_texts[len(indices) + i]
+            for i, idx in enumerate(commentary_indices)
+            if len(indices) + i < len(returned_texts)
+        }
         sink.holdback_per_choice = {
             indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
         }
@@ -877,6 +887,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         return StreamingScanKey(
             texts=tuple(self._combine_streaming_texts(chunks).values()),
             tool_calls=tool_call_fingerprints if stream_ended else (),
+            commentary=tuple(self._combine_streaming_commentary(chunks).values()),
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )

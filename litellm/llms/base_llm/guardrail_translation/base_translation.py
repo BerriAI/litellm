@@ -32,6 +32,7 @@ class StreamTransformSink:
     """
 
     mutated_text_per_choice: dict[int, str] = field(default_factory=dict)
+    mutated_commentary_per_choice: dict[int, str] = field(default_factory=dict)  # mutable-ok: sink out-param
     holdback_per_choice: dict[int, int] = field(default_factory=dict)
 
 
@@ -47,12 +48,13 @@ class StreamingScanKey:
 
     texts: tuple[str, ...]
     tool_calls: tuple[str, ...] = ()
+    commentary: tuple[str, ...] = ()
     stream_ended: bool = field(default=False, compare=False)
     tool_calls_in_flight: bool = field(default=False, compare=False)
 
     @property
     def has_nothing_to_scan(self) -> bool:
-        return not self.stream_ended and not any(self.texts) and not self.tool_calls
+        return not self.stream_ended and not any(self.texts) and not self.tool_calls and not any(self.commentary)
 
 
 class BaseTranslation(ABC):

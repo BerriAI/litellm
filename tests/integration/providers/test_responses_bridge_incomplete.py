@@ -684,7 +684,6 @@ def test_chat_over_responses_deployment_merges_two_messages_and_function_call_in
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.commentary_phase_moves_to_provider_specific_fields")
 def test_chat_over_responses_deployment_routes_commentary_out_of_content(gateway: Gateway) -> None:
     identity: Final = "responses-commentary-" + uuid.uuid4().hex
     answer: Final = f'{{"city": "Paris", "marker": "{identity}"}}'
@@ -759,7 +758,6 @@ def test_chat_over_responses_deployment_routes_commentary_out_of_content(gateway
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.streamed_commentary_joined_and_assembled")
 def test_chat_over_responses_deployment_stream_joins_commentary_fragments(gateway: Gateway) -> None:
     identity: Final = "responses-commentary-stream-" + uuid.uuid4().hex
     answer: Final = f'{{"city": "Paris", "marker": "{identity}"}}'
@@ -893,7 +891,6 @@ def test_chat_over_responses_deployment_stream_joins_commentary_fragments(gatewa
             ), response_body.decode()
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.output_guardrail_masks_commentary")
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
 def test_chat_over_responses_deployment_guardrail_masks_commentary_email(gateway: Gateway, stream: bool) -> None:
     identity: Final = "responses-commentary-guardrail-" + uuid.uuid4().hex
@@ -1144,7 +1141,6 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email(gateway
         assert deleted.status_code == 200, deleted.text
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.guardrail_masks_commentary_email_in_content")
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
 def test_chat_over_responses_deployment_guardrail_masks_commentary_email_in_content_on_tool_turns(
     gateway: Gateway, stream: bool
@@ -1361,7 +1357,6 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email_in_cont
         assert deleted.status_code == 200, deleted.text
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.commentary_kept_in_content_on_tool_turns")
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
 def test_chat_over_responses_deployment_keeps_commentary_in_content_on_tool_turns(
     gateway: Gateway, stream: bool
@@ -2114,7 +2109,6 @@ def test_cursor_chat_completions_route_folds_commentary_into_provider_specific_f
             ], response.text
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.end_of_stream_blank_commentary_rewrite")
 def test_chat_over_responses_deployment_end_of_stream_blank_commentary_rewrite(gateway: Gateway) -> None:
     identity: Final = "responses-commentary-blank-" + uuid.uuid4().hex
     answer: Final = f'{{"city": "Paris", "marker": "{identity}"}}'
@@ -2430,3 +2424,281 @@ def test_chat_over_responses_deployment_conversation_switching_between_chat_and_
             "/responses",
         ], [target for target, _ in hits]
         assert len(hits) == 4
+
+
+def test_chat_over_responses_deployment_guardrail_blocks_late_commentary_delta(gateway: Gateway) -> None:
+    identity: Final = "responses-late-commentary-" + uuid.uuid4().hex
+    answer: Final = f'{{"city": "Paris", "marker": "{identity}"}}'
+    secret: Final = f"{identity}-secret-token"
+    guardrail_name: Final = f"block-late-commentary-{uuid.uuid4().hex[:8]}"
+
+    events: Final = (
+        {
+            "type": "response.created",
+            "response": {
+                "id": f"resp_{identity}",
+                "object": "response",
+                "created_at": 1,
+                "status": "in_progress",
+                "model": "gpt-6-sol",
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "msg_answer",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_answer",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": answer,
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "id": "msg_commentary",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_commentary",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": f"note with {secret}",
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": f"resp_{identity}",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-6-sol",
+                "output": [],
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            },
+        },
+    )
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        if request.target == "/beta/litellm_basic_guardrail_api":
+            checked: Final = json.loads(request.body).get("texts") or []
+            if any(secret in text for text in checked):
+                return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "secret in output"}).encode())
+            return Reply(body=b'{"action": "NONE"}')
+        assert request.method == "POST" and request.target == "/responses", request.target
+        return Reply(
+            content_type="text/event-stream",
+            chunks=tuple(f"data: {json.dumps(event)}\n\n".encode() for event in events),
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.client.post(
+            "/guardrails",
+            headers={"x-litellm-api-key": gateway.key},
+            json={
+                "guardrail": {
+                    "guardrail_name": guardrail_name,
+                    "litellm_params": {
+                        "guardrail": "generic_guardrail_api",
+                        "mode": "post_call",
+                        "default_on": True,
+                        "streaming_sampling_rate": 1,
+                        "api_base": wire.url,
+                        "api_key": "synthetic-guardrail-key",
+                    },
+                }
+            },
+        )
+        assert created.status_code == 200, created.text
+        guardrail_id: Final = created.json()["guardrail_id"]
+        try:
+            model: Final = scenario.model(
+                model="openai/responses/gpt-6-sol", api_base=wire.url, api_key="synthetic-openai-key"
+            )
+            with gateway.client.stream(
+                "POST",
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {gateway.key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
+                    "stream": True,
+                    "cache": {"no-cache": True},
+                },
+            ) as response:
+                response_body: Final = response.read()
+                assert response.status_code == 200, response.text
+                body_text: Final = response_body.decode()
+                assert secret not in body_text, body_text
+                assert "note with" not in body_text, body_text
+        finally:
+            deleted: Final = gateway.client.delete(
+                f"/guardrails/{guardrail_id}", headers={"x-litellm-api-key": gateway.key}
+            )
+            assert deleted.status_code == 200, deleted.text
+
+
+def test_chat_over_responses_deployment_incremental_diff_masks_commentary(gateway: Gateway) -> None:
+    identity: Final = "responses-incr-commentary-" + uuid.uuid4().hex
+    answer: Final = f'{{"city": "Paris", "marker": "{identity}"}}'
+    commentary_text: Final = f"Let me check for {identity}-user@example.com first"
+    guardrail_name: Final = f"incr-commentary-{uuid.uuid4().hex[:8]}"
+
+    events: Final = (
+        {
+            "type": "response.created",
+            "response": {
+                "id": f"resp_{identity}",
+                "object": "response",
+                "created_at": 1,
+                "status": "in_progress",
+                "model": "gpt-6-sol",
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "msg_commentary",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_commentary",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": commentary_text,
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "id": "msg_answer",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_answer",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": answer,
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": f"resp_{identity}",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-6-sol",
+                "output": [],
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            },
+        },
+    )
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        if request.target == "/beta/litellm_basic_guardrail_api":
+            checked: Final = json.loads(request.body).get("texts") or []
+            return Reply(
+                body=json.dumps(
+                    {
+                        "action": "GUARDRAIL_INTERVENED",
+                        "texts": [text.replace(f"{identity}-user@example.com", "[EMAIL_REDACTED]") for text in checked],
+                    }
+                ).encode()
+            )
+        assert request.method == "POST" and request.target == "/responses", request.target
+        return Reply(
+            content_type="text/event-stream",
+            chunks=tuple(f"data: {json.dumps(event)}\n\n".encode() for event in events),
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.client.post(
+            "/guardrails",
+            headers={"x-litellm-api-key": gateway.key},
+            json={
+                "guardrail": {
+                    "guardrail_name": guardrail_name,
+                    "litellm_params": {
+                        "guardrail": "generic_guardrail_api",
+                        "mode": "post_call",
+                        "default_on": True,
+                        "streaming_transform_mode": "incremental_diff",
+                        "api_base": wire.url,
+                        "api_key": "synthetic-guardrail-key",
+                    },
+                }
+            },
+        )
+        assert created.status_code == 200, created.text
+        guardrail_id: Final = created.json()["guardrail_id"]
+        try:
+            model: Final = scenario.model(
+                model="openai/responses/gpt-6-sol", api_base=wire.url, api_key="synthetic-openai-key"
+            )
+            with gateway.client.stream(
+                "POST",
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {gateway.key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
+                    "stream": True,
+                    "cache": {"no-cache": True},
+                },
+            ) as response:
+                response_body: Final = response.read()
+                assert response.status_code == 200, response.text
+                chunks: Final = tuple(
+                    json.loads(line.removeprefix("data: "))
+                    for line in response_body.decode().splitlines()
+                    if line.startswith("data: ") and line != "data: [DONE]"
+                )
+                deltas: Final = tuple(choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ())
+                assert "".join(str(delta.get("content") or "") for delta in deltas) == answer, response_body.decode()
+                assert (
+                    "".join(
+                        str(object_value(delta["provider_specific_fields"])["commentary"])
+                        for delta in deltas
+                        if isinstance(delta.get("provider_specific_fields"), dict)
+                        and "commentary" in delta["provider_specific_fields"]
+                    )
+                    == "Let me check for [EMAIL_REDACTED] first"
+                ), response_body.decode()
+        finally:
+            deleted: Final = gateway.client.delete(
+                f"/guardrails/{guardrail_id}", headers={"x-litellm-api-key": gateway.key}
+            )
+            assert deleted.status_code == 200, deleted.text

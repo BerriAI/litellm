@@ -496,7 +496,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         reference_chunk: object,
         mutated_text_per_choice: dict[int, str],
+        mutated_commentary_per_choice: dict[int, str],  # mutable-ok: guardrail output carried out of band
         emitted_text_per_choice: dict[int, str],
+        emitted_commentary_per_choice: dict[int, str],  # mutable-ok: per-stream emitted map extended in place
         holdback_per_choice: dict[int, int],
         finish_reason_per_choice: dict[int, str | None],
         held_chars_per_choice: dict[int, int],
@@ -520,7 +522,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         silently leave un-transformed text on the wire; a guardrail that needs to
         rewrite recent output must withhold it first via ``stream_holdback_chars``.
         """
-        if not mutated_text_per_choice:
+        if not mutated_text_per_choice and not mutated_commentary_per_choice:
             # Fix #4 — on the final flush a deferred finish_reason (from a mixed
             # content+tool_calls chunk whose passthrough suppressed it) still
             # needs to reach the client, even if the guardrail returned no text
@@ -568,27 +570,54 @@ class UnifiedLLMGuardrails(CustomLogger):
             deltas[choice_idx] = text[len(already) : end]
             held_chars_per_choice[choice_idx] = len(text) - end
 
+        commentary_deltas: Final[dict[int, str]] = {}  # mutable-ok: per-round delta accumulator
+        for choice_idx, text in mutated_commentary_per_choice.items():
+            already_commentary = emitted_commentary_per_choice.get(choice_idx, "")
+            if not text.startswith(already_commentary):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "stream_transform_underflow",
+                        "message": (
+                            f"Guardrail streaming transform for choice {choice_idx} commentary is not a "
+                            f"forward extension of the {len(already_commentary)} chars already streamed "
+                            "to the client; emitted bytes cannot be retracted."
+                        ),
+                    },
+                )
+            commentary_deltas[choice_idx] = text[len(already_commentary) :]
+
         # Iterate the mutated choices (not just those in reference_chunk) so a
         # choice with pending text is never dropped for n > 1. finish_reason is
         # taken per choice from the accumulated map (a choice can finish in an
         # earlier chunk than the stream's last one); tool_calls are dropped since
         # v1 does not transform streamed tool calls (they pass through raw).
         synthetic_choices: Final[list[StreamingChoices]] = []
-        for choice_idx in mutated_text_per_choice:
+        for choice_idx in sorted(set(mutated_text_per_choice) | set(mutated_commentary_per_choice)):
             delta_text = deltas.get(choice_idx, "")
+            commentary_text = commentary_deltas.get(choice_idx, "")
             finish_reason = finish_reason_per_choice.get(choice_idx) if is_final else None
-            # Skip a choice with nothing to say: no new content and no
-            # finish_reason to deliver. This avoids emitting an empty delta for an
+            # Skip a choice with nothing to say: no new content, no commentary and
+            # no finish_reason to deliver. This avoids emitting an empty delta for an
             # already-finished choice (e.g. one that terminated via a passed-through
             # tool-call chunk, which already carried its own finish_reason).
-            if not delta_text and finish_reason is None:
+            if not delta_text and not commentary_text and finish_reason is None:
                 continue
             # role="assistant" on this choice's first emitted delta only.
-            role = "assistant" if not emitted_text_per_choice.get(choice_idx) else None
+            role = (
+                "assistant"
+                if not emitted_text_per_choice.get(choice_idx) and not emitted_commentary_per_choice.get(choice_idx)
+                else None
+            )
             synthetic_choices.append(
                 StreamingChoices(
                     index=choice_idx,
-                    delta=Delta(content=delta_text, role=role, tool_calls=None),
+                    delta=Delta(
+                        content=delta_text if delta_text else None,
+                        role=role,
+                        tool_calls=None,
+                        provider_specific_fields={"commentary": commentary_text} if commentary_text else None,
+                    ),
                     finish_reason=finish_reason,
                 )
             )
@@ -599,6 +628,14 @@ class UnifiedLLMGuardrails(CustomLogger):
         for choice_idx in mutated_text_per_choice:
             emitted_text_per_choice[choice_idx] = emitted_text_per_choice.get(choice_idx, "") + deltas.get(
                 choice_idx, ""
+            )
+        for choice_idx in mutated_commentary_per_choice:
+            emitted_commentary_per_choice[choice_idx] = (  # rebind-ok: emitted map extended in place per round
+                emitted_commentary_per_choice.get(
+                    choice_idx,
+                    "",
+                )
+                + commentary_deltas.get(choice_idx, "")
             )
 
         return ModelResponseStream(
@@ -620,6 +657,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: Sequence[object],
         responses_yielded: list[object],
         emitted_text_per_choice: dict[int, str],
+        emitted_commentary_per_choice: dict[int, str],  # mutable-ok: per-stream emitted map extended in place
         finish_reason_per_choice: dict[int, str | None],
         held_chars_per_choice: dict[int, int],
         is_final: bool,
@@ -648,7 +686,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             synthetic: Final = self._build_transform_chunk(
                 reference_chunk=reference_chunk,
                 mutated_text_per_choice=sink.mutated_text_per_choice,
+                mutated_commentary_per_choice=sink.mutated_commentary_per_choice,
                 emitted_text_per_choice=emitted_text_per_choice,
+                emitted_commentary_per_choice=emitted_commentary_per_choice,
                 holdback_per_choice=sink.holdback_per_choice,
                 finish_reason_per_choice=finish_reason_per_choice,
                 held_chars_per_choice=held_chars_per_choice,
@@ -708,6 +748,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: Final[list[object]] = []
         responses_yielded: Final[list[object]] = []
         emitted_text_per_choice: Final[dict[int, str]] = {}
+        emitted_commentary_per_choice: Final[dict[int, str]] = {}  # mutable-ok: per-stream emitted map
         finish_reason_per_choice: Final[dict[int, str | None]] = {}
         held_chars_per_choice: Final[dict[int, int]] = {}
         chunk_counter = 0
@@ -725,6 +766,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 responses_so_far=responses_so_far,
                 responses_yielded=responses_yielded,
                 emitted_text_per_choice=emitted_text_per_choice,
+                emitted_commentary_per_choice=emitted_commentary_per_choice,
                 finish_reason_per_choice=finish_reason_per_choice,
                 held_chars_per_choice=held_chars_per_choice,
                 is_final=is_final,

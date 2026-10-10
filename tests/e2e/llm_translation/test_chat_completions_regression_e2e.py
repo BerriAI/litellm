@@ -41,6 +41,7 @@ from models import (
     ThinkingParam,
 )
 from passthrough_client import PassthroughClient
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -684,38 +685,35 @@ class TestAzureOpenAIChatCompletions:
         )
     )
     def test_azure_openai_bridged_tool_call_returns_one_choice(
-        self, client: PassthroughClient, resources: ResourceManager
+        self, client: PassthroughClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model = self._register(client, resources, "e2e-azure-openai-bridge")
         key = resources.key()
 
-        response = unwrap(
-            client.proxy.chat(
-                key,
-                ChatBody(
-                    model=model,
-                    messages=[
-                        ChatMessage(
-                            role="system",
-                            content="Before you call any tool, first tell the user in one short sentence what you are about to do",
-                        ),
-                        ChatMessage(
-                            role="user",
-                            content=f"What is the weather in San Francisco? Use the get_weather tool. {unique_marker()}",
-                        ),
-                    ],
-                    tools=[_WEATHER_TOOL],
-                    max_tokens=128,
-                ),
-            )
+        response = sdk.openai(key).chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Before you call any tool, first tell the user in one short sentence what you are about to do",
+                },
+                {
+                    "role": "user",
+                    "content": f"What is the weather in San Francisco? Use the get_weather tool. {unique_marker()}",
+                },
+            ],
+            tools=[_WEATHER_TOOL.model_dump(exclude_none=True)],
+            max_tokens=128,
+            extra_body=NO_PROXY_CACHE,
         )
         assert len(response.choices) == 1, f"bridged reply returned {len(response.choices)} choices: {response}"
         assert response.choices[0].finish_reason == "tool_calls", f"expected finish_reason tool_calls: {response}"
         message = response.choices[0].message
         assert message.tool_calls, f"expected tool calls in the bridged reply: {response}"
-        assert "commentary" not in (
-            message.provider_specific_fields.model_dump() if message.provider_specific_fields else {}
-        ), f"tool-call turns must keep the preamble in content, not provider_specific_fields: {response}"
+        provider_specific_fields: Final = (message.model_extra or {}).get("provider_specific_fields") or {}
+        assert "commentary" not in provider_specific_fields, (
+            f"tool-call turns must keep the preamble in content, not provider_specific_fields: {response}"
+        )
         _assert_weather_tool_call(response)
 
 

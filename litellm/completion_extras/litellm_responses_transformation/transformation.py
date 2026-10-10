@@ -928,26 +928,33 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         parts: Iterable[tuple[object, object]],
         is_commentary: bool,
         content_length: int,
-    ) -> tuple[tuple[str, ...], tuple[ChatCompletionAnnotation, ...], tuple[str, ...]]:
+    ) -> tuple[
+        tuple[str, ...], tuple[ChatCompletionAnnotation, ...], tuple[str, ...], tuple[ChatCompletionAnnotation, ...]
+    ]:
         """Fold (text, annotations) pairs into content or commentary and return
-        (content_texts, annotations, commentary_texts). Commentary text never
-        enters content and its annotations are dropped."""
+        (content_texts, annotations, commentary_texts, commentary_annotations).
+        Commentary text never enters content; its annotations are kept so callers
+        can emit them when commentary falls back into content."""
         part_list: Final = tuple(parts)
         offsets: Final = accumulate(
             (len(part_text) if isinstance(part_text, str) else 0 for part_text, _ in part_list),
             initial=content_length,
         )
         folded: Final = tuple(
-            LiteLLMResponsesTransformationHandler._fold_output_text_part(
-                part_text, None if is_commentary else raw_annotations, offset
-            )
+            LiteLLMResponsesTransformationHandler._fold_output_text_part(part_text, raw_annotations, offset)
             for (part_text, raw_annotations), offset in zip(part_list, offsets)
         )
         if is_commentary:
-            return (), (), tuple(text for text, _ in folded)
+            return (
+                (),
+                (),
+                tuple(text for text, _ in folded),
+                tuple(chain.from_iterable(annotations for _, annotations in folded)),
+            )
         return (
             tuple(text for text, _ in folded),
             tuple(chain.from_iterable(annotations for _, annotations in folded)),
+            (),
             (),
         )
 
@@ -973,10 +980,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         content_parts: Final[list[str]] = []  # mutable-ok: ordered fold accumulator
         commentary_parts: Final[list[str]] = []  # mutable-ok: ordered fold accumulator
         folded_annotations: Final[list[ChatCompletionAnnotation]] = []  # mutable-ok: ordered fold accumulator
+        commentary_annotations: Final[list[ChatCompletionAnnotation]] = []  # mutable-ok: ordered fold accumulator
         reasoning_items: Final[list[_BuiltReasoningItem]] = []  # mutable-ok: ordered fold accumulator
         accumulated_tool_calls: Final[list[Mapping[str, object]]] = []  # mutable-ok: ordered fold accumulator
         first_message_role: str | None = None
         content_length = 0
+        commentary_length = 0
         tool_call_index = 0
 
         for item in output_items:
@@ -985,20 +994,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 reasoning_items.append(reasoning_item)
             elif isinstance(item, ResponseOutputMessage):
                 first_message_role = first_message_role or item.role
-                message_content, message_annotations, message_commentary = (
+                is_commentary_message = item.phase == "commentary"
+                message_content, message_annotations, message_commentary, message_commentary_annotations = (
                     LiteLLMResponsesTransformationHandler._fold_message_text_parts(
                         (
                             (getattr(content, "text", ""), getattr(content, "annotations", None))
                             for content in item.content
                         ),
-                        item.phase == "commentary",
-                        content_length,
+                        is_commentary_message,
+                        commentary_length if is_commentary_message else content_length,
                     )
                 )
                 content_parts.extend(message_content)
                 folded_annotations.extend(message_annotations)
                 commentary_parts.extend(message_commentary)
+                commentary_annotations.extend(message_commentary_annotations)
                 content_length += sum(map(len, message_content))
+                commentary_length += sum(map(len, message_commentary))
             elif (tool_call_dict := _typed_tool_call_dict(item, tool_call_index)) is not None:
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
@@ -1019,17 +1031,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         if first_message_role is None:
                             raw_role = raw_item.get("role")
                             first_message_role = raw_role if isinstance(raw_role, str) else "assistant"
-                        raw_content, raw_annotations_out, raw_commentary = (
+                        raw_is_commentary = raw_item.get("phase") == "commentary"
+                        raw_content, raw_annotations_out, raw_commentary, raw_commentary_annotations = (
                             LiteLLMResponsesTransformationHandler._fold_message_text_parts(
                                 raw_parts,
-                                raw_item.get("phase") == "commentary",
-                                content_length,
+                                raw_is_commentary,
+                                commentary_length if raw_is_commentary else content_length,
                             )
                         )
                         content_parts.extend(raw_content)
                         folded_annotations.extend(raw_annotations_out)
                         commentary_parts.extend(raw_commentary)
+                        commentary_annotations.extend(raw_commentary_annotations)
                         content_length += sum(map(len, raw_content))
+                        commentary_length += sum(map(len, raw_commentary))
                 elif handle_raw_dict_callback is not None:
                     callback_choice, _ = handle_raw_dict_callback(item=raw_item, index=0)
                     if callback_choice is not None and isinstance(callback_choice.message.content, str):
@@ -1055,6 +1070,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         answer_text: Final = "".join(content_parts)
         commentary_text: Final = "".join(commentary_parts)
+        if not answer_text:
+            folded_annotations.extend(commentary_annotations)
         merged_message: Final = Message(
             role=merged_role,
             content=answer_text if answer_text else (commentary_text if commentary_text else None),
@@ -1625,8 +1642,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
 @dataclass(slots=True)
 class _CommentaryStreamState:
-    item_ids: set[str] = field(default_factory=set)
-    pending: list[str] = field(default_factory=list)
+    item_ids: set[str] = field(default_factory=set)  # mutable-ok: per-stream accumulator state
+    pending: list[str] = field(default_factory=list)  # mutable-ok: per-stream accumulator state
     answer_started: bool = False
 
 

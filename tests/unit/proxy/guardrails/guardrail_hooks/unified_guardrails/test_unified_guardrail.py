@@ -1176,7 +1176,9 @@ class TestStreamingTransform:
         synthetic = UnifiedLLMGuardrails()._build_transform_chunk(
             reference_chunk=reference_chunk,
             mutated_text_per_choice={0: "A", 1: "B"},
+            mutated_commentary_per_choice={},
             emitted_text_per_choice={},
+            emitted_commentary_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={0: "stop", 1: "length"},
             held_chars_per_choice={},
@@ -1215,7 +1217,9 @@ class TestStreamingTransform:
         synthetic = UnifiedLLMGuardrails()._build_transform_chunk(
             reference_chunk=reference_chunk,
             mutated_text_per_choice={0: "HI"},
+            mutated_commentary_per_choice={},
             emitted_text_per_choice={},
+            emitted_commentary_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={},
             held_chars_per_choice={},
@@ -1238,7 +1242,9 @@ class TestStreamingTransform:
                 # already streamed "My SSN is 123"; the guardrail now wants to
                 # redact those already-sent chars -> not a forward extension.
                 mutated_text_per_choice={0: "My SSN is [REDACTED]"},
+                mutated_commentary_per_choice={},
                 emitted_text_per_choice={0: "My SSN is 123"},
+                emitted_commentary_per_choice={},
                 holdback_per_choice={},
                 finish_reason_per_choice={},
                 held_chars_per_choice={},

@@ -3531,6 +3531,72 @@ def test_convert_response_output_commentary_only_message_keeps_note_in_content()
     assert choices[0].finish_reason == "stop"
 
 
+def test_convert_response_output_commentary_only_keeps_note_citations_in_content() -> None:
+    citation: Final = {
+        "type": "url_citation",
+        "start_index": 14,
+        "end_index": 19,
+        "title": "Forecast",
+        "url": "https://example.com/forecast",
+    }
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "Let me check. ", annotations=[], phase="commentary"),
+            _bridge_message("msg_2", "Forecast says rain.", annotations=[citation], phase="commentary"),
+            ResponseFunctionToolCall(
+                id="fc_1",
+                type="function_call",
+                status="completed",
+                arguments='{"city":"Paris"}',
+                call_id="call_1",
+                name="get_weather",
+            ),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "Let me check. Forecast says rain."
+    assert choices[0].message.provider_specific_fields is None
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.annotations == [
+        {
+            "type": "url_citation",
+            "start_index": 28,
+            "end_index": 33,
+            "title": "Forecast",
+            "url": "https://example.com/forecast",
+        }
+    ]
+
+
+def test_convert_response_output_commentary_citations_dropped_when_answer_exists() -> None:
+    note_citation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 5,
+        "title": "Note",
+        "url": "https://example.com/note",
+    }
+    answer_citation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 10,
+        "title": "Weather",
+        "url": "https://example.com/weather",
+    }
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "note ", annotations=[note_citation], phase="commentary"),
+            _bridge_message("msg_2", '{"city": "Paris"}', annotations=[answer_citation], phase="final_answer"),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == '{"city": "Paris"}'
+    assert choices[0].message.provider_specific_fields == {"commentary": "note "}
+    assert choices[0].message.annotations == [answer_citation]
+
+
 def test_convert_response_output_commentary_after_final_answer_still_routes_to_commentary() -> None:
     choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
         (
