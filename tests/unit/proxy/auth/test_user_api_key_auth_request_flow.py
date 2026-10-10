@@ -4706,11 +4706,16 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
 async def test_centralized_common_checks_proxy_admin_token_ignores_row_model_list(row_models):
     """A proxy_admin token keeps every model when its DB row carries a personal
     model list, e.g. no-default-models from default_internal_user_params on a
-    user later promoted to admin; only the row's budget carries over."""
+    user later promoted to admin; only the row's budget carries over. The same
+    row still refuses gpt-4o to a non-admin token."""
+    db_user = LiteLLM_UserTable(user_id="admin-user", user_role="internal_user", models=row_models, spend=1.0)
     await _run_checks_for_cached_user(
-        LiteLLM_UserTable(user_id="admin-user", user_role="internal_user", models=row_models, spend=1.0),
-        UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        db_user, UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
     )
+    with pytest.raises(ProxyException):
+        await _run_checks_for_cached_user(
+            db_user, UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.INTERNAL_USER)
+        )
 
 
 @pytest.mark.asyncio
@@ -4718,11 +4723,17 @@ async def test_centralized_common_checks_proxy_admin_token_ignores_row_model_lis
 async def test_centralized_common_checks_admin_name_identity_ignores_its_row_budget(api_key):
     """The master key and the UI username/password login both resolve to the
     litellm_proxy_admin_name row; that row's max_budget does not apply to them,
-    even once its spend is past the budget."""
+    even once its spend is past the budget. The same row under any other admin
+    user_id is refused."""
+    db_user = LiteLLM_UserTable(user_id="admin", user_role="proxy_admin", spend=25.0, max_budget=10.0)
     await _run_checks_for_cached_user(
-        LiteLLM_UserTable(user_id="admin", user_role="proxy_admin", spend=25.0, max_budget=10.0),
-        UserAPIKeyAuth(api_key=api_key, user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        db_user, UserAPIKeyAuth(api_key=api_key, user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     )
+    with pytest.raises(litellm.BudgetExceededError):
+        await _run_checks_for_cached_user(
+            db_user.model_copy(update={"user_id": "admin-user"}),
+            UserAPIKeyAuth(api_key=api_key, user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
 
 
 @pytest.mark.asyncio
