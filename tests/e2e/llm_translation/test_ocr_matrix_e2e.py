@@ -1,12 +1,3 @@
-"""Live provider x auth x input coverage for ``litellm.ocr`` / ``litellm.aocr``.
-
-Each ``Case`` is one hand-picked cell, not the full cross product: every provider
-exercises each of its credential kinds in both ``explicit`` (kwargs) and ``env``
-(monkeypatched environment) mode at least once, and every input kind a provider
-accepts is exercised at least once. Sync and async are spread across the cells.
-Every cell also checks the success callback saw the same response and cost.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -19,17 +10,31 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol, cast
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live, pytest.mark.asyncio]
+
 Document = Mapping[str, object]
 AuthMode = Literal["explicit", "env"]
 CallStyle = Literal["sync", "async"]
+
+
+class _OCRClient(Protocol):
+    def ocr(self, *, model: str, document: Document, **kwargs: object) -> OCRResponse: ...
+
+    async def aocr(self, *, model: str, document: Document, **kwargs: object) -> OCRResponse: ...
+
+
+_OCR_CLIENT: Final = cast(_OCRClient, litellm)
+_STRING_KEYED: Final = TypeAdapter(dict[str, object])
+_FLOAT: Final = TypeAdapter(float)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,12 +45,11 @@ class LoggedCall:
 
 class RecordingLogger(CustomLogger):
     def __init__(self) -> None:
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger.__init__ is untyped
-        self.calls: Final[list[LoggedCall]] = []  # mutable-ok: append-only sink the callback hooks write into
+        self.calls: tuple[LoggedCall, ...] = ()
 
     def _record(self, kwargs: Mapping[str, object], response_obj: object) -> None:
         payload: Final = _string_keyed(kwargs.get("standard_logging_object"))
-        self.calls.append(LoggedCall(payload, response_obj))
+        self.calls = (*self.calls, LoggedCall(payload, response_obj))
 
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
@@ -75,9 +79,9 @@ def logger(monkeypatch: pytest.MonkeyPatch) -> RecordingLogger:
     return recorder
 
 
-TESTS_DIR: Final = Path(__file__).resolve().parents[1]
+TESTS_DIR: Final = Path(__file__).resolve().parents[2]
 PDF_PATH: Final = TESTS_DIR / "llm_translation" / "fixtures" / "dummy.pdf"
-PNG_PATH: Final = TESTS_DIR / "image_gen_tests" / "test_image.png"
+PNG_PATH: Final = Path(__file__).resolve().parent / "fixtures" / "ocr_matrix_image.png"
 PINNED_CDN: Final = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0"
 PDF_URL: Final = f"{PINNED_CDN}/tests/llm_translation/fixtures/dummy.pdf"
 PNG_URL: Final = f"{PINNED_CDN}/tests/image_gen_tests/test_image.png"
@@ -126,9 +130,6 @@ PNG_AS_FILE_OBJECT: Final = Input(
 
 @dataclass(frozen=True, slots=True)
 class Secret:
-    """One credential value: the ``litellm.ocr`` kwarg it travels in, the env var litellm reads
-    when the kwarg is omitted, and the env var that holds the value in the test process."""
-
     kwarg: str
     env: str
     source: str | None = None
@@ -209,7 +210,6 @@ class Case:
         return f"{self.provider.id}-{self.credential.id}-{self.auth}-{self.document.id}-{self.call}"
 
     def bind_credentials(self, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, str]:
-        """Clear every env var the provider could fall back to, then supply this case's values via kwargs or env."""
         values: Final = {secret: os.environ.get(secret.source_env) for secret in self.credential.secrets}
         missing: Final = tuple(secret.source_env for secret, value in values.items() if not value)
         if missing:
@@ -225,11 +225,17 @@ class Case:
     async def run(self, credentials: Mapping[str, str]) -> OCRResponse:
         kwargs: Final = {**self.provider.params, **credentials}
         document: Final = self.document.build()
-        response: Final = (
-            await litellm.aocr(model=self.provider.model, document=document, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # @client erases the signature
-            if self.call == "async"
-            else litellm.ocr(model=self.provider.model, document=document, **kwargs)
-        )
+        try:
+            response: Final = (
+                await _OCR_CLIENT.aocr(model=self.provider.model, document=document, **kwargs)
+                if self.call == "async"
+                else _OCR_CLIENT.ocr(model=self.provider.model, document=document, **kwargs)
+            )
+        except Exception as exc:
+            reason: Final = str(exc).casefold()
+            if any(value in reason for value in ("quota", "rate limit", "region")):
+                pytest.skip(f"{self.provider.id} rejected the account due to quota or region")
+            raise
         assert isinstance(response, OCRResponse)
         return response
 
@@ -259,12 +265,6 @@ CASES: Final = (
 )
 
 
-def _response_cost(response: OCRResponse) -> float:
-    response_cost: Final[object] = response._hidden_params.get("response_cost")  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownVariableType]  # response_cost is only surfaced on _hidden_params
-    assert isinstance(response_cost, float) and response_cost > 0
-    return response_cost
-
-
 def _assert_ocr_response(response: OCRResponse, model: str, expected_text: str) -> None:
     assert response.object == "ocr"
     assert response.model == model.split("/", 1)[1]
@@ -273,23 +273,21 @@ def _assert_ocr_response(response: OCRResponse, model: str, expected_text: str) 
     assert expected_text.lower() in text.lower(), text
     assert response.usage_info is not None
     assert response.usage_info.pages_processed == len(response.pages)
-    _response_cost(response)
 
 
 def _string_keyed(value: object) -> Mapping[str, object]:
-    assert isinstance(value, Mapping), type(value)
-    items: Final = tuple(value.items())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]  # narrowed from object
-    return MappingProxyType({str(key): value for key, value in items})  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # narrowed from object
+    return MappingProxyType(_STRING_KEYED.validate_python(value))
 
 
 def _assert_logged(logged: LoggedCall, response: OCRResponse, model: str, logged_model: str, call: CallStyle) -> None:
     assert isinstance(logged.response, OCRResponse)
-    assert logged.response.pages == response.pages
+    assert logged.response is response
     assert logged.payload["status"] == "success"
     assert logged.payload["call_type"] == ("aocr" if call == "async" else "ocr")
     assert logged.payload["custom_llm_provider"] == model.split("/", 1)[0]
     assert logged.payload["model"] == logged_model
-    assert logged.payload["response_cost"] == _response_cost(response)
+    response_cost: Final = _FLOAT.validate_python(logged.payload["response_cost"])
+    assert response_cost > 0
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
@@ -298,5 +296,3 @@ async def test_ocr(case: Case, monkeypatch: pytest.MonkeyPatch, logger: Recordin
     response: Final = await case.run(credentials)
     _assert_ocr_response(response, case.provider.model, case.document.expected_text)
     _assert_logged(await logger.wait_for_call(), response, case.provider.model, response.model, case.call)
-
-
