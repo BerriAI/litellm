@@ -11,12 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
+
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 from litellm.types.integrations.custom_logger import (
     RESPONSES_AGENTIC_SURFACE,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.proxy import proxy_server
 from litellm.types.utils import CallTypes, LlmProviders
 
 
@@ -250,6 +254,50 @@ async def test_build_responses_plan_produces_responses_input():
     assert "tool_choice" not in patch_obj.optional_params
     assert "_agentic_loop_api_surface" not in patch_obj.kwargs
     assert patch_obj.model == "openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model(monkeypatch):
+    """#38829 on the Responses surface: a provider-stripped model whose remainder still holds a
+    slash was left unqualified, so the follow-up could not resolve a provider."""
+    logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "asearch", AsyncMock(return_value=SearchResponse(object="search", results=[])))
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "fc_1",
+                "call_id": "fc_1",
+                "type": "function_call",
+                "name": "litellm_web_search",
+                "arguments": '{"query": "latest ai news"}',
+                "input": {"query": "latest ai news"},
+            }
+        ],
+        "tool_type": "websearch",
+        "provider": "bedrock",
+        "response_format": "responses",
+    }
+
+    plan = await logger.async_build_responses_agentic_loop_plan(
+        tools=tools_dict,
+        model="mantle/anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=_responses_output_with_web_search(),
+        optional_params={"tools": [{"type": "function", "name": "litellm_web_search"}]},
+        logging_obj=MagicMock(),
+        stream=False,
+        kwargs={
+            "custom_llm_provider": "bedrock",
+            "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
+        },
+    )
+
+    patch_obj = plan.request_patch
+    assert patch_obj is not None
+    assert patch_obj.model == "bedrock/mantle/anthropic.claude-sonnet-5"
+    litellm.asearch.assert_awaited_once()
 
 
 @pytest.mark.asyncio

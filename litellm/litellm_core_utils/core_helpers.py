@@ -31,6 +31,32 @@ def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
 
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model."""
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def names_a_provider(candidate: str) -> bool:
+    """Whether a model name's leading segment is a provider rather than part of the model."""
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
+
+    provider_names: Final = {getattr(provider, "value", provider) for provider in litellm.provider_list}
+    return candidate in provider_names or is_registered_custom_provider(candidate)
+
+
+def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_llm_provider: str) -> str:
+    """Resolve the model an agentic follow-up re-dispatches, keeping a hook's own provider."""
+    if not patch_model:
+        return qualify_provider_stripped_model(model, custom_llm_provider)
+    leading_segment: Final = patch_model.split("/", 1)[0]
+    if leading_segment != patch_model and names_a_provider(leading_segment):
+        return patch_model
+    return qualify_provider_stripped_model(patch_model, custom_llm_provider)
+
+
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
     """
     Safely divide seconds by denominator, handling zero division.
