@@ -838,6 +838,7 @@ if MCP_AVAILABLE:
                 headers,
                 client_ip,
             ) = await get_or_extract_auth_context()
+            request: Final[object] = getattr(ctx, "request", None)
             yield operations.prepare_context(
                 auth,
                 token,
@@ -849,6 +850,11 @@ if MCP_AVAILABLE:
                 _mcp_proxy_mode.get(),
                 wire_compat_for(ctx.protocol_version),
                 ctx.protocol_version,
+                incoming_bearer_token=(
+                    MCPRequestHandler.get_incoming_bearer_token(request.headers)
+                    if isinstance(request, StarletteRequest)
+                    else None
+                ),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:

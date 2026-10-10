@@ -1,5 +1,6 @@
 import json
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -34,6 +35,24 @@ CHAT_COMPLETION_BODY: Final = {
     "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
+
+
+@pytest.fixture(autouse=True)
+def mock_sdk_token_exchange_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_client_factory: Final = getattr(sys.modules.get("openai.auth._workload"), "DefaultHttpx2Client", None)
+    if native_client_factory is not None:
+        import httpx2
+
+        def handle_exchange(request: httpx2.Request) -> httpx2.Response:
+            response: Final = respx.mock.handler(
+                httpx.Request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
+            )
+            return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+        monkeypatch.setattr(
+            "openai.auth._workload.DefaultHttpx2Client",
+            partial(native_client_factory, transport=httpx2.MockTransport(handle_exchange), trust_env=False),
+        )
 
 
 @pytest.fixture
@@ -601,7 +620,6 @@ class TestDiscoverModels:
 
         assert models_route.calls.last.request.headers["Authorization"] == "Bearer None"
         assert not exchange_route.called
-
 
     @respx.mock
     def test_empty_static_key_never_borrows_the_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
