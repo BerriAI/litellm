@@ -35,6 +35,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
 )
 from litellm.llms.prompt_cache_estimation import (
     EstimatedCachePlan,
+    cache_ttl_upper_bound,
     count_prefix_tokens,
     estimate_cache_plan,
     normalize_cache_usage,
@@ -242,6 +243,7 @@ class AutoRouterBaselineCache(CustomLogger):
                 identity.provider,
                 _METADATA.validate_python(deployment.model_info.model_dump()) if deployment else {},
             )
+            native_plan: Final = native and isinstance(target, NativePredictionTarget)
             projected: Final = (
                 baseline_request(
                     kwargs,
@@ -254,19 +256,28 @@ class AutoRouterBaselineCache(CustomLogger):
             )
             estimated_request: Final = (
                 prepare_cache_request(projected, identity.model, identity.provider, native=native)
-                if estimated and projected is not None
+                if estimated and not native_plan and projected is not None
+                else None
+            )
+            baseline_body: Final = (
+                prepare_native_baseline_body(projected, target.model)
+                if native_plan
+                and projected is not None
+                and isinstance(target, NativePredictionTarget)
+                and not (estimated and compaction_applied(kwargs))
                 else None
             )
             scope: Final = "autorouter-baseline:v3:" + _digest(
                 (
-                    "baseline_request_v3" if estimated else "baseline_request_v4",
+                    "baseline_request_v5",
                     request.user_api_key_hash,
                     session,
                     request.route.router_name,
                     request.route.baseline_deployment_id,
                     params,
                     prices,
-                    *((identity, "estimated_prefixes_v5") if estimated else ()),
+                    identity,
+                    "native_prefixes_v2" if native_plan else "estimated_prefixes_v5",
                 )
             )
             started: Final = logging_obj.start_time.timestamp()
@@ -288,6 +299,9 @@ class AutoRouterBaselineCache(CustomLogger):
                     reason="incomplete_response",
                     cache_policy="estimated" if estimated else "anthropic",
                     assumptions=(),
+                    cache_ttl_seconds=cache_ttl_upper_bound(
+                        baseline_body or estimated_request, identity.provider, prices
+                    ),
                     cache_write_pricing="standard"
                     if estimated and (prices is None or prices.get("cache_creation_input_token_cost_above_1hr") is None)
                     else "duration",
@@ -307,9 +321,7 @@ class AutoRouterBaselineCache(CustomLogger):
                 request.route.baseline_deployment_id,
                 estimated_request,
                 estimated,
-                prepare_native_baseline_body(projected, target.model)
-                if not estimated and projected is not None and isinstance(target, NativePredictionTarget)
-                else None,
+                baseline_body,
                 _native_body_digest(selected_body)
                 if selected_body is not None and not compaction_applied(kwargs)
                 else None,
@@ -317,9 +329,22 @@ class AutoRouterBaselineCache(CustomLogger):
         except Exception:  # noqa: BLE001  # optional observation cannot fail inference
             verbose_proxy_logger.warning("Auto-router baseline observation could not be initialized")
 
-    async def estimate(self, context: BaselineCacheContext, usage: Usage) -> EstimatedCachePlan | None:
+    async def estimate(
+        self, context: BaselineCacheContext, usage: Usage
+    ) -> tuple[EstimatedCachePlan | None, str | None]:
+        if isinstance(context.target, NativePredictionTarget) and context.baseline_body is not None:
+            plan, reason = await self.plan(context.target, context.baseline_body)
+            return (
+                EstimatedCachePlan(plan, ("cold_cache_at_session_start", "same_output_tokens"))
+                if plan is not None
+                else None,
+                reason,
+            )
         if self.estimate_slots.locked() or context.estimated_request is None:
-            return None
+            return (
+                None,
+                "unsupported_cache_request" if context.estimated_request is None else "estimation_capacity_exhausted",
+            )
         await self.estimate_slots.acquire()
 
         async def count() -> EstimatedCachePlan | None:
@@ -336,7 +361,7 @@ class AutoRouterBaselineCache(CustomLogger):
 
         task: Final = asyncio.create_task(count())
         task.add_done_callback(self._release_estimate_slot)
-        return await asyncio.shield(task)
+        return await asyncio.shield(task), None
 
     def _release_estimate_slot(self, task: asyncio.Task[EstimatedCachePlan | None]) -> None:
         self.estimate_slots.release()
@@ -362,16 +387,20 @@ class AutoRouterBaselineCache(CustomLogger):
         return tokens
 
     async def plan(
-        self, target: NativePredictionTarget, wire: httpx.Request, body: Mapping[str, JsonValue], usage: Usage | None
+        self,
+        target: NativePredictionTarget,
+        body: Mapping[str, JsonValue],
+        wire: httpx.Request | None = None,
+        usage: Usage | None = None,
     ) -> tuple[CountedPromptCachePlan | None, str | None]:
         deadline: Final = asyncio.get_running_loop().time() + optional_callback_budget(_COUNT_TIMEOUT, fraction=0.75)
-        if not supported_prediction_headers(wire.headers):
+        if wire is not None and not supported_prediction_headers(wire.headers):
             return None, "unsupported_request_headers"
         plan: Final = parse_cache_plan(body)
         if isinstance(plan, UnsupportedCachePlan):
             return None, plan.reason
         details: Final = usage.prompt_tokens_details if usage is not None else None
-        selected: Final = parse_cache_plan(_JSON_BODY.validate_json(wire.content))
+        selected: Final = parse_cache_plan(_JSON_BODY.validate_json(wire.content)) if wire is not None else plan
         if (
             (isinstance(selected, UnsupportedCachePlan) or not selected.breakpoints)
             and details is not None
@@ -423,7 +452,7 @@ async def finalize_baseline_cache(logging_obj: Logging, response_obj: object) ->
     try:
         capture: Final = (
             await asyncio.wait_for(asyncio.shield(task), timeout=budget)
-            if context.estimated
+            if context.estimated and context.baseline_body is None
             else await asyncio.shield(task)
         )
         if logging_obj.baseline_cache_context is active:
@@ -491,7 +520,7 @@ async def _capture_native(
     same: Final = logging_obj.get_router_model_id() == context.baseline_deployment_id and _native_body_digest(
         projected
     ) == _native_body_digest(body)
-    plan, reason = await context.collector.plan(target, wire, projected, usage)
+    plan, reason = await context.collector.plan(target, projected, wire, usage)
     return capture.with_observation(
         BaselineObservation(
             request_id=original.request_id,
@@ -505,6 +534,7 @@ async def _capture_native(
             plan=plan,
             reason=reason,
             minimum_cache_tokens=get_prompt_cache_min_tokens(target.model),
+            cache_ttl_seconds=original.cache_ttl_seconds,
         )
     )
 
@@ -553,10 +583,10 @@ async def _capture_estimated(
         if raw_usage is not None
         else None
     )
-    estimated: Final = (
+    estimated, reason = (
         await context.collector.estimate(context, usage)
-        if context.estimated_request is not None and usage is not None and not context.invalidated
-        else None
+        if usage is not None and not context.invalidated
+        else (None, None)
     )
     plan: Final = estimated.plan if estimated is not None else None
     provider: Final = _METADATA.validate_python(logging_obj.model_call_details).get("custom_llm_provider")
@@ -576,13 +606,16 @@ async def _capture_estimated(
                 update={
                     "available_at": available,
                     "outcome": "uncertain" if context.invalidated or usage is None else "complete",
-                    "usage": prepare_baseline_usage(usage, context.capture.provider, context.estimated_request),
+                    "usage": prepare_baseline_usage(
+                        usage, context.capture.provider, context.baseline_body or context.estimated_request
+                    ),
                     "plan": plan,
                     "minimum_cache_tokens": get_prompt_cache_min_tokens(
                         f"{context.capture.provider}/{context.capture.model}"
                     ),
                     "assumptions": estimated.assumptions if estimated else (),
                     "reason": context.invalidated
+                    or reason
                     or ("missing_usage" if usage is None else "unsupported_cache_request" if plan is None else None),
                 }
             ),

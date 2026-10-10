@@ -7,7 +7,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.prompt_cache_estimation import estimate_cache_plan, normalize_cache_usage, prepare_cache_request
+from litellm.llms.prompt_cache_estimation import cache_ttl_upper_bound, estimate_cache_plan, normalize_cache_usage, prepare_cache_request
 from litellm.proxy.spend_tracking.baseline_accounting import (
     BaselineHistory,
     BaselineObservation,
@@ -56,6 +56,14 @@ def test_plain_responses_input_remains_estimatable() -> None:
     assert captured.plan.total_tokens == _usage().prompt_tokens
 
 
+@pytest.mark.parametrize("ttl,seconds", (("5m", 300), ("1h", 3600), ("24h", 86400)))
+def test_skipped_request_lifetime_is_captured_without_a_token_plan(ttl: str, seconds: int) -> None:
+    request: Final = prepare_cache_request(_request(cache_control={"type": "ephemeral", "ttl": ttl}))
+    assert request is not None
+    assert cache_ttl_upper_bound(request, "anthropic", None) == seconds
+    assert cache_ttl_upper_bound(None, "openai", None) >= seconds
+
+
 def _observation(
     request: dict[str, object],
     started: float = 10000.0,
@@ -79,6 +87,7 @@ def _observation(
         cache_policy="estimated",
         cache_write_pricing="standard",
         assumptions=captured.assumptions,
+        cache_ttl_seconds=cache_ttl_upper_bound(prepared, provider, _PRICES),
     )
 
 
@@ -503,7 +512,7 @@ def test_skipped_estimation_preserves_paid_cache_without_refreshing_it(reason: s
     _, followup = advance_baseline_history(
         retained, (first.model_copy(update={"request_id": "followup", "started_at": 10004.0, "available_at": 10005.0}),)
     )
-    assert followup[0].usage is not None and followup[0].usage.prompt_tokens_details.cached_tokens == 8000
+    assert followup[0].usage is None and followup[0].reason == "history_unavailable"
     _, refreshed = advance_baseline_history(
         retained,
         (first.model_copy(update={"request_id": "refreshed", "started_at": 11800.0, "available_at": 11801.0}),),

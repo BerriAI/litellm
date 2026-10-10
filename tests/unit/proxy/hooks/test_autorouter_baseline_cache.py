@@ -599,11 +599,13 @@ async def test_plain_fallback_invalidates_existing_autorouter_capture(monkeypatc
     assert logging.baseline_observation.observation.reason == "retried_request"
 
 
+@pytest.mark.parametrize("adapted", (False, True))
 async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and_spend(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, adapted: bool,
 ) -> None:
     from litellm.litellm_core_utils import logging_worker
     from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.types.utils import ModelResponse, Usage
 
     release: Final = asyncio.Event()
 
@@ -615,9 +617,22 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
 
     worker: Final = LoggingWorker(timeout=8.0)
     monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
-    rig: Final = _Rig(monkeypatch, count=count)
+    models: Final = _MESSAGES.validate_python([
+        _MODELS[0],
+        {**_MODELS[1], "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "test-selected"}}
+        if adapted else _MODELS[1],
+        _MODELS[2],
+    ])
+    rig: Final = _Rig(monkeypatch, count=count, models=models)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
     try:
-        with _transport(_upstream):
+        with respx.mock(assert_all_called=False) as transport:
+            transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+            transport.post("https://api.openai.com/v1/chat/completions").respond(json=ModelResponse(
+                model="gpt-6-astra",
+                choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "OK"}}],
+                usage=Usage(prompt_tokens=6000, completion_tokens=10, total_tokens=6010),
+            ).model_dump())
             await _call(rig.router, rig.logging())
             payload: Final = await rig.capture.payload()
         observed: Final = _observation(payload).observation
@@ -1279,9 +1294,13 @@ async def test_messages_estimate_keeps_adapted_baseline_extra_body_retention(
 
 
 @pytest.mark.parametrize("chat_adapter", (False, True))
+@pytest.mark.parametrize("native_first", (False, True))
+@pytest.mark.parametrize("count_available", (False, True))
 async def test_adapted_messages_tier_estimates_native_anthropic_baseline(
-    monkeypatch: pytest.MonkeyPatch, chat_adapter: bool
+    monkeypatch: pytest.MonkeyPatch, chat_adapter: bool, native_first: bool, count_available: bool
 ) -> None:
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+
     models: Final = _MESSAGES.validate_python(
         [
             _MODELS[0],
@@ -1297,7 +1316,10 @@ async def test_adapted_messages_tier_estimates_native_anthropic_baseline(
             _MODELS[2],
         ]
     )
-    rig: Final = _Rig(monkeypatch, models=models)
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
+        return await _count(model, api_key, body) if count_available else None
+
+    rig: Final = _Rig(monkeypatch, models=models, count=count)
     monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_adapter)
 
     def openai_response(request: httpx.Request) -> httpx.Response:
@@ -1311,7 +1333,7 @@ async def test_adapted_messages_tier_estimates_native_anthropic_baseline(
                 "created": 1,
                 "model": body["model"],
                 "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "OK"}}],
-                "usage": {"prompt_tokens": 6000, "completion_tokens": 10, "total_tokens": 6010},
+                "usage": {"prompt_tokens": 9000, "completion_tokens": 10, "total_tokens": 9010},
             }
             if chat_adapter
             else {
@@ -1321,22 +1343,49 @@ async def test_adapted_messages_tier_estimates_native_anthropic_baseline(
                 "status": "completed",
                 "model": body["model"],
                 "output": [],
-                "usage": {"input_tokens": 6000, "output_tokens": 10, "total_tokens": 6010},
+                "usage": {"input_tokens": 9000, "output_tokens": 10, "total_tokens": 9010},
             },
         )
 
     with respx.mock(assert_all_called=False) as transport:
-        anthropic: Final = transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+        transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
         transport.post("https://api.openai.com/v1/" + ("chat/completions" if chat_adapter else "responses")).mock(
             side_effect=openai_response
         )
-        log: Final = rig.logging()
-        await _call(rig.router, log)
-        captured: Final = _observation(await rig.capture.payload())
-    assert not anthropic.calls
-    assert log.baseline_cache_context is not None and log.baseline_cache_context.estimated
-    assert captured.observation.cache_policy == "estimated" and captured.observation.outcome == "complete"
-    assert captured.observation.plan is not None and captured.observation.reason is None
+        async def capture(native: bool, started: float) -> CapturedBaselineObservation:
+            messages: Final = _MESSAGES_JSON.replace("1h", "5m").replace(
+                "question", "question USE_OPUS" if native else "question"
+            )
+            await _call(rig.router, rig.logging(), messages=messages)
+            captured: Final = _observation(await rig.capture.payload())
+            assert captured.observation.usage is not None
+            assert captured.observation.usage.prompt_tokens == (6000 if native else 9000)
+            return captured.with_observation(
+                captured.observation.model_copy(
+                    update={"request_id": str(started), "started_at": started, "available_at": started + 1}
+                )
+            )
+
+        captures: Final = (
+            await capture(native_first, 1.0),
+            await capture(not native_first, 101.0),
+            await capture(native_first, 351.0),
+        )
+    assert len({captured.scope for captured in captures}) == 1
+    assert all(captured.observation.cache_ttl_seconds == 300 for captured in captures)
+    if not count_available:
+        assert all(captured.observation.plan is None for captured in captures)
+        assert all(captured.observation.reason == "token_count_unavailable" for captured in captures)
+        return
+    for captured in captures:
+        assert captured.observation.plan is not None and captured.observation.plan.total_tokens == 6000
+    first, _ = advance_baseline_history(BaselineHistory(), (captures[0].observation,))
+    second, _ = advance_baseline_history(first, (captures[1].observation,))
+    _, last = advance_baseline_history(second, (captures[2].observation,))
+    assert last[0].reason == "cache_prefix_available"
+    assert last[0].usage is not None
+    assert last[0].usage.prompt_tokens_details.cached_tokens == 5000
+    assert last[0].usage.prompt_tokens_details.cache_creation_tokens == 0
 
 
 @pytest.mark.parametrize("passthrough", (False, True))

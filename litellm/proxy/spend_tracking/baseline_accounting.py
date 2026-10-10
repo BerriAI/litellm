@@ -7,7 +7,7 @@ owners. Replaying these values in event order is independent of callback order.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import groupby
 from math import isfinite
 from types import MappingProxyType
@@ -41,6 +41,7 @@ class BaselineObservation(LiteLLMBaseModel):
     cache_policy: Literal["anthropic", "estimated"] = "anthropic"
     assumptions: tuple[str, ...] = ()
     cache_write_pricing: Literal["duration", "standard"] = "duration"
+    cache_ttl_seconds: int | None = Field(default=None, ge=0, le=MAX_ESTIMATED_CACHE_TTL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +71,9 @@ class BaselineHistory:
     uncertain_before: float = 0.0
     entries: tuple[CacheEntry, ...] = ()
     blocked_until: float = 0.0
+    uncertain_until: float = 0.0
+    uncertain_ttl_seconds: int = 0
+    version: Literal[1, 2] = 1
 
 
 def _complete_usage(usage: Usage | None, policy: str = "anthropic") -> bool:
@@ -217,6 +221,8 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
     if not _valid_plan(observation) or plan is None:
         return BaselineEstimate(observation.request_id, observation.reason or "unsupported_cache_plan")
     markers: Final = _markers(observation)
+    if markers and observation.started_at < history.uncertain_until:
+        return BaselineEstimate(observation.request_id, "history_unavailable")
     if any(_ambiguous(entry, markers, observation.started_at) for entry in history.entries):
         return BaselineEstimate(observation.request_id, "cache_ttl_changed")
     read: Final = max(
@@ -268,6 +274,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
     if (
         observation.outcome != "complete"
         or observation.started_at < history.blocked_until
+        or observation.started_at < history.uncertain_until
         or not _complete_usage(observation.usage, observation.cache_policy)
         or not _valid_plan(observation)
     ):
@@ -308,7 +315,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
                 marker.fingerprint,
                 marker.content_fingerprint,
                 marker.prefix_tokens,
-                marker.ttl_seconds,
+                max((marker.ttl_seconds, *(entry.ttl_seconds for entry in ambiguous))),
                 observation.available_at,
                 observation.started_at + max((marker.ttl_seconds, *(entry.ttl_seconds for entry in ambiguous))),
                 uncertain=bool(ambiguous),
@@ -372,9 +379,34 @@ def advance_baseline_history(
         if item.outcome != "response_cache" and item.cache_policy == "estimated" and item.plan is None
     )
     relevant: Final = tuple(item for item in simultaneous if item.outcome != "response_cache" and item not in skipped)
-    equivalent: Final = history.equivalent and all(item.baseline_equivalent for item in relevant)
-    before: Final = BaselineHistory(
-        first, history.last_at, equivalent, uncertain, history.entries, history.blocked_until
+    equivalent: Final = history.equivalent and all(
+        item.baseline_equivalent for item in simultaneous if item.outcome != "response_cache"
+    )
+    legacy_lifetime: Final = (
+        MAX_ESTIMATED_CACHE_TTL
+        if history.version == 1 and (history.uncertain_before > 0 or any(entry.uncertain for entry in history.entries))
+        else 0
+    )
+    legacy_until: Final = (
+        max(
+            (
+                history.uncertain_before,
+                history.last_at or 0,
+                history.blocked_until,
+                *(entry.available_at for entry in history.entries),
+            )
+        )
+        + legacy_lifetime
+        if legacy_lifetime
+        else 0
+    )
+    before: Final = replace(
+        history,
+        first_at=first,
+        equivalent=equivalent,
+        uncertain_before=uncertain,
+        uncertain_until=max(history.uncertain_until, legacy_until),
+        uncertain_ttl_seconds=max(history.uncertain_ttl_seconds, legacy_lifetime),
     )
     estimates: Final = tuple(_estimate(before, item, equivalent) for item in simultaneous)
     invalidated: Final = any(
@@ -387,13 +419,35 @@ def advance_baseline_history(
         started,
     )
     overflow: Final = len(entries) > MAX_CACHE_ENTRIES
+    active: Final = started < before.uncertain_until
+    unknown: Final = tuple(
+        item
+        for item in simultaneous
+        if item.outcome != "response_cache"
+        and (invalidated or overflow or item in skipped or active and bool(_markers(item)))
+    )
+    lifetime: Final = max(
+        (
+            before.uncertain_ttl_seconds if active else 0,
+            *(entry.ttl_seconds for entry in history.entries if unknown and entry.expires_at > started),
+            *(
+                item.cache_ttl_seconds
+                if item.cache_ttl_seconds is not None
+                else MAX_ESTIMATED_CACHE_TTL
+                if item.cache_policy == "estimated"
+                else MAX_CACHE_TTL
+                for item in unknown
+            ),
+        )
+    )
     return BaselineHistory(
         first_at=first,
         last_at=started,
         equivalent=equivalent,
-        uncertain_before=max(started, blocked)
-        if invalidated or overflow
-        else max((uncertain, *(item.available_at for item in skipped))),
+        uncertain_before=uncertain,
         entries=() if overflow else entries,
         blocked_until=blocked,
+        uncertain_until=max((before.uncertain_until, *(item.available_at + lifetime for item in unknown))),
+        uncertain_ttl_seconds=lifetime,
+        version=2,
     ), estimates

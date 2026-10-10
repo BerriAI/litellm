@@ -198,6 +198,34 @@ def _ttl(control: object, default: int) -> int:
     return _TTLS.get(value, default) if isinstance(value, str) else default
 
 
+def _cache_lifetime(request: Mapping[str, JsonValue], provider: str, prices: ModelInfo | None) -> int:
+    retention: Final = request.get("prompt_cache_retention")
+    requested: Final = _TTLS.get(retention) if provider in ("openai", "azure") and isinstance(retention, str) else None
+    duration_pricing: Final = provider == "anthropic" or bool(
+        prices and prices.get("cache_creation_input_token_cost_above_1hr") is not None
+    )
+    return _ttl(
+        request.get("prompt_cache_options"),
+        requested or (300 if duration_pricing else 600 if retention == "in_memory" else 1800),
+    )
+
+
+def _explicit_ttls(value: JsonValue) -> Iterator[int]:
+    if isinstance(value, dict):
+        yield _ttl(value.get("cache_control"), 0)
+        for child in value.values():
+            yield from _explicit_ttls(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _explicit_ttls(child)
+
+
+def cache_ttl_upper_bound(request: Mapping[str, JsonValue] | None, provider: str, prices: ModelInfo | None) -> int:
+    if request is None:
+        return 3600 if provider == "anthropic" else max(_TTLS.values())
+    return max((_cache_lifetime(request, provider, prices), *_explicit_ttls(dict(request))))
+
+
 def estimate_cache_plan(
     request: dict[str, JsonValue],
     model: str,
@@ -273,8 +301,7 @@ def estimate_cache_plan(
     duration_pricing: Final = provider == "anthropic" or bool(
         prices and prices.get("cache_creation_input_token_cost_above_1hr") is not None
     )
-    default_ttl: Final = requested_ttl or (300 if duration_pricing else 600 if retention == "in_memory" else 1800)
-    lifetime: Final = _ttl(options, default_ttl)
+    lifetime: Final = _cache_lifetime(request, provider, prices)
     implicit: Final = not duration_pricing and options.get("mode") != "explicit"
     initial: Final = next(
         (index - 1 for index, part in enumerate(parts) if part.role not in ("system", "developer")), len(parts) - 1

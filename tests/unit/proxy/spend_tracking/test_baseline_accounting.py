@@ -3,6 +3,7 @@ from itertools import groupby
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.cost_calculation import cost_per_token
@@ -82,6 +83,68 @@ def _replay(*observations: BaselineObservation) -> tuple[BaselineEstimate, ...]:
         history, estimates = advance_baseline_history(history, tuple(group))
         results.extend(estimates)
     return tuple(results)
+
+
+@pytest.mark.parametrize("ttl", (3600, 86400, None))
+@pytest.mark.parametrize("outcome", ("complete", "uncertain"))
+def test_skipped_long_cache_lifetime_survives_shorter_followups(ttl: int | None, outcome: str) -> None:
+    bound: Final = ttl or 86400
+    first: Final = _observation(
+        "known", 1.0, cache_policy="estimated", cache_ttl_seconds=300,
+        plan=CountedPromptCachePlan(6200, (_marker(ttl=300),)),
+    )
+    skipped: Final = first.model_copy(
+        update={
+            "request_id": "skipped", "started_at": 10.0, "available_at": 11.0,
+            "plan": None, "cache_ttl_seconds": ttl, "outcome": outcome,
+        }
+    )
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    missing, _ = advance_baseline_history(history, (skipped,))
+    assert missing.entries == history.entries
+
+    def followup(started: float) -> BaselineObservation:
+        return first.model_copy(update={"request_id": str(started), "started_at": started, "available_at": started + 1})
+
+    known, still_unknown = advance_baseline_history(missing, (followup(12.0),))
+    assert still_unknown[0].reason == "history_unavailable"
+    assert known.entries == history.entries
+    refreshed, later = advance_baseline_history(known, (followup(float(bound)),))
+    assert later[0].reason == "history_unavailable"
+    _, prior_deadline = advance_baseline_history(refreshed, (followup(bound + 15.0),))
+    assert prior_deadline[0].reason == "history_unavailable"
+    recovered, cold = advance_baseline_history(refreshed, (followup(2 * bound + 2.0),))
+    assert cold[0].usage is not None and cold[0].usage.prompt_tokens_details.cached_tokens == 0
+    _, warm = advance_baseline_history(recovered, (followup(2 * bound + 4.0),))
+    assert warm[0].usage is not None and warm[0].usage.prompt_tokens_details.cached_tokens == 6000
+
+
+@pytest.mark.parametrize("ambiguous_entry", (False, True))
+def test_legacy_checkpoint_accounts_for_refreshes_after_a_skipped_request(ambiguous_entry: bool) -> None:
+    restored: Final = TypeAdapter(BaselineHistory).validate_python({
+        "first_at": 1.0, "last_at": 80000.0, "equivalent": False,
+        "uncertain_before": 0.0 if ambiguous_entry else 1000.0,
+        "entries": (CacheEntry("p:300", "p", 6000, 300, 80000.0, 83600.0, uncertain=True),)
+        if ambiguous_entry else (),
+    })
+    updated, pending = advance_baseline_history(restored, (_observation("pending", 90000.0),))
+    assert pending[0].reason == "history_unavailable" and pending[0].usage is None
+    checkpoint: Final = TypeAdapter(BaselineHistory).validate_json(TypeAdapter(BaselineHistory).dump_json(updated))
+    _, expired = advance_baseline_history(checkpoint, (_observation("expired", 180001.0),))
+    assert expired[0].usage is not None and expired[0].usage.prompt_tokens_details.cached_tokens == 0
+
+
+def test_skipped_turn_preserves_lifetime_of_an_earlier_ambiguous_write() -> None:
+    first: Final = _observation("long", 1.0, cache_policy="estimated", cache_ttl_seconds=3600)
+    short: Final = _observation(
+        "short", 3000.0, cache_policy="estimated", cache_ttl_seconds=300,
+        plan=CountedPromptCachePlan(6200, (_marker(ttl=300),)),
+    )
+    skipped: Final = short.model_copy(update={"request_id": "skip", "started_at": 4000.0, "available_at": 4001.0, "plan": None})
+    later: Final = short.model_copy(update={"request_id": "later", "started_at": 7000.0, "available_at": 7001.0})
+    estimates: Final = _replay(first, short, skipped, later)
+    assert estimates[1].reason == "cache_ttl_changed"
+    assert estimates[3].reason == "history_unavailable" and estimates[3].usage is None
 
 
 @pytest.mark.parametrize("write_rate", (None, 0.0, 0.017))
@@ -192,6 +255,7 @@ def test_growth_lookback_and_mixed_ttl_keep_distinct_read_write_buckets(warm_tai
     second: Final = _replay(first, _observation("second", 10001.0, plan=grown))[-1]
     assert second.reason == "history_unavailable"
     history: Final = BaselineHistory(
+        version=2,
         first_at=1.0,
         last_at=10000.0,
         equivalent=False,
@@ -252,11 +316,15 @@ def test_overlapping_uncertain_request_cannot_be_warmed_by_a_later_callback() ->
     overlap: Final = _observation("overlap", 10001.0)
     during: Final = _observation("during", 10002.0)
     after: Final = _observation("after", 10011.0)
-    warmed: Final = _observation("warmed", 10012.0)
-    estimates: Final = _replay(uncertain, overlap, during, after, warmed)
+    during_lifetime: Final = _observation("during_lifetime", 10012.0)
+    expired: Final = _observation("expired", 13613.0)
+    warmed: Final = _observation("warmed", 13614.0)
+    estimates: Final = _replay(uncertain, overlap, during, after, during_lifetime, expired, warmed)
     assert estimates[1].reason == estimates[2].reason == "concurrent_uncertainty"
     assert estimates[3].usage is None
-    assert estimates[4].usage is not None and estimates[4].usage.prompt_tokens_details.cached_tokens == 6000
+    assert estimates[4].reason == "history_unavailable"
+    assert estimates[5].usage is not None and estimates[5].usage.prompt_tokens_details.cached_tokens == 0
+    assert estimates[6].usage is not None and estimates[6].usage.prompt_tokens_details.cached_tokens == 6000
 
 
 def test_modeled_read_cannot_recharge_the_original_private_write_count() -> None:
@@ -277,6 +345,7 @@ def test_modeled_read_cannot_recharge_the_original_private_write_count() -> None
 def test_mixed_lifetime_lookback_preserves_a_compatible_native_hit() -> None:
     marker: Final = _marker("prefix", 3600, 6000)
     history: Final = BaselineHistory(
+        version=2,
         first_at=1.0,
         last_at=10000.0,
         equivalent=False,
