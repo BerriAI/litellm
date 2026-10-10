@@ -3767,7 +3767,7 @@ async def global_spend_refresh():
                 },
             )
             await new_client.db.connect()
-            await _query_raw(new_client, sql_query)
+            await new_client.db.execute_raw(sql_query)
             verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
             return {
                 "message": "MonthlyGlobalSpend view refreshed",
