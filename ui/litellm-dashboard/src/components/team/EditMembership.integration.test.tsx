@@ -227,15 +227,40 @@ describe("EditMembership submit payload", () => {
     expect(submitted().role).toBe("admin");
   });
 
-  it("blocks submission when the email is not an address", async () => {
-    renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+  it.each(["john_example.com#EXT#@tenant.onmicrosoft.com", "john#tag@example.com"])(
+    "saves budget and limit edits for %s",
+    async (user_email) => {
+      renderEdit(teamMemberConfig, { ...cappedMember, user_email });
 
-    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "not-an-email" } });
-    save();
+      fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "25" } });
+      fireEvent.change(screen.getByLabelText("Team Member TPM Limit"), { target: { value: "100" } });
+      fireEvent.change(screen.getByLabelText("Team Member RPM Limit"), { target: { value: "10" } });
+      save();
 
-    expect(await screen.findByText("Please enter a valid email!")).toBeInTheDocument();
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+      const expectedChanges = {
+        user_id: "u1",
+        user_email,
+        max_budget_in_team: "25",
+        tpm_limit: "100",
+        rpm_limit: "10",
+      };
+      expect(submitted()).toEqual(expect.objectContaining(expectedChanges));
+    },
+  );
+
+  it.each(["not-an-email", "john@@example.com", "john tag@example.com", "john@example#com"])(
+    "blocks submission for an invalid address: %s",
+    async (user_email) => {
+      renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+
+      fireEvent.change(screen.getByLabelText("Email"), { target: { value: user_email } });
+      save();
+
+      expect(await screen.findByText("Please enter a valid email!")).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks submission when no role is selected", async () => {
     renderEdit(orgMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "" });
