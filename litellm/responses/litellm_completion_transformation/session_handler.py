@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
-from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
