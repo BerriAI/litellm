@@ -14,7 +14,7 @@ from urllib.parse import quote, urlparse
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
-from litellm.proxy.common_utils.path_utils import safe_filename
+from litellm.litellm_core_utils.path_utils import safe_filename
 
 from .storage_backend import BaseFileStorageBackend
 
