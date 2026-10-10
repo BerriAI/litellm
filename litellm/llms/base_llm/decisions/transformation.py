@@ -100,6 +100,8 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
 def systemone_request_to_ir(request: DecisionsRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=DecisionsIRState(state=request.state),
+        audio=request.audio,
+        videos=request.videos,
         questions=tuple(_ir_question(name, question) for name, question in request.questions.items()),
     )
 
@@ -166,8 +168,10 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
 
 
 def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest
+    model: str, request: DecisionsIRRequest, supports_audio_video: bool = False
 ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+    if (request.audio or request.videos) and not supports_audio_video:
+        return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions model")
     state: Final = _systemone_state(request.input)
     if isinstance(state, UnsupportedDecisionsRequest):
         return state
@@ -175,6 +179,16 @@ def ir_to_systemone_request(
     return {
         "model": model,
         "state": state,
+        **(
+            {"audio": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.audio]}
+            if request.audio
+            else {}
+        ),
+        **(
+            {"videos": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.videos]}
+            if request.videos
+            else {}
+        ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
     }
 
@@ -355,13 +369,16 @@ class BaseDecisionsConfig(ABC):
     ) -> tuple[Mapping[str, str], bytes | None]:
         return headers, None
 
+    def supports_audio_video_input(self, model: str) -> bool:
+        return False
+
     def transform_decisions_request(
         self,
         model: str,
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(self.request_model(model), request)
+        return ir_to_systemone_request(self.request_model(model), request, self.supports_audio_video_input(model))
 
     def unwrap_response(self, payload: object) -> object:
         return payload

@@ -15964,6 +15964,22 @@
         "prompt_cache_min_tokens": 1024,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
+    "cloudflare/clef-omni": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 64000,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/clef-omni/"
+    },
+    "cloudflare/@cf/cloudflare/clef-omni": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 64000,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/clef-omni/"
+    },
     "cloudflare/clef": {
         "input_cost_per_token": 2.4e-07,
         "litellm_provider": "cloudflare",

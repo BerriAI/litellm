@@ -19,11 +19,13 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
     DecisionQuestion,
+    DecisionsAudio,
     DecisionsIRRequest,
     DecisionsIRResponse,
     DecisionsJSON,
     DecisionsRequestBody,
     DecisionsResponse,
+    DecisionsVideo,
     OpenAIDecisionInput,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
@@ -92,11 +94,14 @@ def _validate_request(
     questions: DecisionsQuestions | None,
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
+    audio: Sequence[DecisionsAudio | Mapping[str, object]] | None,
+    videos: Sequence[DecisionsVideo | Mapping[str, object]] | None,
 ) -> DecisionsRequestFormat:
+    media: Final = {"audio": audio if audio is not None else (), "videos": videos if videos is not None else ()}
     if decision_input is None:
-        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions})
+        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions, **media})
     return _OPENAI_REQUEST_ADAPTER.validate_python(
-        {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
+        {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier, **media}
     )
 
 
@@ -147,6 +152,8 @@ def _prepare_call(
     questions: DecisionsQuestions | None,
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
+    audio: Sequence[DecisionsAudio | Mapping[str, object]] | None,
+    videos: Sequence[DecisionsVideo | Mapping[str, object]] | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -184,6 +191,8 @@ def _prepare_call(
             questions=questions,
             decision_input=decision_input,
             safety_identifier=request_safety_identifier,
+            audio=audio,
+            videos=videos,
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -314,6 +323,8 @@ async def adecisions(
     extra_headers: Mapping[str, str] | None = None,
     input: OpenAIDecisionInput | None = None,
     safety_identifier: str | None = None,
+    audio: Sequence[DecisionsAudio | Mapping[str, object]] | None = None,
+    videos: Sequence[DecisionsVideo | Mapping[str, object]] | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
     call: Final = _prepare_call(
@@ -322,6 +333,8 @@ async def adecisions(
         questions=questions,
         decision_input=input,
         safety_identifier=safety_identifier,
+        audio=audio,
+        videos=videos,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
@@ -360,6 +373,8 @@ def decisions(
     extra_headers: Mapping[str, str] | None = None,
     input: OpenAIDecisionInput | None = None,
     safety_identifier: str | None = None,
+    audio: Sequence[DecisionsAudio | Mapping[str, object]] | None = None,
+    videos: Sequence[DecisionsVideo | Mapping[str, object]] | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
     call: Final = _prepare_call(
@@ -368,6 +383,8 @@ def decisions(
         questions=questions,
         decision_input=input,
         safety_identifier=safety_identifier,
+        audio=audio,
+        videos=videos,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from concurrent.futures import wait
 from collections.abc import Mapping
+from concurrent.futures import wait
 from types import MappingProxyType
 from typing import Final
 
@@ -16,8 +16,8 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 import litellm
-from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.constants import AWS_SIGNING_MAX_THREADS
+from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -1680,3 +1680,123 @@ async def test_azure_ai_decision_requires_api_base_before_http(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize("async_mode", (False, True))
+@pytest.mark.parametrize("openai_format", (False, True))
+@pytest.mark.parametrize("model", ("cloudflare/clef-omni", "cloudflare/@cf/cloudflare/clef-omni"))
+@pytest.mark.asyncio
+async def test_clef_omni_media_reaches_upstream_in_both_formats(
+    respx_mock: respx.MockRouter, async_mode: bool, openai_format: bool, model: str
+) -> None:
+    audio: Final = ["data:audio/wav;base64,YQ==", {"content_type": "audio/mpeg", "base64": "Yg=="}]
+    videos: Final = ["data:video/mp4;base64,Yw==", {"content_type": "video/webm", "base64": "ZA=="}]
+    route: Final = respx_mock.post("https://example.com/ai/run/@cf/cloudflare/clef-omni").respond(
+        200,
+        json={
+            "success": True,
+            "result": {
+                "model": "clef-omni",
+                "answers": {"heard": {"type": "noul", "noul": 0.9}},
+                "usage": {"input_tokens": 100, "output_tokens": 0},
+            },
+        },
+    )
+    fields: Final = (
+        {
+            "input": "Evaluate the clips",
+            "questions": [{"type": "predicate", "name": "heard", "instructions": "Is there speech?"}],
+        }
+        if openai_format
+        else {
+            "state": "Evaluate the clips",
+            "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
+        }
+    )
+    response: Final = (
+        await litellm.adecisions(
+            model=model, api_base="https://example.com", api_key="test", audio=audio, videos=videos, **fields
+        )
+        if async_mode
+        else litellm.decisions(
+            model=model, api_base="https://example.com", api_key="test", audio=audio, videos=videos, **fields
+        )
+    )
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "clef-omni",
+        "state": "Evaluate the clips",
+        "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
+        "audio": audio,
+        "videos": videos,
+    }
+    assert response.usage is not None
+    assert response.usage.input_tokens == 100
+    assert len(route.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "model", ("cloudflare/clef", "cloudflare/clef-flash", "typesafe/jev-latest", "openai/decision")
+)
+@pytest.mark.parametrize(
+    "media", ({"audio": ["data:audio/wav;base64,YQ=="]}, {"videos": ["data:video/mp4;base64,YQ=="]})
+)
+@pytest.mark.asyncio
+async def test_decisions_rejects_media_for_other_models_before_http(
+    respx_mock: respx.MockRouter, model: str, media: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="audio/video input is not supported"):
+        await litellm.adecisions(
+            model=model,
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            **media,
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "media",
+    (
+        {"audio": ["https://example.com/clip.wav"]},
+        {"videos": ["https://example.com/clip.mp4"]},
+        {"audio": [{"content_type": "audio/wav"}]},
+        {"videos": [{"content_type": "video/mp4"}]},
+        {"audio": [{"content_type": "video/mp4", "base64": "YQ=="}]},
+        {"videos": ["data:audio/wav;base64,YQ=="]},
+        {"audio": ["data:audio/wav;base64,YQ=="] * 5},
+        {"videos": ["data:video/mp4;base64,YQ=="] * 3},
+    ),
+)
+@pytest.mark.asyncio
+async def test_decisions_validates_media_before_http(respx_mock: respx.MockRouter, media: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.adecisions(
+            model="cloudflare/clef-omni",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            **media,
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_media_keeps_text_only_request_unchanged(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://example.com/v1/systemone").respond(200, json=dict(_RESPONSE))
+    await litellm.adecisions(
+        model="typesafe/jev-latest",
+        state="test",
+        questions=_QUESTIONS,
+        api_base="https://example.com",
+        api_key="test",
+        audio=[],
+        videos=[],
+    )
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jev-latest",
+        "state": "test",
+        "questions": _QUESTIONS,
+    }
