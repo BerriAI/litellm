@@ -14,40 +14,43 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from pydantic import BaseModel
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import (
-    ChatBody,
-    ChatMessage,
-    ChatStreamOptions,
-    ChatTool,
-    ChatToolFunction,
-    LiteLLMParamsBody,
-    ModelInfoBody,
-    ModelNewBody,
+from llm_translation.sdk_clients import NO_PROXY_CACHE, SdkClients
+from models import LiteLLMParamsBody, ModelInfoBody, ModelNewBody
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionToolParam,
+    ChatCompletionUserMessageParam,
 )
+from openai.types.chat.chat_completion_chunk import Choice, ChoiceDeltaToolCall
 from passthrough_client import PassthroughClient
+from pydantic import BaseModel, ConfigDict
 
-pytestmark = pytest.mark.e2e
+pytestmark: Final = pytest.mark.e2e
 
 MANTLE_BACKEND: Final = "bedrock_mantle/openai.gpt-5.6-terra"
 MANTLE_CHAT_API_BASE: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
 OUTPUT_LIMIT: Final = 1000
-WEATHER_TOOL: Final = ChatTool(
-    function=ChatToolFunction(
-        name="get_weather",
-        description="Get the weather for a city",
-        parameters={"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
-    )
-)
+PROMPT: Final = "reply with one word"
+WEATHER_PROMPT: Final = "What is the weather in Paris?"
+WEATHER_TOOL: Final[ChatCompletionToolParam] = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
 
 
 def _register_mantle_chat_model(
     client: PassthroughClient, resources: ResourceManager, max_tokens: int | None = None
 ) -> str:
-    model = f"e2e-mantle-chat-output-limit-{unique_marker()}"
-    model_id = client.proxy.register_model(
+    model: Final = f"e2e-mantle-chat-output-limit-{unique_marker()}"
+    model_id: Final = client.proxy.register_model(
         ModelNewBody(
             model_name=model,
             litellm_params=LiteLLMParamsBody(
@@ -65,93 +68,112 @@ def _register_mantle_chat_model(
     return model
 
 
-def _prompt() -> list[ChatMessage]:
-    return [ChatMessage(role="user", content="reply with one word")]
+def _user_message(text: str) -> ChatCompletionUserMessageParam:
+    return {"role": "user", "content": text}
 
 
-def _weather_prompt() -> list[ChatMessage]:
-    return [ChatMessage(role="user", content="What is the weather in Paris?")]
-
-
-class _StreamToolCallFunction(BaseModel):
-    name: str | None = None
-    arguments: str | None = None
-
-
-class _StreamToolCall(BaseModel):
-    function: _StreamToolCallFunction = _StreamToolCallFunction()
-
-
-class _StreamDelta(BaseModel):
-    tool_calls: list[_StreamToolCall] | None = None
-
-
-class _StreamChoice(BaseModel):
-    delta: _StreamDelta = _StreamDelta()
-
-
-class _StreamChunk(BaseModel):
-    choices: list[_StreamChoice] = []
+def _assert_completion_within_limit(completion: ChatCompletion) -> None:
+    assert completion.choices[0].message.content, f"empty completion: {completion.model_dump_json()[:400]}"
+    assert completion.usage is not None, f"completion carries no usage: {completion.model_dump_json()[:400]}"
+    assert completion.usage.completion_tokens <= OUTPUT_LIMIT, f"limit not applied: {completion.usage}"
 
 
 class _WeatherArgs(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     city: str
 
 
-def _streamed_tool_calls(events: list[str]) -> Iterator[_StreamToolCall]:
-    for event in events:
-        for choice in _StreamChunk.model_validate_json(event).choices:
-            yield from choice.delta.tool_calls or []
+def _streamed_choices(chunks: tuple[ChatCompletionChunk, ...]) -> Iterator[Choice]:
+    for chunk in chunks:
+        yield from chunk.choices
 
 
-def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
-    calls = tuple(_streamed_tool_calls(events))
-    name = "".join(call.function.name or "" for call in calls)
-    arguments = "".join(call.function.arguments or "" for call in calls)
+def _streamed_tool_calls(chunks: tuple[ChatCompletionChunk, ...]) -> Iterator[ChoiceDeltaToolCall]:
+    for choice in _streamed_choices(chunks):
+        yield from choice.delta.tool_calls or ()
+
+
+def _streamed_tool_call(chunks: tuple[ChatCompletionChunk, ...]) -> tuple[str, str]:
+    calls: Final = tuple(call.function for call in _streamed_tool_calls(chunks) if call.function is not None)
+    name: Final = "".join(call.name or "" for call in calls)
+    arguments: Final = "".join(call.arguments or "" for call in calls)
     return name, arguments
 
 
 class TestBedrockMantleChatOutputLimit:
-    def test_client_max_tokens_returns_completion(self, client: PassthroughClient, resources: ResourceManager) -> None:
-        model = _register_mantle_chat_model(client, resources)
-        result = client.proxy.transport.send(
-            "/chat/completions",
-            headers=client.proxy.transport.bearer(resources.key()),
-            json=ChatBody(model=model, messages=_prompt(), max_tokens=OUTPUT_LIMIT),
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK_MANTLE,),
+            models=(MANTLE_BACKEND,),
+            mode=Mode.NONSTREAM,
         )
-        assert result.ok, f"chat call failed: {result.status_code} {result.body[:400]}"
+    )
+    def test_client_max_tokens_returns_completion(
+        self, client: PassthroughClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register_mantle_chat_model(client, resources)
+        completion: Final = sdk.openai(resources.key()).chat.completions.create(
+            model=model,
+            messages=[_user_message(PROMPT)],
+            max_tokens=OUTPUT_LIMIT,
+            extra_body=NO_PROXY_CACHE,
+        )
+        _assert_completion_within_limit(completion)
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK_MANTLE,),
+            models=(MANTLE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_client_max_completion_tokens_returns_completion(
-        self, client: PassthroughClient, resources: ResourceManager
+        self, client: PassthroughClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = _register_mantle_chat_model(client, resources)
-        result = client.proxy.transport.send(
-            "/chat/completions",
-            headers=client.proxy.transport.bearer(resources.key()),
-            json=ChatBody(model=model, messages=_prompt(), max_completion_tokens=OUTPUT_LIMIT),
+        model: Final = _register_mantle_chat_model(client, resources)
+        completion: Final = sdk.openai(resources.key()).chat.completions.create(
+            model=model,
+            messages=[_user_message(PROMPT)],
+            max_completion_tokens=OUTPUT_LIMIT,
+            extra_body=NO_PROXY_CACHE,
         )
-        assert result.ok, f"chat call failed: {result.status_code} {result.body[:400]}"
+        _assert_completion_within_limit(completion)
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK_MANTLE,),
+            models=(MANTLE_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING, Capability.TOOL_CHOICE),
+            mode=Mode.STREAM,
+        )
+    )
     def test_deployment_max_tokens_streams_tool_call_completion(
-        self, client: PassthroughClient, resources: ResourceManager
+        self, client: PassthroughClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = _register_mantle_chat_model(client, resources, max_tokens=OUTPUT_LIMIT)
-        result = client.proxy.chat_stream(
-            resources.key(),
-            ChatBody(
+        model: Final = _register_mantle_chat_model(client, resources, max_tokens=OUTPUT_LIMIT)
+        chunks: Final = tuple(
+            sdk.openai(resources.key()).chat.completions.create(
                 model=model,
-                messages=_weather_prompt(),
+                messages=[_user_message(WEATHER_PROMPT)],
                 stream=True,
-                stream_options=ChatStreamOptions(include_usage=True),
+                stream_options={"include_usage": True},
                 tools=[WEATHER_TOOL],
                 tool_choice="required",
-            ),
+                extra_body=NO_PROXY_CACHE,
+            )
         )
-        assert result.ok and result.stream_error is None and result.stream_done, (
-            f"streamed chat call failed: {result.status_code} {result.stream_error} {result.body[:400]}"
-        )
-        name, arguments = _streamed_tool_call(result.stream_events)
-        assert name == "get_weather", f"streamed tool call named {name!r}: {result.stream_events[:5]}"
+        finish_reasons: Final = tuple(choice.finish_reason for choice in _streamed_choices(chunks))
+        assert "tool_calls" in finish_reasons, f"stream did not finish on a tool call: {finish_reasons}"
+        assert any(chunk.usage is not None for chunk in chunks), "stream carried no usage chunk"
+        name, arguments = _streamed_tool_call(chunks)
+        assert name == "get_weather", f"streamed tool call named {name!r}: {chunks[:5]}"
         assert _WeatherArgs.model_validate_json(arguments).city.strip(), (
             f"streamed tool call arguments missing city: {arguments!r}"
         )
