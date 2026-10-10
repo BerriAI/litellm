@@ -30457,9 +30457,8 @@ export interface components {
             /**
              * Api Version
              * @description API version for Javelin service
-             * @default v1
              */
-            api_version: string | null;
+            api_version?: string | null;
             /**
              * Application
              * @description Application name for Javelin service
