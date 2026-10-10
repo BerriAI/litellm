@@ -1126,9 +1126,12 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
+export const teamInfoCall = async (accessToken: string, teamID: string | null, options?: { keyLimit?: number }) => {
   try {
-    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
+    return await apiClient.get(`/team/info`, {
+      accessToken,
+      query: { team_id: teamID || undefined, key_limit: options?.keyLimit },
+    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
