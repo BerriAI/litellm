@@ -1,3 +1,4 @@
+import copy
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -392,7 +393,7 @@ def _write_back_structured_texts(body: Mapping[str, Any], edits: Sequence[_TextE
     for ref, text in edits:
         blocks = body["system"] if ref.message_index is None else body["messages"][ref.message_index]["content"]
         block = blocks[ref.block_index]
-        if block.get("text"):
+        if "text" in block:
             block["text"] = text
         else:
             block["guardContent"]["text"]["text"] = text
@@ -729,7 +730,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts)
         if scoped_message_indices:
-            inputs["structured_messages"] = list(structured_messages[index] for index in scoped_message_indices)
+            inputs["structured_messages"] = copy.deepcopy(
+                list(structured_messages[index] for index in scoped_message_indices)
+            )
         tools: Final = _converse_tools(converse_request) if converse_request else ()
         if tools:
             inputs["tools"] = list(tools)
@@ -749,7 +752,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             _write_back_texts(guardrailed_texts, holders)
 
         guardrailed_messages: Final = guardrailed_inputs.get("structured_messages")
-        if guardrailed_messages is not None and guardrailed_messages is not inputs.get("structured_messages"):
+        if guardrailed_messages is not None:
             edits: Final = _structured_text_edits(converted, scoped_message_indices, guardrailed_messages)
             if edits is None:
                 raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)

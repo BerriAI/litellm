@@ -35,16 +35,17 @@ def _make_guardrail(apply_result: dict) -> MagicMock:
     return g
 
 
-def _make_structured_rewriting_guardrail(old: str, new: str) -> MagicMock:
-    def rewrite(inputs: dict, **_: object) -> dict:
-        rewritten = copy.deepcopy(inputs["structured_messages"])
-        for message in rewritten:
-            for part in message["content"] if isinstance(message["content"], list) else []:
-                part["text"] = part["text"].replace(old, new)
-        return {**inputs, "structured_messages": rewritten}
+def _rewrite_structured_text(inputs: dict, old: str, new: str) -> dict:
+    rewritten = copy.deepcopy(inputs["structured_messages"])
+    for message in rewritten:
+        for part in message["content"] if isinstance(message["content"], list) else []:
+            part["text"] = part["text"].replace(old, new)
+    return {**inputs, "structured_messages": rewritten}
 
+
+def _make_structured_rewriting_guardrail(old: str, new: str) -> MagicMock:
     g = _make_guardrail({})
-    g.apply_guardrail = AsyncMock(side_effect=lambda inputs, **kwargs: rewrite(inputs))
+    g.apply_guardrail = AsyncMock(side_effect=lambda inputs, **kwargs: _rewrite_structured_text(inputs, old, new))
     return g
 
 
@@ -830,6 +831,44 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         sent = guardrail.apply_guardrail.call_args.kwargs["inputs"]["structured_messages"]
         assert sent[1] == {"role": "user", "content": [{"type": "text", "text": "My SSN is 078-05-1120"}]}
         assert result["data"]["messages"][0]["content"] == [{"guardContent": {"text": {"text": "My SSN is [SSN]"}}}]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_replacing_structured_messages_in_place_is_written_back(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        data["data"]["messages"][0]["content"] = [{"guardContent": {"text": {"text": "My SSN is 078-05-1120"}}}]
+
+        def redact_in_place(inputs: dict, **_: object) -> dict:
+            inputs["structured_messages"] = [
+                {**message, "content": [{"type": "text", "text": "My SSN is [SSN]"}]}
+                if message["role"] == "user"
+                else message
+                for message in inputs["structured_messages"]
+            ]
+            return inputs
+
+        guardrail = _make_guardrail({})
+        guardrail.apply_guardrail = AsyncMock(side_effect=lambda inputs, **kwargs: redact_in_place(inputs))
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][0]["content"] == [{"guardContent": {"text": {"text": "My SSN is [SSN]"}}}]
+
+    @pytest.mark.asyncio
+    async def test_text_cleared_in_texts_and_structured_messages_stays_cleared(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        guardrail = _make_structured_rewriting_guardrail("Explain balcony staterooms.", "")
+        guardrail.apply_guardrail = AsyncMock(
+            side_effect=lambda inputs, **kwargs: {
+                **_rewrite_structured_text(inputs, "Explain balcony staterooms.", ""),
+                "texts": [text.replace("Explain balcony staterooms.", "") for text in inputs["texts"]],
+            }
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][0]["content"][0] == {"text": ""}
 
     @pytest.mark.asyncio
     async def test_structured_rewrite_that_cannot_be_placed_fails_closed(self):
