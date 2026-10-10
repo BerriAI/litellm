@@ -554,21 +554,27 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     """
     generic_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
-    pattern_model_fallback: list[str] | None = None  # mutable-ok: resolved inside the loop like stripped_model_fallback  # rebind-ok: one assignment inside the loop
+    pattern_model_fallback: list[str] | None = (
+        None  # mutable-ok: resolved inside the loop like stripped_model_fallback  # rebind-ok: one assignment inside the loop
+    )
     fallback_model_group: list[str] | None = None
     fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
     prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
-            fallback_key = cast(str, next(iter(item)))  # cast-ok: fallback entries are single-key dicts; the key is always a str
+            fallback_key = cast(
+                str, next(iter(item))
+            )  # cast-ok: fallback entries are single-key dicts; the key is always a str
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
             elif fallback_key == prefixed_model_group or _check_stripped_model_group(
                 model_group=model_group, fallback_key=fallback_key
             ):  # check generic fallback
-                stripped_model_fallback = cast(list[str], item[fallback_key])  # cast-ok: fallback chains are lists of model names
+                stripped_model_fallback = cast(
+                    list[str], item[fallback_key]
+                )  # cast-ok: fallback chains are lists of model names
             elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx
             elif (
@@ -576,7 +582,9 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
                 and "*" in fallback_key
                 and fnmatch.fnmatchcase(model_group, fallback_key)
             ):
-                pattern_model_fallback = cast(list[str], item[fallback_key])  # cast-ok: fallback chains are lists of model names
+                pattern_model_fallback = cast(
+                    list[str], item[fallback_key]
+                )  # cast-ok: fallback chains are lists of model names
         elif isinstance(item, str):
             fallback_model_group = [item]
     ## if none, check for generic fallback
@@ -584,7 +592,9 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
         if stripped_model_fallback is not None:
             fallback_model_group = stripped_model_fallback
         elif pattern_model_fallback is not None:
-            fallback_model_group = pattern_model_fallback  # rebind-ok: one assignment per priority branch, same as stripped and generic
+            fallback_model_group = (
+                pattern_model_fallback  # rebind-ok: one assignment per priority branch, same as stripped and generic
+            )
         elif generic_fallback_idx is not None:
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 

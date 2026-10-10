@@ -63,9 +63,7 @@ describe("fallbackChainOptions", () => {
 
 describe("resolveFallbackProvider", () => {
   it("prefers the cost map litellm_provider", () => {
-    expect(
-      resolveFallbackProvider("gpt-4", { "gpt-4": { litellm_provider: "azure" } }, modelGroups),
-    ).toBe("azure");
+    expect(resolveFallbackProvider("gpt-4", { "gpt-4": { litellm_provider: "azure" } }, modelGroups)).toBe("azure");
   });
 
   it("falls back to the model group providers when the cost map misses", () => {

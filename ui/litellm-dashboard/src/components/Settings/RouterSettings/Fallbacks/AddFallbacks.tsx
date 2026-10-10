@@ -63,7 +63,6 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
     }
   }, [accessToken, isModalVisible]);
 
-
   const handleCancel = () => {
     setIsModalVisible(false);
     // Reset to initial state
