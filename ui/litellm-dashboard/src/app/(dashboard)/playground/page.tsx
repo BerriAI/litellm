@@ -70,7 +70,7 @@ export default function PlaygroundPage() {
             Compliance
           </TabsTrigger>
           <TabsTrigger value="system-one" className="flex-none">
-            <BetaBadge>System One</BetaBadge>
+            <BetaBadge>Decisions</BetaBadge>
           </TabsTrigger>
           <TabsTrigger value="agent-builder" className="flex-none">
             Agent Builder (Experimental)

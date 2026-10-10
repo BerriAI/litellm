@@ -1,18 +1,14 @@
 import React, { useState } from "react";
 import { ArrowRight, Sparkles, X } from "lucide-react";
 
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE } from "@/lib/decisionModels";
+import { DECISIONS_DOCS_URL, DECISIONS_PROVIDERS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
 
 import { Button } from "@/components/ui/button";
 
 const STORAGE_KEY = "hideDecisionModelsBanner";
 
-interface DecisionModelsBannerProps {
-  onAddModel?: () => void;
-}
-
-const DecisionModelsBanner: React.FC<DecisionModelsBannerProps> = ({ onAddModel }) => {
+const DecisionModelsBanner: React.FC = () => {
   const [dismissed, setDismissed] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem(STORAGE_KEY) === "true";
@@ -32,23 +28,22 @@ const DecisionModelsBanner: React.FC<DecisionModelsBannerProps> = ({ onAddModel 
       <div className="min-w-0 flex-1">
         <h4 className="m-0 text-sm font-semibold text-foreground">Decision models are now supported</h4>
         <p className="m-0 mt-0.5 text-xs text-muted-foreground">
-          {onAddModel && (
-            <>
-              Search <code>decision</code> in Add Model to find them.{" "}
-            </>
-          )}
-          Call them at <code>/v1/decisions</code> or <code>/v1/systemone</code>, or try them in the System One
+          Call them at <code>/v1/decisions</code> or <code>/v1/systemone</code>, or try them in the Decisions
           playground.{" "}
           <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
             How to call them
           </a>
         </p>
       </div>
-      {onAddModel && (
-        <Button type="button" variant="outline" className="shrink-0" onClick={onAddModel}>
-          Add a decision model
-        </Button>
-      )}
+      <Button
+        variant="outline"
+        className="shrink-0"
+        nativeButton={false}
+        role="link"
+        render={<a href={DECISIONS_PROVIDERS_DOCS_URL} target="_blank" rel="noopener noreferrer" />}
+      >
+        Supported providers
+      </Button>
       <Button
         className="shrink-0"
         nativeButton={false}

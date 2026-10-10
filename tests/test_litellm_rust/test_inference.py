@@ -87,7 +87,6 @@ def native_call(
             "api_base": server.base_url,
             "custom_llm_provider": "openai",
             "extra_headers": None,
-            **response_kwargs,
         },
     )
     return (_native.aresponses if asynchronous else _native.responses)(response_request)
@@ -145,6 +144,27 @@ async def test_native_inference_pre_call_edits_reach_the_provider(
 
     await execute(route, True, recording_server, {"callbacks": [Edit()]})
     assert _OBJECT.validate_python(recording_server.requests[0].body)["temperature"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_native_inference_does_not_restore_keywords_deleted_by_a_pre_call_hook(
+    route: Route, recording_server: RecordingServer
+) -> None:
+    class DropKeywords(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {name: value for name, value in kwargs.items() if name not in ("temperature", "extra_headers")}
+
+    litellm.callbacks.append(DropKeywords())
+    await execute(
+        route, True, recording_server, {"temperature": 0.25, "extra_headers": {"x-deleted": "remove this header"}}
+    )
+
+    assert len(recording_server.requests) == 1
+    sent: Final = recording_server.requests[0]
+    assert "temperature" not in _OBJECT.validate_python(sent.body)
+    assert sent.headers.get("x-deleted") is None
 
 
 @pytest.mark.asyncio

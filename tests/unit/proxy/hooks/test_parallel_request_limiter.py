@@ -3,7 +3,7 @@ Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Final
 
@@ -38,6 +38,39 @@ def _clock_rolling_over_after_first_read() -> Callable[[], datetime]:
     return _clock_reading(
         itertools.chain([LAST_MICROSECOND_OF_JANUARY], itertools.repeat(FIRST_MICROSECOND_OF_FEBRUARY))
     )
+
+
+@pytest.mark.parametrize(
+    "current,rpm_limit",
+    [
+        (None, 0),
+        ({"current_requests": 0, "current_tpm": 0, "current_rpm": 1}, 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_per_key_rate_limit_error_carries_descriptor_key(
+    current: Mapping[str, int] | None, rpm_limit: int
+):
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.check_key_in_limits(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data={"model": "gpt-4o-mini"},
+            call_type="completion",
+            max_parallel_requests=10,
+            tpm_limit=100,
+            rpm_limit=rpm_limit,
+            current=dict(current) if current is not None else None,
+            request_count_api_key="test-key:model_per_key",
+            rate_limit_type="model_per_key",
+            values_to_update_in_cache=[],
+        )
+
+    assert exc_info.value.descriptor_key == "model_per_key"
 
 
 @pytest.mark.asyncio

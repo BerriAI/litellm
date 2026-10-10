@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import MemberTable from "@/components/common_components/MemberTable";
+import type { StoredModelMaxBudget } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { Member } from "@/components/networking";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
@@ -25,9 +26,13 @@ const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, stri
 const formatBudget = (value: number | null): string =>
   value === null ? "Unlimited" : `$${formatNumberWithCommas(value, 2)}`;
 
+const hasModelBudgets = (budget: StoredModelMaxBudget | null | undefined): budget is StoredModelMaxBudget =>
+  budget != null && Object.keys(budget).length > 0;
+
 export const seedMemberBudgetFields = (
   record: Member,
   budget: TeamMembership["litellm_budget_table"] | undefined,
+  teamDefaultModelMaxBudget?: StoredModelMaxBudget | null,
 ): Member => ({
   ...record,
   max_budget_in_team: budget?.max_budget ?? null,
@@ -37,6 +42,9 @@ export const seedMemberBudgetFields = (
   allowed_models: budget?.allowed_models || [],
   temp_budget_increase: budget?.temp_budget_increase ?? null,
   temp_budget_expiry: budget?.temp_budget_expiry ?? null,
+  model_max_budget: hasModelBudgets(budget?.model_max_budget)
+    ? budget.model_max_budget
+    : teamDefaultModelMaxBudget ?? null,
 });
 
 interface TeamMemberTabProps {
@@ -305,7 +313,13 @@ export default function TeamMemberTab({
         canEdit={canEditTeam}
         onEdit={(record) => {
           const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
-          setSelectedEditMember(seedMemberBudgetFields(record, membership?.litellm_budget_table));
+          setSelectedEditMember(
+            seedMemberBudgetFields(
+              record,
+              membership?.litellm_budget_table,
+              teamData.team_info.team_member_budget_table?.model_max_budget,
+            ),
+          );
           setIsEditMemberModalVisible(true);
         }}
         onDelete={handleMemberDelete}
