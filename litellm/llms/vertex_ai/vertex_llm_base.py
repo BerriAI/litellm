@@ -9,11 +9,13 @@ import json
 import os
 import threading
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
@@ -491,6 +493,8 @@ class VertexBase:
 
         token_state: Final = getattr(credentials, "token_state", None)
         if isinstance(token_state, _TokenState):
+            if token_state == _TokenState.STALE and self._expires_within_safety_margin(credentials):
+                return _TokenState.INVALID
             return token_state
         # Fallback for credentials without a real token_state (e.g. mocks)
         if getattr(credentials, "expired", True):
@@ -498,6 +502,15 @@ class VertexBase:
         if getattr(credentials, "valid", False):
             return _TokenState.FRESH
         return _TokenState.INVALID
+
+    @staticmethod
+    def _expires_within_safety_margin(credentials: _VertexCredentialsObject) -> bool:
+        expiry: Final = getattr(credentials, "expiry", None)
+        if not isinstance(expiry, datetime):
+            return False
+        now: Final = datetime.now(timezone.utc)
+        remaining: Final = expiry - (now if expiry.tzinfo is not None else now.replace(tzinfo=None))
+        return remaining.total_seconds() <= VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
 
     async def _load_and_cache_credentials(
         self,

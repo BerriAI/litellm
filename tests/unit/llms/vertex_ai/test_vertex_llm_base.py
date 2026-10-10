@@ -2180,3 +2180,96 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+    @pytest.mark.asyncio
+    async def test_stale_token_inside_safety_margin_refreshes_before_use(self):
+        """A token a few seconds from expiry must be refreshed before it is handed out.
+        Google rejects it with ACCESS_TOKEN_EXPIRED at the edge, so serving it with only
+        a background refresh fails the request that triggered the refresh."""
+        import datetime
+
+        from google.auth import _helpers as google_auth_helpers
+        from google.auth.credentials import TokenState
+
+        from litellm.constants import VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "about-to-expire-token"
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.expiry = google_auth_helpers.utcnow() + datetime.timedelta(
+            seconds=VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS / 2
+        )
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+                creds.expiry = google_auth_helpers.utcnow() + datetime.timedelta(hours=1)
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            assert token == "refreshed-token"
+            assert project == "project-1"
+            assert mock_refresh.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stale_token_outside_safety_margin_is_served_while_refreshing(self):
+        """A STALE token with comfortable time left keeps the zero-latency path."""
+        import datetime
+
+        from google.auth import _helpers as google_auth_helpers
+        from google.auth.credentials import TokenState
+
+        from litellm.constants import VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "near-expiry-token"
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.expiry = google_auth_helpers.utcnow() + datetime.timedelta(
+            seconds=VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS * 2
+        )
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(vertex_base, "load_auth", return_value=(mock_creds, "project-1")),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            assert token == "near-expiry-token"
+
+            await asyncio.sleep(0.05)
+
+            assert mock_refresh.called
