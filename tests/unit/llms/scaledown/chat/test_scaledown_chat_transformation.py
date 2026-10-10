@@ -1,8 +1,10 @@
 import json
+from typing import Final, Literal
 
 import httpx
 import pytest
 import respx
+from pydantic import JsonValue
 
 import litellm
 from litellm.llms.scaledown.chat.transformation import (
@@ -417,13 +419,18 @@ def test_stream_options_is_accepted_and_not_forwarded(config):
     )
 
 
-def test_extract_schema_follows_local_refs(config):
-    schema = {
+@pytest.mark.parametrize("wrapper", [None, "anyOf", "oneOf"])
+def test_extract_schema_follows_local_refs(config: ScaleDownChatConfig, wrapper: str | None) -> None:
+    address: Final = {"$ref": "#/$defs/Address"}
+    schema: Final = {
         "type": "object",
         "$defs": {
             "Address": {"type": "object", "properties": {"city": {"type": "string", "description": "city name"}}}
         },
-        "properties": {"address": {"$ref": "#/$defs/Address"}, "name": {"type": "string"}},
+        "properties": {
+            "address": {wrapper: [address, {"type": "null"}]} if wrapper else address,
+            "name": {"type": "string"},
+        },
     }
 
     body = config.transform_request(
@@ -435,6 +442,58 @@ def test_extract_schema_follows_local_refs(config):
     )
 
     assert body["entities"] == {"address": {"city": "city name"}, "name": "name"}
+
+
+@pytest.mark.parametrize("field_type", ["array", ["array", "null"]])
+def test_extract_nullable_array_keeps_item_fields(config: ScaleDownChatConfig, field_type: str | list[str]) -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "invoices": {
+                "type": field_type,
+                "items": {"type": "object", "properties": {"amount": {"type": "number"}}},
+            }
+        },
+    }
+
+    assert _extract_body(config, schema)["entities"] == {"invoices": [{"amount": "amount"}]}
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"anyOf": [{"type": "object", "properties": {"x": {"type": "string"}}}, {"type": "string"}]},
+        {"oneOf": [{"type": "string"}]},
+        {"anyOf": [False, {"type": "string"}]},
+        {"allOf": [{"type": "object", "properties": {"x": {"type": "string"}}}]},
+    ],
+)
+def test_extract_rejects_unsupported_composition(config: ScaleDownChatConfig, field: dict[str, JsonValue]) -> None:
+    with pytest.raises(ScaleDownError) as exc:
+        _extract_body(config, {"type": "object", "properties": {"field": field}})
+
+    assert exc.value.status_code == 400
+
+
+@respx.mock
+@pytest.mark.parametrize("question_type", [[], {}])
+def test_malformed_question_types_are_request_errors(question_type: list[JsonValue] | dict[str, JsonValue]) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Question 'q'"):
+        litellm.completion(
+            model="scaledown/decisions",
+            messages=[{"role": "user", "content": "text"}],
+            questions={"q": {"type": question_type}},
+        )
+
+    assert not respx.calls
+
+
+@respx.mock
+def test_unknown_scaledown_model_is_a_request_error() -> None:
+    with pytest.raises(litellm.BadRequestError, match="Unknown ScaleDown model"):
+        litellm.completion(model="scaledown/unknown", messages=[{"role": "user", "content": "text"}])
+
+    assert not respx.calls
 
 
 def _extract_body(config: ScaleDownChatConfig, schema: dict) -> dict:
@@ -543,11 +602,14 @@ def test_extract_without_a_schema_is_rejected(config):
         )
 
 
-def test_summarize_request_splits_instructions_text_and_max_tokens(config):
-    body = config.transform_request(
+@pytest.mark.parametrize("role", ["system", "developer"])
+def test_summarize_request_splits_instructions_text_and_max_tokens(
+    config: ScaleDownChatConfig, role: Literal["system", "developer"]
+) -> None:
+    body: Final = config.transform_request(
         model="scaledown/summarize",
         messages=[
-            {"role": "system", "content": "Be terse."},
+            {"role": role, "content": "Be terse."},
             {"role": "user", "content": "a long document"},
         ],
         optional_params={"max_tokens": 40},
@@ -625,9 +687,10 @@ def test_empty_native_response_is_an_error(config):
         _transform_response(config, "scaledown/extract", {})
 
 
-def test_non_json_response_reports_the_upstream_status(config):
-    raw_response = httpx.Response(
-        status_code=502,
+@pytest.mark.parametrize("upstream_status", [200, 502])
+def test_non_json_response_is_an_upstream_error(config: ScaleDownChatConfig, upstream_status: int) -> None:
+    raw_response: Final = httpx.Response(
+        status_code=upstream_status,
         text="<html>bad gateway</html>",
         request=httpx.Request("POST", f"{BASE}/v1/scaledown"),
     )

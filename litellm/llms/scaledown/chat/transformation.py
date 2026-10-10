@@ -224,11 +224,11 @@ class ScaleDownChatConfig(BaseConfig):
     ) -> ModelResponse:
         try:
             raw: Final = JSON_OBJECT.validate_json(raw_response.content)
-        except ValueError as exc:
-            raise ScaleDownError(
-                status_code=raw_response.status_code,
-                message=f"ScaleDown returned a non-JSON response: {raw_response.text[:500]}",
-            ) from exc
+        except ValueError:
+            _reject(
+                f"ScaleDown returned a non-JSON response: {raw_response.text[:500]}",
+                raw_response.status_code if raw_response.is_error else 502,
+            )
 
         operation: Final = _operation(model)
         if operation in DECISIONS_MODELS:
@@ -253,7 +253,10 @@ def _trusted_root() -> str:
 
 
 def _operation(model: str) -> str:
-    return model.split("/", 1)[1] if "/" in model else model
+    operation: Final = model.split("/", 1)[1] if "/" in model else model
+    if operation not in DOMAIN_MODELS | DECISIONS_MODELS:
+        _reject(f"Unknown ScaleDown model '{model}'. Choose from {sorted(DOMAIN_MODELS | DECISIONS_MODELS)}.")
+    return operation
 
 
 def _text_of(message: Mapping[str, JsonValue]) -> str | None:
@@ -311,27 +314,53 @@ def _child(node: JsonValue, key: str) -> JsonValue:
     return node.get(key) if isinstance(node, Mapping) else None
 
 
+def _extend_ref_path(path: tuple[str, ...], ref: str) -> tuple[str, ...]:
+    return (*path, ref)
+
+
+def _nullable_branch(schema: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | None:
+    if "allOf" in schema:
+        _reject("ScaleDown extraction does not support allOf. Supply the object's properties directly.")
+    variants: Final = schema.get("anyOf", schema.get("oneOf"))
+    if variants is None:
+        return None
+    if not isinstance(variants, list) or len(variants) != 2:
+        _reject("ScaleDown extraction supports anyOf/oneOf only for one schema plus null.")
+    branches: Final = tuple(branch for branch in variants if isinstance(branch, dict))
+    non_null: Final = tuple(branch for branch in branches if branch.get("type") != "null")
+    if len(branches) != 2 or len(non_null) != 1:
+        _reject("ScaleDown extraction supports anyOf/oneOf only for one schema plus null.")
+    return {
+        **non_null[0],
+        **{key: value for key, value in schema.items() if key not in {"anyOf", "oneOf"}},
+    }
+
+
 def _deref(
     prop: Mapping[str, JsonValue], root: Mapping[str, JsonValue], path: tuple[str, ...]
 ) -> tuple[Mapping[str, JsonValue], tuple[str, ...], bool]:
-    """Follow local `$ref`s (`#/$defs/X`, `#/definitions/X`) to the schema they name.
+    """Follow nullable branches and local `$ref`s (`#/$defs/X`, `#/definitions/X`).
 
     Returns the schema, the refs followed so far, and whether a ref repeated (a cycle).
     The walk is a bounded loop, so a long chain of distinct refs cannot exhaust the stack.
     """
-    current = prop  # rebind-ok: bounded walk along a ref chain
-    followed = path  # rebind-ok: bounded walk along a ref chain
+    current: Mapping[str, JsonValue] = prop  # rebind-ok: bounded walk along a ref chain
+    followed: tuple[str, ...] = path  # rebind-ok: bounded walk along a ref chain
     for _ in range(MAX_REF_CHAIN):
-        ref = current.get("$ref")
+        nullable: Mapping[str, JsonValue] | None = _nullable_branch(current)
+        ref: JsonValue = current.get("$ref")
+        if nullable is not None:
+            current = nullable
+            continue
         if not isinstance(ref, str) or not ref.startswith("#/"):
             return current, followed, False
         if ref in followed:
             return current, followed, True
-        target = reduce(_child, ref[2:].split("/"), dict(root))
+        target: JsonValue = reduce(_child, ref[2:].split("/"), dict(root))
         if not isinstance(target, Mapping):
             return current, followed, False
-        current, followed = target, (*followed, ref)
-    _reject(f"The response_format schema follows more than {MAX_REF_CHAIN} chained $refs.")
+        current, followed = target, _extend_ref_path(followed, ref)
+    _reject(f"The response_format schema follows more than {MAX_REF_CHAIN} chained $refs or nullable branches.")
 
 
 def _build_properties(
@@ -373,7 +402,9 @@ def _build_entity(
     if isinstance(nested, Mapping):
         return _build_properties(nested, root, followed, budget, depth + 1)
     raw_items: Final = schema.get("items")
-    if schema.get("type") == "array" and isinstance(raw_items, Mapping):
+    schema_type: Final = schema.get("type")
+    is_array: Final = schema_type == "array" or (isinstance(schema_type, list) and "array" in schema_type)
+    if is_array and isinstance(raw_items, Mapping):
         items, item_path, item_cyclic = _deref(raw_items, root, followed)
         item_properties: Final = items.get("properties")
         if not item_cyclic and isinstance(item_properties, Mapping):
@@ -409,7 +440,7 @@ def _summarize_request(
     messages: Sequence[Mapping[str, JsonValue]], optional_params: Mapping[str, JsonValue]
 ) -> Mapping[str, JsonValue]:
     instructions: Final = [
-        text for message in messages if message.get("role") == "system" and (text := _text_of(message))
+        text for message in messages if message.get("role") in {"system", "developer"} and (text := _text_of(message))
     ]
     return {
         "text": _last_user_text("summarize", messages),
@@ -460,7 +491,7 @@ def _validate_questions(questions: JsonValue) -> None:
         if not isinstance(question, Mapping):
             _reject(f"Question '{name}' must be an object.")
         question_type = question.get("type")
-        if question_type not in DECISION_QUESTION_TYPES:
+        if not isinstance(question_type, str) or question_type not in DECISION_QUESTION_TYPES:
             _reject(f"Question '{name}' has type {question_type!r}; expected one of {sorted(DECISION_QUESTION_TYPES)}.")
         criteria = question.get("criteria")
         if question_type == "choice" and (not isinstance(criteria, Mapping) or not criteria):
