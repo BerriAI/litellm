@@ -1057,6 +1057,40 @@ def test_transform_response_with_prefix_prompt():
     assert result.choices[0].message.content == "You are a helpful assistant. The grass is green."
 
 
+def test_pdf_file_input_becomes_anthropic_document():
+    config = AnthropicConfig()
+    file_data = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+
+    result = config.transform_request(
+        model="claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_data": file_data, "filename": "document.pdf"}}],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJSBQT05H",
+                    },
+                }
+            ],
+        }
+    ]
+
+
 def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
@@ -8077,3 +8111,45 @@ async def test_litellm_anthropic_prompt_caching_system(
         ],
         "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
     }
+
+
+def test_completion_merges_caller_anthropic_beta_header_with_computer_tool_beta(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_custom_headers",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Paris"}],
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        headers={"anthropic-beta": "computer-use-2025-01-24"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {"display_height_px": 100, "display_width_px": 100, "display_number": 1},
+                },
+            }
+        ],
+    )
+
+    assert response.choices[0].message.content == "Paris"
+    assert route.call_count == 1
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert "computer-use-2025-01-24" in sent_betas
+    assert json.loads(route.calls.last.request.content)["tools"][0]["type"] == "computer_20241022"

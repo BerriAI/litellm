@@ -272,6 +272,24 @@ class ChatTool(BaseModel):
     function: ChatToolFunction
 
 
+class AnthropicToolBody(BaseModel, frozen=True):
+    type: Literal["computer_20250124", "web_fetch_20250910", "text_editor_20250728", "url", "mcp"]
+    name: str | None = None
+    function: dict[str, JsonValue] | None = None
+    max_uses: int | None = None
+    url: str | None = None
+    authorization_token: str | None = None
+    server_label: str | None = None
+    server_url: str | None = None
+    require_approval: str | None = None
+    headers: dict[str, str] | None = None
+
+
+class AnthropicExtraBody(BaseModel, frozen=True):
+    tools: Sequence[AnthropicToolBody] | None = None
+    web_search_options: dict[str, JsonValue] | None = None
+
+
 class McpChatTool(BaseModel):
     """An MCP server attached to a chat completion (OpenAI `type: "mcp"` tool).
     `server_url` selects the gateway-registered server by its alias suffix; with
