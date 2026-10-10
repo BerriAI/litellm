@@ -27,9 +27,14 @@ pub fn outbound_request(
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<OutboundRequest, litellm_http::Error> {
-    let Authenticated { headers, signer } = authenticated;
+    let Authenticated {
+        headers,
+        signer,
+        url: authenticated_url,
+    } = authenticated;
+    let resolved_url = authenticated_url.unwrap_or(url);
     match signer {
-        None => OutboundRequest::json(url, headers, body, timeout),
-        Some(signer) => OutboundRequest::signed_json(url, headers, body, timeout, &signer),
+        None => OutboundRequest::json(resolved_url, headers, body, timeout),
+        Some(signer) => OutboundRequest::signed_json(resolved_url, headers, body, timeout, &signer),
     }
 }

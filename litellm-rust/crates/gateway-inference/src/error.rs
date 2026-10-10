@@ -67,9 +67,10 @@ impl Error {
             Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
-            Self::Route(RouteError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
-                StatusCode::UNAUTHORIZED
-            }
+            Self::Route(RouteError::Auth(
+                litellm_auth::Error::MissingApiKey { .. }
+                | litellm_auth::Error::ProviderAuthentication(_),
+            )) => StatusCode::UNAUTHORIZED,
             Self::Route(error) if error.is_request() => StatusCode::BAD_REQUEST,
             Self::Route(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

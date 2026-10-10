@@ -4,5 +4,8 @@ mod support;
 #[path = "live/edenai.rs"]
 mod edenai;
 
+#[path = "live/github_copilot.rs"]
+mod github_copilot;
+
 #[path = "live/vertex_ai.rs"]
 mod vertex_ai;
