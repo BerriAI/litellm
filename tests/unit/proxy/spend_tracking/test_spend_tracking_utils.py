@@ -6701,3 +6701,28 @@ def test_failure_error_information_masks_ip_addresses_before_long_text_is_trunca
         assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_text
         assert any(char.isdigit() for char in kept_head_and_tail) is not disabled
     assert sanitized["error_code"] == "500"
+
+
+@pytest.mark.parametrize(
+    "address", ["203.0.113.9", "2001:db8::9", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7::", "::1:2:3:4:5:6:7", "fe80::1"]
+)
+def test_failure_error_information_masks_every_ip_address_form_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, address: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", True)
+
+    sanitized: Final = sanitize_error_information_for_spend_logs(
+        {
+            "error_code": "403",
+            "error_message": f"IP address {address} not allowed.",
+            "traceback": f"peer [{address}]:443",
+        }
+    )
+
+    assert sanitized == {
+        "error_code": "403",
+        "error_message": "IP address REDACTED_BY_LITELM not allowed.",
+        "traceback": "peer [REDACTED_BY_LITELM]:443",
+    }

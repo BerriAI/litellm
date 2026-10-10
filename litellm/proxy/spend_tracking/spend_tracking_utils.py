@@ -1625,7 +1625,7 @@ _REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IPV4_ADDRESS: Final = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_IPV6_ADDRESS_CANDIDATE: Final = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
+_IPV6_ADDRESS_CANDIDATE: Final = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,8}[0-9A-Fa-f]{0,4}(?![\w:])")
 
 
 def _masked_ipv6_address(candidate: re.Match[str]) -> str:
