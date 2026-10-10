@@ -29,7 +29,7 @@ def resolve_resource_owner_id(
     A key with neither a user_id nor a team_id would otherwise stamp
     ``created_by=None`` and be locked out of its own resources, so it owns
     them under its hashed token instead, using the ``key:`` scope prefix
-    already used by ``proxy/common_utils/resource_ownership.py``. ``None``
+    already used by ``litellm_core_utils/resource_ownership.py``. ``None``
     means the caller has no usable identity of its own and must fall back
     to team scoping, or be denied.
     """
