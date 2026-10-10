@@ -13,7 +13,7 @@ use litellm_cache_response::{
     CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService, ScopedCache,
 };
 use litellm_host::interceptors::{
-    ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
+    Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
     WireRequest,
 };
 use litellm_inference::{
@@ -285,12 +285,11 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
     };
     assert_eq!(provider.source, ResultSource::Provider);
     assert_eq!(
-        provider
-            .reported_cost
-            .as_ref()
-            .and_then(serde_json::Number::as_f64),
-        expected
+        provider.cost,
+        expected.map_or(Cost::Deferred, |amount| Cost::Reported {
+            amount: serde_json::Number::from_f64(amount).unwrap()
+        })
     );
     assert!(matches!(cached.source, ResultSource::Cache { .. }));
-    assert_eq!(cached.reported_cost, None);
+    assert_eq!(cached.cost, Cost::CacheHit);
 }

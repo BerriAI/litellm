@@ -1,3 +1,4 @@
+use litellm_host::interceptors::Cost;
 use litellm_inference_messages::MessagesRoute;
 use litellm_inference_testing::live::within_deadline;
 use rstest::rstest;
@@ -34,8 +35,9 @@ async fn completion_and_cost_handoff(route: MessagesRoute, #[case] payload: Valu
                 _ => None,
             })
             .filter(|cost| *cost >= 0.0)
-            .and_then(Number::from_f64);
-        assert_eq!(host.facts().reported_cost, expected_cost);
+            .and_then(Number::from_f64)
+            .map_or(Cost::Deferred, |amount| Cost::Reported { amount });
+        assert_eq!(host.facts().cost, expected_cost);
         println!("{}", serde_json::to_string(&message).unwrap());
     })
     .await;
@@ -67,7 +69,7 @@ async fn streaming(route: MessagesRoute) {
                 .is_some_and(|text| !text.is_empty())
         }));
         host.assert_provider_result();
-        assert_eq!(host.facts().reported_cost, None);
+        assert_eq!(host.facts().cost, Cost::Deferred);
     })
     .await;
 }

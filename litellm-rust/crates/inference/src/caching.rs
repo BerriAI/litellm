@@ -13,7 +13,7 @@ use litellm_cache_response::{
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
-    interceptors::{ExecutionFacts, Interceptors, ProviderIdentity, ResultSource, WireRequest},
+    interceptors::{Cost, ExecutionFacts, Interceptors, ProviderIdentity, ResultSource, WireRequest},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
     protocol::Protocol,
@@ -168,11 +168,12 @@ where
         None => (provider().await?, ResultSource::Provider),
     };
     let from_provider = source == ResultSource::Provider;
+    let cost = Cost::settle(&source, None);
     publish(
         ExecutionFacts {
             provider: identity,
             source,
-            reported_cost: None,
+            cost,
         },
         interceptors,
         observers,
@@ -213,8 +214,8 @@ where
     publish(
         ExecutionFacts {
             provider: identity,
+            cost: Cost::settle(&source, None),
             source: source.clone(),
-            reported_cost: None,
         },
         interceptors,
         observers,
