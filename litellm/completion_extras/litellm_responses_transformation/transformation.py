@@ -1869,9 +1869,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         elif event_type == "response.output_text.delta":
             # Content part added to output
-            content_part = cast(
+            content_part = cast(  # cast-ok: output_text.delta deltas are strings
                 "str | None", parsed_chunk.get("delta", None)
-            )  # cast-ok: output_text.delta deltas are strings
+            )
             if content_part is not None:
                 delta_item_id: Final = cast(  # cast-ok: delta events are string-keyed json objects
                     "Mapping[str, object]", parsed_chunk
