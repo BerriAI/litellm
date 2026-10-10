@@ -3694,6 +3694,26 @@ class TestRawSpanAttributeIsolation(unittest.TestCase):
         )
 
 
+    @patch("litellm.turn_off_message_logging", False)
+    def test_raw_span_names_the_provider_when_only_the_call_details_carry_it(self):
+        span_exporter: Final = InMemorySpanExporter()
+        tracer_provider: Final = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+        otel: Final = OpenTelemetry(tracer_provider=tracer_provider)
+        raw_span: Final = tracer_provider.get_tracer(__name__).start_span("raw_gen_ai_request")
+        kwargs: Final = {
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"custom_llm_provider": None},
+            "original_response": '{"images": ["aGVsbG8="]}',
+            "additional_args": {"complete_input_dict": {"text_prompts": [{"text": "a red fox"}]}},
+        }
+
+        otel.set_raw_request_attributes(raw_span, kwargs, None)
+        raw_span.end()
+
+        (raw,) = span_exporter.get_finished_spans()
+        self.assertEqual(set(raw.attributes or {}), {"llm.bedrock.text_prompts", "llm.bedrock.images"})
+
 class TestNoParentSpanDuplication(unittest.TestCase):
     """Issue #4: When litellm_request child span exists, the parent
     litellm_proxy_request span should NOT get set_attributes() called."""
