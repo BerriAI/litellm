@@ -21,6 +21,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
+    AUTH_OBJECTS_TARGET,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -55,7 +56,6 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
