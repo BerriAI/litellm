@@ -1,12 +1,40 @@
 import os
 import uuid
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
-from integration._support.client import Gateway, eventually, string_value
+import pytest
+from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.database import read_rows
 from integration._support.process import owned_proxy
+from pydantic import JsonValue
 from redis import Redis
+
+
+def _tagged_request(
+    gateway: Gateway,
+    model: str,
+    tag: str,
+    tag_source: Literal["body", "header", "key"],
+    text: str,
+    *,
+    key: str | None = None,
+) -> httpx.Response:
+    body: Final[dict[str, JsonValue]] = {
+        "model": model,
+        "messages": [{"role": "user", "content": text}],
+        **({"metadata": {"tags": [tag]}} if tag_source == "body" else {}),
+    }
+    headers: Final[dict[str, str]] = {"x-litellm-tags": tag} if tag_source == "header" else {}
+    request_key: Final[str | None] = key if tag_source == "key" else None
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        body,
+        key=request_key,
+        headers=headers,
+    )
 
 
 def test_spend_over_a_tag_max_budget_rejects_the_next_request(gateway: Gateway) -> None:
@@ -314,3 +342,187 @@ def test_tag_budget_duration_resets_spend_and_unblocks_the_tag(gateway: Gateway,
         assert "budget" in blocked.text.lower(), blocked.text
         recovered: Final = eventually(rejection, lambda code: code == 200, seconds=70)
         assert recovered == 200, recovered
+
+
+@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+def test_tag_budget_update_invalidates_blocked_request(
+    gateway: Gateway,
+    tag_source: Literal["body", "header", "key"],
+) -> None:
+    tag: Final = f"tag-budget-update-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        gateway.post("/tag/new", {"name": tag, "max_budget": 0.0001})
+        scenario.cleanups.callback(delete_tag)
+        first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag budget update {tag}", key=tag_key)
+        assert first.status_code == 200, first.text
+
+        def blocked_response() -> httpx.Response:
+            return _tagged_request(gateway, model, tag, tag_source, f"tag budget blocked {tag}", key=tag_key)
+
+        blocked: Final = eventually(blocked_response, lambda response: response.status_code != 200, seconds=70)
+        assert blocked.status_code == 422, blocked.text
+        assert "budget" in blocked.text.lower(), blocked.text
+        updated: Final = gateway.request("POST", "/tag/update", {"name": tag, "max_budget": 100})
+        assert updated.status_code == 200, updated.text
+        restored: Final = _tagged_request(gateway, model, tag, tag_source, f"tag budget restored {tag}", key=tag_key)
+        assert restored.status_code == 200, restored.text
+
+
+@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+def test_tag_rpm_update_invalidates_cached_limit(
+    gateway: Gateway,
+    tag_source: Literal["body", "header", "key"],
+) -> None:
+    tag: Final = f"tag-rpm-update-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        gateway.post("/tag/new", {"name": tag, "rpm_limit": 100})
+        scenario.cleanups.callback(delete_tag)
+        first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm first {tag}", key=tag_key)
+        assert first.status_code == 200, first.text
+        second: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm second {tag}", key=tag_key)
+        assert second.status_code == 200, second.text
+        updated: Final = gateway.request("POST", "/tag/update", {"name": tag, "rpm_limit": 1})
+        assert updated.status_code == 200, updated.text
+        blocked: Final = _tagged_request(gateway, model, tag, tag_source, f"tag rpm blocked {tag}", key=tag_key)
+        assert blocked.status_code == 429, blocked.text
+        assert tag in blocked.text, blocked.text
+
+
+def test_tag_budget_duration_can_be_cleared_and_limits_are_read_back(gateway: Gateway) -> None:
+    tag: Final = f"tag-budget-duration-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        gateway.post(
+            "/tag/new",
+            {"name": tag, "max_budget": 100, "rpm_limit": 100, "budget_duration": "30d"},
+        )
+        scenario.cleanups.callback(delete_tag)
+        first: Final = _tagged_request(gateway, model, tag, "body", f"tag duration first {tag}")
+        assert first.status_code == 200, first.text
+        updated: Final = gateway.request(
+            "POST",
+            "/tag/update",
+            {"name": tag, "budget_duration": None, "rpm_limit": 1},
+        )
+        assert updated.status_code == 200, updated.text
+        blocked: Final = _tagged_request(gateway, model, tag, "body", f"tag duration blocked {tag}")
+        assert blocked.status_code == 429, blocked.text
+        assert tag in blocked.text, blocked.text
+
+        info_response: Final = gateway.request("POST", "/tag/info", {"names": [tag]})
+        assert info_response.status_code == 200, info_response.text
+        tag_info: Final = object_value(info_response.json())[tag]
+        budget_info: Final = object_value(object_value(tag_info)["litellm_budget_table"])
+        assert {
+            "max_budget": budget_info["max_budget"],
+            "rpm_limit": budget_info["rpm_limit"],
+            "budget_duration": budget_info["budget_duration"],
+            "budget_reset_at": budget_info["budget_reset_at"],
+        } == {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}, (
+            info_response.text
+        )
+
+        tag_rows: Final = read_rows('SELECT budget_id FROM "LiteLLM_TagTable" WHERE tag_name = %s', (tag,))
+        assert len(tag_rows) == 1, tag_rows
+        budget_rows: Final = read_rows(
+            'SELECT max_budget, rpm_limit, budget_duration, budget_reset_at FROM "LiteLLM_BudgetTable" '
+            "WHERE budget_id = %s",
+            (str(tag_rows[0]["budget_id"]),),
+        )
+        assert budget_rows == [
+            {"max_budget": 100, "rpm_limit": 1, "budget_duration": None, "budget_reset_at": None}
+        ], budget_rows
+
+
+@pytest.mark.parametrize("tag_source", ("body", "header", "key"), ids=("body-tags", "tag-header", "key-tags"))
+def test_tag_delete_evicts_blocked_limit(
+    gateway: Gateway,
+    tag_source: Literal["body", "header", "key"],
+) -> None:
+    tag: Final = f"tag-delete-cache-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.request("POST", "/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        tag_key: Final = scenario.key(metadata={"tags": [tag]}) if tag_source == "key" else None
+        created: Final = gateway.request("POST", "/tag/new", {"name": tag, "rpm_limit": 1})
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(delete_tag)
+        first: Final = _tagged_request(gateway, model, tag, tag_source, f"tag delete first {tag}", key=tag_key)
+        assert first.status_code == 200, first.text
+        blocked: Final = _tagged_request(gateway, model, tag, tag_source, f"tag delete blocked {tag}", key=tag_key)
+        assert blocked.status_code == 429, blocked.text
+
+        deleted: Final = gateway.request("POST", "/tag/delete", {"name": tag})
+        assert deleted.status_code == 200, deleted.text
+        restored: Final = _tagged_request(gateway, model, tag, tag_source, f"tag deleted {tag}", key=tag_key)
+        assert restored.status_code == 200, restored.text
+        tag_rows: Final = read_rows('SELECT tag_name FROM "LiteLLM_TagTable" WHERE tag_name = %s', (tag,))
+        assert tag_rows == [], tag_rows
+
+
+def test_tag_info_returns_404_for_deleted_tag(gateway: Gateway) -> None:
+    pytest.skip("BUG: POST /tag/info for a deleted tag returns 500 with detail '404: Tags not found' instead of 404")
+
+    tag: Final = f"tag-info-deleted-{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario:
+
+        def delete_tag() -> None:
+            gateway.request("POST", "/tag/delete", {"name": tag})
+
+        created: Final = gateway.request("POST", "/tag/new", {"name": tag})
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(delete_tag)
+        deleted: Final = gateway.request("POST", "/tag/delete", {"name": tag})
+        assert deleted.status_code == 200, deleted.text
+        missing: Final = gateway.request("POST", "/tag/info", {"names": [tag]})
+        assert missing.status_code == 404, missing.text
+        assert missing.text == f"""{{"detail":"Tags not found: ['{tag}']"}}""", missing.text
+
+
+def test_tag_partial_update_keeps_description_and_models(gateway: Gateway) -> None:
+    pytest.skip("BUG: /tag/update without description/models wipes the stored description and models")
+
+    tag: Final = f"tag-partial-update-{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        gateway.post(
+            "/tag/new",
+            {"name": tag, "description": "description", "models": [model]},
+        )
+
+        def delete_tag() -> None:
+            gateway.post("/tag/delete", {"name": tag})
+
+        scenario.cleanups.callback(delete_tag)
+        updated: Final = gateway.request(
+            "POST",
+            "/tag/update",
+            {"name": tag, "max_budget": 5},
+        )
+        assert updated.status_code == 200, updated.text
+        info: Final = gateway.request("POST", "/tag/info", {"names": [tag]})
+        assert info.status_code == 200, info.text
+        tag_info: Final = object_value(info.json())[tag]
+        assert {
+            "description": object_value(tag_info)["description"],
+            "models": object_value(tag_info)["models"],
+        } == {"description": "description", "models": [model]}, info.text
