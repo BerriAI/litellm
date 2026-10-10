@@ -1264,13 +1264,16 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
-    def _peeked_json_object_body(body: bytes) -> bytes | None:
-        """The peeked bytes when they form a complete JSON-RPC object, else None so a
-        truncated prefix or a batch array fails closed and stays budget-enforced."""
+    def _admission_auth_body(body: bytes) -> bytes:
+        """Return only the JSON-RPC method for admission auth."""
         try:
-            return body if isinstance(json.loads(body), dict) else None
-        except (json.JSONDecodeError, TypeError):
-            return None
+            data: Final = TypeAdapter(dict[str, object]).validate_json(body)
+        except (ValueError, TypeError):
+            return b"{}"
+        method: Final = data.get("method")
+        if not isinstance(method, str):
+            return b"{}"
+        return json.dumps({"method": method}).encode()
 
     def _is_initialize_request(body: bytes) -> bool:
         """
@@ -2193,10 +2196,10 @@ if MCP_AVAILABLE:
             if peek is not None:
                 receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
 
-                async def peeked_json_object_body() -> bytes:
-                    return _peeked_json_object_body(await peek.admission_body()) or b"{}"
+                async def admission_auth_body() -> bytes:
+                    return _admission_auth_body(await peek.admission_body())
 
-                scope[MCP_PEEKED_BODY_SCOPE_KEY] = peeked_json_object_body
+                scope[MCP_PEEKED_BODY_SCOPE_KEY] = admission_auth_body
             (
                 user_api_key_auth,
                 mcp_auth_header,
