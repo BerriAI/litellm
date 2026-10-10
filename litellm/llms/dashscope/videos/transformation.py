@@ -241,7 +241,7 @@ def _media_reference_type(model: str) -> str | None:
     """Models without the field predate the media array and take the image on the flat ``img_url`` field."""
     try:
         info: Final = get_model_info(model=model, custom_llm_provider="dashscope")
-    except Exception:
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
         return None
     provider_specific: Final = info.get("provider_specific_entry")
     value: Final = provider_specific.get(_REFERENCE_INPUT_FIELD) if isinstance(provider_specific, Mapping) else None
@@ -347,11 +347,11 @@ def _video_object_from_task(
         status=status,
         created_at=_timestamp(output.submit_time),
         completed_at=_timestamp(output.end_time) if status == "completed" else None,
-        error=dict(error_block) if error_block is not None else None,  # mutable-ok: VideoObject.error is a dict field
+        error=dict(error_block) if error_block is not None else None,
         seconds=str(seconds) if seconds is not None else None,
         size=_size_from_usage(task.usage),
         model=model,
-        usage=dict(usage) if usage else None,  # mutable-ok: VideoObject.usage is a dict field
+        usage=dict(usage) if usage else None,
     )
 
 
@@ -375,12 +375,19 @@ def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> s
     raise _video_error(raw_response, 502, "Video URL not found in task response. The task may not have succeeded yet.")
 
 
+def _logged_litellm_params(logging_obj: object) -> Mapping[str, object]:
+    litellm_params: Final[object] = getattr(logging_obj, "litellm_params", None)
+    try:
+        return _PARAMETERS_ADAPTER.validate_python(litellm_params)
+    except ValidationError:
+        return _EMPTY_PARAMS
+
+
 def _polled_model_id(logging_obj: object) -> str | None:
     """
     The deployment the proxy routes by is the model encoded in the polled id, so it must survive into the returned id.
     """
-    litellm_params: Final = getattr(logging_obj, "litellm_params", None)
-    video_id: Final = litellm_params.get("video_id") if isinstance(litellm_params, Mapping) else None
+    video_id: Final = _logged_litellm_params(logging_obj).get("video_id")
     if not isinstance(video_id, str):
         return None
     return decode_video_id_with_provider(video_id).get("model_id") or None
@@ -388,7 +395,7 @@ def _polled_model_id(logging_obj: object) -> str | None:
 
 class DashScopeVideoConfig(BaseVideoConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract returns list
-        return [  # mutable-ok: BaseVideoConfig contract returns list
+        return [
             "model",
             "prompt",
             "input_reference",
