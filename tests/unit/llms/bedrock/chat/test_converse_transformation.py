@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock
+from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -10047,11 +10047,31 @@ def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: res
     ).decode()
 
 
-def test_bedrock_thinking_in_assistant_message_keeps_reasoning_block() -> None:
+async def _transform_converse_request(sync_mode: bool, messages: list[AllMessageValues]) -> RequestObject:
     config: Final = AmazonConverseConfig()
-    request: Final = config._transform_request(
+    if sync_mode:
+        return config._transform_request(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    return await config._async_transform_request(
         model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        messages=[
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_bedrock_thinking_in_assistant_message_keeps_reasoning_block(sync_mode: bool) -> None:
+    request: Final = await _transform_converse_request(
+        sync_mode,
+        [
             {
                 "role": "assistant",
                 "content": [
@@ -10061,9 +10081,6 @@ def test_bedrock_thinking_in_assistant_message_keeps_reasoning_block() -> None:
             },
             {"role": "user", "content": "Continue"},
         ],
-        optional_params={},
-        litellm_params={},
-        headers={},
     )
 
     assert request["messages"][0]["role"] == "assistant"
@@ -10072,3 +10089,33 @@ def test_bedrock_thinking_in_assistant_message_keeps_reasoning_block() -> None:
         "signature": "synthetic-signature",
     }
     assert request["messages"][0]["content"][1] == {"text": "The answer is ready"}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_bedrock_user_file_element_becomes_document_block(sync_mode: bool) -> None:
+    pdf_bytes: Final = b"%PDF-1.4 synthetic quarterly report"
+    request: Final = await _transform_converse_request(
+        sync_mode,
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this report"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "report.pdf",
+                            "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+
+    content: Final = request["messages"][0]["content"]
+    assert [next(iter(block)) for block in content] == ["text", "document"]
+    assert content[0] == {"text": "Summarize this report"}
+    assert content[1]["document"]["source"] == {"bytes": base64.b64encode(pdf_bytes).decode()}
+    assert content[1]["document"]["format"] == "pdf"

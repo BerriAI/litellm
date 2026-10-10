@@ -213,8 +213,28 @@ def test_completion_strips_message_names_from_request(respx_mock: respx.MockRout
     assert response.choices[0].message.content == "OK"
 
 
+@pytest.mark.parametrize(
+    ("final_usage", "expected_usage"),
+    [
+        ({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}, (2, 1, 3)),
+        (
+            {
+                "prompt_tokens": 14,
+                "completion_tokens": 10,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+            (14, 322, 336),
+        ),
+    ],
+    ids=["plain", "reasoning_folded_into_completion"],
+)
 @pytest.mark.respx(assert_all_called=True)
-def test_streaming_include_usage_surfaces_xai_final_usage_chunk(respx_mock: respx.MockRouter) -> None:
+def test_streaming_include_usage_surfaces_xai_final_usage_chunk(
+    respx_mock: respx.MockRouter,
+    final_usage: dict[str, object],
+    expected_usage: tuple[int, int, int],
+) -> None:
     frames: Final = (
         {
             "id": "chatcmpl-xai-stream",
@@ -236,7 +256,7 @@ def test_streaming_include_usage_surfaces_xai_final_usage_chunk(respx_mock: resp
             "created": 1234567890,
             "model": "grok-4.20-beta-latest",
             "choices": [],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            "usage": final_usage,
         },
     )
     sse_body: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
@@ -266,7 +286,7 @@ def test_streaming_include_usage_surfaces_xai_final_usage_chunk(respx_mock: resp
         usage_chunks[0].usage.prompt_tokens,
         usage_chunks[0].usage.completion_tokens,
         usage_chunks[0].usage.total_tokens,
-    ) == (2, 1, 3)
+    ) == expected_usage
 
 
 class TestXAIChatWebSearchBilling:

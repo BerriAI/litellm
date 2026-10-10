@@ -9,6 +9,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import interactions
+from litellm.integrations.custom_logger import CustomLogger
 
 
 def _openai_response_body(response_id: str, text: str) -> dict[str, object]:
@@ -433,3 +434,82 @@ class TestInteractionsAcreateOffline:
         assert "What is the speed of light?" in serialized
         assert "response_id:resp-offline" in base64.b64decode(response.id.removeprefix("resp_")).decode()
         assert response.status == "completed"
+
+
+_GEMINI_STREAM_URL: Final = "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse"
+_GEMINI_COMPLETED_INTERACTION: Final = {
+    "id": "interaction-stream",
+    "object": "interaction",
+    "model": "gemini-2.5-flash",
+    "status": "completed",
+    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hello"}]}],
+    "usage": {"input_tokens": 4, "output_tokens": 1},
+}
+_GEMINI_STREAM_WITH_DONE: Final = (
+    'data: {"event_type":"step.delta","delta":{"type":"text","text":"Hello"}}\n\n'
+    "data: {not-json\n\n"
+    f"data: {json.dumps({'event_type': 'interaction.completed', **_GEMINI_COMPLETED_INTERACTION})}\n\n"
+    "data: [DONE]\n\n"
+    'data: {"event_type":"step.delta","delta":{"type":"text","text":"after done"}}\n\n'
+)
+
+
+class _CompletedInteractionRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: tuple[dict[str, object], ...] = ()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.logged = (*self.logged, response_obj.model_dump(exclude_none=True))
+
+
+async def _stream_gemini_interaction(sync_mode: bool) -> list[dict[str, object]]:
+    if sync_mode:
+        return [
+            chunk.model_dump(exclude_none=True)
+            for chunk in interactions.create(
+                model="gemini/gemini-2.5-flash", input="Stream an answer.", stream=True, api_key="gemini-offline"
+            )
+        ]
+    response_stream: Final = await interactions.acreate(
+        model="gemini/gemini-2.5-flash", input="Stream an answer.", stream=True, api_key="gemini-offline"
+    )
+    return [chunk.model_dump(exclude_none=True) async for chunk in response_stream]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.asyncio
+async def test_streaming_skips_malformed_lines_and_stops_at_done(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(_GEMINI_STREAM_URL).mock(
+        return_value=httpx.Response(200, text=_GEMINI_STREAM_WITH_DONE, headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = await _stream_gemini_interaction(sync_mode)
+
+    assert chunks == [
+        {"event_type": "step.delta", "object": "interaction", "delta": {"type": "text", "text": "Hello"}},
+        {"event_type": "interaction.completed", **_GEMINI_COMPLETED_INTERACTION},
+    ]
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_create_streaming_hands_completed_interaction_to_success_callback(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _CompletedInteractionRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(_GEMINI_STREAM_URL).mock(
+        return_value=httpx.Response(200, text=_GEMINI_STREAM_WITH_DONE, headers={"content-type": "text/event-stream"})
+    )
+
+    tuple(
+        interactions.create(
+            model="gemini/gemini-2.5-flash", input="Stream an answer.", stream=True, api_key="gemini-offline"
+        )
+    )
+
+    assert recorder.logged == (_GEMINI_COMPLETED_INTERACTION,)

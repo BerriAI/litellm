@@ -554,8 +554,8 @@ def test_bedrock_optional_params_embeddings_provider_specific_params():
         "vertex_ai_beta",
     ],
 )
-def test_vertex_safety_settings(provider):
-    litellm.vertex_ai_safety_settings = [
+def test_vertex_safety_settings(provider, monkeypatch):
+    monkeypatch.setattr(litellm, "vertex_ai_safety_settings", [
         {
             "category": "HARM_CATEGORY_HARASSMENT",
             "threshold": "BLOCK_NONE",
@@ -572,7 +572,7 @@ def test_vertex_safety_settings(provider):
             "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
             "threshold": "BLOCK_NONE",
         },
-    ]
+    ])
 
     optional_params = get_optional_params(
         model="gemini-1.5-pro", custom_llm_provider=provider
