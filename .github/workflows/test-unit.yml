@@ -449,6 +449,7 @@ jobs:
             test-path: >-
               tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
               tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
+              tests/unit/enterprise/enterprise_callbacks/test_pagerduty_alerting.py
               tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
               tests/unit/integration_support
               tests/unit/models
