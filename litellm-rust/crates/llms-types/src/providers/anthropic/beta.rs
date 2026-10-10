@@ -389,7 +389,7 @@ mod tests {
 
     fn beta_headers_config() -> IndexMap<String, serde_json::Value> {
         serde_json::from_str(include_str!(
-            "../../../../../litellm/anthropic_beta_headers_config.json"
+            "../../../../../../litellm/anthropic_beta_headers_config.json"
         ))
         .unwrap()
     }

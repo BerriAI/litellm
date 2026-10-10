@@ -1,14 +1,18 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::SecretValue;
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_llms_types::formats::messages::MessagesRequest;
+use litellm_llms_types::{
+    formats::messages::MessagesRequest,
+    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
+};
 use litellm_router_types::LitellmParams;
 
 use crate::{
     Error,
-    anthropic::messages::{
-        handler::shape_anthropic_messages_request,
-        transformation::{
-            DEFAULT_HEADERS, transform_messages_request, update_headers_with_anthropic_beta,
+    anthropic::{
+        common_utils::API_KEY_PLACEMENT,
+        messages::{
+            handler::shape_anthropic_messages_request,
+            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
         },
     },
     azure_ai::common_utils::{
@@ -19,12 +23,11 @@ use crate::{
         messages::{
             context::MessagesTransformContext,
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
-            transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
+            transformation::BaseMessagesConfig,
         },
     },
 };
 
-const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 
 pub struct AzureAnthropicMessagesConfig;
@@ -113,7 +116,7 @@ pub fn complete_azure_anthropic_url(
 
     let api_base = api_base.trim_end_matches('/');
 
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
+    if api_base.ends_with(MESSAGES_PATH) {
         return Ok(api_base.to_string());
     }
 
@@ -121,7 +124,7 @@ pub fn complete_azure_anthropic_url(
         Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
         None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
     };
-    Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
+    Ok(format!("{with_anthropic}{MESSAGES_PATH}"))
 }
 
 #[cfg(test)]

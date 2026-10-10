@@ -1,9 +1,10 @@
 use litellm_http::request::{with_header, without_headers};
-use litellm_llms_types::providers::anthropic::{BetaProvider, BetaSet};
+use litellm_llms_types::providers::anthropic::{
+    BETA_HEADER,
+    beta::{BetaProvider, BetaSet},
+};
 
 use crate::{anthropic::common_utils::existing_betas, base_llm::auth::Headers};
-
-const BETA_HEADER: &str = "anthropic-beta";
 
 /// How the `anthropic-beta` header is treated before a request leaves for a host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

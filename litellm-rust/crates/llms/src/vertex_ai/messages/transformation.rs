@@ -6,7 +6,7 @@ use litellm_auth_gcp::{
 use litellm_http::request::has_header;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
+    providers::anthropic::beta::{AnthropicBeta, BetaProvider, BetaSet},
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;

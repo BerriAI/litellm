@@ -1,5 +1,5 @@
 use litellm_llms::anthropic::beta_headers::BetaPolicy;
-use litellm_llms_types::providers::anthropic::BetaProvider;
+use litellm_llms_types::providers::anthropic::beta::BetaProvider;
 use rstest::rstest;
 
 fn headers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {

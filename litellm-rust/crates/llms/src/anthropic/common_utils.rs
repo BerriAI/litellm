@@ -9,13 +9,15 @@ use litellm_llms_types::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
         SystemPrompt,
     },
-    providers::anthropic::{AnthropicBeta, BetaSet},
+    providers::anthropic::{
+        API_BASE, API_KEY_HEADER, BETA_HEADER, DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
+        beta::{AnthropicBeta, BetaSet},
+    },
     recognized::Recognized,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::base_llm::messages::transformation::MESSAGES_PATH_SUFFIX;
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers},
@@ -25,14 +27,10 @@ pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 pub const ANTHROPIC_AUTH_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
 pub const ENCRYPTED_REASONING_SIGNATURE_PREFIX: &str = "litellm_encrypted_reasoning:";
 const THOUGHT_SIGNATURE_SEPARATOR: &str = "__thought__";
-const BETA_HEADER: &str = "anthropic-beta";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
-pub const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
-pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
-const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
+pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header(API_KEY_HEADER);
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
-const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
 
 pub fn supports_effort_tier(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
     match level {
@@ -145,7 +143,7 @@ pub fn resolve_anthropic_api_base(
         env_lookup,
         &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
     )
-    .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string())
+    .unwrap_or_else(|| API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -155,10 +153,10 @@ pub fn complete_anthropic_url(
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
 
     let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
+    if api_base.ends_with(MESSAGES_PATH) {
         return api_base.to_string();
     }
-    format!("{api_base}{MESSAGES_PATH_SUFFIX}")
+    format!("{api_base}{MESSAGES_PATH}")
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {

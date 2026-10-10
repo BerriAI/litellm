@@ -1,54 +1,14 @@
 use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
 use litellm_llms_types::formats::messages::MessagesResponse;
-use serde::{Deserialize, Serialize};
+use litellm_llms_types::providers::anthropic::{
+    BATCHES_PATH, MESSAGES_PATH,
+    batches::{AnthropicBatchResult, AnthropicBatchResultRecord, AnthropicMessageBatch},
+};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
-
-const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnthropicBatchRequestCounts {
-    #[serde(default)]
-    pub processing: u64,
-    #[serde(default)]
-    pub succeeded: u64,
-    #[serde(default)]
-    pub errored: u64,
-    #[serde(default)]
-    pub canceled: u64,
-    #[serde(default)]
-    pub expired: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnthropicMessageBatch {
-    #[serde(default)]
-    pub id: String,
-    #[serde(default = "default_processing_status")]
-    pub processing_status: String,
-    pub created_at: Option<String>,
-    pub ended_at: Option<String>,
-    pub expires_at: Option<String>,
-    pub cancel_initiated_at: Option<String>,
-    pub archived_at: Option<String>,
-    #[serde(default)]
-    pub request_counts: AnthropicBatchRequestCounts,
-}
-
-#[derive(Deserialize)]
-struct BatchResultRecord {
-    result: BatchResult,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum BatchResult {
-    Succeeded { message: Box<MessagesResponse> },
-    Errored { error: Value },
-}
 
 pub trait AnthropicBatchesConfig {
     fn create_batch_url(
@@ -88,10 +48,6 @@ pub struct AnthropicBatchesTransformation;
 pub const ANTHROPIC_BATCHES_TRANSFORMATION: AnthropicBatchesTransformation =
     AnthropicBatchesTransformation;
 
-fn default_processing_status() -> String {
-    "in_progress".into()
-}
-
 fn timestamp(value: Option<&str>) -> Option<i64> {
     value
         .and_then(|value| {
@@ -106,12 +62,12 @@ fn batches_base_url(
 ) -> Result<Url, Error> {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
     let api_base = api_base.trim_end_matches('/');
-    let complete_url = if api_base.ends_with(BATCHES_PATH_SUFFIX) {
+    let complete_url = if api_base.ends_with(BATCHES_PATH) {
         api_base.to_string()
-    } else if let Some(base) = api_base.strip_suffix("/v1/messages") {
-        format!("{base}{BATCHES_PATH_SUFFIX}")
+    } else if let Some(base) = api_base.strip_suffix(MESSAGES_PATH) {
+        format!("{base}{BATCHES_PATH}")
     } else {
-        format!("{api_base}{BATCHES_PATH_SUFFIX}")
+        format!("{api_base}{BATCHES_PATH}")
     };
     Url::parse(&complete_url).map_err(|error| {
         Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
@@ -187,7 +143,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         BatchResponse {
             id: response.id.clone(),
             object: "batch".into(),
-            endpoint: "/v1/messages".into(),
+            endpoint: MESSAGES_PATH.into(),
             input_file_id: "None".into(),
             completion_window: "24h".into(),
             status,
@@ -216,8 +172,8 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
             .filter(|line| !line.trim().is_empty())
             .enumerate()
             .map(|(index, line)| {
-                let record: BatchResultRecord =
-                    serde_json::from_str(line.trim()).map_err(|error| {
+                let record: AnthropicBatchResultRecord = serde_json::from_str(line.trim())
+                    .map_err(|error| {
                         Error::InvalidResponse(crate::ErrorDetail::InvalidLine {
                             subject: "Anthropic batch result",
                             line: index + 1,
@@ -225,8 +181,8 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
                         })
                     })?;
                 match record.result {
-                    BatchResult::Succeeded { message } => Ok(*message),
-                    BatchResult::Errored { error } => {
+                    AnthropicBatchResult::Succeeded { message } => Ok(*message),
+                    AnthropicBatchResult::Errored { error } => {
                         Err(Error::InvalidResponse(crate::ErrorDetail::RemoteFailure {
                             operation: "Anthropic batch request",
                             detail: error,

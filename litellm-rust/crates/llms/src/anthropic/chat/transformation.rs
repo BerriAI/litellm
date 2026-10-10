@@ -3,8 +3,11 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
 };
-use litellm_llms_types::formats::chat_completions::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
+use litellm_llms_types::{
+    formats::chat_completions::{
+        ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
+    },
+    providers::anthropic::DEFAULT_HEADERS,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -199,10 +202,7 @@ impl BaseConfig for AnthropicConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("anthropic-version", "2023-06-01"),
-            ("content-type", "application/json"),
-        ]
+        DEFAULT_HEADERS
     }
 
     /// An OAuth bearer is the whole credential: Python's `validate_environment`

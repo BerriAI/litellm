@@ -3,7 +3,10 @@ use litellm_llms_types::{
     formats::messages::{
         ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
     },
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
+    providers::anthropic::{
+        DEFAULT_HEADERS,
+        beta::{AnthropicBeta, BetaProvider, BetaSet},
+    },
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
@@ -25,11 +28,6 @@ use crate::{
         messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
 };
-
-pub(crate) const DEFAULT_HEADERS: &[(&str, &str)] = &[
-    ("anthropic-version", "2023-06-01"),
-    ("content-type", "application/json"),
-];
 
 pub struct AnthropicMessagesConfig;
 
