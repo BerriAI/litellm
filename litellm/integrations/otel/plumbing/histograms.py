@@ -1,14 +1,14 @@
 import inspect
 from collections.abc import Sequence
 from functools import cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Histogram, Meter
 
-_ADVISORY_PARAM = "explicit_bucket_boundaries_advisory"
+_ADVISORY_PARAM: Final = "explicit_bucket_boundaries_advisory"
 
 
 @cache

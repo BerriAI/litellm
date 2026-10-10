@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -96,6 +97,7 @@ class _StartSpanKwargs(_StartSpanRequiredKwargs, total=False):
 
 class _UsageCompletionTokensView(TypedDict, total=False):
     completion_tokens: int
+    prompt_tokens: ReadOnly[int]
 
 
 class _ResponseWithUsageView(TypedDict, total=False):
@@ -712,7 +714,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         self._meter_provider = meter_provider
 
-        meter: Final = meter_provider.get_meter(__name__)
+        meter: Final = metrics.get_meter(__name__, meter_provider=meter_provider)
 
         semconv_buckets: Final = self.config.semconv_histogram_buckets
 
@@ -1688,7 +1690,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return key not in self._metric_attr_exclude
         return True
 
-    def _record_metrics(self, kwargs, response_obj, start_time, end_time):
+    def _record_metrics(
+        self, kwargs, response_obj: "_ResponseWithUsageView | None", start_time: datetime, end_time: datetime
+    ):
         duration_s: Final = (end_time - start_time).total_seconds()
         params: Final = kwargs.get("litellm_params") or {}
         provider: Final = _provider_label(params.get("custom_llm_provider"))
@@ -1734,7 +1738,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self._token_usage_histogram.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
         cost: Final = kwargs.get("response_cost")
-        if self._cost_histogram and cost:
+        if self._cost_histogram and isinstance(cost, (int, float)) and cost:
             self._cost_histogram.record(cost, attributes=common_attrs)
 
         # Record latency metrics (TTFT, TPOT, and Total Generation Time)
@@ -1762,7 +1766,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             except ValueError:
                 return None
 
-    def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: dict):
+    def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: Mapping[str, str]):
         """Record Time to First Token (TTFT) metric for streaming requests."""
         optional_params: Final = kwargs.get("optional_params", {})
         is_streaming: Final = optional_params.get("stream", False)
@@ -1792,7 +1796,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         response_obj: "_ResponseWithUsageView | None",
         end_time: datetime,
         duration_s: float,
-        common_attrs: dict,
+        common_attrs: Mapping[str, str],
     ):
         """Record Time Per Output Token (TPOT) metric.
 
@@ -1859,7 +1863,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self,
         kwargs: dict,
         end_time: datetime | float,
-        common_attrs: dict,
+        common_attrs: Mapping[str, str],
     ):
         """Record Total Generation Time (response duration) metric.
 
