@@ -973,6 +973,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
+    def _is_gemma_4(model: str) -> bool:
+        model_name: Final = model.split("/")[-1].lower()
+        return model_name.startswith("gemma-4")
+
+    @staticmethod
+    def _map_reasoning_effort_to_gemma_thinking_level(
+        reasoning_effort: str,
+    ) -> GeminiThinkingConfig:
+        """
+        Gemma 4 accepts only the `minimal` and `high` thinking levels and
+        rejects any thinking budget.
+        """
+        if reasoning_effort in ("medium", "high"):
+            return {"thinkingLevel": "high", "includeThoughts": True}
+        if reasoning_effort in ("disable", "none"):
+            # Mirrors the Gemini 3 mapping: callers asking for no reasoning must not receive
+            # thought parts back, even though Gemma 4 still thinks at its `minimal` level.
+            return {"thinkingLevel": "minimal", "includeThoughts": False}
+        if reasoning_effort in ("minimal", "low"):
+            return {"thinkingLevel": "minimal", "includeThoughts": True}
+        else:
+            raise _unsupported_reasoning_effort(reasoning_effort)
+
+    @staticmethod
     def _is_thinking_budget_zero(thinking_budget: int | None) -> bool:
         return thinking_budget is not None and thinking_budget == 0
 
@@ -1262,6 +1286,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
                         optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
                             effort_value, model
+                        )
+                    elif VertexGeminiConfig._is_gemma_4(model):
+                        # `optional_params` is a bare dict upstream and the dict-form
+                        # effort extraction leaves `effort_value` partially unknown;
+                        # the runtime shapes match what the helpers declare.
+                        optional_params.update(  # pyright: ignore[reportUnknownMemberType]  # optional_params is a bare dict upstream; thinkingConfig matches the GeminiThinkingConfig TypedDict the helper returns
+                            thinkingConfig=VertexGeminiConfig._map_reasoning_effort_to_gemma_thinking_level(
+                                effort_value  # pyright: ignore[reportUnknownArgumentType]  # the dict-form extraction above can leave a non-str payload; the helper validates and raises on unsupported values
+                            )
                         )
                     else:
                         optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
