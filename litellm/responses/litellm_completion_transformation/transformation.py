@@ -245,6 +245,9 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+_ChatCompletionContentElement: TypeAlias = str | dict[str, object] | OpenAIChatCompletionTextObject
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
@@ -487,6 +490,11 @@ class LiteLLMCompletionResponsesConfig:
                 input=input,
                 responses_api_request=responses_api_request,
                 replay_reasoning=True,
+                # provider-bound requests collapse a lone text block back to a string
+                # for providers that reject single-block lists (e.g. Databricks
+                # json_object validation); scanning consumers (guardrail translation,
+                # DLP) keep the structured blocks via the default (#45618)
+                collapse_single_text_block=True,
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -535,6 +543,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
+        collapse_single_text_block: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -573,6 +582,7 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
                 replay_reasoning=replay_reasoning,
+                collapse_single_text_block=collapse_single_text_block,
             )
         )
 
@@ -658,6 +668,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_response_input_param_to_chat_completion_message(
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
+        collapse_single_text_block: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -683,6 +694,7 @@ class LiteLLMCompletionResponsesConfig:
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,
                         replay_reasoning=replay_reasoning,
+                        collapse_single_text_block=collapse_single_text_block,
                     )
                 )
 
@@ -1381,6 +1393,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_responses_api_input_item_to_chat_completion_message(
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
+        collapse_single_text_block: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -1444,7 +1457,8 @@ class LiteLLMCompletionResponsesConfig:
                     GenericChatCompletionMessage(
                         role=_input_item_role(input_item),
                         content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                            inspectable
+                            inspectable,
+                            collapse_single_text_block=collapse_single_text_block,
                         ),
                     )
                 ]
@@ -1472,7 +1486,8 @@ class LiteLLMCompletionResponsesConfig:
                 GenericChatCompletionMessage(
                     role=_input_item_role(input_item),
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
+                        content,
+                        collapse_single_text_block=collapse_single_text_block,
                     ),
                 )
             ]
@@ -1819,6 +1834,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: object,
+        collapse_single_text_block: bool = False,
     ) -> str | list[str | dict[str, object]]:
         """
         Transform a Responses API content into a Chat Completion content
@@ -1869,9 +1885,33 @@ class LiteLLMCompletionResponsesConfig:
                         if "cache_control" in item:
                             content_block["cache_control"] = item["cache_control"]
                         content_list.append(content_block)
+            if collapse_single_text_block:
+                collapsed: Final = LiteLLMCompletionResponsesConfig._collapse_single_text_block_to_string(content_list)
+                return collapsed if collapsed is not None else content_list
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
+
+    @staticmethod
+    def _collapse_single_text_block_to_string(
+        content_list: Sequence[_ChatCompletionContentElement],
+    ) -> str | None:
+        # A bridged round trip turns a plain string into a single text block;
+        # collapse it back so downstream providers that require string content
+        # (e.g. Databricks json_object validation) keep working. Blocks carrying
+        # metadata (cache_control) stay lists. Returns None when the content
+        # should stay a list. Every non-str element here is a dict at runtime
+        # (SDK TypedDict instances included), so .get is safe.
+        if len(content_list) != 1:
+            return None
+        sole_block: Final = content_list[0]
+        if isinstance(sole_block, str):
+            return sole_block
+        if sole_block.get("type") == "text" and set(sole_block.keys()) <= {"type", "text"}:
+            sole_text: Final = sole_block.get("text")
+            if isinstance(sole_text, str):
+                return sole_text
+        return None
 
     @staticmethod
     def _get_chat_completion_request_content_type(

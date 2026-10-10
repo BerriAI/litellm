@@ -4519,15 +4519,17 @@ class TestCacheControlPreservation:
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
 
-    def test_content_without_cache_control_unaffected(self):
-        """Content blocks that don't have cache_control should be unaffected."""
+    def test_content_without_cache_control_collapses_to_string(self):
+        """A single text block without cache_control collapses back to a
+        string when the bridge opts in via ``collapse_single_text_block``
+        (#45618): the bridge restores plain-string content so providers that
+        require string message content keep working. Blocks carrying
+        cache_control stay lists (see the test above)."""
         content = [{"type": "text", "text": "hello"}]
         result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-            content
+            content, collapse_single_text_block=True
         )
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert "cache_control" not in result[0]
+        assert result == "hello"
 
     def test_cache_control_preserved_in_input_item_transformation(self):
         """cache_control survives the full input-item -> messages transformation."""
