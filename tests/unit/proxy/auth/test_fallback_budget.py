@@ -1,11 +1,22 @@
+from collections.abc import Mapping, Sequence
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock
+
+import litellm
 import pytest
 
 from litellm import Router
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.auth.fallback_budget import (
     RouterFallbackBudgetCheck,
     is_token_within_budget_for_model,
     router_fallback_budget_check,
+)
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model_budget_spend_cache_key,
+    team_member_budget_entity_id,
 )
 
 FREE_MODEL = {
@@ -48,6 +59,41 @@ def _token(**overrides) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(**fields)
 
 
+async def _team_member_limiter(
+    spend_by_model: Mapping[str, float] | None = None,
+) -> tuple[PROXY_VirtualKeyModelMaxBudgetLimiter, MagicMock]:
+    entity_id: Final = team_member_budget_entity_id(user_id="u1", team_id="t1")
+    spend_by_key: Final = {
+        model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.TEAM_MEMBER,
+            entity_id=entity_id,
+            budget_model=model,
+            budget_duration="1d",
+        ): spend
+        for model, spend in (spend_by_model or {}).items()
+    }
+    redis_cache: Final = MagicMock()
+
+    async def get_spend(*, key: str) -> object | None:
+        return spend_by_key.get(key)
+
+    redis_cache.async_get_cache = AsyncMock(side_effect=get_spend)
+    return PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=redis_cache)), redis_cache
+
+
+def _member_budget_spend_keys(models: Sequence[str]) -> tuple[str, ...]:
+    entity_id: Final = team_member_budget_entity_id(user_id="u1", team_id="t1")
+    return tuple(
+        model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.TEAM_MEMBER,
+            entity_id=entity_id,
+            budget_model=model,
+            budget_duration="1d",
+        )
+        for model in models
+    )
+
+
 ENFORCED = RouterFallbackBudgetCheck(is_enforced=lambda: True)
 NOT_ENFORCED = RouterFallbackBudgetCheck(is_enforced=lambda: False)
 
@@ -68,6 +114,201 @@ async def test_paid_target_refused_when_over_key_budget():
 async def test_paid_target_refused_when_over_user_budget():
     token = _token(user_spend=1900.0, user_max_budget=50.0)
     assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is False
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_refuses_an_exhausted_paid_target() -> None:
+    member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
+    token: Final = _token(
+        user_id="u1",
+        team_id="t1",
+        team_member_model_max_budget=member_caps,
+    )
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"paid-model": 10.0})
+
+    within_budget: Final = await is_token_within_budget_for_model(
+        model="paid-model",
+        valid_token=token,
+        llm_router=_router(),
+        team_member_model_budget_limiter=limiter,
+    )
+
+    assert within_budget is False
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("paid-model",))
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_budget_check_resolves_model_group_alias_before_member_cap_check() -> None:
+    expensive_model: Final = {
+        **PAID_MODEL,
+        "model_name": "expensive",
+        "model_info": {"id": "expensive-model-id"},
+    }
+    router: Final = Router(
+        model_list=[FREE_MODEL, expensive_model],
+        model_group_alias={"backup": "expensive"},
+    )
+    member_caps: Final = {
+        "backup": {"max_budget": 100.0, "budget_duration": "1d"},
+        "expensive": {"max_budget": 5.0, "budget_duration": "1d"},
+    }
+    token: Final = _token(user_id="u1", team_id="t1", team_member_model_max_budget=member_caps)
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"backup": 1.0, "expensive": 10.0})
+    budget_check: Final = RouterFallbackBudgetCheck(
+        is_enforced=lambda: True,
+        team_member_model_budget_limiter=limiter,
+    )
+
+    within_budget: Final = await budget_check(
+        model="backup",
+        request_kwargs={"metadata": {"user_api_key_auth": token}},
+        llm_router=router,
+    )
+
+    assert within_budget is False
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("backup", "expensive"))
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_budget_check_refuses_an_exhausted_alias_cap() -> None:
+    expensive_model: Final = {
+        **PAID_MODEL,
+        "model_name": "expensive",
+        "model_info": {"id": "expensive-model-id"},
+    }
+    router: Final = Router(
+        model_list=[FREE_MODEL, expensive_model],
+        model_group_alias={"backup": "expensive"},
+    )
+    member_caps: Final = {"backup": {"max_budget": 5.0, "budget_duration": "1d"}}
+    token: Final = _token(user_id="u1", team_id="t1", team_member_model_max_budget=member_caps)
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"backup": 10.0})
+    budget_check: Final = RouterFallbackBudgetCheck(
+        is_enforced=lambda: True,
+        team_member_model_budget_limiter=limiter,
+    )
+
+    within_budget: Final = await budget_check(
+        model="backup",
+        request_kwargs={"metadata": {"user_api_key_auth": token}},
+        llm_router=router,
+    )
+
+    assert within_budget is False
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("backup",))
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_budget_check_allows_alias_when_both_names_are_within_cap() -> None:
+    expensive_model: Final = {
+        **PAID_MODEL,
+        "model_name": "expensive",
+        "model_info": {"id": "expensive-model-id"},
+    }
+    router: Final = Router(
+        model_list=[FREE_MODEL, expensive_model],
+        model_group_alias={"backup": "expensive"},
+    )
+    member_caps: Final = {
+        "backup": {"max_budget": 5.0, "budget_duration": "1d"},
+        "expensive": {"max_budget": 5.0, "budget_duration": "1d"},
+    }
+    token: Final = _token(user_id="u1", team_id="t1", team_member_model_max_budget=member_caps)
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"backup": 1.0, "expensive": 1.0})
+    budget_check: Final = RouterFallbackBudgetCheck(
+        is_enforced=lambda: True,
+        team_member_model_budget_limiter=limiter,
+    )
+
+    within_budget: Final = await budget_check(
+        model="backup",
+        request_kwargs={"metadata": {"user_api_key_auth": token}},
+        llm_router=router,
+    )
+
+    assert within_budget is True
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("backup", "expensive"))
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_budget_check_deduplicates_non_alias_target() -> None:
+    router: Final = _router()
+    member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
+    token: Final = _token(user_id="u1", team_id="t1", team_member_model_max_budget=member_caps)
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"paid-model": 1.0})
+    budget_check: Final = RouterFallbackBudgetCheck(
+        is_enforced=lambda: True,
+        team_member_model_budget_limiter=limiter,
+    )
+
+    within_budget: Final = await budget_check(
+        model="paid-model",
+        request_kwargs={"metadata": {"user_api_key_auth": token}},
+        llm_router=router,
+    )
+
+    assert within_budget is True
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("paid-model",))
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_allows_a_paid_target_when_under_cap() -> None:
+    member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
+    token: Final = _token(
+        user_id="u1",
+        team_id="t1",
+        team_member_model_max_budget=member_caps,
+    )
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"paid-model": 1.0})
+
+    within_budget: Final = await is_token_within_budget_for_model(
+        model="paid-model",
+        valid_token=token,
+        llm_router=_router(),
+        team_member_model_budget_limiter=limiter,
+    )
+
+    assert within_budget is True
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("paid-model",))
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_caps_are_not_evaluated_without_a_limiter() -> None:
+    token: Final = _token(
+        user_id="u1",
+        team_id="t1",
+        team_member_model_max_budget={"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+
+    assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is True
+
+
+@pytest.mark.asyncio
+async def test_team_member_limiter_is_not_called_without_member_caps() -> None:
+    token: Final = _token(user_id="u1", team_id="t1")
+    limiter, redis_cache = await _team_member_limiter()
+
+    within_budget: Final = await is_token_within_budget_for_model(
+        model="paid-model",
+        valid_token=token,
+        llm_router=_router(),
+        team_member_model_budget_limiter=limiter,
+    )
+
+    assert within_budget is True
+    assert redis_cache.async_get_cache.call_args_list == []
 
 
 @pytest.mark.asyncio
@@ -121,6 +362,33 @@ async def test_enforced_check_reads_the_key_from_request_metadata(metadata_field
 
     assert await ENFORCED(model="paid-model", request_kwargs=over, llm_router=_router()) is False
     assert await ENFORCED(model="paid-model", request_kwargs=under, llm_router=_router()) is True
+
+
+@pytest.mark.asyncio
+async def test_router_check_passes_member_limiter_from_request_metadata() -> None:
+    member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
+    token: Final = _token(
+        user_id="u1",
+        team_id="t1",
+        team_member_model_max_budget=member_caps,
+    )
+    limiter, redis_cache = await _team_member_limiter(spend_by_model={"paid-model": 10.0})
+    budget_check: Final = RouterFallbackBudgetCheck(
+        is_enforced=lambda: True,
+        team_member_model_budget_limiter=limiter,
+    )
+    request_kwargs: Final = {"metadata": {"user_api_key_auth": token}}
+
+    within_budget: Final = await budget_check(
+        model="paid-model",
+        request_kwargs=request_kwargs,
+        llm_router=_router(),
+    )
+
+    assert within_budget is False
+    assert tuple(call.kwargs["key"] for call in redis_cache.async_get_cache.call_args_list) == (
+        _member_budget_spend_keys(("paid-model",))
+    )
 
 
 @pytest.mark.asyncio

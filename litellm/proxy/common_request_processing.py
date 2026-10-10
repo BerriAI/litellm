@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,  # noqa: TID251  # _pre_call_with_fallbacks receives general_settings as a legacy bare dict
     overload,
     runtime_checkable,
 )
@@ -82,6 +83,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
+    is_model_cost_zero,
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
@@ -126,7 +128,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 )
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import validate_router_weights
@@ -249,6 +251,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
+    sanitize_for_log,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
@@ -736,6 +739,7 @@ async def _resolve_per_request_model_group_alias(
 
 
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+_ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
@@ -1732,6 +1736,69 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+async def _team_member_within_fallback_model_budget(
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str,
+    llm_router: Router | None,
+    proxy_config: ProxyConfig | None,
+    proxy_logging_obj: ProxyLogging,
+) -> bool:
+    member_caps: Final = user_api_key_dict.team_member_model_max_budget
+    user_id: Final = user_api_key_dict.user_id
+    team_id: Final = user_api_key_dict.team_id
+    if not isinstance(member_caps, Mapping) or not member_caps or user_id is None or team_id is None:
+        return True
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        router_settings: Final = (
+            _ROUTER_SETTINGS_ADAPTER.validate_python(
+                await proxy_config.get_hierarchical_router_settings(  # pyright: ignore[reportUnknownMemberType]  # legacy bare-dict return
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+            if proxy_config is not None and llm_router is not None
+            else None
+        )
+        raw_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
+            object, user_api_key_dict.aliases
+        )
+        served_model: Final = resolve_served_model(
+            model,
+            litellm.model_alias_map,
+            raw_aliases,
+            router_settings.get("model_group_alias") if router_settings is not None else None,
+        )
+        if is_model_cost_zero(model=served_model, llm_router=llm_router):
+            return True
+        budget_models: Final = (
+            tuple(dict.fromkeys((model, served_model, llm_router.routable_model_group(served_model))))
+            if llm_router is not None
+            else tuple(dict.fromkeys((model, served_model)))
+        )
+        for budget_model in budget_models:
+            await model_max_budget_limiter.is_team_member_within_model_budget(
+                user_id=user_id,
+                team_id=team_id,
+                team_member_model_max_budget=member_caps,
+                model=budget_model,
+            )
+    except litellm.BudgetExceededError:
+        return False
+    except Exception as e:  # noqa: BLE001  # fail closed: a spend lookup failure must not bill the member
+        verbose_proxy_logger.warning(
+            "Skipping rate limit fallback to model=%s: member budget lookup failed: %s",
+            sanitize_for_log(model),
+            sanitize_for_log(e),
+        )
+        return False
+    return True
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -2302,7 +2369,21 @@ class ProxyBaseLLMRequestProcessing:
         route_type: str,
         llm_router: Router | None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
+            ProxyRateLimitError,
+            per_model_rate_limits_disable_fallbacks,
+        )
+
+        general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
+            Mapping[str, object], general_settings
+        )
+
+        def is_hard_per_model_limit(exc: ProxyRateLimitError) -> bool:
+            return (
+                exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+                and per_model_rate_limits_disable_fallbacks(general_settings_view)
+            )
 
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
@@ -2336,6 +2417,7 @@ class ProxyBaseLLMRequestProcessing:
                 or not configured_fallbacks
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
+                or is_hard_per_model_limit(original_exc)
             ):
                 raise
 
@@ -2354,6 +2436,14 @@ class ProxyBaseLLMRequestProcessing:
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
+                        continue
+                    if not await _team_member_within_fallback_model_budget(
+                        user_api_key_dict=user_api_key_dict,
+                        model=fallback_model,
+                        llm_router=llm_router,
+                        proxy_config=proxy_config,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ):
                         continue
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
@@ -2375,7 +2465,9 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyRateLimitError:
+                    except ProxyRateLimitError as fallback_exc:
+                        if is_hard_per_model_limit(fallback_exc):
+                            raise
                         continue
             except BaseException:
                 self.data = rate_limited_data
