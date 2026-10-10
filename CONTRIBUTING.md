@@ -55,7 +55,7 @@ That's it! Your local development environment is ready.
 
 ## Commit and Branch Conventions
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Branches are named either `litellm_<description>` (the form most PRs in this repo use, and the one AGENTS.md asks internal contributors to use) or in the [Conventional Branches](https://conventional-branch.github.io/) form `<type>/<description>`, where `<type>` is one of `feature`, `bugfix`, `hotfix`, `release`, or `chore`. Run `make install-hooks` once per clone to enable the local git hooks that enforce these. See the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
 
 ### 2. Development Workflow
 
@@ -78,7 +78,7 @@ uv run pytest tests/unit/<your_test_file>.py -v
 git add .
 git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR (branch must follow Conventional Branches — see above)
+# Push and create a PR (branch name must follow the conventions above)
 git push origin feature/your-feature
 ```
 
