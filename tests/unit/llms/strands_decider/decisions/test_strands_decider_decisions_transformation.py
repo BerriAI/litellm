@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
 from botocore.credentials import Credentials
 from pydantic import TypeAdapter
@@ -13,7 +14,7 @@ from litellm.llms.strands_decider.decisions.transformation import (
     AGENTCORE_SESSION_HEADER,
     StrandsDeciderDecisionsConfig,
 )
-from litellm.types.decisions import DecisionsRequestBody
+from litellm.types.decisions import DecisionsIRResponse, DecisionsRequestBody
 from litellm.types.llms.bedrock import AwsAuthParams
 
 _ARN: Final = "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/qa_decider-AbC123xyz0"
@@ -189,16 +190,67 @@ def test_api_key_on_a_runtime_arn_sends_the_bearer_token_without_sigv4() -> None
     assert aws.resolved == ()
 
 
+def _response(url: str, payload: object) -> httpx.Response:
+    return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+
+def _transform(api_base: str, payload: object) -> DecisionsIRResponse:
+    config: Final = StrandsDeciderDecisionsConfig()
+    url: Final = config.get_complete_url(api_base=api_base, model="strands-decider-2B-hobson-v21")
+    return config.transform_decisions_response(
+        model="strands-decider-2B-hobson-v21",
+        custom_llm_provider="strands_decider",
+        raw_response=_response(url, payload),
+        request=_IR_REQUEST,
+    )
+
+
 @pytest.mark.parametrize(
     ("code", "status_code"),
     [("bad_request", 400), ("invalid_request", 400), ("loading", 503), ("inference_error", 500), ("new_code", 500)],
 )
 def test_runtime_error_envelope_raises_with_the_mapped_status(code: str, status_code: int) -> None:
     with pytest.raises(BaseLLMException) as raised:
-        StrandsDeciderDecisionsConfig().parse_response(
-            {"error": {"code": code, "message": "at most 16 questions"}}, _IR_REQUEST
-        )
+        _transform(_ARN, {"error": {"code": code, "message": "at most 16 questions"}})
 
     assert raised.value.status_code == status_code
     assert code in raised.value.message
     assert "at most 16 questions" in raised.value.message
+
+
+@pytest.mark.parametrize("code", ["bad_request", "loading", "inference_error"])
+def test_plain_api_base_error_envelope_keeps_the_unexpected_response_error(code: str) -> None:
+    with pytest.raises(BaseLLMException) as raised:
+        _transform("https://strands.example", {"error": {"code": code, "message": "at most 16 questions"}})
+
+    assert raised.value.status_code == 500
+    assert raised.value.message.startswith("Decisions provider 'strands_decider' returned an unexpected response")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://strands.example/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A123456789012%3Aruntime"
+        "%2Fqa_decider-AbC123xyz0/invocations",
+        "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/not-an-arn/invocations",
+    ],
+)
+def test_error_envelope_from_a_url_that_is_not_the_runtime_keeps_the_unexpected_response_error(url: str) -> None:
+    with pytest.raises(BaseLLMException) as raised:
+        StrandsDeciderDecisionsConfig().transform_decisions_response(
+            model="strands-decider-2B-hobson-v21",
+            custom_llm_provider="strands_decider",
+            raw_response=_response(url, {"error": {"code": "bad_request", "message": "at most 16 questions"}}),
+            request=_IR_REQUEST,
+        )
+
+    assert raised.value.status_code == 500
+
+
+@pytest.mark.parametrize("payload", [["not", "an", "object"], {"error": "unstructured"}])
+def test_runtime_reply_that_is_not_an_error_envelope_keeps_the_unexpected_response_error(payload: object) -> None:
+    with pytest.raises(BaseLLMException) as raised:
+        _transform(_ARN, payload)
+
+    assert raised.value.status_code == 500
+    assert raised.value.message.startswith("Decisions provider 'strands_decider' returned an unexpected response")

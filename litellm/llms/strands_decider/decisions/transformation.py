@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
-from pydantic import BaseModel, ConfigDict
+import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -23,6 +24,7 @@ _RESERVED_HEADER_PREFIXES: Final = ("x-amzn-bedrock-agentcore-runtime-", "x-amz-
 _RUNTIME_ARN: Final = re.compile(
     r"\Aarn:aws(?:-[a-z]+)*:bedrock-agentcore:(?P<region>[a-z0-9-]+):[0-9]{12}:runtime/[A-Za-z0-9_-]+\Z"
 )
+_INVOCATIONS_PATH: Final = re.compile(r"\A/runtimes/(?P<arn>[^/]+)/invocations\Z")
 _RUNTIME_ERROR_STATUS: Final = MappingProxyType({"bad_request": 400, "invalid_request": 400, "loading": 503})
 
 
@@ -46,6 +48,12 @@ def agentcore_runtime(api_base: str) -> AgentCoreRuntime | None:
     return None if match is None else AgentCoreRuntime(arn=api_base, region=match["region"])
 
 
+def invoked_runtime(url: httpx.URL) -> AgentCoreRuntime | None:
+    match: Final = _INVOCATIONS_PATH.match(url.raw_path.decode("ascii"))
+    runtime: Final = None if match is None else agentcore_runtime(unquote(match["arn"]))
+    return runtime if runtime is not None and runtime.invocations_url == str(url) else None
+
+
 class _RuntimeError(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -60,8 +68,11 @@ class _RuntimeReply(BaseModel):
     answers: object = None
 
 
-def _runtime_error(payload: object) -> _RuntimeError | None:
-    reply: Final = _RuntimeReply.model_validate(payload)
+def _runtime_error(content: bytes) -> _RuntimeError | None:
+    try:
+        reply: Final = _RuntimeReply.model_validate_json(content)
+    except ValidationError:
+        return None
     return reply.error if reply.answers is None else None
 
 
@@ -129,11 +140,19 @@ class StrandsDeciderDecisionsConfig(BaseDecisionsConfig, SignsRequestsWithAWS):
         )
         return dict(signed.headers.items()), payload.encode()
 
-    def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-        runtime_error: Final = _runtime_error(payload)
+    def transform_decisions_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        raw_response: httpx.Response,
+        request: DecisionsIRRequest,
+    ) -> DecisionsIRResponse:
+        runtime_error: Final = (
+            None if invoked_runtime(raw_response.request.url) is None else _runtime_error(raw_response.content)
+        )
         if runtime_error is not None:
             raise BaseLLMException(
                 status_code=_RUNTIME_ERROR_STATUS.get(runtime_error.code, 500),
                 message=f"Strands Decider runtime error '{runtime_error.code}': {runtime_error.message}",
             )
-        return super().parse_response(payload, request)
+        return super().transform_decisions_response(model, custom_llm_provider, raw_response, request)

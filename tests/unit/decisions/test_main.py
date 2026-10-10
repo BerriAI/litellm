@@ -884,6 +884,25 @@ async def test_strands_decider_runtime_error_envelope_raises_instead_of_answerin
         )
 
 
+@pytest.mark.asyncio
+async def test_strands_decider_plain_api_base_error_envelope_stays_an_unexpected_response(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post("https://strands.example/v1/systemone").respond(
+        json={"error": {"code": "bad_request", "message": "at most 16 questions"}}
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="returned an unexpected response"):
+        await litellm.adecisions(
+            model="strands_decider/strands-decider-2B-hobson-v19",
+            state="review",
+            questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+            api_base="https://strands.example",
+        )
+
+
 _VLLM_RESPONSE: Final[Mapping[str, object]] = {
     "id": "systemone-4af3d2c1",
     "object": "structured_decision",
