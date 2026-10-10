@@ -498,6 +498,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         client_initialization_params: Final[dict] = locals()
         client_initialization_params["is_async"] = _is_async
         _lp: Final = litellm_params or {}
+        configured_max_retries: Final = _lp.get("max_retries")
+        client_initialization_params["max_retries"] = (
+            DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
+        )
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
         _ad_token: Final = _lp.get("azure_ad_token")
         _client_secret: Final = _lp.get("client_secret")
