@@ -571,10 +571,12 @@ jobs:
               tests/unit/experimental_mcp_client/test_mcp_client.py
               tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
               tests/unit/proxy/_experimental/mcp_server/test_interactions.py
+              tests/unit/proxy/_experimental/mcp_server/test_litellm_proxy_mcp_handler.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_elicitation_handler.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
               tests/unit/proxy/_experimental/mcp_server/test_operations.py
+              tests/unit/responses/mcp/test_litellm_proxy_mcp_handler.py
               tests/integration/mcp/test_interactions.py
             python-version: "3.12"
             workers: 2

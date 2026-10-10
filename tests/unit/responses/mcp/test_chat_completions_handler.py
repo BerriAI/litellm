@@ -1070,7 +1070,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     # exported as a function on the top-level `litellm` package, which can confuse
     # pytest's dotted-path resolver.
     mcp_handler_module = importlib.import_module(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+        "litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler"
     )
     monkeypatch.setattr(mcp_handler_module, "function_setup", mock_function_setup)
     monkeypatch.setattr(
@@ -1455,7 +1455,7 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
             ),
         ]
     if logging_failure:
-        from litellm.responses.mcp import litellm_proxy_mcp_handler
+        from litellm.proxy._experimental.mcp_server import litellm_proxy_mcp_handler
         def fail_logging(*args, **kwargs):
             raise RuntimeError("logging initialization failed")
         monkeypatch.setattr(litellm_proxy_mcp_handler, "function_setup", fail_logging)
