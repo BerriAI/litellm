@@ -584,3 +584,76 @@ def test_vertex_ai_live_route_without_usage_frames_yields_no_logging_response(
 
     assert normalized["standard_logging_response_object"] is None
     assert normalized["kwargs"] == {"model": _LIVE_MODEL}
+
+
+# --- regression for #45787: substring route matching must not classify plain
+# passthrough URLs (e.g. "http://example.com/api/predict/laya") as Vertex AI ---
+
+_NON_VERTEX_URLS_WITH_METHOD_SUBSTRINGS: Final = [
+    "http://example.com/api/predict/laya",
+    "http://example.com/api/search/items",
+    "http://example.com/api/embedContent/proxy",
+    "http://example.com/v1/rawPredict",
+    "http://example.com/predictLongRunning/jobs/1",
+    "http://example.com/api/streamGenerateContent/relay",
+]
+
+
+@pytest.mark.parametrize("url", _NON_VERTEX_URLS_WITH_METHOD_SUBSTRINGS)
+def test_is_vertex_route_ignores_non_vertex_urls_containing_method_substrings(url: str) -> None:
+    assert PassThroughEndpointLogging().is_vertex_route(url) is False
+
+
+def test_is_vertex_route_matches_authentic_vertex_method_urls() -> None:
+    handler = PassThroughEndpointLogging()
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/"
+            "publishers/google/models/gemini-2.0-flash:predict"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/"
+            "publishers/google/models/gemini-2.0:search"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/"
+            "publishers/google/models/text-embedding-005:embedContent"
+        )
+        is True
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_non_vertex_predict_url_normalizes_without_predictions_keyerror() -> None:
+    # Issue #45787: a plain passthrough URL containing the substring "predict"
+    # used to be misrouted to the Vertex handler, whose unguarded
+    # response["predictions"] access then raised KeyError inside the logging
+    # worker and silently dropped the spend row. After the fix the URL is no
+    # longer classified as a Vertex route, so normalization returns the generic
+    # (no-op) payload instead of crashing.
+    handler = PassThroughEndpointLogging()
+    assert handler.is_vertex_route("http://example.com/api/predict/laya") is False
+    normalized = handler.normalize_llm_passthrough_logging_payload(
+        httpx_response=httpx.Response(200, request=httpx.Request("GET", "http://example.com/api/predict/laya")),
+        response_body={},  # no "predictions" key
+        request_body={},
+        logging_obj=_logging_obj(),
+        url_route="http://example.com/api/predict/laya",
+        result="",
+        start_time=_START,
+        end_time=_END,
+        cache_hit=False,
+        custom_llm_provider=None,
+    )
+
+    # No longer misrouted to the Vertex handler, so no KeyError and no
+    # vertex-specific payload is produced.
+    assert normalized["standard_logging_response_object"] is None
+    assert "standard_logging_response_object" in normalized
+    assert "kwargs" in normalized
