@@ -3,14 +3,16 @@ Tests for the proxy OCR endpoint helpers that select the response format
 (`x-req-format: native | litellm`) and return the provider's native payload.
 """
 
+import io
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import orjson
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
-from litellm.proxy.ocr_endpoints.endpoints import _native_response, _parse_ocr_request
+from litellm.proxy.ocr_endpoints.endpoints import OCRRequestError, _native_response, _parse_ocr_request
 
 AZURE_NATIVE_OPERATION = {
     "status": "succeeded",
@@ -145,3 +147,32 @@ def test_upload_octet_stream_content_type_falls_back_to_filename_inference():
 
     assert "mime_type" not in document
     assert document["file"].name == "receipt.pdf"
+
+
+def _multipart_request(form: dict[str, object]) -> MagicMock:
+    request: Final = MagicMock()
+    request.headers = {"content-type": "multipart/form-data; boundary=x"}
+    request.form = AsyncMock(return_value=form)
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "form, message",
+    [
+        ({"model": "mistral-ocr"}, "must include a 'file' field"),
+        (
+            {"model": "mistral-ocr", "file": UploadFile(file=io.BytesIO(b""), filename="empty.pdf")},
+            "Uploaded file is empty",
+        ),
+    ],
+    ids=["missing-file", "empty-file"],
+)
+async def test_malformed_multipart_upload_is_a_400_on_the_file_param(form: dict[str, object], message: str) -> None:
+    with pytest.raises(OCRRequestError) as exc_info:
+        await _parse_ocr_request(_multipart_request(form))
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "file"
+    assert message in exc_info.value.message

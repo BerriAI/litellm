@@ -6768,8 +6768,6 @@ def aggregated_date_range_error(start_date: str | None, end_date: str | None) ->
     date_range: Final = parse_canonical_date_range(start_date, end_date)
     if isinstance(date_range, InvalidDateRange):
         return date_range.reason
-    if date_range.end < date_range.start:
-        return "end_date must be on or after start_date"
     if (date_range.end - date_range.start).days > _MAX_AGGREGATED_RANGE_DAYS:
         return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
     return None

@@ -20,11 +20,15 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileUpdateRequest,
 )
-from litellm.utils import add_openai_metadata
 
 
 def _clean_dict(source: Mapping[str, object]) -> dict[str, object]:
     return {k: v for k, v in source.items() if v is not None}
+
+
+def _visible_attributes(attributes: Mapping[str, object]) -> Mapping[str, str]:
+    """The caller's string attributes, all of them, so the provider enforces its own key limit."""
+    return {str(k): v for k, v in attributes.items() if k != "hidden_params" and isinstance(v, str)}
 
 
 class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
@@ -106,11 +110,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         payload: Final[dict[str, object]] = _clean_dict(dict(create_request))
         attributes: Final = payload.get("attributes")
         if isinstance(attributes, dict):
-            filtered_attributes: Final = add_openai_metadata(attributes)
-            if filtered_attributes is not None:
-                payload["attributes"] = filtered_attributes
-            else:
-                payload.pop("attributes", None)
+            payload["attributes"] = _visible_attributes(attributes)
         url: Final = api_base
         return url, payload
 
@@ -211,11 +211,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         payload: Final[dict[str, object]] = dict(update_request)
         attributes: Final = payload.get("attributes")
         if isinstance(attributes, dict):
-            filtered_attributes: Final = add_openai_metadata(attributes)
-            if filtered_attributes is not None:
-                payload["attributes"] = filtered_attributes
-            else:
-                payload.pop("attributes", None)
+            payload["attributes"] = _visible_attributes(attributes)
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base}/{encoded_file_id}", payload
 

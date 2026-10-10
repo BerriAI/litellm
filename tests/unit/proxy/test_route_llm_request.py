@@ -1760,3 +1760,635 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "context_window_fallbacks" not in call_kwargs
     assert "num_retries" not in call_kwargs
     assert "model_group_retry_policy" not in call_kwargs
+
+
+def _router_with_defaults(
+    default_litellm_params: dict[str, object],
+    *,
+    wildcard_target: str | None = None,
+    fallbacks: list[dict[str, list[str]]] | None = None,
+):
+    import litellm
+
+    wildcard: Final[tuple[dict[str, object], ...]] = (
+        ({"model_name": "*", "litellm_params": {"model": wildcard_target, "api_key": "test-key"}},)
+        if wildcard_target is not None
+        else ()
+    )
+    model_list: Final[list[dict[str, object]]] = [
+        {
+            "model_name": "served",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            "model_info": {"id": "served-deployment"},
+        },
+        {
+            "model_name": "team-internal",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            "model_info": {"id": "team-deployment", "team_id": "team-a", "team_public_model_name": "team-public"},
+        },
+        *wildcard,
+    ]
+    return litellm.Router(
+        model_list=model_list,
+        model_group_alias={"served-alias": "served"},
+        default_litellm_params=default_litellm_params,
+        fallbacks=fallbacks,
+    )
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+        ("atext_completion", "prompt"),
+        ("atranscription", "file"),
+    ],
+)
+def test_router_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "served"},
+            llm_router=_router_with_defaults({param: "supplied-by-router-default"}),
+        )
+
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+    ],
+)
+def test_user_config_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "img", "user_config": {"model_list": [], "default_litellm_params": {param: "x"}}},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == param
+
+
+def test_deployment_param_for_positional_param_still_raises() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {"model": "openai/gpt-image-1", "api_key": "test-key", "prompt": "a cat"},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type="aimage_generation", data={"model": "img"}, llm_router=router)
+
+    assert exc_info.value.param == "prompt"
+
+
+@pytest.mark.parametrize(
+    "route_type, model",
+    [
+        pytest.param("anthropic_messages", "omni-moderation-2024-09-26", id="unknown-model"),
+        pytest.param("amoderation", "omni-moderation-2024-09-26", id="moderation-unknown-model"),
+        pytest.param("amoderation", "openai/gpt-4o-mini", id="moderation-deployment-name"),
+        pytest.param("amoderation", "served-deployment", id="moderation-deployment-id"),
+    ],
+)
+def test_router_default_ignored_for_model_the_router_does_not_merge_for(route_type: str, model: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": model, "messages": []},
+            llm_router=_router_with_defaults({"input": "supplied", "max_tokens": 16}),
+        )
+
+    assert exc_info.value.param in {"input", "max_tokens"}
+
+
+@pytest.mark.parametrize(
+    "model, wildcard_target",
+    [
+        pytest.param("served", None, id="model-name"),
+        pytest.param("served-alias", None, id="model-group-alias"),
+        pytest.param("openai/gpt-4o-mini", None, id="deployment-name"),
+        pytest.param("served-deployment", None, id="deployment-id"),
+        pytest.param("team-public", None, id="team-public-name"),
+        pytest.param("a2a/support-agent", None, id="a2a-agent"),
+        pytest.param("gpt-4.1", "openai/*", id="wildcard"),
+    ],
+)
+def test_router_default_applies_to_every_model_the_router_serves(model: str, wildcard_target: str | None) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": model, "messages": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, wildcard_target=wildcard_target),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        pytest.param([{"*": ["served"]}], id="generic-fallback"),
+        pytest.param([{"unlisted-model": ["served"]}], id="model-keyed-fallback"),
+    ],
+)
+def test_router_default_applies_to_an_unlisted_model_a_fallback_answers_for(
+    fallbacks: list[dict[str, list[str]]],
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=fallbacks),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        pytest.param({"fallbacks": ["served"]}, id="request-body-fallbacks"),
+        pytest.param({"router_settings_override": {"fallbacks": [{"*": ["served"]}]}}, id="key-router-settings"),
+        pytest.param({"fallbacks": [{"model": "served"}]}, id="request-body-client-style-fallbacks"),
+        pytest.param({"fallbacks": [{"model": "served", "temperature": 0}]}, id="client-style-fallbacks-with-params"),
+        pytest.param({"fallbacks": [{"extra": 1, "model": "served"}]}, id="client-style-fallbacks-model-not-first"),
+        pytest.param(
+            {"api_key": "client-value", "fallbacks": [{"model": "served"}]}, id="client-style-fallbacks-client-key"
+        ),
+        pytest.param(
+            {"router_settings_override": {"fallbacks": [{"model": "served"}]}}, id="key-router-settings-client-style"
+        ),
+    ],
+)
+def test_router_default_applies_to_an_unlisted_model_a_per_request_fallback_answers_for(
+    request_fields: dict[str, object],
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": [], **request_fields},
+            llm_router=_router_with_defaults({"max_tokens": 16}),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("client_credential", ["api_key", "api_base"])
+def test_key_router_settings_fallbacks_ignored_when_client_credentials_skip_the_override(
+    client_credential: str,
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={
+                "model": "unlisted-model",
+                "messages": [],
+                client_credential: "client-value",
+                "router_settings_override": {"fallbacks": []},
+            },
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"*": ["served"]}]),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        pytest.param({"fallbacks": []}, id="empty-body-fallbacks"),
+        pytest.param({"fallbacks": [{"other-model": ["served"]}]}, id="body-fallbacks-for-another-model"),
+        pytest.param({"router_settings_override": {"fallbacks": []}}, id="empty-key-fallbacks"),
+    ],
+)
+def test_router_generic_fallback_keeps_router_defaults_whatever_the_request_fallbacks_say(
+    request_fields: dict[str, object],
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": [], **request_fields},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"*": ["served"]}]),
+        )
+        is None
+    )
+
+
+def test_request_body_fallbacks_replace_a_model_keyed_router_fallback_for_the_default_check() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": [], "fallbacks": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"unlisted-model": ["served"]}]),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+def test_router_default_ignored_for_an_unlisted_model_another_fallback_chain_covers() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"served": ["team-internal"]}]),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+@pytest.mark.asyncio
+async def test_missing_model_reaches_the_router_when_no_wildcard_matches_it() -> None:
+    llm_router: Final = MagicMock()
+    llm_router.default_deployment = None
+    llm_router.model_names = []
+    llm_router.is_recognized_model.return_value = False
+    llm_router.router_general_settings.pass_through_all_models = False
+    llm_router.auto_routers = llm_router.complexity_routers = {}
+    llm_router.adaptive_routers = llm_router.quality_routers = {}
+    llm_router.pattern_router.patterns = {"anthropic/(.*)": []}
+    llm_router.pattern_router.get_deployments_by_pattern.return_value = []
+    llm_router.acompletion.return_value = "served by a fallback"
+
+    assert (
+        await route_request(
+            {"model": None, "messages": [{"role": "user", "content": "hi"}]}, llm_router, None, "acompletion"
+        )
+        == "served by a fallback"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_type", ["acompletion", "aresponses", "anthropic_messages"])
+@pytest.mark.parametrize("model", [None, ""])
+@pytest.mark.parametrize("wildcard_target", ["openai/*", "hosted_vllm/*"])
+async def test_missing_model_is_not_routed_to_a_forwarding_wildcard_deployment(
+    route_type: str, model: str | None, wildcard_target: str
+) -> None:
+    router: Final = _router_with_defaults({}, wildcard_target=wildcard_target)
+
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": model, "input": "hi", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8},
+            router,
+            None,
+            route_type,
+        )
+
+
+@pytest.mark.asyncio
+async def test_missing_model_still_reaches_a_fixed_target_wildcard_deployment() -> None:
+    router: Final = _router_with_defaults({}, wildcard_target="openai/gpt-4o")
+
+    response: Final = await (
+        await route_request(
+            {"model": None, "messages": [{"role": "user", "content": "hi"}], "mock_response": "fixed target"},
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "fixed target"
+    assert response.model == "gpt-4o"
+
+
+def _router_with_forwarding_and_fixed_wildcards():
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {"model_name": "*/*", "litellm_params": {"model": "hosted_vllm/*/*", "api_base": "http://vllm.invalid/v1"}},
+            {"model_name": "*", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"}},
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_model_reaches_the_fixed_target_wildcard_it_matches() -> None:
+    response: Final = await (
+        await route_request(
+            {"model": "", "messages": [{"role": "user", "content": "hi"}], "mock_response": "fixed target"},
+            _router_with_forwarding_and_fixed_wildcards(),
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.model == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_null_model_matching_a_forwarding_wildcard_is_not_routed_next_to_a_fixed_one() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": None, "messages": [{"role": "user", "content": "hi"}]},
+            _router_with_forwarding_and_fixed_wildcards(),
+            None,
+            "acompletion",
+        )
+
+
+@pytest.fixture
+def registered_prompt_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+    monkeypatch.setattr(litellm, "callbacks", [CustomPromptManagement()])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("registered_prompt_manager")
+async def test_null_model_with_a_prompt_id_is_left_to_the_prompt_manager() -> None:
+    response: Final = await (
+        await route_request(
+            {
+                "model": None,
+                "prompt_id": "greet",
+                "messages": [{"role": "user", "content": "hi"}],
+                "mock_response": "from the prompt's model",
+            },
+            _router_with_defaults({}, wildcard_target="openai/*"),
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "from the prompt's model"
+
+
+@pytest.mark.asyncio
+async def test_null_model_with_a_prompt_id_but_no_prompt_manager_is_not_routed_to_a_forwarding_wildcard() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": None, "prompt_id": "greet", "messages": [{"role": "user", "content": "hi"}]},
+            _router_with_defaults({}, wildcard_target="openai/*"),
+            None,
+            "acompletion",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("registered_prompt_manager")
+async def test_empty_model_with_a_prompt_id_is_still_not_routed_to_a_forwarding_wildcard() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": "", "prompt_id": "greet", "messages": [{"role": "user", "content": "hi"}]},
+            _router_with_defaults({}, wildcard_target="hosted_vllm/*"),
+            None,
+            "acompletion",
+        )
+
+
+def _router_with_a_complexity_router(default_litellm_params: dict[str, object]):
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {"model_name": "cheap-model", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k"}},
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "cheap-model"}},
+                    "complexity_router_default_model": "cheap-model",
+                },
+            },
+        ],
+        default_litellm_params=default_litellm_params,
+    )
+
+
+def _claude_code_messages_request(headers: dict[str, str]) -> dict[str, object]:
+    return {
+        "model": "unlisted-subagent-model",
+        "messages": [],
+        "litellm_metadata": {"user_api_key_hash": "caller-key-hash"},
+        "proxy_server_request": {"headers": {"x-claude-code-session-id": "session-12345678", **headers}},
+    }
+
+
+def test_router_default_applies_to_a_claude_code_subagent_turn_a_session_router_may_answer() -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data=_claude_code_messages_request({"x-claude-code-agent-id": "agent-1"}),
+            llm_router=_router_with_a_complexity_router({"max_tokens": 64}),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({}, id="main-turn"),
+        pytest.param({"x-claude-code-agent-id": "agent-1", "x-claude-code-session-id": "short"}, id="invalid-session"),
+    ],
+)
+def test_router_default_ignored_for_an_unlisted_model_no_session_router_answers(headers: dict[str, str]) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data=_claude_code_messages_request(headers),
+            llm_router=_router_with_a_complexity_router({"max_tokens": 64}),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+def test_router_default_ignored_for_a_claude_code_subagent_turn_without_a_session_router() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data=_claude_code_messages_request({"x-claude-code-agent-id": "agent-1"}),
+            llm_router=_router_with_defaults({"max_tokens": 64}),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+def _router_with_a_complexity_router_and_a_forwarding_wildcard():
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "cheap-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "api_key": "k",
+                    "mock_response": "from the session's router",
+                },
+            },
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "cheap-model"}},
+                    "complexity_router_default_model": "cheap-model",
+                },
+            },
+            {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},
+        ]
+    )
+
+
+async def _claude_code_subagent_turn(
+    subagent_model: str | None, *, after_a_main_turn: bool = True, **subagent_fields: object
+) -> object:
+    llm_router: Final = _router_with_a_complexity_router_and_a_forwarding_wildcard()
+    if after_a_main_turn:
+        main_turn: Final = _claude_code_messages_request({})
+        await (
+            await route_request(
+                {
+                    **main_turn,
+                    "model": "smart-router",
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                llm_router,
+                None,
+                "anthropic_messages",
+            )
+        )
+    subagent_turn: Final = _claude_code_messages_request({"x-claude-code-agent-id": "agent-1"})
+    return await (
+        await route_request(
+            {
+                **subagent_turn,
+                "model": subagent_model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                **subagent_fields,
+            },
+            llm_router,
+            None,
+            "anthropic_messages",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_null_model_on_a_claude_code_subagent_turn_is_left_to_the_session_router() -> None:
+    response: Final = await _claude_code_subagent_turn(None)
+
+    assert response["content"][0]["text"] == "from the session's router"  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]  # aanthropic_messages returns an untyped dict
+
+
+@pytest.mark.asyncio
+async def test_empty_model_on_a_claude_code_subagent_turn_is_still_not_routed_to_a_forwarding_wildcard() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await _claude_code_subagent_turn("")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "subagent_turn",
+    [
+        pytest.param({"after_a_main_turn": False}, id="unbound-session"),
+        pytest.param({"fallback_depth": 1}, id="fallback-attempt"),
+    ],
+)
+async def test_null_model_on_a_claude_code_subagent_turn_the_session_router_skips_is_not_routed_to_a_forwarding_wildcard(
+    subagent_turn: dict[str, object],
+) -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await _claude_code_subagent_turn(None, **subagent_turn)  # pyright: ignore[reportArgumentType]  # the params mix the keyword-only flag with body fields
+
+
+@pytest.mark.asyncio
+async def test_model_optional_route_still_reaches_a_wildcard_deployment_without_a_model() -> None:
+    llm_router: Final = MagicMock()
+    llm_router.default_deployment = None
+    llm_router.model_names = []
+    llm_router.is_recognized_model.return_value = False
+    llm_router.router_general_settings.pass_through_all_models = False
+    llm_router.pattern_router.patterns = {"(.*)": []}
+    llm_router.pattern_router.get_deployments_by_pattern.return_value = []
+    llm_router.alist_batches.return_value = "listed"
+
+    assert await route_request({"model": None}, llm_router, None, "alist_batches") == "listed"
+    llm_router.alist_batches.assert_called_once_with(model=None)
+
+
+@pytest.mark.asyncio
+async def test_null_user_config_is_treated_as_absent() -> None:
+    router: Final = _router_with_defaults({})
+
+    response: Final = await (
+        await route_request(
+            {
+                "model": "served",
+                "messages": [{"role": "user", "content": "hi"}],
+                "mock_response": "from the main router",
+                "user_config": None,
+            },
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "from the main router"

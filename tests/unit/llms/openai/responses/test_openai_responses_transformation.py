@@ -145,11 +145,14 @@ class TestOpenAIResponsesAPIConfig:
             (17, 17),
             (256, 256),
             (None, None),
+            (0, 0),
+            (-1, -1),
         ],
     )
     def test_enforce_min_max_output_tokens(self, value, expected):
-        """Below the minimum clamps to 16; the boundary, larger values, and None
-        are returned unchanged so no previously-valid request regresses."""
+        """Positive values below the minimum clamp to 16; the boundary, larger values,
+        None, and non-positive values are returned unchanged so the provider rejects
+        an invalid value instead of the proxy silently rewriting it."""
         assert self.config._enforce_min_max_output_tokens(value) == expected
 
     def validate_responses_api_request_params(self, params, expected_fields):

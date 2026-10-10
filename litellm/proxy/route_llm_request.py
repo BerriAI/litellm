@@ -6,11 +6,16 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
+from litellm.router_utils.fallback_event_handlers import (
+    check_non_standard_fallback_format,
+    get_fallback_model_group,
+)
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -245,13 +250,18 @@ def _find_missing_required_body_param(
     if not missing_present_params:
         return None
     candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
-    router_default_litellm_params: Final = _router_default_litellm_params(route_type, data, llm_router)
+    router_default_litellm_params: Final = _router_default_litellm_params(
+        route_type, data, llm_router, model_resolves=bool(candidate_litellm_params)
+    )
     missing_param: Final = next(
         (
             param
             for param in missing_present_params
             if router_default_litellm_params.get(param) is None
-            and not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            and (
+                route_type in _ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM
+                or not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            )
         ),
         None,
     )
@@ -260,19 +270,37 @@ def _find_missing_required_body_param(
     return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
 
 
-_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = frozenset(
-    {"asearch", "acreate_agent", "acreate_eval", "acreate_run"}
+# The Router method takes the route's required param positionally, so it binds before
+# any default or deployment param is merged in, and only the request body can supply it.
+_ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM: Final[frozenset[str]] = frozenset(
+    {"aimage_generation", "aspeech", "atext_completion", "atranscription"}
 )
+
+_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = (
+    frozenset({"asearch", "acreate_agent", "acreate_eval", "acreate_run"}) | _ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM
+)
+
+# The Router merges defaults on these only when `get_model_list` lists the model.
+_ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS: Final[frozenset[str]] = frozenset({"amoderation"})
+
+# Routes whose providers reject a request without a model. A wildcard deployment that
+# forwards the requested name would send a made-up one, so it must not serve these.
+_ROUTE_TYPES_REQUIRING_MODEL: Final[frozenset[str]] = frozenset({"acompletion", "aresponses", "anthropic_messages"})
 
 
 def _router_default_litellm_params(
     route_type: str,
     data: Mapping[str, object],
     llm_router: LitellmRouter | None,
+    *,
+    model_resolves: bool,
 ) -> Mapping[str, object]:
     # Mirror exactly the defaults the dispatching router will merge at dispatch time:
-    # user_config requests dispatch on their own throwaway Router, and the listed route
-    # types (plus model-less direct dispatch) never pass through the router's merge.
+    # the listed route types either never pass through the router's merge or take the
+    # param positionally, which binds before the merge; user_config requests dispatch on
+    # their own throwaway Router; and the merge only runs once a deployment resolves.
+    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE:
+        return {}
     user_config: Final[Mapping[str, object] | None] = (
         data.get("user_config") if isinstance(data.get("user_config"), Mapping) else None
     )
@@ -280,10 +308,137 @@ def _router_default_litellm_params(
         defaults: Final[Mapping[str, object] | None] = user_config.get("default_litellm_params")
         return defaults if isinstance(defaults, Mapping) else {}
     model_name: Final = data.get("model")
-    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE or not isinstance(model_name, str) or not model_name:
+    if not isinstance(model_name, str) or not model_name:
         return {}
     router_defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
-    return router_defaults if isinstance(router_defaults, Mapping) else {}
+    if not isinstance(router_defaults, Mapping) or llm_router is None:
+        return {}
+    if model_resolves:
+        return router_defaults
+    if route_type in _ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS or not _router_serves_model(llm_router, data, model_name):
+        return {}
+    return router_defaults
+
+
+def _router_serves_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
+    """Whether dispatch reaches one of the router's deployments for a model that
+    `get_model_list` does not list: a deployment id or name, an alias, a team public name,
+    an A2A agent, any model a fallback chain (including `*`) answers for, or a Claude Code
+    subagent turn its session's routing strategy may answer for."""
+    return (
+        _is_a2a_agent_model(model_name)
+        or llm_router.is_recognized_model(model_name)
+        or model_name in llm_router.deployment_names  # pyright: ignore[reportUnknownMemberType]  # Router.deployment_names is an untyped list
+        or model_name in llm_router.team_public_model_names
+        or _router_falls_back_for_model(llm_router, data, model_name)
+        or _router_may_resume_claude_code_session(llm_router, data)
+    )
+
+
+def _router_may_resume_claude_code_session(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+    """The router sends a Claude Code subagent turn to the auto, complexity, adaptive or
+    quality router its session's main turn picked, whatever model the subagent names."""
+    return (
+        any(
+            (
+                llm_router.auto_routers,
+                llm_router.complexity_routers,
+                llm_router.adaptive_routers,
+                llm_router.quality_routers,
+            )
+        )
+        and llm_router._request_header(data, "x-claude-code-agent-id") is not None  # pyright: ignore[reportPrivateUsage]  # the router's own header read for the session lookup this mirrors
+        and llm_router._claude_code_session_router_cache_key(data) is not None  # pyright: ignore[reportPrivateUsage]  # the router's own session key; None means it never looks up a binding
+    )
+
+
+async def _claude_code_session_router_answers(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+    """Whether the router will send this Claude Code subagent turn to the auto, complexity,
+    adaptive or quality router its session's main turn is bound to, whatever model it names."""
+    if not _router_may_resume_claude_code_session(llm_router, data) or data.get("fallback_depth") not in (None, 0):
+        return False
+    cache_key: Final = llm_router._claude_code_session_router_cache_key(data)  # pyright: ignore[reportPrivateUsage]  # the router's own session key for the binding this reads
+    if cache_key is None:
+        return False
+    bound_model: Final = await llm_router._get_claude_code_session_router_binding(cache_key)  # pyright: ignore[reportPrivateUsage]  # the router's own binding read
+    return (
+        isinstance(bound_model, str)
+        and llm_router._select_pre_routing_strategy(  # pyright: ignore[reportPrivateUsage]  # the router drops a binding with no strategy left
+            llm_router.get_model_from_alias(model=bound_model) or bound_model, data
+        )
+        is not None
+    )
+
+
+def _router_falls_back_for_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
+    """The router swaps an unknown model for its own `*` fallback whatever the request
+    says; past that, it reads `fallbacks` from the request kwargs before its own, and key
+    and team `router_settings` fill that kwarg at dispatch when the body leaves it out,
+    except on the client-credential branch, which dispatches before the override. A
+    client-style list (`["gpt-4o"]` or `[{"model": "gpt-4o"}]`) is tried for any model."""
+    if llm_router._has_default_fallbacks():  # pyright: ignore[reportPrivateUsage]  # the router's own test for the swap this mirrors
+        return True
+    override: Final = data.get("router_settings_override") if "api_key" not in data and "api_base" not in data else None
+    override_fallbacks: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # key and team router_settings are untyped JSON
+        override.get("fallbacks")  # pyright: ignore[reportUnknownMemberType]  # key and team router_settings are untyped JSON
+        if isinstance(override, Mapping)
+        else None
+    )
+    fallbacks: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # key and team router_settings are untyped JSON
+        data.get("fallbacks")
+        if "fallbacks" in data
+        else override_fallbacks
+        if override_fallbacks is not None
+        else getattr(llm_router, "fallbacks", None)
+    )
+    if not isinstance(fallbacks, list) or not fallbacks:
+        return False
+    if check_non_standard_fallback_format(fallbacks=fallbacks):  # pyright: ignore[reportUnknownArgumentType]  # Router.fallbacks is an untyped list
+        return True
+    chain, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)  # pyright: ignore[reportUnknownArgumentType]  # Router.fallbacks is an untyped list
+    return bool(chain)
+
+
+class _MatchedModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _MatchedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _MatchedModelInfo
+
+
+_MATCHED_DEPLOYMENTS_ADAPTER: Final[TypeAdapter[tuple[_MatchedDeployment, ...]]] = TypeAdapter(
+    tuple[_MatchedDeployment, ...]
+)
+
+
+async def _wildcard_forwards_missing_model(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+    """Whether the router would pick a wildcard deployment for a request with a null or
+    empty model and every such deployment copies the requested name into its target
+    (`openai/*`), so the provider would get a made-up or empty model instead of a fixed one
+    like `openai/gpt-4o`. An empty one must not reach a provider: key and team model checks
+    skip it, and some servers (vLLM) answer it with their default model. A null model is left
+    to a registered prompt manager when the request has a `prompt_id`, and to the router a
+    Claude Code session is bound to on its subagent turns; either may pick the model."""
+    model: Final = data.get("model")
+    if model is None and (
+        (data.get("prompt_id") and litellm.logging_callback_manager.callback_is_active(CustomPromptManagement))
+        or await _claude_code_session_router_answers(llm_router, data)
+    ):
+        return False
+    matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
+        llm_router.pattern_router.get_deployments_by_pattern(model=model if isinstance(model, str) else None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for this model; it returns untyped dicts
+    )
+    targets: Final = tuple(
+        deployment.litellm_params.model
+        for matched_deployment in matched
+        if (deployment := llm_router.get_deployment(model_id=matched_deployment.model_info.id)) is not None
+    )
+    return bool(targets) and all("*" in target for target in targets)
 
 
 def _candidate_deployment_litellm_params(
@@ -626,6 +781,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
@@ -802,7 +959,14 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
-            elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
+            elif llm_router.default_deployment is not None or (
+                len(llm_router.pattern_router.patterns) > 0
+                and not (
+                    not data["model"]
+                    and route_type in _ROUTE_TYPES_REQUIRING_MODEL
+                    and await _wildcard_forwards_missing_model(llm_router, data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes the request body as an untyped dict
+                )
+            ):
                 return getattr(llm_router, f"{route_type}")(**data)
             elif data["model"] in llm_router.deployment_names:
                 # Only match deployment_names if no wildcard matched
