@@ -2889,3 +2889,73 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+COMPLETION_RESPONSE_WITHOUT_USAGE = {
+    "id": "chatcmpl-no-usage",
+    "created": 1784657740,
+    "model": "gpt-5.6",
+    "object": "chat.completion",
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello"},
+        }
+    ],
+}
+
+COMPLETION_RESPONSE_NULL_USAGE = {**COMPLETION_RESPONSE_WITHOUT_USAGE, "usage": None}
+
+COMPLETION_RESPONSE_ZERO_USAGE = {
+    **COMPLETION_RESPONSE_WITHOUT_USAGE,
+    "usage": {"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0},
+}
+
+
+def test_convert_to_model_response_object_marks_missing_usage():
+    # main.py's completion() pre-attaches an empty Usage() before the provider
+    # reply is parsed; without a marker, a missing block looks like a real 0.
+    model_response: Final = ModelResponse()
+    setattr(model_response, "usage", litellm.Usage())
+
+    result: Final = convert_to_model_response_object(
+        response_object=COMPLETION_RESPONSE_WITHOUT_USAGE,
+        model_response_object=model_response,
+        response_type="completion",
+    )
+
+    assert result.hidden_params["usage_missing"] is True
+    # the zero-filled default stays intact for downstream consumers
+    assert result.usage.prompt_tokens == 0
+    assert result.usage.completion_tokens == 0
+
+
+def test_convert_to_model_response_object_marks_null_usage():
+    model_response: Final = ModelResponse()
+    setattr(model_response, "usage", litellm.Usage())
+
+    result: Final = convert_to_model_response_object(
+        response_object=COMPLETION_RESPONSE_NULL_USAGE,
+        model_response_object=model_response,
+        response_type="completion",
+    )
+
+    assert result.hidden_params["usage_missing"] is True
+    assert result.usage.total_tokens == 0
+
+
+def test_convert_to_model_response_object_real_zero_usage_not_marked():
+    model_response: Final = ModelResponse()
+    setattr(model_response, "usage", litellm.Usage())
+
+    result: Final = convert_to_model_response_object(
+        response_object=COMPLETION_RESPONSE_ZERO_USAGE,
+        model_response_object=model_response,
+        response_type="completion",
+    )
+
+    assert "usage_missing" not in result.hidden_params
+    assert result.usage.prompt_tokens == 0
+    assert result.usage.completion_tokens == 0
+    assert result.usage.total_tokens == 0

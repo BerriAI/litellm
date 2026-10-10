@@ -745,6 +745,15 @@ def convert_to_model_response_object(
             if "usage" in response_object and response_object["usage"] is not None:
                 usage_object: Final = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
+            else:
+                # The provider sent no usage (missing or explicit null). The
+                # pre-attached empty Usage() keeps zero-filled counts as the
+                # default for downstream consumers, but a missing block would
+                # be indistinguishable from a real zero - record the absence
+                # so callers can tell the two apart.
+                cast(  # cast-ok: hidden_params is normalized to a dict in the function prelude
+                    dict[str, object], hidden_params
+                ).update({"usage_missing": True})
             if "created" in response_object:
                 model_response_object.created = safe_convert_created_field(response_object["created"])
 
