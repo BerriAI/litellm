@@ -60,6 +60,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=int(os.environ.get("INTEGRATION_WORKERS", "1")))
     parser.add_argument("--shards", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARDS", "1")))
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARD_INDEX", "0")))
+    parser.add_argument("--timings", type=Path)
     parser.add_argument("--list", action="store_true", help="print the group's test files and exit")
     parser.add_argument("files", nargs="*", help="run only these files, or pytest node ids inside them, of the group")
     options: Final = parser.parse_intermixed_args()
@@ -108,6 +109,7 @@ def main() -> int:
             f"--integration-order-seed={options.order_seed}",
             f"--integration-shard-count={options.shards}",
             f"--integration-shard-index={options.shard_index}",
+            *(("--integration-timings", str(options.timings)) if options.timings is not None else ()),
             f"--junitxml={output / 'junit.xml'}",
             "-o",
             "junit_family=xunit1",

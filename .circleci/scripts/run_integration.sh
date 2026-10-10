@@ -219,7 +219,7 @@ fi
 node_files=()
 case_shards=1
 case_shard_index=0
-if [ "$suite" = extensions ] || [ "$suite" = providers ]; then
+if [ "$suite" = extensions ] || [ "$suite" = providers ] || [ "$suite" = mcp ]; then
   case_shards="${CIRCLE_NODE_TOTAL:-1}"
   case_shard_index="${CIRCLE_NODE_INDEX:-0}"
 elif [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
@@ -245,7 +245,8 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
+  .venv/bin/python tests/integration/run.py "$suite" --results "$results" \
+  --timings "/tmp/integration-timings/$suite/timings.json" "${node_files[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do

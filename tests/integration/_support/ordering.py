@@ -4,11 +4,37 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import reduce
 from itertools import chain, groupby
+from math import ceil, isfinite
+from statistics import median
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 from _pytest.python import get_direct_param_fixture_func
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, TypeAdapter, ValidationError
+
+EMPTY_DURATIONS: Final[Mapping[str, float]] = MappingProxyType({})
+
+
+class CaseTiming(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    nodeid: str = Field(min_length=1)
+    seconds: FiniteFloat = Field(ge=0)
+
+
+TIMINGS: Final = TypeAdapter(tuple[CaseTiming, ...])
+
+
+def parse_timings(content: str) -> Mapping[str, float]:
+    try:
+        values: Final = TIMINGS.validate_json(content)
+    except ValidationError:
+        return EMPTY_DURATIONS
+    durations: Final = {value.nodeid: max(value.seconds, 0.001) for value in values}
+    if len(durations) != len(values) or not isfinite(sum(durations.values())):
+        return EMPTY_DURATIONS
+    return MappingProxyType(durations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,31 +122,57 @@ def fixture_groups(cases: tuple[CollectedCase, ...]) -> Mapping[str, str]:
     return MappingProxyType(dict(chain.from_iterable(_file_groups(members) for _, members in files)))
 
 
-def _allocate(shards: tuple[tuple[str, ...], ...], group: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
-    index: Final = min(range(len(shards)), key=lambda candidate: len(shards[candidate]))
+def _allocate(
+    shards: tuple[tuple[str, ...], ...], group: tuple[str, ...], durations: Mapping[str, float]
+) -> tuple[tuple[str, ...], ...]:
+    index: Final = min(
+        range(len(shards)),
+        key=lambda candidate: (sum(durations[nodeid] for nodeid in shards[candidate]), len(shards[candidate])),
+    )
     return tuple((*shard, *group) if candidate == index else shard for candidate, shard in enumerate(shards))
 
 
-def _partition_group(cases: Iterable[CollectedCase], maximum: int) -> tuple[tuple[str, ...], ...]:
+def _add_case(
+    groups: tuple[tuple[str, ...], ...], case: CollectedCase, maximum: float, durations: Mapping[str, float]
+) -> tuple[tuple[str, ...], ...]:
+    if not groups:
+        return ((case.nodeid,),)
+    if sum(durations[nodeid] for nodeid in groups[-1]) + durations[case.nodeid] > maximum:
+        return (*groups, (case.nodeid,))
+    return (*groups[:-1], (*groups[-1], case.nodeid))
+
+
+def _partition_group(
+    cases: Iterable[CollectedCase], maximum: float, durations: Mapping[str, float]
+) -> tuple[tuple[str, ...], ...]:
     members: Final = tuple(sorted(cases, key=lambda case: case.nodeid))
     nodeids: Final = tuple(case.nodeid for case in members)
     if members[0].parameters:
         return (nodeids,)
-    return tuple(nodeids[start : start + maximum] for start in range(0, len(nodeids), maximum))
+    return reduce(lambda groups, case: _add_case(groups, case, maximum, durations), members, ())
 
 
-def case_shards(cases: tuple[CollectedCase, ...], count: int) -> tuple[frozenset[str], ...]:
+def case_shards(
+    cases: tuple[CollectedCase, ...], count: int, durations: Mapping[str, float] = EMPTY_DURATIONS
+) -> tuple[frozenset[str], ...]:
     if count < 1:
         raise ValueError("Integration shard count must be positive")
     groups: Final = fixture_groups(cases)
+    known: Final = tuple(durations[case.nodeid] for case in cases if case.nodeid in durations)
+    default: Final = max(float(median(known)), 0.001) if known else 1.0
+    weights: Final = MappingProxyType({case.nodeid: max(durations.get(case.nodeid, default), 0.001) for case in cases})
 
     def key(case: CollectedCase) -> str:
         return groups[case.nodeid] or case.nodeid
 
-    maximum: Final = max(1, (len(cases) + count - 1) // count)
+    maximum: Final = sum(weights.values()) / count if known else float(max(1, ceil(len(cases) / count)))
     members: Final = tuple(
-        chain.from_iterable(_partition_group(group, maximum) for _, group in groupby(sorted(cases, key=key), key=key))
+        chain.from_iterable(
+            _partition_group(group, maximum, weights) for _, group in groupby(sorted(cases, key=key), key=key)
+        )
     )
-    ordered: Final = tuple(sorted(members, key=lambda group: (-len(group), group[0])))
-    allocation: Final = reduce(_allocate, ordered, tuple(() for _ in range(count)))
+    ordered: Final = tuple(sorted(members, key=lambda group: (-sum(weights[nodeid] for nodeid in group), group[0])))
+    allocation: Final = reduce(
+        lambda shards, group: _allocate(shards, group, weights), ordered, tuple(() for _ in range(count))
+    )
     return tuple(frozenset(shard) for shard in allocation)

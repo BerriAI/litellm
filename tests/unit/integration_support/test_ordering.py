@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from itertools import groupby
+from types import MappingProxyType
 from typing import Final
 
-from tests.integration._support.ordering import CollectedCase, ScopedParameter, case_shards, fixture_groups
+import pytest
+
+from tests.integration._support.ordering import (
+    CollectedCase,
+    ScopedParameter,
+    case_shards,
+    fixture_groups,
+    parse_timings,
+)
 from tests.integration.conftest import _order_key
 
 
@@ -106,5 +115,66 @@ def test_an_oversized_unparametrized_fixture_is_split_into_bounded_groups() -> N
     )
     shards: Final = case_shards(cases, 4)
     assert tuple(map(len, shards)) == (5, 5, 5, 5)
+    assert frozenset.union(*shards) == frozenset(case.nodeid for case in cases)
+    assert sum(len(shard) for shard in shards) == len(cases)
+
+
+def test_measured_cost_splits_an_expensive_shared_fixture_without_losing_cases() -> None:
+    expensive: Final = tuple(
+        CollectedCase(f"test_tracing.py::test_route[{index}]", fixtures=("module:test_tracing.py:gateway",))
+        for index in range(4)
+    )
+    cheap: Final = tuple(CollectedCase(f"test_other.py::test_route[{index}]") for index in range(8))
+    cases: Final = (*expensive, *cheap)
+    durations: Final = MappingProxyType({case.nodeid: 40.0 if case in expensive else 1.0 for case in cases})
+    shards: Final = case_shards(cases, 4, durations)
+    assert sorted(sum(durations[nodeid] for nodeid in shard) for shard in shards) == [42.0] * 4
+    assert frozenset.union(*shards) == frozenset(case.nodeid for case in cases)
+    assert sum(len(shard) for shard in shards) == len(cases)
+    assert shards == case_shards(tuple(reversed(cases)), 4, durations)
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        "invalid",
+        "{}",
+        '[{"nodeid":"case","seconds":-1}]',
+        '[{"nodeid":"case","seconds":"1"}]',
+        '[{"nodeid":"case","seconds":NaN}]',
+        '[{"nodeid":"case","seconds":Infinity}]',
+        '[{"nodeid":"case","seconds":1},{"nodeid":"case","seconds":2}]',
+    ),
+)
+def test_invalid_timing_cache_preserves_the_complete_cold_partition(content: str) -> None:
+    cases: Final = tuple(CollectedCase(f"test_owned.py::test_route[{index}]") for index in range(9))
+    durations: Final = parse_timings(content)
+    assert not durations
+    assert case_shards(cases, 3, durations) == case_shards(cases, 3)
+
+
+def test_timing_cache_keeps_zero_duration_skips_and_assigns_new_cases() -> None:
+    durations: Final = parse_timings('[{"nodeid":"skip","seconds":0},{"nodeid":"old","seconds":12}]')
+    cases: Final = (CollectedCase("skip"), CollectedCase("new"))
+    shards: Final = case_shards(cases, 2, durations)
+    assert durations["skip"] > 0
+    assert frozenset.union(*shards) == frozenset({"skip", "new"})
+    assert tuple(map(len, shards)) == (1, 1)
+
+
+def test_measured_cost_keeps_parametrized_fixture_configurations_atomic() -> None:
+    shared: Final = tuple(
+        CollectedCase(
+            f"test_tracing.py::test_route[{index}]",
+            (ScopedParameter("module:test_tracing.py", "configuration", "shared"),),
+        )
+        for index in range(3)
+    )
+    plain: Final = tuple(CollectedCase(f"test_other.py::test_route[{index}]") for index in range(5))
+    cases: Final = (*shared, *plain)
+    durations: Final = MappingProxyType({case.nodeid: 40.0 if case in shared else 1.0 for case in cases})
+    shards: Final = case_shards(cases, 3, durations)
+    configuration: Final = frozenset(case.nodeid for case in shared)
+    assert sum(configuration <= shard for shard in shards) == 1
     assert frozenset.union(*shards) == frozenset(case.nodeid for case in cases)
     assert sum(len(shard) for shard in shards) == len(cases)

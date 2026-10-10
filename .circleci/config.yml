@@ -2963,6 +2963,33 @@ jobs:
       - store_test_results:
           path: test-results/provider-replay-harness
 
+  integration_timing_snapshot:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Prepare optional integration timing snapshots
+          command: mkdir -p /tmp/integration-timings/{extensions,providers,mcp}
+      - restore_cache:
+          keys:
+            - integration-timings-v1-extensions-{{ .Branch }}-{{ .Revision }}
+            - integration-timings-v1-extensions-{{ .Branch }}-
+      - restore_cache:
+          keys:
+            - integration-timings-v1-providers-{{ .Branch }}-{{ .Revision }}
+            - integration-timings-v1-providers-{{ .Branch }}-
+      - restore_cache:
+          keys:
+            - integration-timings-v1-mcp-{{ .Branch }}-{{ .Revision }}
+            - integration-timings-v1-mcp-{{ .Branch }}-
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - integration-timings
+
   integration_contracts:
     parameters:
       suite:
@@ -2985,6 +3012,15 @@ jobs:
     parallelism: << parameters.parallelism >>
     steps:
       - setup_litellm_test_deps
+      - when:
+          condition:
+            or:
+              - equal: [extensions, << parameters.suite >>]
+              - equal: [providers, << parameters.suite >>]
+              - equal: [mcp, << parameters.suite >>]
+          steps:
+            - attach_workspace:
+                at: /tmp
       - when:
           condition:
             equal: [browser, << parameters.suite >>]
@@ -3033,12 +3069,17 @@ jobs:
             or:
               - equal: [extensions, << parameters.suite >>]
               - equal: [providers, << parameters.suite >>]
+              - equal: [mcp, << parameters.suite >>]
           steps:
             - run:
                 name: Prepare this shard's execution record
                 command: |
                   mkdir -p "/tmp/integration-shards/<< parameters.suite >>/$CIRCLE_NODE_INDEX"
                   cp test-results/integration-<< parameters.suite >>/execution.json "/tmp/integration-shards/<< parameters.suite >>/$CIRCLE_NODE_INDEX/execution.json"
+                  if [ "<< parameters.suite >>" = mcp ]; then
+                    mkdir -p "/tmp/integration-shards/mcp/$CIRCLE_NODE_INDEX/coverage"
+                    cp test-results/integration-mcp/coverage/data "/tmp/integration-shards/mcp/$CIRCLE_NODE_INDEX/coverage/data.$CIRCLE_NODE_INDEX"
+                  fi
             - persist_to_workspace:
                 root: /tmp/integration-shards
                 paths:
@@ -3052,7 +3093,7 @@ jobs:
     parameters:
       suite:
         type: enum
-        enum: [extensions, providers]
+        enum: [extensions, providers, mcp]
       shards:
         type: integer
     machine:
@@ -3065,7 +3106,27 @@ jobs:
           at: /tmp/integration-shards
       - run:
           name: Verify every << parameters.suite >> case ran exactly once
-          command: .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/<< parameters.suite >> --shards << parameters.shards >>
+          command: |
+            .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/<< parameters.suite >> \
+              --shards << parameters.shards >> --timings-output /tmp/integration-timings/<< parameters.suite >>/timings.json
+      - save_cache:
+          key: integration-timings-v1-<< parameters.suite >>-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - /tmp/integration-timings/<< parameters.suite >>
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - run:
+                name: Combine coverage from every MCP shard
+                command: |
+                  mkdir -p test-results/integration-mcp/coverage
+                  export COVERAGE_FILE="$PWD/test-results/integration-mcp/coverage/data"
+                  .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml /tmp/integration-shards/mcp/*/coverage
+                  .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml > test-results/integration-mcp/coverage/coverage.txt
+                  .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml -d test-results/integration-mcp/coverage/html
+            - store_artifacts:
+                path: test-results/integration-mcp/coverage
 
   routing_parity:
     parameters:
@@ -3148,6 +3209,9 @@ jobs:
         default: ""
       timeout_minutes:
         type: integer
+      workers:
+        type: integer
+        default: 1
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -3175,12 +3239,16 @@ jobs:
           command: |
             mkdir -p test-results
             coverage_args=()
+            worker_args=()
+            if [ "<< parameters.workers >>" -gt 1 ]; then
+              worker_args=(-n << parameters.workers >> --dist=worksteal)
+            fi
             if [ -n "<< parameters.coverage_flag >>" ]; then
               coverage_args=(--cov=./litellm --cov-report=xml:coverage.xml)
             fi
             timeout --signal=TERM << parameters.timeout_minutes >>m uv run --no-sync pytest \
               << parameters.test_path >> -vv --tb=short --durations=10 -o junit_family=xunit1 \
-              --junitxml=test-results/junit.xml "${coverage_args[@]}"
+              --junitxml=test-results/junit.xml "${coverage_args[@]}" "${worker_args[@]}"
       - when:
           condition: << parameters.coverage_flag >>
           steps:
@@ -3353,6 +3421,8 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
+      - integration_timing_snapshot:
+          name: integration-timing-snapshot
       - integration_contracts:
           name: integration-<< matrix.suite >>
           matrix:
@@ -3374,6 +3444,8 @@ workflows:
           name: integration-providers
           suite: providers
           parallelism: 16
+          requires:
+            - integration-timing-snapshot
       - integration_shard_coverage:
           name: integration-providers-coverage
           suite: providers
@@ -3388,10 +3460,21 @@ workflows:
           name: integration-mcp
           suite: mcp
           resource_class: xlarge
+          parallelism: 2
+          requires:
+            - integration-timing-snapshot
+      - integration_shard_coverage:
+          name: integration-mcp-coverage
+          suite: mcp
+          shards: 2
+          requires:
+            - integration-mcp
       - integration_contracts:
           name: integration-extensions
           suite: extensions
           parallelism: 32
+          requires:
+            - integration-timing-snapshot
       - integration_shard_coverage:
           name: integration-extensions-coverage
           suite: extensions
@@ -3424,6 +3507,7 @@ workflows:
           test_path: tests/proxy_migration_tests
           seed: false
           timeout_minutes: 20
+          workers: 2
       - postgres_suite:
           name: roi-database
           test_path: tests/integration/database/test_roi_observed.py
