@@ -206,41 +206,41 @@ class TestDashScopeVideoMapOpenAIParams:
         assert mapped == {"ratio": "16:9", "resolution": "720P"}
 
     @pytest.mark.parametrize(
-        "size,expected_ratio",
+        "size,expected",
         [
-            ("832x480", "16:9"),
-            ("1792x1024", "16:9"),
-            ("1024x1792", "9:16"),
-            ("960x720", "4:3"),
-            ("720x960", "3:4"),
-            ("1080x1080", "1:1"),
+            ("832x480", {"ratio": "16:9", "resolution": "480P"}),
+            ("1792x1024", {"ratio": "16:9", "resolution": "1080P"}),
+            ("1024x1792", {"ratio": "9:16", "resolution": "1080P"}),
+            ("960x720", {"ratio": "4:3", "resolution": "720P"}),
+            ("720x960", {"ratio": "3:4", "resolution": "720P"}),
+            ("1080x1080", {"ratio": "1:1", "resolution": "1080P"}),
         ],
     )
-    def test_size_snaps_to_the_nearest_ratio_dashscope_accepts(self, size, expected_ratio):
+    def test_size_snaps_to_the_nearest_ratio_dashscope_accepts(self, size, expected):
         """DashScope fails the task after accepting it when the ratio is not one
         it lists, so an exact reduction like 832x480 -> 26:15 is never sent."""
         mapped = DashScopeVideoConfig().map_openai_params(
             video_create_optional_params={"size": size}, model="wan3.0-video", drop_params=False
         )
 
-        assert mapped["ratio"] == expected_ratio
+        assert mapped == expected
 
     @pytest.mark.parametrize(
-        "size,expected_resolution",
+        "size,expected",
         [
-            ("854x480", "480P"),
-            ("1280x720", "720P"),
-            ("1920x1080", "1080P"),
-            ("1080x1920", "1080P"),
-            ("3840x2160", "1080P"),
+            ("854x480", {"ratio": "16:9", "resolution": "480P"}),
+            ("1280x720", {"ratio": "16:9", "resolution": "720P"}),
+            ("1920x1080", {"ratio": "16:9", "resolution": "1080P"}),
+            ("1080x1920", {"ratio": "9:16", "resolution": "1080P"}),
+            ("3840x2160", {"ratio": "16:9", "resolution": "1080P"}),
         ],
     )
-    def test_resolution_tier_is_picked_from_the_shortest_side(self, size, expected_resolution):
+    def test_resolution_tier_is_picked_from_the_shortest_side(self, size, expected):
         mapped = DashScopeVideoConfig().map_openai_params(
             video_create_optional_params={"size": size}, model="wan3.0-video", drop_params=False
         )
 
-        assert mapped["resolution"] == expected_resolution
+        assert mapped == expected
 
     def test_explicit_resolution_and_ratio_win_over_size(self):
         mapped = DashScopeVideoConfig().map_openai_params(
@@ -249,8 +249,7 @@ class TestDashScopeVideoMapOpenAIParams:
             drop_params=False,
         )
 
-        assert mapped["ratio"] == "4:3"
-        assert mapped["resolution"] == "1080P"
+        assert mapped == {"ratio": "4:3", "resolution": "1080P"}
 
     def test_request_metadata_is_never_sent_as_a_body_field(self):
         mapped = DashScopeVideoConfig().map_openai_params(
@@ -451,8 +450,7 @@ class TestDashScopeVideoStatus:
             raw_response=_mock_response(payload), logging_obj=None, custom_llm_provider="dashscope"
         )
 
-        assert video_obj.usage["duration_seconds"] == 12.0
-        assert video_obj.usage["video_resolution"] == "1080p"
+        assert video_obj.usage == {"duration_seconds": 12.0, "video_resolution": "1080p"}
 
     def test_size_is_rebuilt_from_shortest_side_and_ratio(self):
         """DashScope splits geometry across SR and ratio; OpenAI's size field is
@@ -753,26 +751,25 @@ class TestDashScopeVideoUnsupportedOperations:
             calls[operation]()
 
 
-class TestDashScopeVideoProviderWiring:
-    @pytest.mark.parametrize(
-        "provider,expected",
-        [
-            ("dashscope", DashScopeVideoConfig),
-            ("qwencloud", QwenCloudVideoConfig),
-            ("qwen_ai_platform", QwenAIPlatformVideoConfig),
-        ],
+@pytest.mark.parametrize(
+    "provider,expected",
+    [
+        ("dashscope", DashScopeVideoConfig),
+        ("qwencloud", QwenCloudVideoConfig),
+        ("qwen_ai_platform", QwenAIPlatformVideoConfig),
+    ],
+)
+def test_provider_resolves_to_a_video_config(provider, expected):
+    """Without this registration litellm answers 'video generation is not
+    supported for dashscope' before any transform runs."""
+    import litellm
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_video_config(
+        model="wan3.0-video", provider=litellm.LlmProviders(provider)
     )
-    def test_provider_resolves_to_a_video_config(self, provider, expected):
-        """Without this registration litellm answers 'video generation is not
-        supported for dashscope' before any transform runs."""
-        import litellm
-        from litellm.utils import ProviderConfigManager
 
-        config = ProviderConfigManager.get_provider_video_config(
-            model="wan3.0-video", provider=litellm.LlmProviders(provider)
-        )
-
-        assert type(config) is expected
+    assert type(config) is expected
 
 
 VIDEO_MODEL_TIERS: Final = (
@@ -794,22 +791,49 @@ VIDEO_MODEL_TIERS: Final = (
 class TestDashScopeVideoPricing:
     @pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
     @pytest.mark.parametrize("model,tiers", VIDEO_MODEL_TIERS)
-    def test_every_supported_tier_bills_its_own_rate(self, provider, model, tiers):
+    def test_every_supported_tier_has_its_own_rate(self, provider, model, tiers):
         """A tier without its own rate falls back to the base rate, so a 480P
         video would silently bill at the 1080P price; a missing alias entry
         bills the whole video at zero."""
         from litellm import get_model_info
-        from litellm.llms.openai.cost_calculation import video_generation_cost
 
         info = get_model_info(model=model, custom_llm_provider=provider)
 
-        for tier in tiers:
-            tier_rate = info[f"output_cost_per_second_{tier}"]
-            assert tier_rate > 0
-            cost = video_generation_cost(
-                model=model, duration_seconds=5.0, custom_llm_provider=provider, video_resolution=tier
-            )
-            assert cost == pytest.approx(tier_rate * 5.0)
+        assert all(info.get(f"output_cost_per_second_{tier}", 0) > 0 for tier in tiers), info
+
+    @pytest.mark.parametrize(
+        "usage,expected_cost",
+        [
+            ({"SR": 480, "duration": 5}, 5 * 0.1),
+            ({"SR": 720, "duration": 5}, 5 * 0.2),
+            ({"SR": 1080, "duration": 8}, 8 * 0.3),
+        ],
+    )
+    def test_delivered_tier_and_duration_bill_at_that_tier_rate(self, usage, expected_cost):
+        from litellm.llms.openai.cost_calculation import video_generation_cost
+
+        model_info = {
+            "output_cost_per_second": 0.3,
+            "output_cost_per_second_480p": 0.1,
+            "output_cost_per_second_720p": 0.2,
+            "output_cost_per_second_1080p": 0.3,
+        }
+        payload = {
+            "output": {"task_id": "t1", "task_status": "SUCCEEDED", "video_url": "https://x/v.mp4"},
+            "usage": usage,
+        }
+        video_obj = DashScopeVideoConfig().transform_video_status_retrieve_response(
+            raw_response=_mock_response(payload), logging_obj=None, custom_llm_provider="dashscope"
+        )
+
+        cost = video_generation_cost(
+            model="wan3.0-video",
+            duration_seconds=video_obj.usage["duration_seconds"],
+            model_info=model_info,
+            video_resolution=video_obj.usage["video_resolution"],
+        )
+
+        assert cost == pytest.approx(expected_cost)
 
     @pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
     @pytest.mark.parametrize("model,tiers", VIDEO_MODEL_TIERS)
