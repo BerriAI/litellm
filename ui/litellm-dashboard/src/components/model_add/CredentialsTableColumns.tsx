@@ -6,19 +6,25 @@ import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { CredentialItem } from "@/components/networking";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { credentialLabel } from "@/components/shared/credentialOptions";
 import { IdentityCell } from "@/components/shared/table_cells";
+import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-function CredentialProviderCell({ provider }: { provider: string | undefined }) {
+import { inferAuthMethod } from "./credential_federation";
+
+function CredentialProviderCell({ provider, federated }: { provider: string | undefined; federated: boolean }) {
   if (!provider) {
     return <span className="text-sm text-muted-foreground">-</span>;
   }
@@ -36,6 +42,7 @@ function CredentialProviderCell({ provider }: { provider: string | undefined }) 
         />
       ) : null}
       <span className="truncate text-sm">{displayName || provider}</span>
+      {federated && <Badge variant="secondary">Workload identity federation</Badge>}
     </div>
   );
 }
@@ -47,6 +54,7 @@ interface CredentialRowActionsProps {
 }
 
 function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowActionsProps) {
+  const configOwned = credential.source === "config";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -57,7 +65,21 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem data-testid="credential-action-edit" onClick={() => onEdit(credential)}>
+        {configOwned && (
+          <>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel data-testid="credential-config-owned-hint">
+                Defined in config.yaml. Edit the file to change or delete it.
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuItem
+          data-testid="credential-action-edit"
+          disabled={configOwned}
+          onClick={() => onEdit(credential)}
+        >
           <Pencil />
           Edit
         </DropdownMenuItem>
@@ -72,6 +94,7 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
         <DropdownMenuItem
           variant="destructive"
           data-testid="credential-action-delete"
+          disabled={configOwned}
           onClick={() => onDelete(credential)}
         >
           <Trash2 />
@@ -96,13 +119,19 @@ export const getCredentialsTableColumns = ({
   const dataColumns: ColumnDef<CredentialItem>[] = [
     {
       id: "credential_name",
-      accessorKey: "credential_name",
+      accessorFn: credentialLabel,
       meta: { title: "Credential Name" },
       header: ({ column }) => <DataTableSortHeader column={column} title="Credential Name" />,
       size: 260,
       enableSorting: true,
       cell: ({ row }) => (
-        <IdentityCell title={row.original.credential_name} className="max-w-72" titleClassName="font-medium" />
+        <IdentityCell
+          title={credentialLabel(row.original)}
+          subtitle={row.original.display_name ? row.original.credential_name : undefined}
+          badge={row.original.source === "config" ? <Badge variant="outline">Config</Badge> : undefined}
+          className="max-w-72"
+          titleClassName="font-medium"
+        />
       ),
     },
     {
@@ -110,9 +139,14 @@ export const getCredentialsTableColumns = ({
       accessorKey: "credential_info.custom_llm_provider",
       meta: { title: "Provider" },
       header: "Provider",
-      size: 200,
+      size: 320,
       enableSorting: false,
-      cell: ({ row }) => <CredentialProviderCell provider={row.original.credential_info?.custom_llm_provider} />,
+      cell: ({ row }) => (
+        <CredentialProviderCell
+          provider={row.original.credential_info?.custom_llm_provider}
+          federated={inferAuthMethod(row.original.credential_values) === "federation"}
+        />
+      ),
     },
   ];
 

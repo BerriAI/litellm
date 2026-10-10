@@ -187,7 +187,7 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         billed_duration = _parse_duration_seconds(parsed.metadata.totalBilledDuration if parsed.metadata else None)
         if billed_duration is not None:
             response["duration"] = billed_duration
-        response._hidden_params = response_json
+        response.hidden_params = response_json
         return response
 
 

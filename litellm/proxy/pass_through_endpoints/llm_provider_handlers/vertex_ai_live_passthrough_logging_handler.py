@@ -307,7 +307,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         usage: Final = self._session_usage(turn, model)
         if usage is None:
             return None
-        cost: Final = logging_obj._response_cost_calculator(  # pyright: ignore[reportPrivateUsage]  # the call's own calculator keeps custom pricing and the deployment's region in step with the spend row
+        cost: Final = logging_obj.response_cost_calculator(
             result=ModelResponse(model=model, usage=usage),
             litellm_model_name=model,
         )

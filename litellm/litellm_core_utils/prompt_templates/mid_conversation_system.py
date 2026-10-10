@@ -31,7 +31,7 @@ Anthropic wire shape is built later by ``anthropic_messages_pt``.
 
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import chain, groupby
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypeVar
 
 from litellm.types.llms.anthropic import AnthropicMessagesSystemMessageParam, AnthropicSystemMessageContent
 from litellm.types.llms.openai import (
@@ -55,6 +55,7 @@ _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
+_Message: Final = TypeVar("_Message")
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 
@@ -96,8 +97,8 @@ def _kind(message: object) -> _MessageKind:
 
 
 def split_leading_system_run(
-    messages: Sequence[AllMessageValues],
-) -> tuple[tuple[AllMessageValues, ...], tuple[AllMessageValues, ...]]:
+    messages: Sequence[_Message],
+) -> tuple[tuple[_Message, ...], tuple[_Message, ...]]:
     """Split ``messages`` into the leading run of system messages and everything after it."""
     leading_count: Final = next(
         (index for index, message in enumerate(messages) if not is_system_message(message)),
@@ -160,9 +161,16 @@ def _anthropic_text_block(part: _TextPart) -> AnthropicSystemMessageContent:
     return cached
 
 
+def anthropic_system_blocks(run: Sequence[object]) -> tuple[AnthropicSystemMessageContent, ...]:
+    """The top-level ``system`` blocks for a run of system messages: every non-empty text part in order,
+    each keeping its ``cache_control``, which is the shape the chat path sends for the leading run."""
+    parts: Final = chain.from_iterable(_text_parts(message) for message in run)
+    return tuple(_anthropic_text_block(part) for part in parts)
+
+
 def anthropic_system_messages(message: object) -> tuple[AnthropicMessagesSystemMessageParam, ...]:
     """The Anthropic wire message for a system message, or nothing when it carries no text."""
-    blocks: Final = tuple(_anthropic_text_block(part) for part in _text_parts(message))
+    blocks: Final = anthropic_system_blocks((message,))
     if not blocks:
         return ()
     wire: Final[AnthropicMessagesSystemMessageParam] = {

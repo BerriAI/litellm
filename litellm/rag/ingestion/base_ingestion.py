@@ -23,6 +23,7 @@ from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
 from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
@@ -79,7 +80,7 @@ class BaseRAGIngestion(ABC):
         from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 
         credential_name: Final = self.vector_store_config.get("litellm_credential_name")
-        if credential_name and litellm.credential_list:
+        if isinstance(credential_name, str) and credential_name and litellm.credential_list:
             credential_values: Final = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 return
@@ -125,7 +126,8 @@ class BaseRAGIngestion(ABC):
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get("content-type", "application/octet-stream")
+            content_type_header: Final = header_value(response.headers, "content-type")
+            content_type = "application/octet-stream" if content_type_header is None else content_type_header
             return filename, file_content, content_type, None
 
         if file_id:

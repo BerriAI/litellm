@@ -15,7 +15,7 @@ import click
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
@@ -26,6 +26,7 @@ from litellm.proxy.db.pgbouncer import (
     start_in_container_pgbouncer,
 )
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -97,7 +98,7 @@ def _build_db_connection_url_params(
     return params
 
 
-class DatabaseTimeoutSettings(BaseModel):
+class DatabaseTimeoutSettings(LiteLLMBaseModel):
     """The `general_settings` keys that bound how long a statement may hold locks.
 
     Validated at the boundary so a mistyped value fails at startup with a clear
@@ -203,18 +204,22 @@ def deprecated_v2_flag_passed_on_cli() -> bool:
 
 class ProxyInitializationHelpers:
     @staticmethod
-    def _echo_litellm_version():
+    def echo_litellm_version():
         pkg_version: Final = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
 
+    _echo_litellm_version = echo_litellm_version
+
     @staticmethod
-    def _run_health_check(host, port):
+    def run_health_check(host, port):
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
 
+    _run_health_check = run_health_check
+
     @staticmethod
-    def _run_config_validation(config: str | None) -> None:
+    def run_config_validation(config: str | None) -> None:
         if config is None:
             raise click.UsageError("--validate_config requires --config <path>")
         import asyncio
@@ -232,8 +237,10 @@ class ProxyInitializationHelpers:
             raise click.exceptions.Exit(1) from error
         click.echo(f"LiteLLM: config OK ({model_count} models)")
 
+    _run_config_validation = run_config_validation
+
     @staticmethod
-    def _run_test_chat_completion(
+    def run_test_chat_completion(
         host: str,
         port: int,
         model: str,
@@ -282,8 +289,10 @@ class ProxyInitializationHelpers:
         )
         print(completion_response)
 
+    _run_test_chat_completion = run_test_chat_completion
+
     @staticmethod
-    def _get_default_unvicorn_init_args(
+    def get_default_unvicorn_init_args(
         host: str,
         port: int,
         log_config: str | None = None,
@@ -327,8 +336,10 @@ class ProxyInitializationHelpers:
                 )
         return uvicorn_args
 
+    _get_default_unvicorn_init_args = get_default_unvicorn_init_args
+
     @staticmethod
-    def _apply_uvicorn_max_requests_jitter(
+    def apply_uvicorn_max_requests_jitter(
         uvicorn_args: dict,
         max_requests_before_restart: int | None,
         jitter: int,
@@ -354,6 +365,8 @@ class ProxyInitializationHelpers:
                 f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
                 f"Ignoring the flag.\033[0m"
             )
+
+    _apply_uvicorn_max_requests_jitter = apply_uvicorn_max_requests_jitter
 
     @staticmethod
     def _get_reload_options(config_path: str | None) -> dict:
@@ -418,7 +431,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def _configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
+    def configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -435,8 +448,10 @@ class ProxyInitializationHelpers:
             "to let a shell-exported value take precedence."
         )
 
+    _configure_dev_reload = configure_dev_reload
+
     @staticmethod
-    def _init_hypercorn_server(
+    def init_hypercorn_server(
         app: FastAPI,
         host: str,
         port: int,
@@ -468,8 +483,10 @@ class ProxyInitializationHelpers:
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
         asyncio.run(serve(app, config))
 
+    _init_hypercorn_server = init_hypercorn_server
+
     @staticmethod
-    def _init_granian_server(
+    def init_granian_server(
         host: str,
         port: int,
         num_workers: int,
@@ -497,7 +514,7 @@ class ProxyInitializationHelpers:
         if ciphers is not None:
             print("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
 
-        kwargs: Final[dict[str, Any]] = {
+        kwargs: Final[dict[str, object]] = {
             "target": "litellm.proxy.proxy_server:app",
             "address": host,
             "port": port,
@@ -518,8 +535,10 @@ class ProxyInitializationHelpers:
 
         Granian(**kwargs).serve()
 
+    _init_granian_server = init_granian_server
+
     @staticmethod
-    def _run_gunicorn_server(
+    def run_gunicorn_server(
         host: str,
         port: int,
         app: FastAPI,
@@ -634,8 +653,10 @@ class ProxyInitializationHelpers:
         start_query_engine_reaper()
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
+    _run_gunicorn_server = run_gunicorn_server
+
     @staticmethod
-    def _run_ollama_serve():
+    def run_ollama_serve():
         try:
             command: Final = ["ollama", "serve"]
 
@@ -646,19 +667,25 @@ class ProxyInitializationHelpers:
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
             """)
 
+    _run_ollama_serve = run_ollama_serve
+
     @staticmethod
-    def _is_port_in_use(port):
+    def is_port_in_use(port):
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(("localhost", port)) == 0
 
+    _is_port_in_use = is_port_in_use
+
     @staticmethod
-    def _get_loop_type():
+    def get_loop_type():
         """Helper function to determine the event loop type based on platform"""
         if sys.platform in ("win32", "cygwin", "cli"):
             return None  # Let uvicorn choose the default loop on Windows
         return "uvloop"
+
+    _get_loop_type = get_loop_type
 
     @staticmethod
     def _prometheus_callback_configured(litellm_settings: Mapping[str, object] | None) -> bool:
@@ -675,7 +702,7 @@ class ProxyInitializationHelpers:
         )
 
     @staticmethod
-    def _maybe_setup_prometheus_multiproc_dir(
+    def maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
         litellm_settings: dict | None,
         prometheus_metrics_port: int | None = None,
@@ -687,14 +714,16 @@ class ProxyInitializationHelpers:
         """
         import tempfile
 
-        if prometheus_metrics_port is None and (
-            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
-        ):
-            return None
-
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
         configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
+        if prometheus_metrics_port is None and (
+            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
+        ):
+            if configured_dir:
+                wipe_directory(configured_dir)
+            return None
+
         multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
 
@@ -703,6 +732,8 @@ class ProxyInitializationHelpers:
         action: Final = "Using existing" if configured_dir else "Auto-created"
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
         return multiproc_dir
+
+    _maybe_setup_prometheus_multiproc_dir = maybe_setup_prometheus_multiproc_dir
 
 
 @click.command()
@@ -1099,10 +1130,10 @@ def run_server(
     except ModuleNotFoundError as e:
         raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`") from e
     if version is True:
-        ProxyInitializationHelpers._echo_litellm_version()
+        ProxyInitializationHelpers.echo_litellm_version()
         return
     if validate_config is True:
-        ProxyInitializationHelpers._run_config_validation(config)
+        ProxyInitializationHelpers.run_config_validation(config)
         return
     if enforce_prisma_migration_check:
         print(
@@ -1111,12 +1142,12 @@ def run_server(
             "when database setup fails at startup. You can safely remove it.\033[0m"
         )
     if model and "ollama" in model and api_base is None:
-        ProxyInitializationHelpers._run_ollama_serve()
+        ProxyInitializationHelpers.run_ollama_serve()
     if health is True:
-        ProxyInitializationHelpers._run_health_check(host, port)
+        ProxyInitializationHelpers.run_health_check(host, port)
         return
     if test is True:
-        ProxyInitializationHelpers._run_test_chat_completion(host, port, model, test)
+        ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
         return
     else:
         if headers:
@@ -1226,7 +1257,7 @@ def run_server(
 
                 litellm.json_logs = True
 
-                litellm._turn_on_json()
+                litellm.turn_on_json()
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
@@ -1488,7 +1519,7 @@ def run_server(
                 )
                 sys.exit(1)
             export_pooled_database_url(pooled_database_url)
-        if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
+        if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port):
             port = random.randint(1024, 49152)
         if prometheus_metrics_port == port:
             raise click.UsageError("--prometheus_metrics_port must differ from --port")
@@ -1496,24 +1527,24 @@ def run_server(
         import litellm
 
         if detailed_debug is True:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app
 
         os.environ["NUM_WORKERS"] = str(num_workers)
 
-        # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
-        prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-            num_workers=num_workers,
-            litellm_settings=litellm_settings if config else None,
-            prometheus_metrics_port=prometheus_metrics_port,
-        )
-
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print("LiteLLM: Setup complete. Skipping server startup as requested.")
             return
+
+        # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
+        prometheus_multiproc_dir: Final = ProxyInitializationHelpers.maybe_setup_prometheus_multiproc_dir(
+            num_workers=num_workers,
+            litellm_settings=litellm_settings if config else None,
+            prometheus_metrics_port=prometheus_metrics_port,
+        )
 
         if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
             from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process
@@ -1530,7 +1561,7 @@ def run_server(
             )
 
         running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False
-        uvicorn_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+        uvicorn_args: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
@@ -1544,7 +1575,7 @@ def run_server(
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
             if max_requests_before_restart_jitter is not None:
-                ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                ProxyInitializationHelpers.apply_uvicorn_max_requests_jitter(
                     uvicorn_args=uvicorn_args,
                     max_requests_before_restart=max_requests_before_restart,
                     jitter=max_requests_before_restart_jitter,
@@ -1556,12 +1587,12 @@ def run_server(
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
 
-            loop_type: Final = ProxyInitializationHelpers._get_loop_type()
+            loop_type: Final = ProxyInitializationHelpers.get_loop_type()
             if loop_type:
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                ProxyInitializationHelpers._configure_dev_reload(uvicorn_args, config)
+                ProxyInitializationHelpers.configure_dev_reload(uvicorn_args, config)
 
             if num_workers > 1:
                 start_query_engine_reaper()
@@ -1570,7 +1601,7 @@ def run_server(
                 workers=num_workers,
             )
         elif run_gunicorn is True:
-            ProxyInitializationHelpers._run_gunicorn_server(
+            ProxyInitializationHelpers.run_gunicorn_server(
                 host=host,
                 port=port,
                 app=app,
@@ -1581,7 +1612,7 @@ def run_server(
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
             )
         elif run_hypercorn is True:
-            ProxyInitializationHelpers._init_hypercorn_server(
+            ProxyInitializationHelpers.init_hypercorn_server(
                 app=app,
                 host=host,
                 port=port,
@@ -1590,7 +1621,7 @@ def run_server(
                 ciphers=ciphers,
             )
         elif run_granian is True:
-            ProxyInitializationHelpers._init_granian_server(
+            ProxyInitializationHelpers.init_granian_server(
                 host=host,
                 port=port,
                 num_workers=num_workers,

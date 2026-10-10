@@ -13,7 +13,7 @@ from typing import Final, TypeAlias
 
 import click
 import requests
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BASE_INSTRUCTIONS_PATH,
@@ -22,6 +22,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     codex_models_response_json,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
@@ -261,7 +262,7 @@ def agent_launch_args(command: str, base_url: str) -> list[str]:
     return builder(base_url) if builder else []
 
 
-class ListedModel(BaseModel):
+class ListedModel(LiteLLMBaseModel):
     """The fields of a /v1/models entry that an OpenCode or Codex model entry is built from."""
 
     id: str
@@ -270,7 +271,7 @@ class ListedModel(BaseModel):
     max_output_tokens: int | None = None
 
 
-class _ModelListing(BaseModel):
+class _ModelListing(LiteLLMBaseModel):
     data: tuple[ListedModel, ...]
 
 
@@ -318,29 +319,29 @@ def _fetch_model_listing(
     return listing.data
 
 
-class _OpenCodeLimit(BaseModel):
+class _OpenCodeLimit(LiteLLMBaseModel):
     context: int
     output: int
 
 
-class _OpenCodeModel(BaseModel):
+class _OpenCodeModel(LiteLLMBaseModel):
     name: str
     limit: _OpenCodeLimit | None = None
 
 
-class _OpenCodeProviderOptions(BaseModel):
+class _OpenCodeProviderOptions(LiteLLMBaseModel):
     baseURL: str
     apiKey: str
 
 
-class _OpenCodeProvider(BaseModel):
+class _OpenCodeProvider(LiteLLMBaseModel):
     npm: str
     name: str
     options: _OpenCodeProviderOptions
     models: Mapping[str, _OpenCodeModel]
 
 
-class _OpenCodeConfig(BaseModel):
+class _OpenCodeConfig(LiteLLMBaseModel):
     provider: Mapping[str, _OpenCodeProvider]
 
 

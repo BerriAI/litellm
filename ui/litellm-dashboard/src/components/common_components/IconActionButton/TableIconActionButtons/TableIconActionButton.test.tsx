@@ -86,4 +86,21 @@ describe("TableIconActionButton", () => {
 
     expect(await screen.findByText("Cannot edit")).toBeInTheDocument();
   });
+  it("should show disabledTooltipText on keyboard focus when disabled", async () => {
+    const user = userEvent.setup();
+    render(
+      <TableIconActionButton
+        variant="Edit"
+        onClick={() => {}}
+        dataTestId="test-button"
+        disabled
+        tooltipText="Edit"
+        disabledTooltipText="Cannot edit"
+      />,
+    );
+
+    await user.tab();
+
+    expect(await screen.findByText("Cannot edit")).toBeInTheDocument();
+  });
 });

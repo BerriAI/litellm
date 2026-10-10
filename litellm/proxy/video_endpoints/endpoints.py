@@ -9,7 +9,10 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -57,7 +60,7 @@ async def video_generation(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "sora-2",
@@ -80,7 +83,7 @@ async def video_generation(
     )
 
     # Read request body
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     if input_reference is not None:
         input_reference_file: Final = await batch_to_bytesio([input_reference])
         if input_reference_file:
@@ -108,7 +111,7 @@ async def video_generation(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -144,7 +147,7 @@ async def video_list(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -195,7 +198,7 @@ async def video_list(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -232,7 +235,7 @@ async def video_status(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/video_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -295,7 +298,7 @@ async def video_status(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -332,7 +335,7 @@ async def video_content(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --output video.mp4
     ```
     """
@@ -402,7 +405,7 @@ async def video_content(
             headers={"Content-Disposition": f"attachment; filename=video_{video_id}.mp4"},
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -437,7 +440,7 @@ async def video_remix(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/video_123/remix" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "prompt": "A new version with different colors"
@@ -458,7 +461,7 @@ async def video_remix(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["video_id"] = video_id
 
     decoded: Final = decode_video_id_with_provider(video_id)
@@ -503,7 +506,7 @@ async def video_remix(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -541,7 +544,7 @@ async def video_create_character(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/characters" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "video=@character_video.mp4" \
         -F "name=my_character"
     ```
@@ -560,7 +563,7 @@ async def video_create_character(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     video_file: Final = await batch_to_bytesio([video])
     if video_file:
         data["video"] = video_file[0]
@@ -608,7 +611,7 @@ async def video_create_character(
             )
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -643,7 +646,7 @@ async def video_get_character(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/characters/char_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -714,7 +717,7 @@ async def video_get_character(
             )
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -748,7 +751,7 @@ async def video_edit(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/edits" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
     ```
@@ -767,7 +770,7 @@ async def video_edit(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     uploaded_video: Final = data.pop("video", None)
     if isinstance(uploaded_video, StarletteUploadFile):
         video_files: Final = await batch_to_bytesio((uploaded_video,))
@@ -816,7 +819,7 @@ async def video_edit(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -852,7 +855,7 @@ async def video_extension(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/extensions" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
     ```
@@ -871,7 +874,7 @@ async def video_extension(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["video_id"] = video_reference_to_id(data.pop("video", None))
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
@@ -913,7 +916,7 @@ async def video_extension(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

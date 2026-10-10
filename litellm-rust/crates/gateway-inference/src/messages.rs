@@ -10,8 +10,8 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
-use litellm_core::messages::{MessagesCall, messages_body, route::Messages};
 use litellm_host_http::Sse;
+use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -79,6 +79,7 @@ fn project(
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
+        litellm_params: deployment.litellm_params.clone(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
         timeout: deployment.timeout,

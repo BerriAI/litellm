@@ -7,8 +7,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.cost_calculator import (
-    _select_model_name_for_cost_calc,  # pyright: ignore[reportPrivateUsage]  # shares completion_cost's deployment tariff selection
     completion_cost,  # pyright: ignore[reportUnknownVariableType]  # legacy optional parameters are untyped
+    select_model_name_for_cost_calc,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets
@@ -42,7 +42,7 @@ def price_cache_tokens(
     model: str, deployment_id: str, tokens: CacheTokenBuckets, completion_tokens: int = 0
 ) -> float | None:
     try:
-        selected_model: Final = _select_model_name_for_cost_calc(
+        selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=None,
             custom_pricing=True,

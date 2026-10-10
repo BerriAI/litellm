@@ -4,8 +4,10 @@ from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     import httpx
@@ -172,9 +174,9 @@ ChatCompletionMessageParam = (
 )
 
 
-class CompletionRequest(BaseModel):
+class CompletionRequest(LiteLLMBaseModel):
     model: str
-    messages: list[ChatCompletionMessageParam] = []
+    messages: list[ChatCompletionMessageParam] = Field(default=[])
     timeout: float | int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -204,7 +206,7 @@ class CompletionRequest(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _CompletionDispatchContext:
+class CompletionDispatchContext:
     _azure_detection_model: str
     acompletion: bool
     api_base: str | None
@@ -236,6 +238,9 @@ class _CompletionDispatchContext:
     text_completion: bool
     timeout: float | str | httpx.Timeout | None
     top_p: float | None
+
+
+_CompletionDispatchContext = CompletionDispatchContext
 
 
 _CompletionDispatchResult = Union[

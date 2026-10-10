@@ -6,6 +6,7 @@ with guardrail transformations.
 """
 
 import copy
+import json
 from collections.abc import Callable
 from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -3654,3 +3655,85 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), added, self._completed(3, [function_call])])
         assert ended_key.tool_calls_in_flight is False
         assert len(ended_key.tool_calls) == 1
+
+    def test_released_stream_as_ended_keys_the_tool_call_the_client_already_received(self):
+        handler = OpenAIResponsesHandler()
+        added = {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather", "arguments": ""},
+        }
+        arguments_delta = {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 2,
+            "item_id": "fc_1",
+            "delta": '{"city": "Paris"',
+        }
+        ended_key = handler.get_streaming_scan_key(
+            handler.released_stream_as_ended([self._delta(0, "hi"), added, arguments_delta])
+        )
+        assert ended_key.stream_ended is True
+        assert ended_key.texts == ("hi",)
+        assert len(ended_key.tool_calls) == 1 and "Paris" in ended_key.tool_calls[0], ended_key
+
+    def test_released_stream_as_ended_leaves_a_text_only_stream_as_released(self):
+        released = (self._delta(0, "hi"), self._delta(1, " there"))
+        ended = OpenAIResponsesHandler().released_stream_as_ended(released)
+        assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
+
+    @staticmethod
+    def _finished_function_call(sequence_number: int, item_id: str, city: str) -> tuple[dict[str, object], ...]:
+        arguments = json.dumps({"city": city})
+        pending = {"type": "function_call", "id": item_id, "call_id": "call_" + item_id, "name": "get_weather"}
+        return (
+            {"type": "response.output_item.added", "sequence_number": sequence_number, "item": {**pending, "arguments": ""}},
+            {
+                "type": "response.function_call_arguments.delta",
+                "sequence_number": sequence_number + 1,
+                "item_id": item_id,
+                "delta": arguments,
+            },
+            {
+                "type": "response.output_item.done",
+                "sequence_number": sequence_number + 2,
+                "item": {**pending, "arguments": arguments, "status": "completed"},
+            },
+        )
+
+    def test_released_stream_as_ended_keys_every_tool_call_finished_before_the_disconnect(self):
+        handler = OpenAIResponsesHandler()
+        released = (
+            self._delta(0, "hi"),
+            *self._finished_function_call(1, "fc_1", "Paris"),
+            *self._finished_function_call(4, "fc_2", "Rome"),
+        )
+        ended_key = handler.get_streaming_scan_key(handler.released_stream_as_ended(released))
+        assert ended_key.stream_ended is True
+        assert ended_key.texts == ("hi",)
+        cities = tuple(city for fingerprint in ended_key.tool_calls for city in ("Paris", "Rome") if city in fingerprint)
+        assert cities == ("Paris", "Rome"), ended_key
+
+    def test_released_stream_as_ended_keys_a_message_whose_item_already_finished(self):
+        handler = OpenAIResponsesHandler()
+        message_done = {
+            "type": "response.output_item.done",
+            "sequence_number": 1,
+            "item": {"type": "message", "id": "msg_1", "content": [{"type": "output_text", "text": "hi"}]},
+        }
+        ended_key = handler.get_streaming_scan_key(handler.released_stream_as_ended((self._delta(0, "hi"), message_done)))
+        assert ended_key.stream_ended is True
+        assert ended_key.texts == ("hi",)
+
+    @pytest.mark.asyncio
+    async def test_scan_of_a_stream_released_through_a_finished_tool_call_covers_its_text_too(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+        released = (self._delta(0, "hi"), *self._finished_function_call(1, "fc_1", "Paris"))
+        await handler.process_output_streaming_response(
+            responses_so_far=list(handler.released_stream_as_ended(released)),
+            guardrail_to_apply=guardrail,
+            request_data={},
+        )
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hi"]], guardrail.seen_inputs
+        tool_calls = guardrail.seen_inputs[0].get("tool_calls") or []
+        assert [call["function"]["arguments"] for call in tool_calls] == ['{"city": "Paris"}'], tool_calls

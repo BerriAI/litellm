@@ -3,7 +3,8 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -174,6 +175,10 @@ async def test_commit_ack_loss_and_concurrent_duplicate_delivery_are_idempotent(
     assert await _store(db, after_commit=True).append(event) == "unavailable"
     store: Final = _store(db)
     assert set(await asyncio.gather(*(store.append(event) for _ in range(4)))) == {"recorded"}
+    duplicate: Final = event.model_copy(update={
+        "turn": replace(event.turn, turn_at=event.turn.turn_at + timedelta(seconds=1))
+    })
+    assert await store.append(duplicate) == "recorded"
     await _log(db, other)
     assert await store.append(other) == "recorded"
     if not attributed:

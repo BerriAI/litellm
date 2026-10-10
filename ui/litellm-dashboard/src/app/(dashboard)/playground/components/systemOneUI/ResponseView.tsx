@@ -7,6 +7,8 @@ import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
 
+const SCORE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
 interface ResponseViewProps {
   response?: SystemOneResponse;
   fallbackModel?: string;
@@ -85,14 +87,18 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Score</span>
-        <Badge>{answer.score}</Badge>
+        <Badge>{SCORE_FORMAT.format(answer.score)}</Badge>
         {answer.confidence !== undefined && (
           <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
         )}
       </div>
       <div className="grid gap-3">
         {levels.map(([level, probability]) => {
-          const label = answer.legend?.[level] ? `${level}: ${answer.legend[level]}` : level;
+          const description = answer.legend?.[level];
+          const label =
+            description === undefined
+              ? level
+              : `${level}: ${typeof description === "string" ? description : JSON.stringify(description)}`;
           return (
             <ProbabilityMeter
               key={level}
@@ -124,7 +130,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>System One request failed</AlertTitle>
+        <AlertTitle>Decisions request failed</AlertTitle>
         <AlertDescription>{error}</AlertDescription>
       </Alert>
     );
@@ -135,7 +141,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
       <Card>
         <CardHeader>
           <CardTitle>Calibrated probabilities</CardTitle>
-          <CardDescription>Send a request to see System One answers and probabilities.</CardDescription>
+          <CardDescription>Send a request to see decision answers and probabilities.</CardDescription>
         </CardHeader>
       </Card>
     );

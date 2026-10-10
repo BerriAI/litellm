@@ -1,6 +1,6 @@
-import type { SystemOneRequest } from "./schemas";
+import type { DecisionRequest, SystemOneRequest } from "./schemas";
 
-export const SYSTEM_ONE_EXAMPLE: SystemOneRequest = {
+export const SYSTEM_ONE_EXAMPLE = {
   model: "jev-latest",
   state:
     "Since upgrading to the latest release, streaming responses stop halfway through whenever a fallback model takes over. Non-streaming requests still work. I haven't narrowed down which change caused it, but it happens on most long prompts.",
@@ -35,4 +35,8 @@ export const SYSTEM_ONE_EXAMPLE: SystemOneRequest = {
       ],
     },
   },
-};
+} satisfies SystemOneRequest;
+
+export const PLACEHOLDER_DECISION_MODEL = "your-decision-model";
+
+export const decisionsExample = (model: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });

@@ -1542,6 +1542,27 @@ describe("ModelInfoView", () => {
       expect(screen.getByTestId("reuse-credentials-button")).toBeInTheDocument();
     });
 
+    it("names the attached credential by its display name in the re-use dialog", async () => {
+      mockCredentialListCall.mockResolvedValue({
+        credentials: [
+          {
+            credential_name: "selected-credential",
+            display_name: "Selected Label",
+            credential_values: {},
+            credential_info: {},
+          },
+        ],
+      } as never);
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      await user.click(await screen.findByTestId("reuse-credentials-button"));
+
+      const dialog = await screen.findByRole("dialog", { name: "Using Existing Credential" });
+      await vi.waitFor(() => expect(dialog).toHaveTextContent("Selected Label"));
+      expect(dialog).not.toHaveTextContent("selected-credential");
+    });
+
     it.each([["auto_router/adaptive_router"], ["auto_router/quality_router"]])(
       "offers no Test Connection for %s, whose targets it cannot build",
       async (model) => {
@@ -1577,13 +1598,13 @@ describe("ModelInfoView", () => {
     const openCredentialSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText?: string) => {
       const trigger = screen
         .getAllByRole("combobox")
-        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
-        .find((element) => triggerText === undefined || element.textContent?.includes(triggerText));
+        .filter((element) => element.getAttribute("placeholder") === "Select or search for existing credentials")
+        .find((element) => triggerText === undefined || (element as HTMLInputElement).value.includes(triggerText));
       if (trigger === undefined) {
         throw new Error(`Could not find credential selector${triggerText ? ` with ${triggerText}` : ""}`);
       }
       await user.click(trigger);
-      await screen.findByRole("combobox", { expanded: true });
+      await screen.findByRole("option", { name: "None" });
     };
 
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -1837,8 +1858,8 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await openSelect(user, "selected-credential");
-      await user.click(await screen.findByText("other-credential"));
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "other-credential" }));
 
       const payload = await save(user);
 
@@ -1902,11 +1923,10 @@ describe("ModelInfoView", () => {
       await user.click(screen.getByRole("button", { name: /cancel/i }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      const credentialTrigger: HTMLElement = screen
+      const credentialTrigger = screen
         .getAllByRole("combobox")
-        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
-        .at(0) as HTMLElement;
-      expect(credentialTrigger).toHaveTextContent("selected-credential");
+        .find((element) => element.getAttribute("placeholder") === "Select or search for existing credentials");
+      expect(credentialTrigger).toHaveValue("selected-credential");
     });
 
     it("shows Manual in read mode after saving None", async () => {

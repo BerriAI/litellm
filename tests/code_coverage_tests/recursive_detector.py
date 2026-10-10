@@ -2,9 +2,10 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
-    "_remove_additional_properties",
-    "_remove_strict_from_schema",
+    "remove_additional_properties",
+    "remove_strict_from_schema",
     "filter_schema_fields",
     "text_completion",
     "_check_for_os_environ_vars",
@@ -13,7 +14,7 @@ IGNORE_FUNCTIONS = [
     "convert_anyof_null_to_nullable",  # has a set max depth
     "add_object_type",
     "strip_field",
-    "_transform_prompt",
+    "transform_prompt",
     "mask_dict",
     "_serialize",  # we now set a max depth for this
     "_sanitize_request_body_for_spend_logs_payload",  # testing added for circular reference
@@ -25,7 +26,7 @@ IGNORE_FUNCTIONS = [
     "filter_value_from_dict",  # max depth set.
     "normalize_json_schema_types",  # max depth set.
     "_extract_fields_recursive",  # max depth set.
-    "_remove_json_schema_refs",  # max depth set.,
+    "remove_json_schema_refs",  # max depth set.,
     "_convert_schema_types",  # max depth set.,
     "_fix_enum_empty_strings",  # max depth set.,
     "get_access_token",  # max depth set.,
@@ -49,7 +50,7 @@ IGNORE_FUNCTIONS = [
     "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
     "_read_image_bytes",  # max depth set.
-    "_get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
+    "get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
     "_redact_sensitive_litellm_params",  # max depth set (default 10).
     "_redact_secret_values_in_obj",  # max depth set (default 10, _REDACT_SECRET_MAX_DEPTH); fails closed by returning "REDACTED" at the cap.
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.

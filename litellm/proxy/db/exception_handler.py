@@ -31,6 +31,8 @@ _CONNECTION_CAPACITY_PHRASES: Final = (
     "remaining connection slots are reserved",
 )
 _PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
+_LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
+_LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
 
 
 def _exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -265,6 +267,21 @@ class PrismaDBExceptionHandler:
             return True
         error_message: Final = str(e).lower()
         return any(phrase in error_message for phrase in _CONNECTION_CAPACITY_PHRASES)
+
+    @staticmethod
+    def is_lock_timeout_error(e: Exception) -> bool:
+        """True iff Postgres cancelled a statement for exceeding ``lock_timeout``
+        (SQLSTATE 55P03). The statement never acquired its lock, so it never
+        applied and the transaction rolled back: the rows it carried are safe to
+        re-send, and the pooled connection is free again rather than pinned
+        behind the holder."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) == _LOCK_TIMEOUT_SQLSTATE:
+            return True
+        return _LOCK_TIMEOUT_PHRASE in str(e).lower()
 
     @staticmethod
     def postgres_sqlstate(e: Exception) -> str | None:

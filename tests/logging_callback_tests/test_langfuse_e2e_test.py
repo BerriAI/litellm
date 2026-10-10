@@ -367,7 +367,7 @@ class TestLangfuseLogging:
     async def test_langfuse_logging_completion_with_malformed_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
@@ -393,7 +393,7 @@ class TestLangfuseLogging:
     async def test_langfuse_logging_completion_with_bedrock_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
@@ -426,7 +426,7 @@ class TestLangfuseLogging:
     async def test_langfuse_logging_completion_with_vertex_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
@@ -507,7 +507,7 @@ class TestLangfuseLogging:
     @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_with_router(self, mock_setup):
         """Test Langfuse logging with router"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = litellm.Router(
             model_list=[
                 {

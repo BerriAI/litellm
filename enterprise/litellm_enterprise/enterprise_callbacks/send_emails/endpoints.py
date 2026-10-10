@@ -3,9 +3,10 @@ Endpoints for managing email alerts on litellm
 """
 
 import json
-from typing import Dict
+from typing import Dict, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import JsonValue
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     DefaultEmailSettings,
     EmailEvent,
@@ -38,14 +39,15 @@ async def _get_email_settings(prisma_client) -> Dict[str, bool]:
             and general_settings_entry.param_value is not None
         ):
             # Get general settings value
-            if isinstance(general_settings_entry.param_value, str):
-                general_settings = json.loads(general_settings_entry.param_value)
-            else:
-                general_settings = general_settings_entry.param_value
+            general_settings: Final = (
+                cast(Dict[str, object], json.loads(general_settings_entry.param_value))
+                if isinstance(general_settings_entry.param_value, str)
+                else cast(Dict[str, object], general_settings_entry.param_value)
+            )
 
             # Extract email_settings from general settings if it exists
             if general_settings and "email_settings" in general_settings:
-                email_settings = general_settings["email_settings"]
+                email_settings: Final = cast(Dict[str, bool], general_settings["email_settings"])
                 # Update settings_dict with values from general_settings
                 for event_name, enabled in email_settings.items():
                     settings_dict[event_name] = enabled
@@ -64,7 +66,7 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
     from litellm.proxy.proxy_server import proxy_config
 
     proxy_config.reject_config_owned_writes(
-        section_name="general_settings", changed_keys={"email_settings": settings}
+        section_name="general_settings", changed_keys={"email_settings": cast(JsonValue, settings)}
     )
     try:
         verbose_proxy_logger.debug(
@@ -77,16 +79,15 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
         )
 
         # Initialize general settings dict
-        if (
-            general_settings_entry is not None
-            and general_settings_entry.param_value is not None
-        ):
-            if isinstance(general_settings_entry.param_value, str):
-                general_settings = json.loads(general_settings_entry.param_value)
-            else:
-                general_settings = dict(general_settings_entry.param_value)
-        else:
-            general_settings = {}
+        general_settings: Final = (
+            (
+                cast(Dict[str, object], json.loads(general_settings_entry.param_value))
+                if isinstance(general_settings_entry.param_value, str)
+                else cast(Dict[str, object], dict(general_settings_entry.param_value))
+            )
+            if general_settings_entry is not None and general_settings_entry.param_value is not None
+            else {}
+        )
 
         # Update email_settings in general_settings
         general_settings["email_settings"] = settings

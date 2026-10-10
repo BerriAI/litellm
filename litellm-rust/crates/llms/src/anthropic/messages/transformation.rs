@@ -3,9 +3,10 @@ use litellm_llms_types::{
     formats::messages::{
         ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
     },
-    providers::anthropic::{AnthropicBeta, BetaSet},
+    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
     recognized::Recognized,
 };
+use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
 use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
@@ -47,6 +48,8 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -76,6 +79,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
@@ -148,6 +152,15 @@ pub(crate) fn update_headers_with_anthropic_beta(
     request: &MessagesRequest,
 ) -> Headers {
     merge_beta_headers(headers, feature_betas(request))
+}
+
+/// The betas a request needs on a host other than the first-party API: the Anthropic set
+/// filtered and renamed through the host's `BetaProvider` policy.
+pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
+    feature_betas(request)
+        .iter()
+        .filter_map(|beta| beta.on(provider))
+        .collect()
 }
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
@@ -270,7 +283,7 @@ fn drop_unsupported_params(
 
 fn speed_text(speed: &Recognized<Speed>) -> String {
     match speed {
-        Recognized::Known(speed) => speed.as_str().to_string(),
+        Recognized::Known(speed) => <&'static str>::from(*speed).to_string(),
         Recognized::Unrecognized(Value::String(text)) => text.clone(),
         Recognized::Unrecognized(other) => other.to_string(),
     }
@@ -815,7 +828,13 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(api_base, "claude", &env(vars)),
+            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+                api_base,
+                "claude",
+                &LitellmParams::default(),
+                false,
+                &env(vars),
+            ),
             Ok(expected.to_string())
         );
     }
@@ -833,6 +852,7 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &LitellmParams::default(),
             &env(vars),
         )
     }
@@ -1108,8 +1128,20 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(Vec::new(), None, "claude", &record);
-        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+            Vec::new(),
+            None,
+            "claude",
+            &LitellmParams::default(),
+            &record,
+        );
+        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude",
+            &LitellmParams::default(),
+            false,
+            &record,
+        );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let undeclared: Vec<&String> = requested

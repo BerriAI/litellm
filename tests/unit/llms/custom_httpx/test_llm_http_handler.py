@@ -5,6 +5,8 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -18,6 +20,9 @@ from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -31,6 +36,8 @@ from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+from litellm.llms.chatgpt.authenticator import Authenticator as ChatGPTAuthenticator
+from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -43,6 +50,7 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
@@ -50,6 +58,10 @@ from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorSt
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+from litellm.responses.streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
@@ -346,6 +358,89 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
     assert hook_litellm_params.get(_SANDBOX_KEY)
 
 
+class _AgenticLoopKwargsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_kwargs: Mapping[str, object] = MappingProxyType({})
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        self.seen_kwargs = MappingProxyType(dict(kwargs))
+        return False, {}
+
+
+class _SentRequestRecorder:
+    def __init__(self) -> None:
+        self.body: Mapping[str, object] = MappingProxyType({})
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.body = MappingProxyType(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "gpt-4o",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+
+def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_non_streaming_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sent: Final = _SentRequestRecorder()
+    recorder: Final = _AgenticLoopKwargsRecorder()
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
+    )
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what is new in litellm?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "stream": True,
+            "stream_options": {"include_obfuscation": True},
+            "tools": [{"type": "web_search"}],
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test",
+            api_base="https://example.openai.azure.com",
+            api_version="2025-04-01-preview",
+            stream_options={"include_obfuscation": True},
+        ),
+        logging_obj=logging_obj,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(sent.respond))),
+    )
+
+    assert sent.body["stream"] is False
+    assert "stream_options" not in sent.body
+    assert "stream_options" not in recorder.seen_kwargs
+
+
 @pytest.mark.asyncio
 async def test_async_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()
@@ -364,6 +459,7 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
         )
     )
     logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = None
 
     await handler.async_response_api_handler(
         model="gpt-5.3-codex",
@@ -378,6 +474,166 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+
+
+_CHATGPT_SSE_BODY = (
+    "event: response.output_item.done\n"
+    'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", '
+    '"id": "msg_1", "status": "completed", "role": "assistant", "content": [{"type": "output_text", '
+    '"text": "aggregated", "annotations": []}]}}\n'
+    "\n"
+    "event: response.completed\n"
+    'data: {"type": "response.completed", "response": {"id": "resp_1", "object": "response", '
+    '"created_at": 1, "model": "gpt-5.3-codex", "status": "completed", "output": [], '
+    '"parallel_tool_calls": false, "tool_choice": "auto", "tools": [], '
+    '"usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}}}\n'
+    "\n"
+)
+
+
+def _chatgpt_sse_response():
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_CHATGPT_SSE_BODY.encode(),
+        request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+    )
+
+
+def _chatgpt_responses_logging_obj():
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = None
+    logging_obj.async_success_handler = AsyncMock()
+    return logging_obj
+
+
+def _chatgpt_responses_config():
+    authenticator = Mock(spec=ChatGPTAuthenticator)
+    authenticator.get_access_token.return_value = "access-test"
+    authenticator.get_account_id.return_value = "acct-test"
+    return ChatGPTResponsesAPIConfig(authenticator=authenticator)
+
+
+def _chatgpt_handler_kwargs(caller_params, client):
+    return {
+        "model": "gpt-5.3-codex",
+        "input": "hi",
+        "responses_api_provider_config": _chatgpt_responses_config(),
+        "response_api_optional_request_params": caller_params,
+        "custom_llm_provider": "chatgpt",
+        "litellm_params": GenericLiteLLMParams(api_key="sk-test", api_base="https://chatgpt.example.com"),
+        "logging_obj": _chatgpt_responses_logging_obj(),
+        "client": client,
+    }
+
+
+def _assert_aggregated_chatgpt_response(result):
+    assert not isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert isinstance(result, ResponsesAPIResponse)
+    assert result.id == "resp_1"
+    assert result.output[0].content[0].text == "aggregated"
+
+
+@pytest.mark.parametrize("caller_params", [{}, {"stream": False}])
+def test_response_api_handler_aggregates_chatgpt_sse_for_a_non_streaming_caller(caller_params):
+    handler = BaseLLMHTTPHandler()
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(return_value=_chatgpt_sse_response())
+
+    result = handler.response_api_handler(**_chatgpt_handler_kwargs(caller_params, client))
+
+    assert client.post.call_args.kwargs["json"]["stream"] is True
+    _assert_aggregated_chatgpt_response(result)
+
+
+def test_response_api_handler_streams_chatgpt_sse_for_a_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(return_value=_chatgpt_sse_response())
+
+    result = handler.response_api_handler(**_chatgpt_handler_kwargs({"stream": True}, client))
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert [event.type for event in result][-1] == "response.completed"
+
+
+def test_response_api_handler_streams_chatgpt_sse_for_an_extra_body_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(return_value=_chatgpt_sse_response())
+
+    result = handler.response_api_handler(extra_body={"stream": True}, **_chatgpt_handler_kwargs({}, client))
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert [event.type for event in result][-1] == "response.completed"
+
+
+def test_response_api_handler_fake_streams_only_for_a_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(return_value=_chatgpt_sse_response())
+
+    streamed = handler.response_api_handler(fake_stream=True, **_chatgpt_handler_kwargs({"stream": True}, client))
+    assert isinstance(streamed, MockResponsesAPIStreamingIterator)
+
+    client.post = Mock(return_value=_chatgpt_sse_response())
+    aggregated = handler.response_api_handler(fake_stream=True, **_chatgpt_handler_kwargs({}, client))
+    _assert_aggregated_chatgpt_response(aggregated)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_params", [{}, {"stream": False}])
+async def test_async_response_api_handler_aggregates_chatgpt_sse_for_a_non_streaming_caller(caller_params):
+    handler = BaseLLMHTTPHandler()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=_chatgpt_sse_response())
+
+    result = await handler.async_response_api_handler(**_chatgpt_handler_kwargs(caller_params, client))
+
+    assert client.post.call_args.kwargs["json"]["stream"] is True
+    _assert_aggregated_chatgpt_response(result)
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_streams_chatgpt_sse_for_a_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=_chatgpt_sse_response())
+
+    result = await handler.async_response_api_handler(**_chatgpt_handler_kwargs({"stream": True}, client))
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert [event.type async for event in result][-1] == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_streams_chatgpt_sse_for_an_extra_body_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=_chatgpt_sse_response())
+
+    result = await handler.async_response_api_handler(
+        extra_body={"stream": True}, **_chatgpt_handler_kwargs({}, client)
+    )
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert [event.type async for event in result][-1] == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_fake_streams_only_for_a_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=_chatgpt_sse_response())
+
+    streamed = await handler.async_response_api_handler(
+        fake_stream=True, **_chatgpt_handler_kwargs({"stream": True}, client)
+    )
+    assert isinstance(streamed, MockResponsesAPIStreamingIterator)
+
+    client.post = AsyncMock(return_value=_chatgpt_sse_response())
+    aggregated = await handler.async_response_api_handler(fake_stream=True, **_chatgpt_handler_kwargs({}, client))
+    _assert_aggregated_chatgpt_response(aggregated)
 
 
 @pytest.mark.asyncio
@@ -407,7 +663,7 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
         model="gpt-5",
         input="hi",
         responses_api_provider_config=config,
-        response_api_optional_request_params={},
+        response_api_optional_request_params={"stream": True},
         custom_llm_provider="chatgpt",
         litellm_params=GenericLiteLLMParams(),
         logging_obj=logging_obj,
@@ -441,7 +697,7 @@ async def test_async_response_api_handler_posts_the_async_transform_hook_result(
         model="gpt-5",
         input="hi",
         responses_api_provider_config=config,
-        response_api_optional_request_params={},
+        response_api_optional_request_params={"stream": True},
         custom_llm_provider="chatgpt",
         litellm_params=GenericLiteLLMParams(),
         logging_obj=Mock(),
@@ -728,6 +984,7 @@ async def test_async_anthropic_messages_handler_streaming_forwards_provider_resp
     additional_headers = result._hidden_params["additional_headers"]
     assert additional_headers["llm_provider-x-amzn-requestid"] == "amzn-req-123"
     assert additional_headers["llm_provider-x-amzn-trace-id"] == "Root=1-abc-def"
+    assert mock_logging_obj.model_call_details["response_headers"] == dict(upstream_response.headers)
 
     collected = b"".join([chunk async for chunk in result])
     assert b"message_start" in collected
@@ -1434,8 +1691,7 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
     expected_response = {"id": "msg_1", "content": []}
     mock_config.transform_anthropic_messages_response = Mock(return_value=expected_response)
 
-    ok_response = Mock()
-    ok_response.raise_for_status = Mock(return_value=None)
+    ok_response = httpx.Response(200, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
     mock_client = AsyncMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=ok_response)
 
@@ -1905,8 +2161,7 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
         captured_kwargs.update(call_kwargs)
         return sentinel_response
 
-    mock_httpx_response = Mock()
-    mock_httpx_response.status_code = 200
+    mock_httpx_response = httpx.Response(200, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
 
     with (
         patch.object(
@@ -2813,7 +3068,7 @@ def test_vector_store_search_handler_direct_config_sync_skips_http():
     config = _make_stub_direct_vector_store_config(stub_response)
     logging_obj = Mock()
 
-    with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
         result = handler.vector_store_search_handler(
             vector_store_id="vs_direct",
             query="q",
@@ -4759,3 +5014,133 @@ async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_asy
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize(
+    ("status_code", "content", "headers", "expected_bytes"),
+    (
+        (
+            416,
+            b"<Error><Code>InvalidRange</Code><ActualObjectSize>0</ActualObjectSize></Error>",
+            {},
+            0,
+        ),
+        (206, b"", {"Content-Range": "bytes 0-0/4321"}, 4321),
+    ),
+)
+async def test_retrieve_file_accepts_bedrock_successful_range_responses(
+    is_async: bool,
+    status_code: int,
+    content: bytes,
+    headers: dict[str, str],
+    expected_bytes: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+    file_id = "s3://my-bucket/litellm-batch-outputs/job-123/output.jsonl"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            status_code,
+            content=content,
+            headers=headers,
+            request=request,
+        )
+    )
+    params = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+    handler = BaseLLMHTTPHandler()
+
+    if is_async:
+        client = AsyncHTTPHandler()
+        await client.close()
+        async_client = httpx.AsyncClient(transport=transport)
+        client.client = async_client
+        try:
+            result = await handler.async_retrieve_file(
+                file_id=file_id,
+                provider_config=BedrockFilesConfig(),
+                litellm_params=params,
+                headers={},
+                logging_obj=Mock(),
+                client=client,
+            )
+        finally:
+            await async_client.aclose()
+    else:
+        sync_client = httpx.Client(transport=transport)
+        client = HTTPHandler(client=sync_client)
+        try:
+            result = handler.retrieve_file(
+                file_id=file_id,
+                provider_config=BedrockFilesConfig(),
+                litellm_params=params,
+                headers={},
+                logging_obj=Mock(),
+                client=client,
+            )
+        finally:
+            sync_client.close()
+
+    assert result.bytes == expected_bytes
+    assert result.filename == "output.jsonl"
+    assert result.purpose == "batch_output"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_retrieve_file_rejects_unverified_bedrock_range_error(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+    file_id = "s3://my-bucket/litellm-batch-outputs/job-123/output.jsonl"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            416,
+            content=b"<Error><Code>InvalidRange</Code></Error>",
+            request=request,
+        )
+    )
+    params = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+    handler = BaseLLMHTTPHandler()
+
+    if is_async:
+        client = AsyncHTTPHandler()
+        await client.close()
+        async_client = httpx.AsyncClient(transport=transport)
+        client.client = async_client
+        try:
+            with pytest.raises(BaseLLMException, match="InvalidRange"):
+                await handler.async_retrieve_file(
+                    file_id=file_id,
+                    provider_config=BedrockFilesConfig(),
+                    litellm_params=params,
+                    headers={},
+                    logging_obj=Mock(),
+                    client=client,
+                )
+        finally:
+            await async_client.aclose()
+    else:
+        sync_client = httpx.Client(transport=transport)
+        client = HTTPHandler(client=sync_client)
+        try:
+            with pytest.raises(BaseLLMException, match="InvalidRange"):
+                handler.retrieve_file(
+                    file_id=file_id,
+                    provider_config=BedrockFilesConfig(),
+                    litellm_params=params,
+                    headers={},
+                    logging_obj=Mock(),
+                    client=client,
+                )
+        finally:
+            sync_client.close()
