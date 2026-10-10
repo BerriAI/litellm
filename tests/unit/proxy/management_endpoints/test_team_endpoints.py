@@ -4976,6 +4976,7 @@ async def test_team_list_caller_membership_uses_member_spend_budget_and_reset_da
         prisma_client,
         [_team_list_member("team-a")],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -4999,6 +5000,7 @@ async def test_team_list_caller_membership_includes_roster_members_without_membe
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5009,6 +5011,64 @@ async def test_team_list_caller_membership_includes_roster_members_without_membe
     )
     membership_query.assert_awaited_once()
     budget_query.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_team_list_caller_membership_matches_email_only_roster_member() -> None:
+    reset_at: Final = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    team: Final = TeamListItem(
+        team_id="team-a",
+        metadata={"team_member_budget_id": "team-budget"},
+        members_with_roles=[Member(user_id=None, user_email="caller@x.com", role="user")],
+    )
+    prisma_client, membership_query, budget_query = _team_list_prisma(
+        (),
+        [_budget_table("team-budget", 50, reset_at)],
+    )
+
+    teams: Final = await _enrich_team_list_with_caller_membership(
+        prisma_client,
+        [team],
+        "caller",
+        "caller@x.com",
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    assert teams[0].caller_membership == TeamListCallerMembership(
+        spend=0.0,
+        max_budget=50,
+        budget_reset_at=None,
+    )
+    membership_query.assert_awaited_once()
+    budget_query.assert_awaited_once_with(where={"budget_id": {"in": ("team-budget",)}})
+
+
+@pytest.mark.parametrize("caller_user_email", ("other@x.com", None))
+@pytest.mark.asyncio
+async def test_team_list_caller_membership_ignores_email_only_roster_member_without_matching_email(
+    caller_user_email: str | None,
+) -> None:
+    team: Final = TeamListItem(
+        team_id="team-a",
+        metadata={"team_member_budget_id": "team-budget"},
+        members_with_roles=[Member(user_id=None, user_email="caller@x.com", role="user")],
+    )
+    prisma_client, membership_query, budget_query = _team_list_prisma(
+        (),
+        [_budget_table("team-budget", 50)],
+    )
+
+    teams: Final = await _enrich_team_list_with_caller_membership(
+        prisma_client,
+        [team],
+        "caller",
+        caller_user_email,
+        datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+
+    assert teams[0].caller_membership is None
+    membership_query.assert_awaited_once()
+    budget_query.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5024,6 +5084,7 @@ async def test_team_list_caller_membership_uses_team_default_without_member_rese
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5050,6 +5111,7 @@ async def test_team_list_caller_membership_uses_reset_date_from_member_linked_de
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5073,6 +5135,7 @@ async def test_team_list_caller_membership_ignores_zero_team_default_budget() ->
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5109,6 +5172,7 @@ async def test_team_list_caller_membership_applies_only_active_temporary_increas
         prisma_client,
         [_team_list_member("team-a")],
         "caller",
+        None,
         datetime(2030, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -5150,6 +5214,7 @@ async def test_team_list_caller_membership_uses_private_row_reset_with_inherited
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
         "caller",
+        None,
         datetime(2030, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -5173,6 +5238,7 @@ async def test_team_list_caller_membership_is_null_for_nonmember_admins() -> Non
         prisma_client,
         [team],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5188,6 +5254,7 @@ async def test_team_list_caller_membership_skips_queries_without_caller_user_id(
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a")],
+        None,
         None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
@@ -5215,6 +5282,7 @@ async def test_team_list_caller_membership_batches_page_membership_and_budget_qu
             _team_list_member("team-b", default_budget_id="budget-b"),
         ],
         "caller",
+        None,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 

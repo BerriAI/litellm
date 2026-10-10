@@ -5695,13 +5695,22 @@ def _team_list_budget_model(budget_row: _TeamListBudgetRow | None) -> LiteLLM_Bu
     )
 
 
+def _caller_in_roster(team: TeamListItem, caller_user_id: str, caller_user_email: str | None) -> bool:
+    return any(
+        (member.user_id is not None and member.user_id == caller_user_id)
+        or (member.user_email is not None and caller_user_email is not None and member.user_email == caller_user_email)
+        for member in team.members_with_roles
+    )
+
+
 def _team_member_default_budget_id(
     team: TeamListItem,
     caller_user_id: str,
+    caller_user_email: str | None,
     memberships_by_team: Mapping[str, _TeamListMembershipRow],
 ) -> str | None:
     membership_row: Final = memberships_by_team.get(team.team_id)
-    if membership_row is None and not any(member.user_id == caller_user_id for member in team.members_with_roles):
+    if membership_row is None and not _caller_in_roster(team, caller_user_id, caller_user_email):
         return None
     member_budget: Final = _team_list_budget_model(
         membership_row.litellm_budget_table if membership_row is not None else None
@@ -5720,16 +5729,19 @@ def _team_member_default_budget_id(
 def _team_list_caller_membership(
     team: TeamListItem,
     caller_user_id: str,
+    caller_user_email: str | None,
     memberships_by_team: Mapping[str, _TeamListMembershipRow],
     budgets_by_id: Mapping[str, _TeamListBudgetRow],
     now: datetime,
 ) -> TeamListCallerMembership | None:
     membership_row: Final = memberships_by_team.get(team.team_id)
-    if membership_row is None and not any(member.user_id == caller_user_id for member in team.members_with_roles):
+    if membership_row is None and not _caller_in_roster(team, caller_user_id, caller_user_email):
         return None
     member_budget_row: Final = membership_row.litellm_budget_table if membership_row is not None else None
     member_budget: Final = _team_list_budget_model(member_budget_row)
-    default_budget_id: Final = _team_member_default_budget_id(team, caller_user_id, memberships_by_team)
+    default_budget_id: Final = _team_member_default_budget_id(
+        team, caller_user_id, caller_user_email, memberships_by_team
+    )
     default_budget_row: Final = budgets_by_id.get(default_budget_id) if default_budget_id is not None else None
     team_default_budget: Final = _team_list_budget_model(default_budget_row)
     max_budget: Final = resolve_effective_team_member_budget(
@@ -5751,6 +5763,7 @@ async def _enrich_team_list_with_caller_membership(
     prisma_client: PrismaClient,
     teams: Sequence[TeamListItem],
     caller_user_id: str | None,
+    caller_user_email: str | None,
     now: datetime,
 ) -> tuple[TeamListItem, ...]:
     if caller_user_id is None:
@@ -5769,7 +5782,12 @@ async def _enrich_team_list_with_caller_membership(
         dict.fromkeys(
             budget_id
             for team in teams
-            if (budget_id := _team_member_default_budget_id(team, caller_user_id, memberships_by_team)) is not None
+            if (
+                budget_id := _team_member_default_budget_id(
+                    team, caller_user_id, caller_user_email, memberships_by_team
+                )
+            )
+            is not None
         )
     )
     default_budget_rows: Final[Sequence[_TeamListBudgetRow]] = (
@@ -5787,6 +5805,7 @@ async def _enrich_team_list_with_caller_membership(
                 "caller_membership": _team_list_caller_membership(
                     team=team,
                     caller_user_id=caller_user_id,
+                    caller_user_email=caller_user_email,
                     memberships_by_team=memberships_by_team,
                     budgets_by_id=budgets_by_id,
                     now=now,
@@ -6062,6 +6081,7 @@ async def list_team_v2(
             prisma_client=prisma_client,
             teams=tuple(team for team in team_list if isinstance(team, TeamListItem)),
             caller_user_id=user_api_key_dict.user_id,
+            caller_user_email=user_api_key_dict.user_email,
             now=get_utc_datetime(),
         )
         if not use_deleted_table and team_list
