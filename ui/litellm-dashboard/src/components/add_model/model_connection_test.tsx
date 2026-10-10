@@ -133,7 +133,7 @@ ${formattedBody}
     : "";
 
   return (
-    <div className="rounded-lg bg-background p-6">
+    <div className="min-w-0 rounded-lg bg-background p-6">
       {isLoading ? (
         <div aria-busy="true" className="flex flex-col items-center justify-center gap-4 px-5 py-8 text-center">
           <LoaderCircle className="size-8 animate-spin text-primary" />
@@ -157,7 +157,9 @@ ${formattedBody}
 
           <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 p-4 shadow-xs">
             <p className="mb-2 font-medium">Error:</p>
-            <p className="text-sm leading-relaxed text-destructive">{errorMessage}</p>
+            <p data-testid="connection-error-msg" className="text-sm leading-relaxed break-words text-destructive">
+              {errorMessage}
+            </p>
 
             {error && (
               <Button
