@@ -1,10 +1,15 @@
+import base64
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 
 
+import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
@@ -1851,3 +1856,285 @@ def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
 
     assert response is not None
     assert "service_tier" not in response.model_dump()
+
+
+def _legacy_stream_chunk(
+    model: str,
+    *,
+    content: str | None = None,
+    tool_calls: tuple[ChatCompletionDeltaToolCall, ...] = (),
+    usage: Usage | None = None,
+    finish_reason: str | None = None,
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-legacy",
+        created=1,
+        model=model,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=finish_reason,
+                index=0,
+                delta=Delta(content=content, role="assistant", tool_calls=list(tool_calls)),
+            )
+        ],
+        usage=usage,
+    )
+
+
+def test_stream_chunk_builder_empty_initial_chunk() -> None:
+    chunks: Final = ({"id": ""}, {"id": "1"}, {"id": "1"})
+
+    assert ChunkProcessor._get_chunk_id(chunks) == "1"
+
+
+def test_stream_chunk_builder_litellm_empty_chunks() -> None:
+    with pytest.raises(litellm.APIError):
+        stream_chunk_builder(chunks=None)
+
+    assert stream_chunk_builder(chunks=[]) is None
+
+
+def test_stream_chunk_builder_litellm_mixed_calls() -> None:
+    chunks: Final = (
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            content="To answer your question, ",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    id="call_sql",
+                    index=0,
+                    type="function",
+                    function=Function(
+                        name="sql_query",
+                        arguments='{"query": "SELECT COUNT(*) FROM users;"}',
+                    ),
+                ),
+            ),
+        ),
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            content="I will run a query.",
+            finish_reason="stop",
+        ),
+    )
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.content == "To answer your question, I will run a query."
+    assert [tool_call.to_dict() for tool_call in response.choices[0].message.tool_calls] == [
+        {
+            "function": {
+                "arguments": '{"query": "SELECT COUNT(*) FROM users;"}',
+                "name": "sql_query",
+            },
+            "id": "call_sql",
+            "type": "function",
+        }
+    ]
+
+
+def _openai_sse(*chunks: Mapping[str, object]) -> str:
+    events: Final = tuple(
+        f"data: {json.dumps({'id': 'chatcmpl-legacy', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'gpt-4.1-mini', **chunk})}\n\n"
+        for chunk in chunks
+    )
+    return "".join(events) + "data: [DONE]\n\n"
+
+
+def _complete_streamed_openai_response(respx_mock: respx.MockRouter, sse_body: str) -> litellm.ModelResponse:
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+    )
+    return litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "What's the weather like in Boston?"}],
+        api_key="sk-test",
+        stream=True,
+        stream_options={"include_usage": True},
+        complete_response=True,
+    )
+
+
+def test_stream_chunk_builder_litellm_tool_call(respx_mock: respx.MockRouter) -> None:
+    response: Final = _complete_streamed_openai_response(
+        respx_mock,
+        _openai_sse(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_weather",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"city":'},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"Boston"}'}}]},
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+            {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}},
+        ),
+    )
+
+    assert [tool_call.to_dict() for tool_call in response.choices[0].message.tool_calls] == [
+        {"function": {"arguments": '{"city":"Boston"}', "name": "get_weather"}, "id": "call_weather", "type": "function"}
+    ]
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (5, 3, 8)
+
+
+def test_stream_chunk_builder_litellm_tool_call_regular_message(respx_mock: respx.MockRouter) -> None:
+    response: Final = _complete_streamed_openai_response(
+        respx_mock,
+        _openai_sse(
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello "}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {"content": "there."}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}},
+        ),
+    )
+
+    assert response.choices[0].message.content == "Hello there."
+    assert response.choices[0].message.tool_calls is None
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (4, 2, 6)
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+
+
+def test_stream_chunk_builder_multiple_tool_calls() -> None:
+    def tool_call_chunk(*tool_calls: ChatCompletionDeltaToolCall, finish_reason: str | None = None) -> ModelResponseStream:
+        return _legacy_stream_chunk("openai/gpt-4o", tool_calls=tool_calls, finish_reason=finish_reason)
+
+    chunks: Final = (
+        tool_call_chunk(
+            ChatCompletionDeltaToolCall(
+                id="call_exp", index=0, type="function", function=Function(name="exponentiate", arguments="")
+            )
+        ),
+        tool_call_chunk(ChatCompletionDeltaToolCall(index=0, function=Function(arguments='{"base": 3, '))),
+        tool_call_chunk(
+            ChatCompletionDeltaToolCall(id="call_add", index=1, type="function", function=Function(name="add", arguments=""))
+        ),
+        tool_call_chunk(ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"exponent": 5}'))),
+        tool_call_chunk(
+            ChatCompletionDeltaToolCall(index=1, function=Function(arguments='{"x": 1, "y": 2}')),
+            finish_reason="tool_calls",
+        ),
+    )
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.to_dict() for tool_call in response.choices[0].message.tool_calls] == [
+        {"function": {"arguments": '{"base": 3, "exponent": 5}', "name": "exponentiate"}, "id": "call_exp", "type": "function"},
+        {"function": {"arguments": '{"x": 1, "y": 2}', "name": "add"}, "id": "call_add", "type": "function"},
+    ]
+
+
+def test_grok_bug() -> None:
+    chunks: Final = (
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    id="call_weather",
+                    index=0,
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"location":'),
+                ),
+            ),
+        ),
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    index=0,
+                    type="function",
+                    function=Function(arguments='"Boston"}'),
+                ),
+            ),
+            finish_reason="tool_calls",
+        ),
+    )
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {
+        "location": "Boston"
+    }
+
+
+def test_stream_chunk_builder_openai_audio_output_usage() -> None:
+    usage: Final = Usage(
+        completion_tokens=4,
+        prompt_tokens=7,
+        total_tokens=11,
+        completion_tokens_details={"audio_tokens": 2, "text_tokens": 2},
+        prompt_tokens_details=PromptTokensDetails(audio_tokens=3, text_tokens=4),
+    )
+    response: Final = stream_chunk_builder(
+        chunks=[
+            _legacy_stream_chunk("openai/gpt-audio-1.5", content="Ye"),
+            _legacy_stream_chunk("openai/gpt-audio-1.5", content="s.", finish_reason="stop"),
+            _legacy_stream_chunk("openai/gpt-audio-1.5", usage=usage),
+        ]
+    )
+
+    assert response is not None
+    assert response.choices[0].message.content == "Yes."
+    assert response.usage.model_dump(exclude_none=True) == usage.model_dump(exclude_none=True)
+
+
+def _openai_audio_stream_chunk(delta: Mapping[str, object], finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        **{
+            "id": "chatcmpl-audio",
+            "created": 1,
+            "model": "gpt-audio-1.5",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason, "logprobs": None}],
+        }
+    )
+
+
+def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
+    first_pcm: Final = b"\x01\x02"
+    second_pcm: Final = b"\x03\x04\x05\x06"
+    chunks: Final = (
+        _openai_audio_stream_chunk(
+            {"role": "assistant", "content": None, "audio": {"id": "audio_yes", "transcript": "Ye"}}
+        ),
+        _openai_audio_stream_chunk({"audio": {"transcript": "s."}}),
+        _openai_audio_stream_chunk({"audio": {"data": base64.b64encode(first_pcm).decode()}}),
+        _openai_audio_stream_chunk({"audio": {"data": base64.b64encode(second_pcm).decode()}}),
+        _openai_audio_stream_chunk({"audio": {"id": "audio_yes", "expires_at": 1767225600}}),
+        _openai_audio_stream_chunk({}, finish_reason="stop"),
+    )
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    audio: Final = response.choices[0].message.audio
+    assert audio is not None
+    assert audio.model_dump() == {
+        "id": "audio_yes",
+        "data": base64.b64encode(first_pcm + second_pcm).decode(),
+        "expires_at": 1767225600,
+        "transcript": "Yes.",
+    }

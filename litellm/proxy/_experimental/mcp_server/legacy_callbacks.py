@@ -27,6 +27,10 @@ class ElicitationCallback(Protocol):
     async def __call__(self, context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData: ...
 
 
+def has_active_mcp_request_context() -> bool:
+    return get_active_mcp_request_ctx() is not None
+
+
 def create_sampling_callback(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,

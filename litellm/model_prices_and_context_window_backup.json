@@ -13213,28 +13213,30 @@
     },
     "bedrock/moonshotai.kimi-k2-thinking": {
         "deprecation_date": "2027-03-30",
-        "input_cost_per_token": 7.3e-07,
-        "input_cost_per_token_flex": 3.6e-07,
+        "input_cost_per_token": 6e-07,
+        "input_cost_per_token_flex": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
         "max_output_tokens": 16000,
         "max_tokens": 16000,
         "mode": "chat",
-        "output_cost_per_token": 3.03e-06,
-        "output_cost_per_token_flex": 1.52e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html",
+        "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json",
         "supports_function_calling": true,
         "supports_reasoning": true
     },
     "bedrock/moonshotai.kimi-k2.5": {
         "input_cost_per_token": 6e-07,
+        "input_cost_per_token_flex": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
         "max_output_tokens": 16000,
         "max_tokens": 16000,
         "mode": "chat",
-        "output_cost_per_token": 3.03e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html",
+        "output_cost_per_token": 3e-06,
+        "output_cost_per_token_flex": 1.5e-06,
+        "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
@@ -66874,7 +66876,7 @@
         "supports_audio_input": true
     },
     "azure/gpt-realtime-translate": {
-        "deprecation_date": "2027-05-06",
+        "deprecation_date": "2027-11-09",
         "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -71840,5 +71842,51 @@
             "image"
         ],
         "supports_embedding_image_input": true
+    },
+    "scaledown/extract": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/summarize": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/compress": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_vision": false
+    },
+    "scaledown/classify": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/decisions": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
     }
 }

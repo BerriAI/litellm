@@ -200,6 +200,7 @@ def anthropic_client(gateway: Gateway) -> anthropic.Anthropic:
     return anthropic.Anthropic(
         base_url=str(gateway.client.base_url),
         api_key=gateway.key,
+        auth_token=gateway.key,
         max_retries=0,
         http_client=httpx.Client(trust_env=False, timeout=60),
     )
