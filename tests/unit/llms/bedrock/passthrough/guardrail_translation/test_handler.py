@@ -10,8 +10,20 @@ Validates that:
 """
 
 import copy
-import pytest
+from datetime import datetime
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import litellm
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
     BedrockPassthroughGuardrailHandler,
@@ -820,6 +832,52 @@ def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
     return prelude + prelude_crc_b + headers_bytes + payload_bytes + msg_crc_b
 
 
+_TEST_CARD = "4111 1111 1111 1111"
+
+
+class _CardMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="card-mask", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.received_texts: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts", [])
+        self.received_texts.append(list(texts))
+        return {**inputs, "texts": [text.replace(_TEST_CARD, "****") for text in texts]}
+
+
+async def _run_post_call_guardrail_on_stream(
+    stream_bytes: bytes, guardrail: CustomGuardrail, monkeypatch: pytest.MonkeyPatch
+) -> bytes:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    logging_obj = LiteLLMLoggingObj(
+        model="claude",
+        messages=[],
+        stream=True,
+        call_type="allm_passthrough_route",
+        start_time=datetime.now(),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    return await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+        body_bytes=stream_bytes,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        data={
+            "model": "claude",
+            "custom_llm_provider": "bedrock",
+            "endpoint": "model/claude/converse-stream",
+            "litellm_logging_obj": logging_obj,
+        },
+    )
+
+
 class TestDeAnonymizeConverseStream:
     def _make_proxy_logging(self, mock_hook) -> MagicMock:
         proxy_logging_obj = MagicMock()
@@ -888,11 +946,11 @@ class TestDeAnonymizeConverseStream:
         return blocks
 
     @pytest.mark.asyncio
-    async def test_text_blocks_are_guardrailed_separately(self):
+    async def test_text_blocks_are_guardrailed_separately(self, monkeypatch):
         stream_bytes = (
             _build_event_stream_frame("messageStart", {"role": "assistant"})
             + _build_event_stream_frame(
-                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Card: 4111 1111 1111 1111."}}
+                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": f"Card: {_TEST_CARD}."}}
             )
             + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
             + _build_event_stream_frame(
@@ -901,41 +959,23 @@ class TestDeAnonymizeConverseStream:
             + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
             + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
         )
+        guardrail = _CardMaskingGuardrail()
 
-        async def mock_hook(data, user_api_key_dict, response):
-            assert [block["text"] for block in response["output"]["message"]["content"]] == [
-                "Card: 4111 1111 1111 1111.",
-                "Thanks for sailing with us!",
-            ]
-            return {
-                "output": {
-                    "message": {
-                        "role": "assistant",
-                        "content": [{"text": "Card: <CREDIT_CARD>."}, {"text": "Thanks for sailing with us!"}],
-                    }
-                },
-                "stopReason": "end_turn",
-            }
+        result = await _run_post_call_guardrail_on_stream(stream_bytes, guardrail, monkeypatch)
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
-            body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(mock_hook),
-            user_api_key_dict=MagicMock(),
-            data={},
-        )
-
-        assert self._deltas_by_block(result, "text") == {0: "Card: <CREDIT_CARD>.", 1: "Thanks for sailing with us!"}
+        assert guardrail.received_texts == [[f"Card: {_TEST_CARD}.", "Thanks for sailing with us!"]]
+        assert self._deltas_by_block(result, "text") == {0: "Card: ****.", 1: "Thanks for sailing with us!"}
 
     @pytest.mark.asyncio
-    async def test_parallel_tool_use_inputs_stay_in_their_own_block(self):
+    async def test_parallel_tool_use_inputs_stay_in_their_own_block(self, monkeypatch):
         import json
 
-        first_input = '{"ship":"IC","cardNumber":"4111 1111 1111 1111"}'
-        second_input = '{"ship":"Icon of the Seas"}'
+        first_input = f'{{"ship":"AU","cardNumber":"{_TEST_CARD}"}}'
+        second_input = '{"ship":"AU"}'
         stream_bytes = (
             _build_event_stream_frame(
                 "contentBlockStart",
-                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_a", "name": "book_cruise"}}},
+                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_a", "name": "book"}}},
             )
             + _build_event_stream_frame(
                 "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": first_input}}}
@@ -951,31 +991,14 @@ class TestDeAnonymizeConverseStream:
             + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
             + _build_event_stream_frame("messageStop", {"stopReason": "tool_use"})
         )
+        guardrail = _CardMaskingGuardrail()
 
-        async def mock_hook(data, user_api_key_dict, response):
-            return {
-                "output": {
-                    "message": {
-                        "role": "assistant",
-                        "content": [
-                            {"text": first_input.replace("4111 1111 1111 1111", "<CREDIT_CARD>")},
-                            {"text": second_input},
-                        ],
-                    }
-                },
-                "stopReason": "tool_use",
-            }
+        result = await _run_post_call_guardrail_on_stream(stream_bytes, guardrail, monkeypatch)
 
-        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
-            body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(mock_hook),
-            user_api_key_dict=MagicMock(),
-            data={},
-        )
-
+        assert guardrail.received_texts == [[first_input, second_input]]
         inputs = self._deltas_by_block(result, "toolUse")
-        assert json.loads(inputs[0]) == {"ship": "IC", "cardNumber": "<CREDIT_CARD>"}
-        assert json.loads(inputs[1]) == {"ship": "Icon of the Seas"}
+        assert json.loads(inputs[0]) == {"ship": "AU", "cardNumber": "****"}
+        assert json.loads(inputs[1]) == {"ship": "AU"}
 
     @pytest.mark.asyncio
     async def test_tokens_split_across_chunks_reassembled(self):
