@@ -988,7 +988,6 @@ from fastapi import (
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
@@ -1003,6 +1002,8 @@ from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+
+from litellm.proxy.common_utils.cors import ConfigurableCORSMiddleware, get_cors_config
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -2235,27 +2236,8 @@ def _get_cors_config(
     Returns:
         Tuple[List[str], bool]: (origins, allow_credentials)
     """
-    _origins_raw: Final = cors_origins_env if cors_origins_env is not None else os.getenv("LITELLM_CORS_ORIGINS")
-    if _origins_raw is None or _origins_raw.strip() == "":
-        computed_origins = ["*"]
-    else:
-        computed_origins = [o.strip() for o in _origins_raw.split(",") if o.strip()]
-
-    # Disable credentials by default when wildcard origins are used — combining
-    # allow_origins=["*"] with allow_credentials=True causes Starlette to reflect
-    # the incoming Origin header, allowing any site to make credentialed requests.
-    # Set LITELLM_CORS_ALLOW_CREDENTIALS=true to explicitly restore the old behaviour
-    # (e.g. for non-browser clients that relied on the Access-Control-Allow-Credentials
-    # header being present regardless of origin).
-    _credentials_raw: Final = (
-        cors_credentials_env if cors_credentials_env is not None else os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
-    )
-    if _credentials_raw is not None:
-        computed_credentials = _credentials_raw.strip().lower() == "true"
-    else:
-        computed_credentials = "*" not in computed_origins
-
-    return computed_origins, computed_credentials
+    computed_origins, computed_credentials = get_cors_config(cors_origins_env, cors_credentials_env)
+    return list(computed_origins), computed_credentials
 
 
 origins, allow_cors_credentials = _get_cors_config()
@@ -2564,11 +2546,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=allow_cors_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    ConfigurableCORSMiddleware,
+    get_settings=lambda: _current_general_settings(),
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 

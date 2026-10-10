@@ -131,6 +131,20 @@ uv tool install 'litellm[proxy]'
 litellm --model gpt-4o
 ```
 
+#### Browser CORS configuration
+
+Set browser origins, preflight methods and request headers under `general_settings` in your proxy YAML configuration
+
+```yaml
+general_settings:
+  cors_allow_origins: ["https://app.example.com"]
+  cors_allow_methods: ["POST"]
+  cors_allow_headers: ["Authorization", "Content-Type"]
+  cors_allow_credentials: false
+```
+
+`LITELLM_CORS_ORIGINS` and `LITELLM_CORS_ALLOW_CREDENTIALS` take precedence over the corresponding YAML settings. Without configuration, origins, methods and headers allow `*`, and credentials are disabled. If credentials are omitted, they are enabled only when the effective origin list excludes `*`. Loaded configuration updates apply to subsequent requests
+
 ```python
 import openai
 
