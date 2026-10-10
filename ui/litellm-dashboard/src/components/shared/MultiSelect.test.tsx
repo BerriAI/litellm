@@ -1,12 +1,18 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { MultiSelect, type MultiSelectOption } from "./MultiSelect";
+import { MAX_VISIBLE_OPTIONS, MultiSelect, type MultiSelectOption } from "./MultiSelect";
 
 const OPTIONS: MultiSelectOption[] = [
   { value: "vs-alpha", label: "alpha-kb (vs-alpha)" },
   { value: "vs-beta", label: "beta-kb (vs-beta)", description: "second store" },
 ];
+
+const LARGE_OPTIONS: MultiSelectOption[] = Array.from({ length: 5000 }, (_, index) => ({
+  value: `tag-${index}`,
+  label: `tag-${index}`,
+  description: "shared spend tag description",
+}));
 
 const renderMultiSelect = (props: Partial<React.ComponentProps<typeof MultiSelect>> = {}) => {
   const onValueChange = vi.fn();
@@ -67,6 +73,66 @@ describe("MultiSelect", () => {
 
     expect(screen.getByLabelText("alpha-kb (vs-alpha)")).toBeInTheDocument();
     expect(screen.getByLabelText("beta-kb (vs-beta)")).toBeInTheDocument();
+  });
+
+  it("caps rendered options and reports the number of matching options", async () => {
+    const { input } = renderMultiSelect({ options: LARGE_OPTIONS });
+
+    await openPopup(input);
+
+    expect(screen.getAllByRole("option")).toHaveLength(MAX_VISIBLE_OPTIONS);
+    expect(screen.getByText("Showing first 100 of 5000 matches. Type to narrow results.")).toBeInTheDocument();
+  });
+
+  it("matches option descriptions by default", async () => {
+    const { input } = renderMultiSelect();
+    await userEvent.type(input, "second store");
+
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /beta-kb/ })).toBeInTheDocument();
+  });
+
+  it("skips descriptions when searchDescriptions is false", async () => {
+    const { input } = renderMultiSelect({ options: LARGE_OPTIONS, searchDescriptions: false });
+    await userEvent.type(input, "shared spend");
+
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(await screen.findByText("No options found")).toBeInTheDocument();
+  });
+
+  it("filters by label and updates the match hint", async () => {
+    const { input } = renderMultiSelect({ options: LARGE_OPTIONS });
+    await userEvent.type(input, "tag-49");
+
+    expect(screen.getAllByRole("option")).toHaveLength(MAX_VISIBLE_OPTIONS);
+    expect(screen.getByText("Showing first 100 of 111 matches. Type to narrow results.")).toBeInTheDocument();
+  });
+
+  it("shows an under-cap label match without the match hint", async () => {
+    const { input } = renderMultiSelect({ options: LARGE_OPTIONS });
+    await userEvent.type(input, "tag-4999");
+
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /tag-4999/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Showing first/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the custom option available when matching results exceed the cap", async () => {
+    const { onValueChange, input } = renderMultiSelect({ options: LARGE_OPTIONS, allowCustomValues: true });
+    await userEvent.type(input, "tag");
+
+    await userEvent.click(screen.getByRole("option", { name: 'Create "tag"' }));
+
+    expect(onValueChange).toHaveBeenCalledWith(["tag"]);
+  });
+
+  it("renders a selected chip outside the visible option slice", async () => {
+    const { input } = renderMultiSelect({ options: LARGE_OPTIONS, value: ["tag-4999"] });
+
+    await openPopup(input);
+
+    expect(screen.getByLabelText("tag-4999")).toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(MAX_VISIBLE_OPTIONS);
   });
 
   it("labels an unknown selected value with its raw id", () => {
