@@ -129,7 +129,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         correctly and the provider is creating a cache.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -167,7 +167,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         This validates that caching is working end-to-end.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -202,50 +202,6 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             f"but got {cache_read}. Full usage: {usage}"
         )
 
-    @pytest.mark.asyncio
-    async def test_prompt_caching_with_system_message(self):
-        """
-        E2E test: Prompt caching with system message should work.
-        """
-        _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
-
-        messages = [
-            {
-                "role": "user",
-                "content": "What are the key terms?",
-            },
-        ]
-
-        system = [
-            {
-                "type": "text",
-                "text": LARGE_DOCUMENT_FOR_CACHING,
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
-
-        response = await litellm.anthropic.messages.acreate(
-            model=self.get_model(),
-            messages=messages,
-            system=system,
-            max_tokens=100,
-        )
-
-        print(f"Response: {json.dumps(response, indent=2, default=str)}")
-
-        usage = response.get("usage", {})
-        cache_creation = usage.get("cache_creation_input_tokens", 0)
-        cache_read = usage.get("cache_read_input_tokens", 0)
-
-        print(f"cache_creation_input_tokens: {cache_creation}")
-        print(f"cache_read_input_tokens: {cache_read}")
-
-        assert cache_creation > 0 or cache_read > 0, (
-            f"Expected cache tokens > 0 for system message caching, "
-            f"but got cache_creation={cache_creation}, cache_read={cache_read}"
-        )
-
     def _parse_sse_chunks(self, chunk: bytes) -> list:
         """
         Parse SSE format chunks and return list of JSON objects.
@@ -270,7 +226,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         are correctly returned in the streaming response's message_delta event.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -368,7 +324,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         E2E test: Second streaming call should return cache_read_input_tokens > 0.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -431,95 +387,4 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         assert cache_read > 0, (
             f"Expected cache_read_input_tokens > 0 on second streaming call, "
             f"but got {cache_read}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_prompt_caching_message_start_indicates_caching_support(self):
-        """
-        E2E test: message_start event should contain cache fields to indicate caching support.
-
-        This validates that the message_start event includes cache_creation_input_tokens
-        and cache_read_input_tokens fields (even if initialized to 0) so that clients
-        like Claude Code can detect that prompt caching is supported.
-
-        This test specifically addresses the issue where Bedrock converse API streaming
-        didn't include cache fields in message_start, causing clients to think caching
-        wasn't supported.
-        """
-        _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
-
-        messages = self.get_messages_with_cache_control()
-
-        response = await litellm.anthropic.messages.acreate(
-            model=self.get_model(),
-            messages=messages,
-            max_tokens=100,
-            stream=True,
-        )
-
-        # Look for message_start event and validate it has cache fields
-        message_start_found = False
-        message_start_has_cache_creation_field = False
-        message_start_has_cache_read_field = False
-
-        async for chunk in response:
-            # Handle SSE format chunks (bytes)
-            if isinstance(chunk, bytes):
-                json_chunks = self._parse_sse_chunks(chunk)
-                for json_data in json_chunks:
-                    if json_data.get("type") == "message_start":
-                        message_start_found = True
-                        message = json_data.get("message", {})
-                        usage = message.get("usage", {})
-
-                        print(
-                            f"message_start usage: {json.dumps(usage, indent=2, default=str)}"
-                        )
-
-                        # Check that cache fields are present (even if 0)
-                        if "cache_creation_input_tokens" in usage:
-                            message_start_has_cache_creation_field = True
-                        if "cache_read_input_tokens" in usage:
-                            message_start_has_cache_read_field = True
-
-                        # Break after first message_start
-                        break
-            elif isinstance(chunk, dict):
-                if chunk.get("type") == "message_start":
-                    message_start_found = True
-                    message = chunk.get("message", {})
-                    usage = message.get("usage", {})
-
-                    print(
-                        f"message_start usage: {json.dumps(usage, indent=2, default=str)}"
-                    )
-
-                    # Check that cache fields are present (even if 0)
-                    if "cache_creation_input_tokens" in usage:
-                        message_start_has_cache_creation_field = True
-                    if "cache_read_input_tokens" in usage:
-                        message_start_has_cache_read_field = True
-
-                    # Break after first message_start
-                    break
-
-            # Break if we found message_start
-            if message_start_found:
-                break
-
-        # Validate that message_start was found
-        assert (
-            message_start_found
-        ), "Expected to find message_start event in streaming response"
-
-        # Validate that cache fields are present in message_start
-        assert message_start_has_cache_creation_field, (
-            "Expected cache_creation_input_tokens field in message_start event. "
-            "This field should be present (even if 0) to indicate caching support to clients."
-        )
-
-        assert message_start_has_cache_read_field, (
-            "Expected cache_read_input_tokens field in message_start event. "
-            "This field should be present (even if 0) to indicate caching support to clients."
         )

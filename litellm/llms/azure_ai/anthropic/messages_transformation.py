@@ -4,7 +4,7 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 
 from typing import Any, Final
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -50,7 +50,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present
@@ -68,6 +68,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+            messages=messages,
         )
 
         return headers, api_base

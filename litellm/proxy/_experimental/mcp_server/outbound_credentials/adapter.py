@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import base64
 import os
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 from fastapi import HTTPException
 from pydantic import SecretStr
 from typing_extensions import assert_never
 
-from litellm.experimental_mcp_client.client import strip_auth_scheme, to_basic_credentials
+from litellm.experimental_mcp_client.client import MCPClient, strip_auth_scheme, to_basic_credentials
 from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
     ApiKeyConfig,
@@ -39,7 +41,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPAuthType, MCPTransport
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -79,7 +81,7 @@ def to_server_spec(server: MCPServer) -> ServerSpec | None:
 
     BYOK is the per-user source of the ``api_key`` mode; its scheme rides on ``auth_type`` just
     like a shared key, but the value is per-user and not migrated yet, so a BYOK server defers
-    to v1 regardless of ``auth_type`` (this guard is the seam the BYOK arm replaces later).
+    to v1 for its static schemes. Declared OBO always stays with the exchange arm.
 
     Dispatches on the declared ``auth_type``. The match is exhaustive over ``MCPAuthType`` with
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
@@ -90,8 +92,8 @@ def to_server_spec(server: MCPServer) -> ServerSpec | None:
     modes ``true_passthrough`` / ``oauth_delegate`` (``PassthroughConfig``); delegated/passthrough
     oauth2 and SigV4 return None and stay on v1.
     """
-    if server.is_byok:
-        return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
+    if server.is_byok and server.auth_type != MCPAuth.oauth2_token_exchange:
+        return None  # per-user BYOK source not migrated yet -> defer to v1
     resource: Final = server.url or server.server_id
     auth_type: Final = server.auth_type
     match auth_type:
@@ -165,21 +167,9 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
     )
 
 
-def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
-    """Build a token_exchange (OBO) spec, or defer (None) when it is not OBO-configured.
-
-    An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
-    ``token_exchange_endpoint``/``token_url`` is absent: a missing endpoint then fails closed (412) at
-    the exchanger rather than silently deferring to v1 and connecting unauthenticated, since the
-    gateway must not guess the IdP or fall back to a weaker source. Without client credentials there is
-    nothing to own, so the server stays on v1 (parity-safe). ``profile`` selects the wire dialect
-    (``rfc8693`` default, ``entra_obo`` for Microsoft Entra On-Behalf-Of); an unrecognized value
-    normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
-    forwarded only when the operator set it; a missing one is omitted, not derived.
-    """
+def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec:
+    """Keep declared OBO owned by the resolver, including incomplete client configuration."""
     endpoint: Final = server.token_exchange_endpoint or server.effective_token_url
-    if not server.client_id or not server.client_secret:
-        return None
     profile: Final[Literal["rfc8693", "entra_obo"]] = (
         "entra_obo" if server.token_exchange_profile == "entra_obo" else "rfc8693"
     )
@@ -193,7 +183,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
             token_exchange_endpoint=endpoint,
             audience=server.audience,
             client_id=server.client_id,
-            client_secret=SecretStr(server.client_secret),
+            client_secret=SecretStr(server.client_secret) if server.client_secret else None,
             token_endpoint_auth_method=server.token_endpoint_auth_method,
             scopes=tuple(server.scopes or ()),
         ),
@@ -397,3 +387,74 @@ def raise_token_exchange_challenge(
         detail="Unauthorized",
         headers={"WWW-Authenticate": www_authenticate},
     )
+
+
+_STATIC_MODES: Final = frozenset(
+    (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.token, MCPAuth.authorization)
+)
+
+
+def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> bool:
+    if not value:
+        return False
+    if auth_type == MCPAuth.api_key and name != "authorization":
+        return True
+    if value.lower() in ("bearer", "basic", "token", "apikey"):
+        return False
+    if auth_type == MCPAuth.api_key:
+        api_scheme: Final = value.split(None, 1)[0]
+        if api_scheme.lower() in ("bearer", "token", "apikey"):
+            api_credential: Final = strip_auth_scheme(value, api_scheme).strip()
+            return api_credential.lower() != api_scheme.lower()
+    if auth_type in (MCPAuth.bearer_token, MCPAuth.token):
+        scheme: Final = "Bearer" if auth_type == MCPAuth.bearer_token else "token"
+        credential: Final = strip_auth_scheme(value, scheme).strip()
+        return bool(credential) and credential.lower() != scheme.lower()
+    if auth_type == MCPAuth.basic:
+        parts: Final = value.split(None, 1)
+        if len(parts) != 2 or parts[0].lower() != "basic":
+            return False
+        try:
+            decoded: Final = base64.b64decode(parts[1], validate=True).strip()
+            return b":" in decoded
+        except ValueError:
+            return False
+    return True
+
+
+def validate_static_credential(
+    auth_type: MCPAuthType,
+    headers: Mapping[str, str],
+    upstream_token_header: str | None = None,
+    static_header_names: Iterable[str] = (),
+) -> Result[None, CredError]:
+    if auth_type not in _STATIC_MODES:
+        return Ok(None)
+    default_slot: Final = "X-API-Key" if auth_type == MCPAuth.api_key else "Authorization"
+    admin_chosen_slots: Final = tuple(static_header_names) if auth_type == MCPAuth.api_key else ()
+    slots: Final = frozenset(
+        name.lower()
+        for name in (
+            upstream_token_header or default_slot,
+            default_slot,
+            "Authorization",
+            *admin_chosen_slots,
+        )
+    )
+    values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
+    if any(_usable_credential_value(auth_type, name, value) for name, value in values):
+        return Ok(None)
+    return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
+
+
+async def prepare_mcp_client(server: MCPServer, client: MCPClient) -> MCPClient:
+    if server.auth_type not in _STATIC_MODES or client.transport_type == MCPTransport.stdio:
+        return client
+    request: Final = await client.prepare_request_auth()
+    match validate_static_credential(
+        server.auth_type, request.headers, server.upstream_token_header, server.static_headers or ()
+    ):
+        case Error(error):
+            raise_public(error)
+        case Ok():
+            return client

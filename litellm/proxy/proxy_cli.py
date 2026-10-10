@@ -13,12 +13,20 @@ from typing import TYPE_CHECKING, Any, Final
 
 import click
 import httpx
+from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.pgbouncer import (
+    PgBouncerError,
+    PgBouncerSettings,
+    export_pooled_database_url,
+    start_in_container_pgbouncer,
+)
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -26,21 +34,20 @@ else:
     FastAPI = Any
 
 
-def _deprioritize_script_dir_in_sys_path() -> None:
+def _drop_script_dir_from_sys_path() -> None:
     """Stop ``litellm/proxy`` modules from shadowing installed packages.
 
     Running this file as a script puts its own directory at ``sys.path[0]``, so
     ``import a2a`` resolves to ``litellm/proxy/a2a`` instead of the ``a2a`` SDK
-    and A2A agent calls fail. The entry is moved to the end rather than dropped,
-    because the sibling-import fallbacks in this module (``from proxy_server
-    import ...``) still need it. No-op under the ``litellm`` console script.
+    and ``proxy_server`` resolves to a second copy of
+    ``litellm.proxy.proxy_server``. No-op under the ``litellm`` console script.
     """
     script_dir: Final = os.path.dirname(os.path.abspath(__file__))
     if sys.path and os.path.abspath(sys.path[0]) == script_dir:
-        sys.path.append(sys.path.pop(0))
+        sys.path.pop(0)
 
 
-_deprioritize_script_dir_in_sys_path()
+_drop_script_dir_from_sys_path()
 sys.path.append(os.getcwd())
 
 config_filename: Final = "litellm.secrets"
@@ -49,8 +56,6 @@ litellm_mode: Final = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
 from enum import Enum
-
-telemetry: Final = None
 
 
 class LiteLLMDatabaseConnectionPool(Enum):
@@ -93,7 +98,7 @@ def _build_db_connection_url_params(
     return params
 
 
-class DatabaseTimeoutSettings(BaseModel):
+class DatabaseTimeoutSettings(LiteLLMBaseModel):
     """The `general_settings` keys that bound how long a statement may hold locks.
 
     Validated at the boundary so a mistyped value fails at startup with a clear
@@ -104,12 +109,14 @@ class DatabaseTimeoutSettings(BaseModel):
 
     database_statement_timeout: float | None = None
     database_lock_timeout: float | None = None
+    database_idle_in_transaction_session_timeout: float | None = None
 
 
 def _pg_options_with_timeouts(
     existing_options: str,
     statement_timeout: float | None,
     lock_timeout: float | None,
+    idle_in_transaction_session_timeout: float | None = None,
 ) -> str:
     """Return the Postgres ``options`` value carrying the configured timeouts.
 
@@ -139,6 +146,7 @@ def _pg_options_with_timeouts(
         for name, seconds in (
             ("statement_timeout", statement_timeout),
             ("lock_timeout", lock_timeout),
+            ("idle_in_transaction_session_timeout", idle_in_transaction_session_timeout),
         )
         if seconds is not None and not re.search(rf"(?:-c\s*|--){re.escape(name)}=", existing_options)
     )
@@ -177,20 +185,62 @@ def append_query_params(url: str | None, params: dict) -> str:
     return modified_url
 
 
+def resolve_v2_migration_resolver(*, use_legacy_flag: bool, env_value: str | None) -> bool:
+    from litellm_proxy_extras.utils import str_to_bool
+
+    if use_legacy_flag:
+        return False
+    if env_value is None:
+        return True
+    return bool(str_to_bool(env_value))
+
+
+def deprecated_v2_flag_passed_on_cli() -> bool:
+    ctx: Final = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source("use_v2_migration_resolver") is ParameterSource.COMMANDLINE
+
+
 class ProxyInitializationHelpers:
     @staticmethod
-    def _echo_litellm_version():
+    def echo_litellm_version():
         pkg_version: Final = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
 
+    _echo_litellm_version = echo_litellm_version
+
     @staticmethod
-    def _run_health_check(host, port):
+    def run_health_check(host, port):
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
 
+    _run_health_check = run_health_check
+
     @staticmethod
-    def _run_test_chat_completion(
+    def run_config_validation(config: str | None) -> None:
+        if config is None:
+            raise click.UsageError("--validate_config requires --config <path>")
+        import asyncio
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        async def _load() -> int:
+            _, model_list, _ = await ProxyConfig().load_config(router=None, config_file_path=config)
+            return len(model_list)
+
+        try:
+            model_count: Final = asyncio.run(_load())
+        except Exception as error:
+            click.echo(f"LiteLLM: config validation failed: {error}", err=True)
+            raise click.exceptions.Exit(1) from error
+        click.echo(f"LiteLLM: config OK ({model_count} models)")
+
+    _run_config_validation = run_config_validation
+
+    @staticmethod
+    def run_test_chat_completion(
         host: str,
         port: int,
         model: str,
@@ -239,8 +289,10 @@ class ProxyInitializationHelpers:
         )
         print(completion_response)
 
+    _run_test_chat_completion = run_test_chat_completion
+
     @staticmethod
-    def _get_default_unvicorn_init_args(
+    def get_default_unvicorn_init_args(
         host: str,
         port: int,
         log_config: str | None = None,
@@ -255,7 +307,7 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         import litellm
-        from litellm._logging import _get_uvicorn_json_log_config
+        from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
 
         uvicorn_args: Final = {
             "app": "litellm.proxy.proxy_server:app",
@@ -269,6 +321,8 @@ class ProxyInitializationHelpers:
         elif litellm.json_logs:
             # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
+        elif litellm_log := os.environ.get("LITELLM_LOG"):
+            uvicorn_args["log_level"] = resolve_log_level(litellm_log)
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         if timeout_worker_healthcheck is not None:
@@ -282,8 +336,10 @@ class ProxyInitializationHelpers:
                 )
         return uvicorn_args
 
+    _get_default_unvicorn_init_args = get_default_unvicorn_init_args
+
     @staticmethod
-    def _apply_uvicorn_max_requests_jitter(
+    def apply_uvicorn_max_requests_jitter(
         uvicorn_args: dict,
         max_requests_before_restart: int | None,
         jitter: int,
@@ -309,6 +365,8 @@ class ProxyInitializationHelpers:
                 f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
                 f"Ignoring the flag.\033[0m"
             )
+
+    _apply_uvicorn_max_requests_jitter = apply_uvicorn_max_requests_jitter
 
     @staticmethod
     def _get_reload_options(config_path: str | None) -> dict:
@@ -373,7 +431,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def _configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
+    def configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -390,8 +448,10 @@ class ProxyInitializationHelpers:
             "to let a shell-exported value take precedence."
         )
 
+    _configure_dev_reload = configure_dev_reload
+
     @staticmethod
-    def _init_hypercorn_server(
+    def init_hypercorn_server(
         app: FastAPI,
         host: str,
         port: int,
@@ -423,8 +483,10 @@ class ProxyInitializationHelpers:
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
         asyncio.run(serve(app, config))
 
+    _init_hypercorn_server = init_hypercorn_server
+
     @staticmethod
-    def _init_granian_server(
+    def init_granian_server(
         host: str,
         port: int,
         num_workers: int,
@@ -452,7 +514,7 @@ class ProxyInitializationHelpers:
         if ciphers is not None:
             print("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
 
-        kwargs: Final[dict[str, Any]] = {
+        kwargs: Final[dict[str, object]] = {
             "target": "litellm.proxy.proxy_server:app",
             "address": host,
             "port": port,
@@ -473,8 +535,10 @@ class ProxyInitializationHelpers:
 
         Granian(**kwargs).serve()
 
+    _init_granian_server = init_granian_server
+
     @staticmethod
-    def _run_gunicorn_server(
+    def run_gunicorn_server(
         host: str,
         port: int,
         app: FastAPI,
@@ -581,11 +645,18 @@ class ProxyInitializationHelpers:
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 
+        # The master preloads the app and then forks every worker, so native routes are
+        # forbidden in it: their runtime threads would not survive the fork.
+        from litellm.rust_bridge.fork_guard import reserve_process_for_forking
+
+        reserve_process_for_forking("the gunicorn master")
         start_query_engine_reaper()
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
+    _run_gunicorn_server = run_gunicorn_server
+
     @staticmethod
-    def _run_ollama_serve():
+    def run_ollama_serve():
         try:
             command: Final = ["ollama", "serve"]
 
@@ -596,19 +667,25 @@ class ProxyInitializationHelpers:
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
             """)
 
+    _run_ollama_serve = run_ollama_serve
+
     @staticmethod
-    def _is_port_in_use(port):
+    def is_port_in_use(port):
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(("localhost", port)) == 0
 
+    _is_port_in_use = is_port_in_use
+
     @staticmethod
-    def _get_loop_type():
+    def get_loop_type():
         """Helper function to determine the event loop type based on platform"""
         if sys.platform in ("win32", "cygwin", "cli"):
             return None  # Let uvicorn choose the default loop on Windows
         return "uvloop"
+
+    _get_loop_type = get_loop_type
 
     @staticmethod
     def _prometheus_callback_configured(litellm_settings: Mapping[str, object] | None) -> bool:
@@ -625,7 +702,7 @@ class ProxyInitializationHelpers:
         )
 
     @staticmethod
-    def _maybe_setup_prometheus_multiproc_dir(
+    def maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
         litellm_settings: dict | None,
         prometheus_metrics_port: int | None = None,
@@ -637,14 +714,16 @@ class ProxyInitializationHelpers:
         """
         import tempfile
 
-        if prometheus_metrics_port is None and (
-            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
-        ):
-            return None
-
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
         configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
+        if prometheus_metrics_port is None and (
+            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
+        ):
+            if configured_dir:
+                wipe_directory(configured_dir)
+            return None
+
         multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
 
@@ -653,6 +732,8 @@ class ProxyInitializationHelpers:
         action: Final = "Using existing" if configured_dir else "Auto-created"
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
         return multiproc_dir
+
+    _maybe_setup_prometheus_multiproc_dir = maybe_setup_prometheus_multiproc_dir
 
 
 @click.command()
@@ -745,9 +826,11 @@ class ProxyInitializationHelpers:
 )
 @click.option(
     "--telemetry",
-    default=True,
+    default=None,
     type=bool,
-    help="Helps us know if people are using this feature. Turn this off by doing `--telemetry False`",
+    hidden=True,
+    expose_value=False,
+    help="Deprecated no-op kept so existing start commands still parse",
 )
 @click.option(
     "--log_config",
@@ -850,12 +933,18 @@ class ProxyInitializationHelpers:
     default=False,
     help="Use prisma db push instead of prisma migrate for database schema updates",
 )
-@click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option("--local", is_flag=True, default=False, help="no-op, kept for backwards compatibility")
 @click.option(
     "--skip_server_startup",
     is_flag=True,
     default=False,
     help="Skip starting the server after setup (useful for migrations only)",
+)
+@click.option(
+    "--validate_config",
+    is_flag=True,
+    default=False,
+    help="Load and validate the config file (including mcp_servers) without starting the server, then exit. Exit code 1 on any config error.",
 )
 @click.option(
     "--keepalive_timeout",
@@ -911,19 +1000,34 @@ class ProxyInitializationHelpers:
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
-    help="Exit with error if database migration fails on startup.",
-    envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
+    hidden=True,
+    help=(
+        "Deprecated and ignored: the proxy always exits when database setup fails at "
+        "startup. It is still accepted so existing commands keep working."
+    ),
 )
 @click.option(
     "--use_v2_migration_resolver",
     is_flag=True,
     default=False,
     help=(
-        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
-        "path that can cause schema thrashing during rolling deploys where two "
-        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+        "Deprecated and ignored: the v2 migration resolver is now the default, "
+        "so this flag has no effect. It is still accepted so existing commands "
+        "keep working. Pass --use_legacy_migration_resolver, or set "
+        "USE_V2_MIGRATION_RESOLVER=false, to opt back into v1."
     ),
     envvar="USE_V2_MIGRATION_RESOLVER",
+)
+@click.option(
+    "--use_legacy_migration_resolver",
+    is_flag=True,
+    default=False,
+    help=(
+        "Fall back to the legacy v1 migration resolver. By default the proxy "
+        "uses the v2 resolver, which avoids the diff-and-force recovery path "
+        "that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB."
+    ),
 )
 @click.option(
     "--reload",
@@ -964,7 +1068,6 @@ def run_server(
     add_function_to_prompt,
     config,
     max_budget,
-    telemetry,
     test,
     local,
     num_workers,
@@ -986,6 +1089,7 @@ def run_server(
     log_config,
     use_prisma_db_push: bool,
     skip_server_startup,
+    validate_config: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
@@ -993,6 +1097,7 @@ def run_server(
     limit_concurrency: int | None,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
+    use_legacy_migration_resolver: bool,
     reload: bool,
     prometheus_metrics_port: int | None,
 ):
@@ -1015,45 +1120,34 @@ def run_server(
         return
 
     args: Final = locals()
-    if local:
-        from proxy_server import (
+    try:
+        from litellm.proxy.proxy_server import (
             KeyManagementSettings,
             ProxyConfig,
             app,
             save_worker_config,
         )
-    else:
-        try:
-            from .proxy_server import (
-                KeyManagementSettings,
-                ProxyConfig,
-                app,
-                save_worker_config,
-            )
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
-        except ImportError as e:
-            if "litellm[proxy]" in str(e):
-                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
-                raise e
-            else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
-                    KeyManagementSettings,
-                    ProxyConfig,
-                    app,
-                    save_worker_config,
-                )
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`") from e
     if version is True:
-        ProxyInitializationHelpers._echo_litellm_version()
+        ProxyInitializationHelpers.echo_litellm_version()
         return
+    if validate_config is True:
+        ProxyInitializationHelpers.run_config_validation(config)
+        return
+    if enforce_prisma_migration_check:
+        print(
+            "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
+            "deprecated and has no effect, because the proxy always exits "
+            "when database setup fails at startup. You can safely remove it.\033[0m"
+        )
     if model and "ollama" in model and api_base is None:
-        ProxyInitializationHelpers._run_ollama_serve()
+        ProxyInitializationHelpers.run_ollama_serve()
     if health is True:
-        ProxyInitializationHelpers._run_health_check(host, port)
+        ProxyInitializationHelpers.run_health_check(host, port)
         return
     if test is True:
-        ProxyInitializationHelpers._run_test_chat_completion(host, port, model, test)
+        ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
         return
     else:
         if headers:
@@ -1069,7 +1163,6 @@ def run_server(
             max_tokens=max_tokens,
             request_timeout=request_timeout,
             max_budget=max_budget,
-            telemetry=telemetry,
             drop_params=drop_params,
             add_function_to_prompt=add_function_to_prompt,
             headers=headers,
@@ -1101,6 +1194,7 @@ def run_server(
         db_extra_connection_params: dict | None = None
         db_statement_timeout: float | None = None
         db_lock_timeout: float | None = None
+        db_idle_in_transaction_timeout: float | None = None
         general_settings = {}
         ### GET DB TOKEN FOR RDS IAM / AZURE ENTRA AUTH ###
 
@@ -1108,6 +1202,7 @@ def run_server(
         from litellm.proxy.db.token_auth import (
             AZURE_POSTGRESQL_AUTH_ENV_VAR,
             IAM_TOKEN_DB_AUTH_ENV_VAR,
+            resolve_database_token_auth,
             token_auth_flag_enabled,
         )
 
@@ -1162,7 +1257,7 @@ def run_server(
 
                 litellm.json_logs = True
 
-                litellm._turn_on_json()
+                litellm.turn_on_json()
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
@@ -1210,6 +1305,7 @@ def run_server(
             db_timeouts: Final = DatabaseTimeoutSettings.model_validate(general_settings)
             db_statement_timeout = db_timeouts.database_statement_timeout
             db_lock_timeout = db_timeouts.database_lock_timeout
+            db_idle_in_transaction_timeout = db_timeouts.database_idle_in_transaction_session_timeout
             if database_url and database_url.startswith("os.environ/"):
                 original_dir: Final = os.getcwd()
                 # set the working directory to where this script is
@@ -1240,8 +1336,10 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
+                DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
+                postgres_connection_budget_message,
                 reader_shareable_params,
                 translate_libpq_ssl_params,
                 unsupported_db_scheme,
@@ -1260,73 +1358,88 @@ def run_server(
                         flush=True,
                     )
                     sys.exit(1)
-            try:
-                from litellm.secret_managers.main import get_secret
+            from litellm.secret_managers.main import get_secret
 
-                connection_url_params: Final = _build_db_connection_url_params(
-                    connection_limit=db_connection_pool_limit,
-                    pool_timeout=db_connection_timeout,
-                    connect_timeout=db_connect_timeout,
-                    socket_timeout=db_socket_timeout,
-                    disable_prepared_statements=db_disable_prepared_statements,
-                    extra_params=db_extra_connection_params,
+            env_disable_prepared_statements: Final = token_auth_flag_enabled(
+                os.getenv(DISABLE_PREPARED_STATEMENTS_ENV_VAR), env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+            )
+            disable_prepared_statements: Final = db_disable_prepared_statements or env_disable_prepared_statements
+            connection_url_params: Final = _build_db_connection_url_params(
+                connection_limit=db_connection_pool_limit,
+                pool_timeout=db_connection_timeout,
+                connect_timeout=db_connect_timeout,
+                socket_timeout=db_socket_timeout,
+                disable_prepared_statements=disable_prepared_statements,
+                extra_params=db_extra_connection_params,
+            )
+            lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
+            if os.getenv("DATABASE_URL", None) is not None:
+                database_url = get_secret("DATABASE_URL", default_value=None)
+                resolved_url: Final[str | None] = str(database_url) if database_url else None
+                pg_options: Final[str] = _pg_options_with_timeouts(
+                    _url_query_value(resolved_url, "options"),
+                    db_statement_timeout,
+                    db_lock_timeout,
+                    db_idle_in_transaction_timeout,
                 )
-                lifetime_params: Final = idle_lifetime_params(
-                    general_settings.get("database_max_idle_connection_lifetime")
+                writer_url: Final = (
+                    _with_query_value(resolved_url, "options", pg_options)
+                    if resolved_url and pg_options
+                    else resolved_url
                 )
-                if os.getenv("DATABASE_URL", None) is not None:
-                    database_url = get_secret("DATABASE_URL", default_value=None)
-                    resolved_url: Final[str | None] = str(database_url) if database_url else None
-                    pg_options: Final[str] = _pg_options_with_timeouts(
-                        _url_query_value(resolved_url, "options"),
-                        db_statement_timeout,
-                        db_lock_timeout,
-                    )
-                    writer_url: Final = (
-                        _with_query_value(resolved_url, "options", pg_options)
-                        if resolved_url and pg_options
-                        else resolved_url
-                    )
-                    modified_url = append_query_params(
-                        writer_url,
-                        connection_url_params,
-                    )
-                    os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
-                        add_missing_query_params(modified_url, lifetime_params)
-                    )
-                if os.getenv("DIRECT_URL", None) is not None:
-                    database_url = os.getenv("DIRECT_URL")
-                    modified_url = append_query_params(database_url, connection_url_params)
-                    os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
-                        add_missing_query_params(modified_url, lifetime_params)
-                    )
-                # The reader pool is a real pool against the same configured cap, so it
-                # gets the allowlisted pool params. Schema-affecting ones, including any
-                # the operator smuggled in through database_extra_connection_params, stay
-                # on the writer. Anything pinned on the replica URL wins, unlike the
-                # writer where the config is applied on top.
-                read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
-                if read_replica_url:
-                    reader_options: Final[str] = _pg_options_with_timeouts(
-                        _url_query_value(read_replica_url, "options"),
-                        db_statement_timeout,
-                        db_lock_timeout,
-                    )
-                    os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
+                modified_url = append_query_params(
+                    writer_url,
+                    connection_url_params,
+                )
+                os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
+                    add_missing_query_params(modified_url, lifetime_params)
+                )
+            if os.getenv("DIRECT_URL", None) is not None:
+                database_url = os.getenv("DIRECT_URL")
+                modified_url = append_query_params(database_url, connection_url_params)
+                os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
+                    add_missing_query_params(modified_url, lifetime_params)
+                )
+            # The reader pool is a real pool against the same configured cap, so it
+            # gets the allowlisted pool params. Schema-affecting ones, including any
+            # the operator smuggled in through database_extra_connection_params, stay
+            # on the writer. Anything pinned on the replica URL wins, unlike the
+            # writer where the config is applied on top.
+            read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+            if read_replica_url:
+                reader_options: Final[str] = _pg_options_with_timeouts(
+                    _url_query_value(read_replica_url, "options"),
+                    db_statement_timeout,
+                    db_lock_timeout,
+                    db_idle_in_transaction_timeout,
+                )
+                os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
+                    add_missing_query_params(
                         add_missing_query_params(
-                            add_missing_query_params(
-                                _with_query_value(read_replica_url, "options", reader_options)
-                                if reader_options
-                                else read_replica_url,
-                                reader_shareable_params(connection_url_params),
-                            ),
-                            lifetime_params,
-                        )
+                            _with_query_value(read_replica_url, "options", reader_options)
+                            if reader_options
+                            else read_replica_url,
+                            reader_shareable_params(connection_url_params),
+                        ),
+                        lifetime_params,
                     )
-                subprocess.run(["prisma"], capture_output=True)
-                is_prisma_runnable = True
-            except FileNotFoundError:
-                is_prisma_runnable = False
+                )
+            print(
+                postgres_connection_budget_message(
+                    writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
+                    or f"{db_connection_pool_limit}",
+                    reader_limit=(
+                        _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
+                        or f"{db_connection_pool_limit}"
+                    )
+                    if read_replica_url
+                    else None,
+                    num_workers=f"{1 if run_hypercorn else num_workers}",
+                )
+            )
+            from litellm_proxy_extras.prisma_toolchain import prisma_cli_available
+
+            is_prisma_runnable: Final = prisma_cli_available()
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
@@ -1338,18 +1451,35 @@ def run_server(
                 if should_update_prisma_schema(general_settings.get("disable_prisma_schema_update")) is False:
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not use_v2_migration_resolver:
+                    use_v2_resolver: Final = resolve_v2_migration_resolver(
+                        use_legacy_flag=use_legacy_migration_resolver,
+                        env_value=os.getenv("USE_V2_MIGRATION_RESOLVER"),
+                    )
+                    if deprecated_v2_flag_passed_on_cli() and use_v2_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
-                            "If your deployment has seen schema thrashing during rolling "
-                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
-                            "diff-and-force recovery that caused the thrash).\033[0m"
+                            "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is "
+                            "deprecated and has no effect, because the v2 migration "
+                            "resolver is now the default. You can safely remove it. To "
+                            "opt back into the legacy v1 resolver, pass "
+                            "--use_legacy_migration_resolver.\033[0m"
+                        )
+                    if not use_v2_resolver:
+                        print(
+                            "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration "
+                            "resolver. It performs the diff-and-force recovery that can "
+                            "cause schema thrashing during rolling deploys where two "
+                            "LiteLLM versions contend for the same DB.\033[0m"
                         )
                     try:
-                        setup_ok: Final = PrismaManager.setup_database(
+                        migrated: Final = PrismaManager.setup_database(
                             use_migrate=not use_prisma_db_push,
-                            use_v2_resolver=use_v2_migration_resolver,
+                            use_v2_resolver=use_v2_resolver,
                         )
+                        setup_ok: Final = migrated and (
+                            not skip_server_startup or PrismaManager.build_request_log_indexes()
+                        )
+                        if migrated and not skip_server_startup:
+                            PrismaManager.start_request_log_index_build()
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2
                         # resolver's non-idempotent failures and permission
@@ -1362,22 +1492,34 @@ def run_server(
                         )
                         sys.exit(2)
                     if not setup_ok:
-                        if enforce_prisma_migration_check:
-                            print(
-                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
-                            )
-                            sys.exit(1)
-                        else:
-                            print(
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
-                                "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
-                            )
+                        print(
+                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                        )
+                        sys.exit(1)
             else:
                 print(
-                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa: F541
+                    "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
+                    "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
+                    "or run a shipped LiteLLM image.\033[0m"
                 )
-        if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
+                sys.exit(1)
+        pgbouncer_settings: Final = PgBouncerSettings()
+        upstream_database_url: Final = os.getenv("DATABASE_URL")
+        if pgbouncer_settings.enabled and upstream_database_url is not None:
+            pooled_database_url: Final = start_in_container_pgbouncer(
+                pgbouncer_settings, upstream_database_url, token_auth=resolve_database_token_auth()
+            )
+            if isinstance(pooled_database_url, PgBouncerError):
+                print(
+                    f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
+                    f"could not start: {pooled_database_url.reason}\033[0m",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                sys.exit(1)
+            export_pooled_database_url(pooled_database_url)
+        if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port):
             port = random.randint(1024, 49152)
         if prometheus_metrics_port == port:
             raise click.UsageError("--prometheus_metrics_port must differ from --port")
@@ -1385,22 +1527,24 @@ def run_server(
         import litellm
 
         if detailed_debug is True:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app
 
-        # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
-        prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-            num_workers=num_workers,
-            litellm_settings=litellm_settings if config else None,
-            prometheus_metrics_port=prometheus_metrics_port,
-        )
+        os.environ["NUM_WORKERS"] = str(num_workers)
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print("LiteLLM: Setup complete. Skipping server startup as requested.")
             return
+
+        # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
+        prometheus_multiproc_dir: Final = ProxyInitializationHelpers.maybe_setup_prometheus_multiproc_dir(
+            num_workers=num_workers,
+            litellm_settings=litellm_settings if config else None,
+            prometheus_metrics_port=prometheus_metrics_port,
+        )
 
         if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
             from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process
@@ -1417,7 +1561,7 @@ def run_server(
             )
 
         running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False
-        uvicorn_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+        uvicorn_args: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
@@ -1431,7 +1575,7 @@ def run_server(
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
             if max_requests_before_restart_jitter is not None:
-                ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+                ProxyInitializationHelpers.apply_uvicorn_max_requests_jitter(
                     uvicorn_args=uvicorn_args,
                     max_requests_before_restart=max_requests_before_restart,
                     jitter=max_requests_before_restart_jitter,
@@ -1443,12 +1587,12 @@ def run_server(
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
 
-            loop_type: Final = ProxyInitializationHelpers._get_loop_type()
+            loop_type: Final = ProxyInitializationHelpers.get_loop_type()
             if loop_type:
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                ProxyInitializationHelpers._configure_dev_reload(uvicorn_args, config)
+                ProxyInitializationHelpers.configure_dev_reload(uvicorn_args, config)
 
             if num_workers > 1:
                 start_query_engine_reaper()
@@ -1457,7 +1601,7 @@ def run_server(
                 workers=num_workers,
             )
         elif run_gunicorn is True:
-            ProxyInitializationHelpers._run_gunicorn_server(
+            ProxyInitializationHelpers.run_gunicorn_server(
                 host=host,
                 port=port,
                 app=app,
@@ -1468,7 +1612,7 @@ def run_server(
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
             )
         elif run_hypercorn is True:
-            ProxyInitializationHelpers._init_hypercorn_server(
+            ProxyInitializationHelpers.init_hypercorn_server(
                 app=app,
                 host=host,
                 port=port,
@@ -1477,7 +1621,7 @@ def run_server(
                 ciphers=ciphers,
             )
         elif run_granian is True:
-            ProxyInitializationHelpers._init_granian_server(
+            ProxyInitializationHelpers.init_granian_server(
                 host=host,
                 port=port,
                 num_workers=num_workers,

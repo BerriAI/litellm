@@ -129,7 +129,7 @@ export const getPluginTableColumns = ({
     cell: ({ row }) => {
       const description = row.original.description;
       return (
-        <span className="block max-w-72 truncate text-sm text-muted-foreground" title={description}>
+        <span className="block max-w-72 truncate text-sm text-muted-foreground" title={description ?? undefined}>
           {description || "No description"}
         </span>
       );
@@ -142,7 +142,7 @@ export const getPluginTableColumns = ({
     header: "Category",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <PluginCategoryBadge category={row.original.category} />,
+    cell: ({ row }) => <PluginCategoryBadge category={row.original.category ?? undefined} />,
   },
   {
     id: "enabled",

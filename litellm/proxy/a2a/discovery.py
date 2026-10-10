@@ -14,6 +14,7 @@ fetcher dispatches by ``discovery_mode``:
   pure-A2A fallback strategy returns 404 for these deployments.
 """
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Final
 from urllib.parse import urlencode
@@ -55,7 +56,7 @@ def _normalize_base_url(base_url: str) -> str:
 
 
 def _build_langgraph_platform_paths(
-    params: dict[str, Any] | None,
+    params: Mapping[str, object] | None,
 ) -> tuple[str, ...]:
     """Build the paths to try for LangGraph Platform discovery.
 
@@ -71,7 +72,7 @@ def _build_langgraph_platform_paths(
     return tuple(f"{path}?{query}" for path in AGENT_CARD_WELL_KNOWN_PATHS)
 
 
-def _paths_for_mode(mode: DiscoveryMode, params: dict[str, Any] | None) -> tuple[str, ...]:
+def _paths_for_mode(mode: DiscoveryMode, params: Mapping[str, object] | None) -> tuple[str, ...]:
     if mode == DiscoveryMode.WELL_KNOWN_FALLBACK:
         return AGENT_CARD_WELL_KNOWN_PATHS
     if mode == DiscoveryMode.LANGGRAPH_PLATFORM:
@@ -83,7 +84,7 @@ async def fetch_well_known_card(
     base_url: str,
     *,
     discovery_mode: DiscoveryMode = DiscoveryMode.WELL_KNOWN_FALLBACK,
-    params: dict[str, Any] | None = None,
+    params: Mapping[str, object] | None = None,
     timeout: float = DEFAULT_DISCOVERY_TIMEOUT_SECONDS,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:

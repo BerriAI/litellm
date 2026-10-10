@@ -1,12 +1,16 @@
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 
@@ -46,6 +50,8 @@ def _request_count_key(model_group: str, deployment_id: str) -> str:
 
 
 def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
+    if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        return None
     try:
         call: Final = _CALL_KWARGS.validate_python(kwargs)
     except ValidationError:
@@ -87,16 +93,22 @@ def _least_busy(
 
 
 def _warn_unreadable(model_group: str, error: Exception) -> None:
-    verbose_router_logger.warning(
-        "least-busy routing could not read the shared in-flight counts for %s, "
-        "falling back to this worker's own counts: %s",
-        model_group,
+    log_redis_failure(
+        verbose_router_logger,
+        logging.WARNING,
+        f"least-busy routing could not read the shared in-flight counts for {model_group}, "
+        "falling back to this worker's own counts",
         error,
     )
 
 
 def _warn_unwritable(key: str, error: Exception) -> None:
-    verbose_router_logger.warning("least-busy routing could not update the in-flight count under %s: %s", key, error)
+    log_redis_failure(
+        verbose_router_logger,
+        logging.WARNING,
+        f"least-busy routing could not update the in-flight count under {key}",
+        error,
+    )
 
 
 class LeastBusyLoggingHandler(CustomLogger):
@@ -108,9 +120,11 @@ class LeastBusyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
 
+    @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         self._increment(kwargs, 1)
 
+    @with_service_target("router_usage")
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -118,6 +132,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_success += 1
 
+    @with_service_target("router_usage")
     def log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -125,6 +140,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_failure += 1
 
+    @with_service_target("router_usage")
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -132,6 +148,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_success += 1
 
+    @with_service_target("router_usage")
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -139,6 +156,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_failure += 1
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> Mapping[str, object] | None:
@@ -154,6 +172,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         local: Final = _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
         return _least_busy(healthy_deployments, local)
 
+    @with_service_target("router_usage")
     async def async_get_available_deployments(
         self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> Mapping[str, object] | None:

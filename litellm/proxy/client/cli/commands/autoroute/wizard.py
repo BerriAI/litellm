@@ -94,7 +94,7 @@ def _load_persisted_master_key(config_path: Path) -> str | None:
     """The master key from an existing generated config, so a rewrite carries it forward.
 
     Lenient on a missing or corrupt file: configure is the regeneration path, so it must
-    succeed from any prior state; a key that cannot be read is simply not carried and `up`
+    succeed from any prior state; a key that cannot be read is simply not carried and `start`
     mints a fresh one.
     """
     if not config_path.exists():

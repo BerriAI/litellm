@@ -10,6 +10,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
 router: Final = APIRouter()
 
@@ -57,7 +58,7 @@ async def search(
     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/search/litellm-search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "query": "latest AI developments 2024",
@@ -70,7 +71,7 @@ async def search(
     Example with search_tool_name in body:
     ```bash
     curl -X POST "http://localhost:4000/v1/search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "search_tool_name": "litellm-search",
@@ -134,46 +135,23 @@ async def search(
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
 
+    from litellm.proxy.auth.auth_checks import can_token_call_search_tool
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+
+    routed_search_tool_name: Final = data.get("search_tool_name") or resolve_inference_model(
+        data.get("model"), general_settings, user_model
+    )
+    if not isinstance(routed_search_tool_name, str) or not routed_search_tool_name:
+        raise ProxyMissingRequiredParamError(route="/search", param="search_tool_name")
+    try:
+        await can_token_call_search_tool(search_tool_name=routed_search_tool_name, valid_token=user_api_key_dict)
+    except ProxyException as e:
+        verbose_proxy_logger.debug("Search tool authorization denied: %s", e.type)
+        raise
+
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
         search_tool_name_value: Final = data["search_tool_name"]
-
-        # Authorization check: verify key can access this search tool
-        from litellm.proxy.auth.auth_checks import (
-            can_key_call_search_tool,
-            can_team_call_search_tool,
-            get_team_object,
-        )
-
-        try:
-            # Check key-level access
-            await can_key_call_search_tool(
-                search_tool_name=search_tool_name_value,
-                valid_token=user_api_key_dict,
-            )
-
-            # Check team-level access if key is associated with a team
-            if user_api_key_dict.team_id:
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
-                )
-
-                team_object: Final = await get_team_object(
-                    team_id=user_api_key_dict.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                await can_team_call_search_tool(
-                    search_tool_name=search_tool_name_value,
-                    team_object=team_object,
-                )
-        except Exception as e:
-            verbose_proxy_logger.error("Search tool authorization failed for %s: %s", search_tool_name_value, e)
-            raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             verbose_proxy_logger.debug(
@@ -230,7 +208,7 @@ async def search(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -264,7 +242,7 @@ async def list_search_tools(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/search/tools" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Response:

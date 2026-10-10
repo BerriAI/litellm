@@ -1,27 +1,31 @@
 """tests/e2e routes every HTTP call through the typed transport (e2e_http.py), so
 raw HTTP client imports (requests, urllib.request, httpx, aiohttp, http.client) are
-banned in suite code. Importing requests' exception types for catching is fine
-anywhere; a small allowlist grandfathers the files that legitimately make raw calls
-(the transport itself, the root conftest liveness probe, the claude_code version
-resolver's constant registry URL fetch, and the mcp OAuth client, whose httpx
-client is the object the official mcp SDK's streamable_http_client requires and so
-cannot go through the sync requests transport). Referenced by tests/e2e/CLAUDE.md."""
+banned in suite code, and tests/e2e_harness, which tests that harness, is held to the
+same ban. Importing requests' exception types for catching is fine anywhere; a small
+allowlist grandfathers the files that legitimately make raw calls (the transport
+itself, the root conftest liveness probe, the claude_code version resolver's constant
+registry URL fetch, and the mcp OAuth client, whose httpx client is the object the
+official mcp SDK's streamable_http_client requires and so cannot go through the sync
+requests transport). Referenced by tests/e2e/AGENTS.md."""
 
 from __future__ import annotations
 
 import ast
 import sys
+from itertools import chain
 from pathlib import Path
+from typing import Final
 
-E2E_DIR = Path(__file__).resolve().parents[1] / "e2e"
+TESTS_DIR = Path(__file__).resolve().parents[1]
+SCANNED_DIRS = ("e2e", "e2e_harness")
 
 BANNED_MODULES = ("requests", "urllib.request", "http.client", "httpx", "aiohttp")
 
 ALLOWED_RAW_CLIENT_FILES = {
-    "e2e_http.py": ("requests",),
-    "conftest.py": ("requests",),
-    "claude_code/pr_gate_version_resolver.py": ("urllib.request",),
-    "mcp/oauth_chat_client.py": ("httpx",),
+    "e2e/e2e_http.py": ("requests",),
+    "e2e/conftest.py": ("requests",),
+    "e2e/claude_code/pr_gate_version_resolver.py": ("urllib.request",),
+    "e2e/mcp/oauth_chat_client.py": ("httpx",),
 }
 
 EXCEPTION_ONLY_NAMES = frozenset({"RequestException", "ConnectionError", "Timeout", "HTTPError"})
@@ -51,27 +55,28 @@ def _banned_imports(tree: ast.Module) -> tuple[tuple[str, int], ...]:
 
 
 def _violations_in(path: Path) -> tuple[str, ...]:
-    relative = path.relative_to(E2E_DIR).as_posix()
+    relative = path.relative_to(TESTS_DIR).as_posix()
     allowed = ALLOWED_RAW_CLIENT_FILES.get(relative, ())
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     return tuple(
-        f"tests/e2e/{relative}:{lineno}: raw HTTP client import '{module}'"
+        f"tests/{relative}:{lineno}: raw HTTP client import '{module}'"
         for module, lineno in _banned_imports(tree)
         if module not in allowed
     )
 
 
+def _scanned_files() -> tuple[Path, ...]:
+    trees: Final = (sorted((TESTS_DIR / scanned).rglob("*.py")) for scanned in SCANNED_DIRS)
+    return tuple(chain.from_iterable(trees))
+
+
 def main() -> int:
-    violations = tuple(
-        violation
-        for path in sorted(E2E_DIR.rglob("*.py"))
-        for violation in _violations_in(path)
-    )
+    violations: Final = tuple(chain.from_iterable(_violations_in(path) for path in _scanned_files()))
     for violation in violations:
         print(violation)
     if violations:
         print(
-            f"\n{len(violations)} raw HTTP client import(s) in tests/e2e. "
+            f"\n{len(violations)} raw HTTP client import(s) in tests/e2e or tests/e2e_harness. "
             "Route the call through tests/e2e/e2e_http.py (get_external for absolute "
             "third-party URLs) so it gets the typed Result handling."
         )

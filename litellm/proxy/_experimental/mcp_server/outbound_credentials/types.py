@@ -26,12 +26,13 @@ union (see `result.py`), not `expression.Result`.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Annotated, Final, Literal
 
+import httpx2
 from expression import case, tag, tagged_union
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
@@ -39,11 +40,35 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
     DEFAULT_SUBJECT_TOKEN_TYPE,
     normalize_upstream_header_name,
 )
+
+
+class AuthResolution(str, Enum):
+    no_auth = "no-auth"
+    stored_user_token = "stored-user-token"
+    static_token = "static-token"
+    per_request_header = "per-request-header"
+    oauth2_passthrough = "oauth2-passthrough"
+    client_credentials = "m2m-client-credentials"
+    token_exchange = "token-exchange"
+    id_jag = "id-jag"
+    aws_sigv4 = "aws-sigv4"
+    extra_headers = "extra-headers"
+    not_applicable = "not-applicable"
+    unresolved = "unresolved"
+    failed = "resolution-failed"
+    multiple = "multiple"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedCredential:
+    auth: httpx2.Auth = field(repr=False)
+    source: AuthResolution
 
 
 class AuthSpecKind(str, Enum):
@@ -86,7 +111,7 @@ class Unauthorized:
 
 @tagged_union(frozen=True)
 class CredError:
-    """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx.Auth`.
+    """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx2.Auth`.
 
     Discriminated on the `Literal` `tag`; consumers `match self.tag` (see `summary`) so the
     type checker can prove exhaustiveness. Construct via the `of_*` factories.
@@ -189,7 +214,7 @@ def validate_header_name(raw: str) -> Result[str, CredError]:
     return Ok(normalized)
 
 
-class HeaderCarrier(BaseModel):
+class HeaderCarrier(LiteLLMBaseModel):
     """Where a resolved credential is written upstream, and how its value is formatted.
 
     ``Authorization: Bearer`` is only OAuth's *default* conveyance (RFC 6750 section 2.1), not its
@@ -295,7 +320,7 @@ class TokenExchangeConfig(HeaderCarrier):
     scopes: tuple[str, ...] = ()
 
 
-class PrivateKeyJwtAuth(BaseModel):
+class PrivateKeyJwtAuth(LiteLLMBaseModel):
     """RFC 7523 private-key-JWT client authentication: the gateway signs a `client_assertion`."""
 
     model_config = ConfigDict(frozen=True)
@@ -305,7 +330,7 @@ class PrivateKeyJwtAuth(BaseModel):
     signing_alg: str = "RS256"
 
 
-class ClientSecretAuth(BaseModel):
+class ClientSecretAuth(LiteLLMBaseModel):
     """`client_secret_post` client authentication: the gateway posts `client_id` + `client_secret`."""
 
     model_config = ConfigDict(frozen=True)
@@ -338,7 +363,7 @@ class IdJagConfig(HeaderCarrier):
     scopes: tuple[str, ...] = ()
 
 
-class SharedKey(BaseModel):
+class SharedKey(LiteLLMBaseModel):
     """A fixed key configured on the server, identical for every caller."""
 
     model_config = ConfigDict(frozen=True)
@@ -346,7 +371,7 @@ class SharedKey(BaseModel):
     value: SecretStr
 
 
-class Byok(BaseModel):
+class Byok(LiteLLMBaseModel):
     """A key the user brings via the entry flow, stored per-user and pulled from the credential
     store at resolve time. Missing means the user must provide it, a 401 + WWW-Authenticate
     challenge."""
@@ -369,21 +394,21 @@ class ApiKeyConfig(HeaderCarrier):
     key_source: ApiKeySource
 
 
-class PassthroughConfig(BaseModel):
+class PassthroughConfig(LiteLLMBaseModel):
     """Client-driven upstream OAuth; the gateway forwards the client's upstream token."""
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.passthrough] = AuthSpecKind.passthrough
 
 
-class NoneConfig(BaseModel):
+class NoneConfig(LiteLLMBaseModel):
     """No upstream credential; the request is sent unauthenticated."""
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.none] = AuthSpecKind.none
 
 
-class StaticKeys(BaseModel):
+class StaticKeys(LiteLLMBaseModel):
     """Long-lived AWS access keys configured on the server."""
 
     model_config = ConfigDict(frozen=True)
@@ -393,7 +418,7 @@ class StaticKeys(BaseModel):
     session_token: SecretStr | None = None
 
 
-class AssumeRole(BaseModel):
+class AssumeRole(LiteLLMBaseModel):
     """An IAM role the gateway assumes via STS for short-lived, auto-refreshed credentials."""
 
     model_config = ConfigDict(frozen=True)
@@ -403,7 +428,7 @@ class AssumeRole(BaseModel):
     external_id: str | None = None
 
 
-class Ambient(BaseModel):
+class Ambient(LiteLLMBaseModel):
     """The environment's default AWS credential chain (instance profile, IRSA, env vars)."""
 
     model_config = ConfigDict(frozen=True)
@@ -413,7 +438,7 @@ class Ambient(BaseModel):
 AwsCredentialSource = Annotated[StaticKeys | AssumeRole | Ambient, Field(discriminator="source")]
 
 
-class AwsSigV4Config(BaseModel):
+class AwsSigV4Config(LiteLLMBaseModel):
     """AWS SigV4 per-request signing for an AWS-hosted upstream (e.g. Bedrock AgentCore). The
     gateway signs with its own AWS identity, never the caller's; `credentials` selects how that
     identity is obtained, defaulting to the ambient credential chain."""
@@ -438,7 +463,7 @@ AuthConfig = Annotated[
 ]
 
 
-class Subject(BaseModel):
+class Subject(LiteLLMBaseModel):
     """The validated inbound principal. NOT the v1 request object and NOT the LiteLLM key."""
 
     model_config = ConfigDict(frozen=True)
@@ -450,7 +475,7 @@ class Subject(BaseModel):
     inbound_token: SecretStr | None = None
 
 
-class ServerSpec(BaseModel):
+class ServerSpec(LiteLLMBaseModel):
     """The declared upstream. A v2-native type; the v1 -> v2 adapter maps onto this."""
 
     model_config = ConfigDict(frozen=True)

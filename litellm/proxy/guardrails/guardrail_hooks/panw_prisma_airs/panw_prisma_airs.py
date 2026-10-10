@@ -5,6 +5,8 @@ Palo Alto Networks Prisma AI Runtime Security (AIRS) Guardrail Integration for L
 Provides real-time threat detection, DLP, URL filtering, content masking, and policy enforcement for AI applications.
 """
 
+import functools
+import itertools
 import json
 import os
 import re
@@ -15,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -26,18 +28,23 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    role_out_of_guardrail_scope,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.responses.guardrail_translation.handler import scannable_instructions
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -61,7 +68,7 @@ ToolCallLike: TypeAlias = (
 )
 
 
-class _ToolCallFunctionSlice(BaseModel):
+class _ToolCallFunctionSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     name: str | None = None
@@ -84,10 +91,41 @@ class _ToolCallFunctionSlice(BaseModel):
         return json.dumps(value) if isinstance(value, (dict, list)) else str(value)
 
 
-class _ToolCallSlice(BaseModel):
+class _ToolCallSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     function: _ToolCallFunctionSlice | None = None
+
+
+class _ResponsesContentPart(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    text: str | None = None
+
+
+class _ResponsesInputItem(LiteLLMBaseModel):
+    """The slice of a raw Responses ``input`` item that decides which ``texts`` it flattens to."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str | None = None
+    role: str | None = None
+    content: str | tuple[_ResponsesContentPart, ...] | None = None
+
+    def text_count(self, *, skip_system: bool) -> int:
+        if role_out_of_guardrail_scope(
+            (self.role or "").lower(), skip_system_message=skip_system, skip_tool_message=False
+        ):
+            return 0
+        if isinstance(self.content, str):
+            return 1
+        if self.content is None:
+            return 0
+        return sum(part.text is not None for part in self.content)
+
+
+_ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
+_RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
 
 
 if TYPE_CHECKING:
@@ -194,7 +232,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # internal '<=' comparison and surfaces as a misleading api_error.
         self.timeout = float(timeout) if timeout is not None else 10.0
 
-        # Tri-state: None = not set (default-on for Anthropic), True = explicit on, False = explicit off
         self.experimental_use_latest_role_message_only: bool | None = kwargs.get(
             "experimental_use_latest_role_message_only"
         )
@@ -721,10 +758,18 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
         }
 
-    def _record_scan_id(self, request_data: dict[str, object], scan_result: Mapping[str, object]) -> None:
+    def _record_scan_id(
+        self, request_data: dict[str, object], scan_result: Mapping[str, object], stage: GuardrailEventHooks
+    ) -> None:
         """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
         scan_id: Final = scan_result.get("scan_id")
-        add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)
+        add_guardrail_scan_id(
+            request_data=request_data,
+            scan_id=str(scan_id) if scan_id else None,
+            guardrail_name=self.guardrail_name,
+            provider=self._PROVIDER_NAME,
+            stage=stage,
+        )
 
     def _handle_api_error_with_logging(
         self,
@@ -793,7 +838,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-    def _prepare_metadata_from_request(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_metadata_from_request(self, data: dict[str, Any]) -> dict[str, object]:
         """
         Extract and prepare metadata from request data for PANW API call.
 
@@ -809,7 +854,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """
         user_metadata: Final = data.get("metadata", {}) or {}
         requester_meta: Final = user_metadata.get("requester_metadata", {}) or {}
-        metadata: Final = {
+        metadata: Final[dict[str, object]] = {
             "user": data.get("user") or "litellm_user",
             "model": data.get("model") or "unknown",
         }
@@ -948,7 +993,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             event_type=GuardrailEventHooks.post_call,
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
-        self._record_scan_id(request_data, scan_result)
+        self._record_scan_id(request_data, scan_result, GuardrailEventHooks.post_call)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -1078,7 +1123,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.pre_call,
             )
-            self._record_scan_id(data, scan_result)
+            self._record_scan_id(data, scan_result, GuardrailEventHooks.pre_call)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1199,7 +1244,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.post_call,
             )
-            self._record_scan_id(data, scan_result)
+            self._record_scan_id(data, scan_result, GuardrailEventHooks.post_call)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1401,7 +1446,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     duration=(end_time - start_time).total_seconds(),
                     event_type=GuardrailEventHooks.post_call,
                 )
-                self._record_scan_id(request_data, scan_result)
+                self._record_scan_id(request_data, scan_result, GuardrailEventHooks.post_call)
 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
@@ -1475,7 +1520,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 continue
 
-            self._record_scan_id(request_data, scan_result)
+            self._record_scan_id(
+                request_data,
+                scan_result,
+                GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
+            )
 
             action = scan_result.get("action", "block")
             masked_args = self._masked_tool_call_arguments(
@@ -1566,119 +1615,153 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         request_data: Mapping[str, object],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> bool:
-        """Resolve whether to scan only the latest user message.
+        """Resolve whether to scan only the latest user/developer message.
 
-        - Non-Anthropic requests: always False (existing behavior)
-        - Anthropic requests:
-          - Flag explicitly True/False: respect it
-          - Flag None (not set): default to True
+        - Flag explicitly True/False: respect it for every request shape,
+          matching the bedrock guardrail's semantics for the same flag
+        - Flag None (not set): True for Anthropic /v1/messages requests, False otherwise
         """
-        if not self._is_anthropic_request(request_data, logging_obj):
-            return False
-        if self.experimental_use_latest_role_message_only is None:
-            return True  # Default-on for Anthropic
-        return self.experimental_use_latest_role_message_only
+        if self.experimental_use_latest_role_message_only is not None:
+            return self.experimental_use_latest_role_message_only
+        return self._is_anthropic_request(request_data, logging_obj)
 
     @staticmethod
-    def _get_latest_user_text_indices(
+    def _message_texts(message: AllMessageValues) -> tuple[str, ...]:
+        """Text entries the framework flattens out of one structured message."""
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return (content,)
+        if not isinstance(content, list):
+            return ()
+        return tuple(text for item in content if isinstance(item, dict) and isinstance(text := item.get("text"), str))
+
+    @classmethod
+    def _text_source_message_indices(
+        cls,
         texts: Sequence[str],
-        messages: Sequence[object],
-    ) -> set | None:
+        messages: Sequence[AllMessageValues],
+    ) -> tuple[int, ...] | None:
+        """Map every ``texts`` entry to the index of the structured message it was flattened from.
+
+        A message's texts are consumed only when they sit at the running position of
+        ``texts``; messages the translation handler added without a counterpart in
+        ``texts`` (Responses ``function_call_output``, ``reasoning``) are skipped. The walk
+        runs front-to-back and back-to-front and both must agree, so an added message whose
+        text happens to equal a neighbouring real message's text cannot steal that text's
+        attribution. Returns None otherwise.
+        """
+        runs: Final = tuple(cls._message_texts(message) for message in messages)
+
+        def walk(ordered_runs: Sequence[tuple[str, ...]], ordered_texts: Sequence[str]) -> tuple[int, ...]:
+            def consume(sources: tuple[int, ...], item: tuple[int, tuple[str, ...]]) -> tuple[int, ...]:
+                position, run = item
+                start: Final = len(sources)
+                if run and tuple(ordered_texts[start : start + len(run)]) == run:
+                    return sources + (position,) * len(run)
+                return sources
+
+            return functools.reduce(consume, enumerate(ordered_runs), ())
+
+        forward: Final = walk(runs, texts)
+        last: Final = len(runs) - 1
+        backward: Final = tuple(
+            last - position for position in walk(tuple(run[::-1] for run in runs[::-1]), texts[::-1])[::-1]
+        )
+        return forward if len(forward) == len(texts) and forward == backward else None
+
+    @staticmethod
+    def _reasoning_item_text_indices(
+        texts: Sequence[str],
+        request_data: Mapping[str, object],
+        *,
+        skip_system: bool,
+    ) -> frozenset[int] | None:
+        """Return the ``texts`` indices flattened from Responses ``reasoning`` input items.
+
+        The Responses translation handler gives those model-authored items the default
+        ``user`` role, so the latest-turn selection must not mistake one for a human turn.
+        Empty for requests without a Responses ``input`` item list; None when the raw items
+        (after the leading ``instructions`` text, both minus whatever ``skip_system`` drops)
+        do not account for every entry of ``texts``.
+        """
+        try:
+            raw_input: Final = _RESPONSES_INPUT.validate_python(request_data.get("input"))
+        except ValidationError:
+            return None
+        if not isinstance(raw_input, tuple):
+            return frozenset()
+        offset: Final = 0 if scannable_instructions(request_data, skip_system=skip_system) is None else 1
+        counts: Final = tuple(item.text_count(skip_system=skip_system) for item in raw_input)
+        if offset + sum(counts) != len(texts):
+            return None
+        starts: Final = itertools.accumulate(counts, initial=offset)
+        return frozenset(
+            text_idx
+            for item, count, start in zip(raw_input, counts, starts)
+            if item.type == "reasoning"
+            for text_idx in range(start, start + count)
+        )
+
+    def _get_latest_user_text_indices(
+        self,
+        texts: Sequence[str],
+        messages: Sequence[AllMessageValues],
+        request_data: Mapping[str, object],
+    ) -> frozenset[int] | None:
         """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
-        Args:
-            texts: Flattened text entries from the framework.
-            messages: Original request messages (request_data["messages"]),
-                      NOT structured_messages (which may have injected system content).
-
-        Returns a set of scannable indices, or None on count mismatch or no user/developer
-        message (safety fallback to existing role-filter behavior).
+        The latest user/developer message is chosen from ``messages`` itself, so a latest turn
+        without text (image only) yields an empty set rather than promoting an earlier turn.
+        Messages flattened from Responses ``reasoning`` items are never that turn.
+        Returns None when ``texts`` cannot be aligned with ``messages`` or ``request_data``, no
+        user/developer message exists, or the latest one carries text that never reached
+        ``texts`` (safety fallback to the role-filter scan).
         """
-        last_human_msg_idx: int | None = None
-        for idx in range(len(messages) - 1, -1, -1):
-            msg = messages[idx]
-            if isinstance(msg, dict) and msg.get("role") in ("user", "developer"):
-                last_human_msg_idx = idx
-                break
-
-        if last_human_msg_idx is None:
-            return None  # No user/developer message → fallback to existing role-filter scan
-
-        scannable: Final[set] = set()
-        text_idx = 0
-        for msg_idx, msg in enumerate(messages):
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            is_latest_human = msg_idx == last_human_msg_idx
-
-            if content is None:
-                pass
-            elif isinstance(content, str):
-                if is_latest_human:
-                    scannable.add(text_idx)
-                text_idx += 1
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("text") is not None:
-                        if is_latest_human:
-                            scannable.add(text_idx)
-                        text_idx += 1
-
-        if text_idx != len(texts):
-            return None  # Count mismatch → safety fallback
-
-        return scannable
+        sources: Final = self._text_source_message_indices(texts, messages)
+        if sources is None:
+            return None
+        reasoning: Final = self._reasoning_item_text_indices(
+            texts, request_data, skip_system=effective_skip_system_message_for_guardrail(self)
+        )
+        if reasoning is None:
+            return None
+        reasoning_messages: Final = frozenset(sources[text_idx] for text_idx in reasoning)
+        latest_human: Final = max(
+            (
+                idx
+                for idx, message in enumerate(messages)
+                if idx not in reasoning_messages and message.get("role") in ("user", "developer")
+            ),
+            default=None,
+        )
+        if latest_human is None:
+            return None
+        if latest_human not in sources and self._message_texts(messages[latest_human]):
+            return None
+        return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
-    @staticmethod
+    @classmethod
     def _get_scannable_text_indices(
+        cls,
         texts: Sequence[str],
-        structured_messages: Sequence[object],
-    ) -> set | None:
-        """Derive which ``texts`` indices originate from user/system messages.
+        structured_messages: Sequence[AllMessageValues],
+    ) -> frozenset[int] | None:
+        """Derive which ``texts`` indices originate from user/system/developer messages.
 
-        The unified guardrail framework flattens message content into ``texts``
-        without preserving role info.  This helper re-walks
-        ``structured_messages`` using the **same** extraction logic the
-        framework uses (string content → 1 entry, list content → 1 per text
-        item, None → 0) and records the running text index for each entry
-        whose source role is ``"user"``, ``"system"``, or ``"developer"``.
-
-        Returns a set of scannable indices, or ``None`` if the count doesn't
-        match ``len(texts)`` (safety fallback → scan everything).
+        Returns None when ``texts`` cannot be aligned with ``structured_messages``
+        (safety fallback: scan everything).
         """
-        scannable: Final[set] = set()
-        text_idx = 0
-        for msg in structured_messages:
-            if not isinstance(msg, dict):
-                continue
-            role = msg.get("role", "")
-            content = msg.get("content")
-            is_scannable = role in ("user", "system", "developer")
-
-            if content is None:
-                # No content → 0 text entries
-                pass
-            elif isinstance(content, str):
-                if is_scannable:
-                    scannable.add(text_idx)
-                text_idx += 1
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("text") is not None:
-                        if is_scannable:
-                            scannable.add(text_idx)
-                        text_idx += 1
-            # Ignore other content types (shouldn't happen)
-
-        if text_idx != len(texts):
-            # Count mismatch → safety fallback: scan all
+        sources: Final = cls._text_source_message_indices(texts, structured_messages)
+        if sources is None:
             return None
-
-        return scannable
+        return frozenset(
+            text_idx
+            for text_idx, source in enumerate(sources)
+            if structured_messages[source].get("role") in ("user", "system", "developer")
+        )
 
     @staticmethod
     def _mcp_name_fallback(rd: dict) -> str | None:
@@ -1771,21 +1854,18 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         # On request side, determine which text indices correspond to scannable
         # messages so we can skip scanning assistant/tool history text.
-        scannable_indices: set | None = None
+        scannable_indices: frozenset[int] | None = None
         if input_type == "request":
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
-                # For Anthropic /v1/messages: default to latest-user-only scanning.
-                # Uses request_data["messages"] (original format), NOT structured_messages
-                # (which has injected system content from adapter translation).
                 if self._use_latest_user_only(request_data, logging_obj):
-                    original_messages: Final = request_data.get("messages")
-                    if original_messages:
-                        scannable_indices = self._get_latest_user_text_indices(texts, original_messages)
-                # Fall through to existing role filtering if:
-                # - not Anthropic, OR flag explicitly False, OR
-                # - no original messages, OR
-                # - latest-user extraction returned None (no user / count mismatch)
+                    scannable_indices = self._get_latest_user_text_indices(texts, structured_messages, request_data)
+                    if scannable_indices is not None and not scannable_indices:
+                        verbose_proxy_logger.debug(
+                            "PANW Prisma AIRS: latest user message has no text, so "
+                            "experimental_use_latest_role_message_only leaves nothing to scan for call_id=%s",
+                            call_id,
+                        )
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
                 if (
@@ -1829,7 +1909,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 new_texts.append(text)
                 continue
 
-            self._record_scan_id(request_data, scan_result)
+            self._record_scan_id(
+                request_data,
+                scan_result,
+                GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
+            )
 
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
@@ -1901,7 +1985,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             else:
-                self._record_scan_id(request_data, mcp_scan_result)
+                self._record_scan_id(request_data, mcp_scan_result, GuardrailEventHooks.pre_call)
                 action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
                 if action == "allow":
@@ -1941,4 +2025,5 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             GuardrailEventHooks.logging_only,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

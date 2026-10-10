@@ -26,6 +26,7 @@ import asyncio
 import pytest
 
 from e2e_config import ws_base_url
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
@@ -64,7 +65,21 @@ from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 # pipecat-ai/pipecat#2544); raw-ws tool_call_round_trip[vertex_ai] is the
 # source of truth for that provider. Keep openai/azure/gemini here.
 PROVIDER_PARAMS = [
-    pytest.param(p, id=p.id) for p in PROVIDERS if p.id != "vertex_ai"
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                capabilities=(Capability.FUNCTION_CALLING,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS if p.id != "vertex_ai"
 ]
 
 WEATHER_TOOL = ToolsSchema(

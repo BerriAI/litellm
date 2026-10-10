@@ -93,6 +93,30 @@ const exitToBuiltInTiers = (value: ComplexityRouterConfigValue, rows: readonly A
   return commitTierRows(activeTierRows(restored), "", restored);
 };
 
+/** Model changes reconcile params and the plan floor against the resulting populated pools. */
+export const setTierModels = (
+  value: ComplexityRouterConfigValue,
+  id: string,
+  models: string[],
+): ComplexityRouterConfigValue => {
+  const next: ComplexityRouterConfigValue = {
+    ...value,
+    ...(value.custom_tier_set
+      ? {
+          custom_tier_set: {
+            ...value.custom_tier_set,
+            tiers: value.custom_tier_set.tiers.map((row) => (row.id === id ? { ...row, models } : row)),
+          },
+        }
+      : { tiers: { ...value.tiers, [id]: models } }),
+    tier_model_params: pruneTierModelParams(value.tier_model_params, id, models),
+  };
+  const floor = next.plan_mode_min_tier;
+  return floor && !activeTierRows(next).some((row) => row.id === floor && row.models.length > 0)
+    ? { ...next, plan_mode_min_tier: undefined }
+    : next;
+};
+
 const nextTierSetValue = (
   value: ComplexityRouterConfigValue,
   rows: ActiveTierRow[],
@@ -102,11 +126,7 @@ const nextTierSetValue = (
 
   switch (action.kind) {
     case "models":
-      return commitTierRows(
-        rows.map((row) => (row.id === action.id ? { ...row, models: action.models } : row)),
-        fallbackId,
-        { ...value, tier_model_params: pruneTierModelParams(value.tier_model_params, action.id, action.models) },
-      );
+      return setTierModels(value, action.id, action.models);
     case "patch":
       return commitTierRows(
         rows.map((row) => (row.id === action.id ? { ...row, ...action.patch } : row)),

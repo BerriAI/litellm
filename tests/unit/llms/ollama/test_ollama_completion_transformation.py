@@ -1,0 +1,888 @@
+import base64
+import io
+import json
+import sys
+from typing import Final
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+
+import litellm
+from litellm._uuid import uuid
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.ollama.completion.transformation import (
+    OllamaConfig,
+    OllamaTextCompletionResponseIterator,
+)
+from litellm.types.utils import Message, ModelResponse, ModelResponseStream
+
+
+class TestOllamaConfig:
+    def test_transform_response_standard(self):
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "Hello, I am an AI assistant",
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]  # Return dummy token IDs
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify response
+        assert result.choices[0]["message"].content == "Hello, I am an AI assistant"
+        assert result.choices[0]["finish_reason"] == "stop"
+        assert result.model == "ollama/llama2"
+        assert result.created is not None
+        # Access usage properly
+        assert result["usage"]["prompt_tokens"] == 10
+        assert result["usage"]["completion_tokens"] == 5
+        assert result["usage"]["total_tokens"] == 15
+
+    @patch("uuid.uuid4")
+    def test_transform_response_json_function_call(self, mock_uuid4):
+        # Setup mock UUID
+        mock_uuid4.return_value = "test-uuid"
+
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with JSON function call format
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": json.dumps(
+                {"name": "get_weather", "arguments": {"location": "San Francisco"}}
+            )
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]  # Return dummy token IDs
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={"format": "json"},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify result has tool_calls
+        assert result.choices[0]["message"].content is None
+        assert result.choices[0]["finish_reason"] == "tool_calls"
+        assert len(result.choices[0]["message"].tool_calls) == 1
+        assert result.choices[0]["message"].tool_calls[0]["id"].startswith("call_")
+        assert (
+            result.choices[0]["message"].tool_calls[0]["function"]["name"]
+            == "get_weather"
+        )
+        assert json.loads(
+            result.choices[0]["message"].tool_calls[0]["function"]["arguments"]
+        ) == {"location": "San Francisco"}
+        # No usage assertions here as we don't need to test them in every case
+
+    def test_transform_response_json_function_call_in_code_fence(self):
+        raw_response: Final = MagicMock()
+        raw_response.json.return_value = {
+            "response": '```json\n{"name": "read", "arguments": {"filePath": "calc.py"}}\n```'
+        }
+
+        result: Final = OllamaConfig().transform_response(
+            model="gemma4:31b",
+            raw_response=raw_response,
+            model_response=ModelResponse(choices=[{"message": Message(content="")}]),
+            logging_obj=MagicMock(),
+            request_data={"format": "json"},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=MagicMock(),
+        )
+
+        tool_call: Final = result.choices[0].message.tool_calls[0]
+        assert (result.choices[0].finish_reason, tool_call.function.name) == ("tool_calls", "read")
+        assert json.loads(tool_call.function.arguments) == {"filePath": "calc.py"}
+
+    def test_transform_response_regular_json(self):
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with regular JSON (not function call)
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": json.dumps(
+                {"result": "success", "data": {"temperature": 72, "unit": "F"}}
+            )
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]  # Return dummy token IDs
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={"format": "json"},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify result has JSON content
+        expected_content = json.dumps(
+            {"result": "success", "data": {"temperature": 72, "unit": "F"}}
+        )
+        assert result.choices[0]["message"].content == expected_content
+        assert result.choices[0]["finish_reason"] == "stop"
+        # No usage assertions here as we don't need to test them in every case
+
+    def test_transform_response_with_thinking_tags(self):
+        """Test that responses with <think>...</think> tags parse reasoning content correctly."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with thinking tags
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "<think>I need to think about this problem step by step</think>Here is my answer",
+            "prompt_eval_count": 15,
+            "eval_count": 8,
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify reasoning content is extracted
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "I need to think about this problem step by step"
+        )
+        assert result.choices[0]["message"].content == "Here is my answer"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_with_thinking_tags_alternative(self):
+        """Test that responses with <thinking>...</thinking> tags parse reasoning content correctly."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with thinking tags (alternative format)
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "<thinking>Let me analyze this carefully</thinking>The solution is X",
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify reasoning content is extracted
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "Let me analyze this carefully"
+        )
+        assert result.choices[0]["message"].content == "The solution is X"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_with_multiline_thinking_tags(self):
+        """Test that responses with multiline thinking content work correctly."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with multiline thinking content
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "<think>\nThis is a complex problem.\nI need to break it down:\n1. First step\n2. Second step\n</think>Based on my analysis, the answer is Y",
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify multiline reasoning content is extracted
+        expected_reasoning = "\nThis is a complex problem.\nI need to break it down:\n1. First step\n2. Second step\n"
+        assert result.choices[0]["message"].reasoning_content == expected_reasoning
+        assert (
+            result.choices[0]["message"].content
+            == "Based on my analysis, the answer is Y"
+        )
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_thinking_only(self):
+        """Test response with only thinking content and no additional content."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with only thinking content
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "<think>Just internal thoughts, no response</think>",
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify reasoning content is extracted and content is empty
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "Just internal thoughts, no response"
+        )
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_json_mode_with_thinking_tags(self):
+        """Test JSON mode with thinking tags - should handle as text when JSON parsing fails."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response with thinking tags in JSON mode
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "<think>Planning my JSON response</think>This is not valid JSON",
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={"format": "json"},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify reasoning content is extracted even in JSON mode when JSON parsing fails
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "Planning my JSON response"
+        )
+        assert result.choices[0]["message"].content == "This is not valid JSON"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_no_thinking_tags(self):
+        """Test that responses without thinking tags work normally."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response without thinking tags
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "response": "Regular response without any thinking tags",
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify no reasoning content is extracted
+        assert result.choices[0]["message"].reasoning_content is None
+        assert (
+            result.choices[0]["message"].content
+            == "Regular response without any thinking tags"
+        )
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def _transform(
+        self, response_json: dict[str, object], request_data: dict[str, object] | None = None
+    ) -> ModelResponse:
+        config = OllamaConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = response_json
+
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        return config.transform_response(
+            model="gpt-oss:120b",
+            raw_response=raw_response,
+            model_response=ModelResponse(
+                id="test_id",
+                choices=[{"message": Message(content="")}],
+            ),
+            logging_obj=MagicMock(),
+            request_data=request_data or {},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+    def test_transform_response_with_thinking_field(self):
+        """`/api/generate` returns reasoning in a top-level `thinking` field, which must
+        reach `reasoning_content` instead of being dropped."""
+        result = self._transform(
+            {
+                "response": "OK",
+                "thinking": 'We need to reply with exactly "OK".',
+                "prompt_eval_count": 15,
+                "eval_count": 8,
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == 'We need to reply with exactly "OK".'
+        assert result.choices[0]["message"].content == "OK"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_with_thinking_field_and_empty_response(self):
+        """A model that spends its whole turn reasoning leaves `response` empty; the
+        reasoning still has to be surfaced rather than billed and discarded."""
+        result = self._transform(
+            {
+                "response": "",
+                "thinking": "Entire turn went into reasoning.",
+                "eval_count": 96,
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "Entire turn went into reasoning."
+        assert result.choices[0]["message"].content == ""
+
+    def test_transform_response_thinking_field_wins_over_inline_tags(self):
+        """When both shapes are present the field wins, matching the `ollama_chat` transport."""
+        result = self._transform(
+            {
+                "response": "<think>inline</think>Answer",
+                "thinking": "from field",
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "from field"
+        assert result.choices[0]["message"].content == "<think>inline</think>Answer"
+
+    def test_transform_response_json_mode_non_json_text_with_thinking_field(self):
+        """JSON mode falls back to text handling when the payload is not JSON, so the
+        `thinking` field has to be picked up on that path too."""
+        result = self._transform(
+            {
+                "response": "not valid json",
+                "thinking": "reasoning in json mode",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "reasoning in json mode"
+        assert result.choices[0]["message"].content == "not valid json"
+
+    def test_transform_response_empty_thinking_field_falls_back_to_tags(self):
+        """An empty `thinking` field must not mask inline `<think>` tags."""
+        result = self._transform(
+            {
+                "response": "<think>inline reasoning</think>Answer",
+                "thinking": "",
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "inline reasoning"
+        assert result.choices[0]["message"].content == "Answer"
+
+    def test_transform_response_json_mode_valid_json_keeps_thinking_field(self):
+        """A valid JSON `response` is returned as content, and the reasoning that came
+        with it must not be dropped."""
+        result = self._transform(
+            {
+                "response": '{"answer": 42}',
+                "thinking": "reasoned before answering in json",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].content == '{"answer": 42}'
+        assert result.choices[0]["message"].reasoning_content == "reasoned before answering in json"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_json_mode_function_call_keeps_thinking_field(self):
+        """A JSON `response` shaped like a function call becomes a tool call, and the
+        reasoning behind the call must survive alongside it."""
+        result = self._transform(
+            {
+                "response": '{"name": "get_weather", "arguments": {"city": "Paris"}}',
+                "thinking": "the user wants weather, so call the tool",
+            },
+            request_data={"format": "json"},
+        )
+
+        message = result.choices[0]["message"]
+        assert message.tool_calls is not None
+        assert message.tool_calls[0].function.name == "get_weather"
+        assert message.reasoning_content == "the user wants weather, so call the tool"
+        assert result.choices[0]["finish_reason"] == "tool_calls"
+
+    def test_transform_response_json_mode_empty_response_keeps_thinking_field(self):
+        """In JSON mode a model that spends its whole turn reasoning leaves `response`
+        empty; the reasoning must still come back instead of a blank message."""
+        result = self._transform(
+            {
+                "response": "",
+                "thinking": "all of the tokens went into reasoning",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["message"].reasoning_content == "all of the tokens went into reasoning"
+
+    def test_transform_response_null_response_keeps_content_null(self):
+        """Ollama sends `response: null` when the reply carries no text; that stays null
+        rather than becoming an empty string, while `thinking` is still surfaced."""
+        result = self._transform({"response": None, "thinking": "reasoning only"})
+
+        assert result.choices[0]["message"].content is None
+        assert result.choices[0]["message"].reasoning_content == "reasoning only"
+
+    def test_transform_response_malformed_reasoning_fields_do_not_crash(self):
+        """A reply whose `response` and `thinking` are not strings must still produce a
+        response instead of raising, with no reasoning invented."""
+        result = self._transform({"response": 5, "thinking": ["not", "a", "string"]})
+
+        assert result.choices[0]["message"].reasoning_content is None
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["finish_reason"] == "stop"
+
+
+class TestOllamaTextCompletionResponseIterator:
+    def test_every_chunk_of_one_stream_carries_the_same_response_id(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        ollama_chunks: Final = (
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "thinking": "Hm", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "Hel", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "lo", "done": False},
+        )
+
+        results: Final = tuple(iterator.chunk_parser(chunk) for chunk in ollama_chunks)
+
+        ids: Final = {result.id for result in results if isinstance(result, ModelResponseStream)}
+        assert len(results) == len(ollama_chunks) and len(ids) == 1, ids
+        assert next(iter(ids)).startswith("chatcmpl-")
+        other: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        other_result: Final = other.chunk_parser(ollama_chunks[2])
+        assert isinstance(other_result, ModelResponseStream) and other_result.id not in ids
+
+    def test_chunk_parser_with_thinking_field(self):
+        """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test chunk with thinking field - this is the problematic case from the issue
+        chunk_with_thinking = {
+            "model": "gpt-oss:20b",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "",
+            "thinking": "User",
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk_with_thinking)
+
+        # Should return a ModelResponseStream with reasoning content
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices and result.choices[0].delta is not None
+        assert getattr(result.choices[0].delta, "reasoning_content") == "User"
+
+    def test_chunk_parser_normal_response(self):
+        """Test that normal response chunks still work."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test normal chunk with response
+        normal_chunk = {
+            "model": "llama2",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "Hello world",
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(normal_chunk)
+
+        # Updated to handle ModelResponseStream return type
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices and result.choices[0].delta is not None
+        assert result.choices[0].delta.content == "Hello world"
+        assert getattr(result.choices[0].delta, "reasoning_content", None) is None
+
+    def test_chunk_parser_empty_response_without_thinking(self):
+        """Test that empty response chunks without thinking still work."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test empty response chunk without thinking
+        empty_response_chunk = {
+            "model": "qwen3:4b",
+            "created_at": "2025-10-16T11:27:14.82881Z",
+            "response": "",
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(empty_response_chunk)
+
+        # Updated to handle ModelResponseStream return type
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices and result.choices[0].delta is not None
+        assert result.choices[0].delta.content == None
+        assert getattr(result.choices[0].delta, "reasoning_content", None) == ""
+
+    def test_chunk_parser_done_chunk(self):
+        """Test that done chunks work correctly."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test done chunk
+        done_chunk = {
+            "model": "llama2",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "",
+            "done": True,
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert result["text"] == ""
+        assert result["is_finished"] is True
+        assert result["finish_reason"] == "stop"
+        assert result["usage"] is not None
+        assert result["usage"]["prompt_tokens"] == 10
+        assert result["usage"]["completion_tokens"] == 5
+        assert result["usage"]["total_tokens"] == 15
+
+    @pytest.mark.parametrize(
+        ("response_chunks", "expected_text", "expected_tool_name", "expected_finish_reason"),
+        [
+            (
+                ['{"name": "write_file", ', '"arguments": {"path": "hello.py"}}'],
+                "",
+                "write_file",
+                "tool_calls",
+            ),
+            (
+                ["```", "json", "\n", '{"name": "write_file", "arguments": {"path": "hello.py"}}', "\n```"],
+                "",
+                "write_file",
+                "tool_calls",
+            ),
+            (['{"answer": ', "42}"], '{"answer": 42}', None, "stop"),
+            (["{not json"], "{not json", None, "stop"),
+        ],
+    )
+    def test_chunk_parser_turns_streamed_json_function_call_into_tool_call(
+        self,
+        response_chunks: list[str],
+        expected_text: str,
+        expected_tool_name: str | None,
+        expected_finish_reason: str,
+    ):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        streamed: Final = [iterator.chunk_parser({"response": text, "done": False}) for text in response_chunks]
+        done: Final = iterator.chunk_parser({"response": "", "done": True, "prompt_eval_count": 3, "eval_count": 2})
+
+        assert [chunk.choices[0].delta.content for chunk in streamed] == [None] * len(response_chunks)
+        assert done["text"] == expected_text
+        assert done["finish_reason"] == expected_finish_reason
+        assert done["usage"]["total_tokens"] == 5
+        tool_use: Final = done.get("tool_use")
+        assert (tool_use["function"]["name"] if tool_use else None) == expected_tool_name
+        if tool_use:
+            assert json.loads(tool_use["function"]["arguments"]) == {"path": "hello.py"}
+
+    def test_chunk_parser_streams_text_that_only_later_contains_braces(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        first: Final = iterator.chunk_parser({"response": "Here is code: ", "done": False})
+        second: Final = iterator.chunk_parser({"response": '{"a": 1}', "done": False})
+        done: Final = iterator.chunk_parser({"response": "", "done": True})
+
+        assert (first.choices[0].delta.content, second.choices[0].delta.content) == ("Here is code: ", '{"a": 1}')
+        assert (done["text"], done["finish_reason"], done.get("tool_use")) == ("", "stop", None)
+
+    def test_chunk_parser_releases_held_code_fence_that_is_not_json(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        contents: Final = [
+            iterator.chunk_parser({"response": text, "done": False}).choices[0].delta.content
+            for text in ("```", "python\n", "print(1)")
+        ]
+
+        assert contents == [None, "```python\n", "print(1)"]
+
+
+async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": "llava",
+                "response": "Green",
+                "done": True,
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="ollama/llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_base="http://ollama.example:11434",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+def _image_base64(image_format: str) -> str:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), "green").save(buffer, image_format)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def _transform_image_request(image_base64: str, mime_subtype: str) -> dict:
+    return OllamaConfig().transform_request(
+        model="llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/{mime_subtype};base64,{image_base64}"},
+                    },
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_transform_request_sends_png_and_jpeg_images_without_pillow(
+    image_format: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_base64 = _image_base64(image_format)
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    data = _transform_image_request(image_base64, image_format.lower())
+
+    assert data["images"] == [image_base64]
+
+
+def test_transform_request_without_pillow_says_how_to_convert_other_image_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gif_base64 = _image_base64("GIF")
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    with pytest.raises(Exception, match="pip install Pillow"):
+        _transform_image_request(gif_base64, "gif")
+
+
+def test_transform_request_reencodes_other_image_formats_as_jpeg() -> None:
+    from PIL import Image
+
+    data = _transform_image_request(_image_base64("GIF"), "gif")
+
+    (encoded,) = data["images"]
+    assert Image.open(io.BytesIO(base64.b64decode(encoded))).format == "JPEG"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [base64.b64encode(b"not an image").decode("utf-8"), "abc"],
+    ids=["decodable_but_not_an_image", "invalid_base64"],
+)
+def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> None:
+    data = _transform_image_request(payload, "png")
+
+    assert data["images"] == [payload]

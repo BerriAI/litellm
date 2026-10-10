@@ -1,9 +1,11 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class HashicorpVaultConfig(BaseModel):
+class HashicorpVaultConfig(LiteLLMBaseModel):
     """Configuration for Hashicorp Vault secret manager integration."""
 
     vault_addr: str | None = Field(
@@ -40,7 +42,15 @@ class HashicorpVaultConfig(BaseModel):
     )
     vault_namespace: str | None = Field(
         default=None,
-        description="Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)",
+        description="Vault namespace used for both login and secret operations unless overridden below",
+    )
+    vault_login_namespace: str | None = Field(
+        default=None,
+        description="Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace",
+    )
+    vault_secret_namespace: str | None = Field(
+        default=None,
+        description="Namespace for secret reads and writes (URL path segment); falls back to vault_namespace",
     )
     vault_mount_name: str | None = Field(
         default=None,
@@ -52,7 +62,7 @@ class HashicorpVaultConfig(BaseModel):
     )
 
 
-class CyberArkConfig(BaseModel):
+class CyberArkConfig(LiteLLMBaseModel):
     """Configuration for CyberArk Conjur secret manager integration."""
 
     cyberark_api_base: str | None = Field(
@@ -89,7 +99,7 @@ class CyberArkConfig(BaseModel):
     )
 
 
-class ConfigOverrideSettingsResponse(BaseModel):
+class ConfigOverrideSettingsResponse(LiteLLMBaseModel):
     """Response model for config override settings GET endpoints."""
 
     config_type: str = Field(description="The type of config override")

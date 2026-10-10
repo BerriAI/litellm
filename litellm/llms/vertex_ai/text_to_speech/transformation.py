@@ -6,11 +6,12 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 """
 
 import base64
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, Union
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -43,9 +44,10 @@ else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
 
-_LyriaVoice: TypeAlias = (
-    str | dict | None
-)  # mutable-ok: inherited interface supports structured provider voice dictionaries
+_LyriaVoice: TypeAlias = str | dict | None
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -467,14 +469,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         # Parse JSON response
-        _json_response: Final = raw_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Get base64-encoded audio content
         response_content: Final = _json_response.get("audioContent")
         if not response_content:
             raise ValueError("No audioContent in Vertex AI TTS response")
 
-        binary_data: Final = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(_STR.validate_python(response_content))
         media_type: Final = speech_media_type_from_audio_bytes(binary_data)
         response: Final = httpx.Response(
             status_code=200,
@@ -501,9 +503,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list:  # mutable-ok: inherited provider interface returns a concrete parameter list
-        return [  # mutable-ok: inherited provider interface requires a concrete parameter list
-            "response_format"
-        ]
+        return ["response_format"]
 
     def map_openai_params(
         self,
@@ -513,9 +513,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         drop_params: bool = False,
         kwargs: dict | None = None,  # mutable-ok: inherited provider interface accepts a concrete keyword dictionary
     ) -> tuple[str | None, dict]:  # mutable-ok: inherited provider interface returns concrete mapped parameters
-        mapped_params: Final = dict(  # mutable-ok: mapping drops unsupported parameters before provider dispatch
-            optional_params
-        )
+        mapped_params: Final = dict(optional_params)
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
         unsupported_params: Final = tuple(
@@ -582,7 +580,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
             return VertexAIInteractionsConfig(mint_access_token=mint_access_token).get_complete_url(
                 api_base=api_base,
                 model=base_model,
-                litellm_params={  # mutable-ok: interactions dispatch expects a concrete parameter dictionary
+                litellm_params={
                     **litellm_params,
                     "vertex_project": project,
                     "vertex_location": "global",
@@ -613,7 +611,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
             custom_llm_provider="vertex_ai",
         )
         headers.update(
-            {  # mutable-ok: HTTP dispatch requires a concrete header dictionary
+            {
                 "Authorization": f"Bearer {access_token}",
                 "x-goog-user-project": project,
                 "Content-Type": "application/json",
@@ -622,27 +620,23 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
         request_body: Final[dict[str, object]] = (  # mutable-ok: HTTP dispatch requires a concrete provider payload
-            {  # mutable-ok: predict dispatch requires a concrete provider request dictionary
-                "instances": [  # mutable-ok: predict dispatch requires a concrete instances list
-                    {"prompt": input}  # mutable-ok: predict dispatch requires a concrete instance dictionary
-                ],
-                "parameters": {  # mutable-ok: predict dispatch requires a concrete parameters dictionary
-                    "sample_count": 1
-                },
+            {
+                "instances": [{"prompt": input}],
+                "parameters": {"sample_count": 1},
             }
             if model_info["vertex_ai_audio_api"] == "lyria_predict"
-            else {  # mutable-ok: interactions dispatch requires a concrete provider request dictionary
+            else {
                 "model": base_model,
                 "input": input,
                 **(
-                    {  # mutable-ok: interactions dispatch requires a nested response-format dictionary
-                        "response_format": {  # mutable-ok: interactions response format is a concrete provider payload
+                    {
+                        "response_format": {
                             "type": "audio",
                             "mime_type": "audio/wav",
                         }
                     }
                     if optional_params.get("response_format") == "wav"
-                    else {}  # mutable-ok: no response override is merged for non-WAV output
+                    else {}
                 ),
             }
         )
@@ -664,21 +658,15 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         if model_info["vertex_ai_audio_api"] == "lyria_predict":
             predictions: Final = response_json.get("predictions") or ()
             if predictions:
-                audio_data = predictions[0].get("audioContent") or predictions[0].get(
-                    "bytesBase64Encoded"
-                )  # rebind-ok: predict response supplies the generated audio value
+                audio_data = predictions[0].get("audioContent") or predictions[0].get("bytesBase64Encoded")
                 mime_type = predictions[0].get("mimeType")  # rebind-ok: predict response supplies its audio MIME type
         else:
             for step in response_json.get("steps") or response_json.get("outputs") or ():
                 content_items = step.get("content") or () if step.get("type") == "model_output" else (step,)
                 for content in content_items:
                     if content.get("type") == "audio" and content.get("data"):
-                        audio_data = content[
-                            "data"
-                        ]  # rebind-ok: interactions response supplies the generated audio value
-                        mime_type = content.get(
-                            "mime_type"
-                        )  # rebind-ok: interactions response supplies its audio MIME type
+                        audio_data = content["data"]
+                        mime_type = content.get("mime_type")
         if audio_data is None:
             raise ValueError(f"No generated audio found in Vertex AI {base_model} response")
         binary_data: Final = base64.b64decode(audio_data)

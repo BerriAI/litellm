@@ -7,6 +7,7 @@ import {
   serializeTierModelConfigs,
   tierRowLabel,
   setTierModelReasoningEffort,
+  setTierModelParam,
 } from "./complexity_router_tiers";
 import { resolveComplexityDefaultModel } from "./tier_rows";
 
@@ -215,6 +216,28 @@ describe("setTierModelReasoningEffort", () => {
       COMPLEX: { opus: { reasoning_effort: "high" } },
       MEDIUM: { opus: { reasoning_effort: "low" } },
     });
+  });
+});
+
+describe("setTierModelParam", () => {
+  it.each(["reasoning_effort", "speed"] as const)("clears only %s and preserves the input", (key) => {
+    const params = { reasoning_effort: "high", speed: "fast", max_tokens: 512 };
+    const current = { COMPLEX: { primary: params, secondary: { speed: "fast" } }, REASONING: { primary: params } };
+    const cleared = setTierModelParam(current, "COMPLEX", "primary", [key, undefined]);
+    expect(cleared).toEqual({
+      ...current,
+      COMPLEX: {
+        ...current.COMPLEX,
+        primary: key === "speed" ? { reasoning_effort: "high", max_tokens: 512 } : { speed: "fast", max_tokens: 512 },
+      },
+    });
+    expect(current.COMPLEX.primary).toEqual({ reasoning_effort: "high", speed: "fast", max_tokens: 512 });
+  });
+
+  it("removes empty records when the only override is Fast", () => {
+    const enabled = setTierModelParam(undefined, "COMPLEX", "primary", ["speed", "fast"]);
+    expect(enabled).toEqual({ COMPLEX: { primary: { speed: "fast" } } });
+    expect(setTierModelParam(enabled, "COMPLEX", "primary", ["speed", undefined])).toBeUndefined();
   });
 });
 

@@ -3,13 +3,18 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from math import ceil
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import Field
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -24,12 +29,19 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: float = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
     max_latency_list_size: int = 10
+    ttft_percentile: float | None = Field(default=None, gt=0, le=1)
 
 
 def _average_latency(samples: Sequence[float]) -> float:
     if not samples:
         return 0.0
     return sum(samples) / len(samples)
+
+
+def _percentile_latency(samples: Sequence[float], percentile: float) -> float:
+    values: Final = sorted(samples)
+    index: Final = ceil(len(values) * percentile) - 1
+    return values[index]
 
 
 def _ttft_seconds(elapsed: timedelta | float) -> float:
@@ -47,7 +59,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
+    @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update latency usage on success
@@ -119,7 +134,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-                parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+                parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict: Final = (
                     self.router_cache.get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
                 )
@@ -168,10 +183,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
+    @with_service_target("router_usage")
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             metadata_field: Final = self._select_metadata_field(kwargs)
             _exception: Final = kwargs.get("exception", None)
@@ -225,7 +243,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
+    @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update latency usage on success
@@ -296,7 +317,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-                parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+                parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict: Final = (
                     await self.router_cache.async_get_cache(
                         key=latency_key,
@@ -427,14 +448,17 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
-            # get average latency or average ttft (depending on streaming/non-streaming)
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
             )
-            average_latency = _average_latency(item_ttft_latency if use_ttft else item_latency)
+            selected_latency = (
+                _percentile_latency(item_ttft_latency, self.routing_args.ttft_percentile)
+                if use_ttft and self.routing_args.ttft_percentile is not None
+                else _average_latency(item_ttft_latency if use_ttft else item_latency)
+            )
 
             # -------------- #
             # Debugging Logic
@@ -443,7 +467,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             # this helps a user to debug why the router picked a specfic deployment      #
             _deployment_api_base = _deployment.get("litellm_params", {}).get("api_base", "")
             if _deployment_api_base is not None:
-                _latency_per_deployment[_deployment_api_base] = average_latency
+                _latency_per_deployment[_deployment_api_base] = selected_latency
             # -------------- #
             # End of Debugging Logic
             # -------------- #
@@ -453,7 +477,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             else:
-                potential_deployments.append((_deployment, average_latency))
+                potential_deployments.append((_deployment, selected_latency))
 
         if len(potential_deployments) == 0:
             return None
@@ -477,6 +501,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             request_kwargs[metadata_field]["_latency_per_deployment"] = _latency_per_deployment
         return deployment
 
+    @with_service_target("router_usage")
     async def async_get_available_deployments(
         self,
         model_group: str,
@@ -488,7 +513,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # get list of potential deployments
         latency_key: Final = f"{model_group}_map"
 
-        parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
+        parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
         request_count_dict: Final = (
             await self.router_cache.async_get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
         )
@@ -502,6 +527,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             request_count_dict,
         )
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self,
         model_group: str,
@@ -516,7 +542,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # get list of potential deployments
         latency_key: Final = f"{model_group}_map"
 
-        parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
+        parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
         request_count_dict = self.router_cache.get_cache(key=latency_key, parent_otel_span=parent_otel_span) or {}
 
         return self._get_available_deployments(
