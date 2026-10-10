@@ -3,6 +3,7 @@ import collections.abc
 import datetime
 import json
 import logging
+import sys
 import threading
 import time
 import traceback
@@ -58,6 +59,9 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
+
+# Strong refs keep __del__-scheduled partial-stream log tasks alive until they finish.
+_pending_partial_stream_log_tasks: Final[set["asyncio.Task[None]"]] = set()
 
 
 def _next_sync_or_exhausted(it: Iterator[object]) -> object:
@@ -307,6 +311,8 @@ class CustomStreamWrapper:
         }
 
         self._post_streaming_hooks: list | None = None
+        self._terminal_logging_scheduled = False
+        self._stream_closed = False
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -391,12 +397,107 @@ class CustomStreamWrapper:
         still-active call's context within that same Task if this fires late.
         """
         self._restore_consumer_correlation_context(guarded=True)
+        try:
+            if (
+                not litellm.disable_streaming_logging
+                and getattr(self, "logging_obj", None) is not None
+                and not getattr(self, "_terminal_logging_scheduled", True)
+                and getattr(self, "chunks", None)
+                and not sys.is_finalizing()
+            ):
+                task: Final = asyncio.get_running_loop().create_task(self._log_partial_stream_success())
+                _pending_partial_stream_log_tasks.add(task)
+                task.add_done_callback(_pending_partial_stream_log_tasks.discard)
+        except Exception as del_error:  # noqa: BLE001  # __del__ must never raise; no running loop means no partial log
+            verbose_logger.debug("could not schedule partial stream logging in __del__: %s", del_error)
+
+    async def _log_partial_stream_success(self) -> None:
+        """Log the chunks seen so far as a success event for a stream that ended
+        early (aclose or dropped reference) before natural exhaustion."""
+        if (
+            litellm.disable_streaming_logging
+            or self.logging_obj is None
+            or self._terminal_logging_scheduled
+            or not self.chunks
+            or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success")
+        ):
+            return
+        self._terminal_logging_scheduled = True
+        try:
+            partial_response: Final = litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+            if partial_response is None:
+                return
+            if self.model:
+                partial_response.model = self.model
+            await self.logging_obj.dispatch_success_handlers(
+                partial_response,
+                cache_hit=self.custom_llm_provider == "cached_response",
+                start_time=None,
+                end_time=None,
+                prefer_async_handlers=True,
+            )
+        except Exception as log_error:  # noqa: BLE001  # partial logging is best-effort; never break stream teardown
+            verbose_logger.debug("could not log partial stream success: %s", log_error)
+
+    def _log_partial_stream_success_sync(self) -> None:
+        """Sync counterpart of _log_partial_stream_success for close()."""
+        if (
+            litellm.disable_streaming_logging
+            or self.logging_obj is None
+            or self._terminal_logging_scheduled
+            or not self.chunks
+            or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success")
+        ):
+            return
+        self._terminal_logging_scheduled = True
+        try:
+            partial_response: Final = litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+            if partial_response is None:
+                return
+            if self.model:
+                partial_response.model = self.model
+            self.run_success_logging_and_cache_storage(
+                partial_response,
+                self.custom_llm_provider == "cached_response",
+            )
+        except Exception as log_error:  # noqa: BLE001  # partial logging is best-effort; never break stream teardown
+            verbose_logger.debug("could not log partial stream success: %s", log_error)
+
+    def close(self) -> None:
+        """Sync close: release the provider stream and log the chunks read so
+        far when the stream is abandoned before natural exhaustion."""
+        self._stream_closed = True
+        stream_to_close: Final = self.completion_stream
+        self.completion_stream = None
+        if stream_to_close is not None:
+            close_fn: Final = getattr(stream_to_close, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception as close_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+                    verbose_logger.debug(
+                        "CustomStreamWrapper.close: error closing completion_stream: %s",
+                        close_error,
+                    )
+        self._log_partial_stream_success_sync()
+        self._restore_consumer_correlation_context()
 
     async def aclose(self):
         # Restore the consumer's outer context only after the underlying
         # provider stream's own close (and its diagnostic logging below, if
         # closing fails) completes - not before - so those log lines still
         # carry this closing stream's own trace_id/session_id.
+        self._stream_closed = True
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -416,6 +517,8 @@ class CustomStreamWrapper:
                         "CustomStreamWrapper.aclose: error closing completion_stream: %s",
                         e,
                     )
+        with anyio.CancelScope(shield=True):
+            await self._log_partial_stream_success()
         self._restore_consumer_correlation_context()
 
     def check_send_stream_usage(self, stream_options: dict | None):
@@ -1780,6 +1883,8 @@ class CustomStreamWrapper:
             response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
+        if self._stream_closed:
+            raise StopIteration
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
@@ -1872,6 +1977,7 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
+                self._terminal_logging_scheduled = True
                 try:
                     complete_streaming_response = litellm.stream_chunk_builder(
                         chunks=self.chunks,
@@ -1985,6 +2091,7 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+            self._terminal_logging_scheduled = True
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
             self._handle_stream_fallback_error(e)
 
@@ -2005,6 +2112,8 @@ class CustomStreamWrapper:
         return self.completion_stream
 
     async def __anext__(self) -> "ModelResponseStream":
+        if self._stream_closed:
+            raise StopAsyncIteration
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
@@ -2122,6 +2231,7 @@ class CustomStreamWrapper:
             if self.logging_obj is not None:
                 self._record_partial_usage_for_failure()
                 ## LOGGING
+                self._terminal_logging_scheduled = True
                 asyncio.create_task(
                     self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
                 )
@@ -2193,6 +2303,7 @@ class CustomStreamWrapper:
                 self.sent_stream_usage = True
                 return response
 
+            self._terminal_logging_scheduled = True
             _deferred_cb: Final = getattr(
                 self.logging_obj,
                 "_on_deferred_stream_complete",
@@ -2252,6 +2363,7 @@ class CustomStreamWrapper:
         if self.logging_obj is not None:
             self._record_partial_usage_for_failure()
             ## LOGGING
+            self._terminal_logging_scheduled = True
             asyncio.create_task(
                 self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
             )
