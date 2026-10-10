@@ -1,0 +1,697 @@
+{
+  "python": "3.12.13",
+  "rows": [
+    {
+      "address": "0.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "0.255.255.255",
+      "blocked": true
+    },
+    {
+      "address": "1.0.0.0",
+      "blocked": false
+    },
+    {
+      "address": "9.255.255.255",
+      "blocked": false
+    },
+    {
+      "address": "10.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "10.255.255.255",
+      "blocked": true
+    },
+    {
+      "address": "11.0.0.0",
+      "blocked": false
+    },
+    {
+      "address": "100.63.255.255",
+      "blocked": false
+    },
+    {
+      "address": "100.64.0.0",
+      "blocked": true
+    },
+    {
+      "address": "100.127.255.255",
+      "blocked": true
+    },
+    {
+      "address": "100.128.0.0",
+      "blocked": false
+    },
+    {
+      "address": "126.255.255.255",
+      "blocked": false
+    },
+    {
+      "address": "127.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "127.255.255.255",
+      "blocked": true
+    },
+    {
+      "address": "128.0.0.0",
+      "blocked": false
+    },
+    {
+      "address": "168.63.129.15",
+      "blocked": false
+    },
+    {
+      "address": "168.63.129.16",
+      "blocked": true
+    },
+    {
+      "address": "168.63.129.17",
+      "blocked": false
+    },
+    {
+      "address": "169.253.255.255",
+      "blocked": false
+    },
+    {
+      "address": "169.254.0.0",
+      "blocked": true
+    },
+    {
+      "address": "169.254.255.255",
+      "blocked": true
+    },
+    {
+      "address": "169.255.0.0",
+      "blocked": false
+    },
+    {
+      "address": "172.15.255.255",
+      "blocked": false
+    },
+    {
+      "address": "172.16.0.0",
+      "blocked": true
+    },
+    {
+      "address": "172.31.255.255",
+      "blocked": true
+    },
+    {
+      "address": "172.32.0.0",
+      "blocked": false
+    },
+    {
+      "address": "191.255.255.255",
+      "blocked": false
+    },
+    {
+      "address": "192.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.255",
+      "blocked": true
+    },
+    {
+      "address": "192.0.1.0",
+      "blocked": false
+    },
+    {
+      "address": "192.0.0.8",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.9",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.10",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.11",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.169",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.170",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.171",
+      "blocked": true
+    },
+    {
+      "address": "192.0.0.172",
+      "blocked": true
+    },
+    {
+      "address": "192.0.1.255",
+      "blocked": false
+    },
+    {
+      "address": "192.0.2.0",
+      "blocked": true
+    },
+    {
+      "address": "192.0.2.255",
+      "blocked": true
+    },
+    {
+      "address": "192.0.3.0",
+      "blocked": false
+    },
+    {
+      "address": "192.31.195.255",
+      "blocked": false
+    },
+    {
+      "address": "192.31.196.0",
+      "blocked": false
+    },
+    {
+      "address": "192.31.196.255",
+      "blocked": false
+    },
+    {
+      "address": "192.31.197.0",
+      "blocked": false
+    },
+    {
+      "address": "192.52.192.255",
+      "blocked": false
+    },
+    {
+      "address": "192.52.193.0",
+      "blocked": false
+    },
+    {
+      "address": "192.52.193.255",
+      "blocked": false
+    },
+    {
+      "address": "192.52.194.0",
+      "blocked": false
+    },
+    {
+      "address": "192.88.98.255",
+      "blocked": false
+    },
+    {
+      "address": "192.88.99.0",
+      "blocked": false
+    },
+    {
+      "address": "192.88.99.255",
+      "blocked": false
+    },
+    {
+      "address": "192.88.100.0",
+      "blocked": false
+    },
+    {
+      "address": "192.167.255.255",
+      "blocked": false
+    },
+    {
+      "address": "192.168.0.0",
+      "blocked": true
+    },
+    {
+      "address": "192.168.255.255",
+      "blocked": true
+    },
+    {
+      "address": "192.169.0.0",
+      "blocked": false
+    },
+    {
+      "address": "192.175.47.255",
+      "blocked": false
+    },
+    {
+      "address": "192.175.48.0",
+      "blocked": false
+    },
+    {
+      "address": "192.175.48.255",
+      "blocked": false
+    },
+    {
+      "address": "192.175.49.0",
+      "blocked": false
+    },
+    {
+      "address": "198.17.255.255",
+      "blocked": false
+    },
+    {
+      "address": "198.18.0.0",
+      "blocked": true
+    },
+    {
+      "address": "198.19.255.255",
+      "blocked": true
+    },
+    {
+      "address": "198.20.0.0",
+      "blocked": false
+    },
+    {
+      "address": "198.51.99.255",
+      "blocked": false
+    },
+    {
+      "address": "198.51.100.0",
+      "blocked": true
+    },
+    {
+      "address": "198.51.100.255",
+      "blocked": true
+    },
+    {
+      "address": "198.51.101.0",
+      "blocked": false
+    },
+    {
+      "address": "203.0.112.255",
+      "blocked": false
+    },
+    {
+      "address": "203.0.113.0",
+      "blocked": true
+    },
+    {
+      "address": "203.0.113.255",
+      "blocked": true
+    },
+    {
+      "address": "203.0.114.0",
+      "blocked": false
+    },
+    {
+      "address": "223.255.255.255",
+      "blocked": false
+    },
+    {
+      "address": "224.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "239.255.255.255",
+      "blocked": true
+    },
+    {
+      "address": "240.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "255.255.255.255",
+      "blocked": true
+    },
+    {
+      "address": "255.255.255.254",
+      "blocked": true
+    },
+    {
+      "address": "::",
+      "blocked": true
+    },
+    {
+      "address": "::1",
+      "blocked": true
+    },
+    {
+      "address": "::2",
+      "blocked": false
+    },
+    {
+      "address": "::fffe:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "::ffff:0.0.0.0",
+      "blocked": true
+    },
+    {
+      "address": "::ffff:255.255.255.255",
+      "blocked": true
+    },
+    {
+      "address": "::1:0:0:0",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b::",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b::ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b::1:0:0",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b:0:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b:1::",
+      "blocked": true
+    },
+    {
+      "address": "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "64:ff9b:2::",
+      "blocked": false
+    },
+    {
+      "address": "ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "100::",
+      "blocked": true
+    },
+    {
+      "address": "100::ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "100:0:0:1::",
+      "blocked": false
+    },
+    {
+      "address": "2000:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2001::",
+      "blocked": true
+    },
+    {
+      "address": "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:200::",
+      "blocked": false
+    },
+    {
+      "address": "2001:0:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:1::",
+      "blocked": true
+    },
+    {
+      "address": "2001:1::1",
+      "blocked": false
+    },
+    {
+      "address": "2001:1::2",
+      "blocked": false
+    },
+    {
+      "address": "2001:1::3",
+      "blocked": true
+    },
+    {
+      "address": "2001:1:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:2::",
+      "blocked": true
+    },
+    {
+      "address": "2001:2:0:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:2:1::",
+      "blocked": true
+    },
+    {
+      "address": "2001:2:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:3::",
+      "blocked": false
+    },
+    {
+      "address": "2001:3:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2001:4::",
+      "blocked": true
+    },
+    {
+      "address": "2001:4:111:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:4:112::",
+      "blocked": false
+    },
+    {
+      "address": "2001:4:112:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2001:4:113::",
+      "blocked": true
+    },
+    {
+      "address": "2001:f:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:10::",
+      "blocked": true
+    },
+    {
+      "address": "2001:1f:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:20::",
+      "blocked": false
+    },
+    {
+      "address": "2001:2f:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2001:30::",
+      "blocked": false
+    },
+    {
+      "address": "2001:3f:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2001:40::",
+      "blocked": true
+    },
+    {
+      "address": "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2001:db8::",
+      "blocked": true
+    },
+    {
+      "address": "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2001:db9::",
+      "blocked": false
+    },
+    {
+      "address": "2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "2002::",
+      "blocked": true
+    },
+    {
+      "address": "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "2003::",
+      "blocked": false
+    },
+    {
+      "address": "3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "3fff::",
+      "blocked": true
+    },
+    {
+      "address": "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "3fff:1000::",
+      "blocked": false
+    },
+    {
+      "address": "5eff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "5f00::",
+      "blocked": false
+    },
+    {
+      "address": "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "5f01::",
+      "blocked": false
+    },
+    {
+      "address": "fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "fc00::",
+      "blocked": true
+    },
+    {
+      "address": "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "fe00::",
+      "blocked": false
+    },
+    {
+      "address": "fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "fe80::",
+      "blocked": true
+    },
+    {
+      "address": "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "fec0::",
+      "blocked": false
+    },
+    {
+      "address": "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": false
+    },
+    {
+      "address": "ff00::",
+      "blocked": true
+    },
+    {
+      "address": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "blocked": true
+    },
+    {
+      "address": "8.8.8.8",
+      "blocked": false
+    },
+    {
+      "address": "1.1.1.1",
+      "blocked": false
+    },
+    {
+      "address": "100.128.0.1",
+      "blocked": false
+    },
+    {
+      "address": "2606:4700::1111",
+      "blocked": false
+    },
+    {
+      "address": "2001:200::1",
+      "blocked": false
+    },
+    {
+      "address": "2001:4860:4860::8888",
+      "blocked": false
+    },
+    {
+      "address": "2002:c000:204::1",
+      "blocked": true
+    },
+    {
+      "address": "2002:0a00:1::",
+      "blocked": true
+    },
+    {
+      "address": "2002:808:808::1",
+      "blocked": true
+    },
+    {
+      "address": "::ffff:127.0.0.1",
+      "blocked": true
+    },
+    {
+      "address": "::ffff:168.63.129.16",
+      "blocked": true
+    },
+    {
+      "address": "::ffff:10.0.0.1",
+      "blocked": true
+    },
+    {
+      "address": "::ffff:8.8.8.8",
+      "blocked": false
+    },
+    {
+      "address": "::ffff:169.254.169.254",
+      "blocked": true
+    },
+    {
+      "address": "::127.0.0.1",
+      "blocked": false
+    },
+    {
+      "address": "::8.8.8.8",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b::808:808",
+      "blocked": false
+    },
+    {
+      "address": "64:ff9b::a00:1",
+      "blocked": false
+    }
+  ]
+}
