@@ -12,6 +12,8 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
 @pytest.mark.parametrize(
@@ -29,6 +31,44 @@ def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
         assert "thinking" in supported_openai_params
     else:
         assert "thinking" not in supported_openai_params
+
+
+@pytest.mark.parametrize(
+    ("stream", "operation"),
+    [(False, "rawPredict"), (True, "streamRawPredict")],
+)
+def test_vertex_anthropic_request_body_and_endpoint(stream: bool, operation: str) -> None:
+    headers: Final[dict[str, str]] = {}
+    body: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+        optional_params={"max_tokens": 100, "anthropic_version": "vertex-2023-10-16"},
+        litellm_params={},
+        headers=headers,
+    )
+    url: Final = VertexBase.create_vertex_url(
+        vertex_location="us-east5",
+        vertex_project="scripted-project",
+        partner=VertexPartnerProvider.claude,
+        stream=stream,
+        model="claude-sonnet-4",
+    )
+
+    assert body == {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello, can you tell me a short joke?"}],
+            }
+        ],
+        "max_tokens": 100,
+        "anthropic_version": "vertex-2023-10-16",
+    }
+    assert headers == {}
+    assert url == (
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/scripted-project/locations/us-east5/"
+        f"publishers/anthropic/models/claude-sonnet-4:{operation}"
+    )
 
 
 def test_get_supported_params_thinking():
