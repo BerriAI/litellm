@@ -12,6 +12,7 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
     resolve_served_model,
@@ -608,6 +609,21 @@ class TestTruncateFallbackErrorDetail:
         to stay small enough that a walk over many model groups cannot compound it into an
         output volume that starves the process."""
         assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000
+
+
+class TestFormatFallbackOutcomeMessage:
+    def test_a_short_model_group_is_named_in_full(self):
+        assert format_fallback_outcome_message("gpt-group", None, "") == (
+            "\n\nLiteLLM: model group 'gpt-group' failed with the error above. No fallback was attempted."
+        )
+
+    def test_a_megabyte_model_group_is_named_with_a_bounded_prefix(self):
+        model_group = "m" * 1_000_000
+
+        message = format_fallback_outcome_message(model_group, None, "")
+
+        assert len(message) < 3_000
+        assert f"model group '{truncate_fallback_error_detail(model_group)}' failed with the error above" in message
 
 
 class TestWarnOnProviderCredentialMismatch:

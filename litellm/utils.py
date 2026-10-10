@@ -5858,7 +5858,7 @@ def _get_model_info_from_generalization(
     )
     if any(get_model_cost_key(candidate) is not None for candidate in candidates):
         return None
-    for candidate in candidates:
+    for candidate in dict.fromkeys(candidates):
         generalized_info = match_capability_generalizations(candidate)
         if generalized_info is None:
             continue

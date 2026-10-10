@@ -7,13 +7,20 @@ from typing import Final
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 
 _SERVING_ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
+_SHOWN_NAME_CHARS: Final = 100
+
+
+def _shown_name(name: str) -> str:
+    if len(name) <= _SHOWN_NAME_CHARS:
+        return repr(name)
+    return f"{name[:_SHOWN_NAME_CHARS]!r}... ({len(name)} characters)"
 
 
 def validate_serving_endpoint_name(name: str) -> str:
     if _SERVING_ENDPOINT_NAME.fullmatch(name) is None:
         raise ValueError(
-            f"Databricks serving endpoint name {name!r} must be the bare endpoint name (letters, digits, '-', '_' "
-            "and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. databricks-openjev-qwen35-4b"
+            f"Databricks serving endpoint name {_shown_name(name)} must be the bare endpoint name (letters, digits, "
+            "'-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. databricks-openjev-qwen35-4b"
         )
     return name
 
