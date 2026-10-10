@@ -575,7 +575,10 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
             elif (
                 fallback_key == prefixed_model_group
                 or _check_stripped_model_group(model_group=model_group, fallback_key=fallback_key)
-                or _matches_wildcard_fallback_key(model_group=model_group, fallback_key=fallback_key)
+                or (
+                    isinstance(fallback_key, str)
+                    and _matches_wildcard_fallback_key(model_group=model_group, fallback_key=fallback_key)
+                )
             ):
                 stripped_model_fallback = item[fallback_key]
             elif fallback_key == "*":  # check generic fallback

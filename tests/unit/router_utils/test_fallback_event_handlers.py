@@ -1507,6 +1507,7 @@ def test_router_falls_back_from_provider_wildcard_key():
 
     response = router.completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "hi"}])
 
+    assert isinstance(response, litellm.ModelResponse)
     assert response.choices[0].message.content == "hi"
 
 
