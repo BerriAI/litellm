@@ -2187,7 +2187,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <div className="space-y-4">
               <div>
                 <p className="font-medium">Team Name</p>
-                <div>{info.team_alias}</div>
+                <div className="truncate" title={info.team_alias}>
+                  {info.team_alias}
+                </div>
               </div>
               <div>
                 <p className="font-medium">Team ID</p>
@@ -2415,12 +2417,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
-        <div>
+        <div className="min-w-0">
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeftIcon className="h-4 w-4" />
             Back to Teams
           </Button>
-          <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
+          <h1 className="truncate text-2xl font-semibold" title={info.team_alias}>
+            {info.team_alias}
+          </h1>
           <div className="flex items-center">
             <p className="text-sm text-muted-foreground font-mono">{info.team_id}</p>
             <Button
