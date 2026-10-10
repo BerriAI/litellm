@@ -20,7 +20,8 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+    from litellm.models.skills import LiteLLM_SkillsTable
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 

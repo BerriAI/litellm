@@ -11,15 +11,15 @@ import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
 import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { makeSystemOneRequest } from "../../llm_calls/system_one";
-import { PLACEHOLDER_DECISION_MODEL, SYSTEM_ONE_EXAMPLE, decisionsExample } from "./lib/example";
+import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
+import { decisionsExample, openAIDecisionsExample } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
-import type { DecisionEndpoint, PlaygroundRequest } from "./lib/schemas";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
 import ResponseView from "./ResponseView";
 import SystemOneForm from "./SystemOneForm";
-import { validateSystemOnePayload } from "./lib/validatePayload";
+import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
+import { validateSystemOnePayload, validateOpenAIDecisionsPayload } from "./lib/validatePayload";
 import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
 
 interface SystemOneUIProps {
@@ -30,13 +30,11 @@ interface SystemOneUIProps {
 type EditorView = "form" | "json";
 
 interface SystemOneSendVariables {
-  payload: PlaygroundRequest;
-  endpoint: DecisionEndpoint;
+  request: PlaygroundDecisionRequest;
   apiKey: string;
   signal: AbortSignal;
 }
 
-const EXAMPLE_PAYLOAD = JSON.stringify(SYSTEM_ONE_EXAMPLE, null, 2);
 const DECISION_MODELS_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/44231";
 
 function getCustomProxyBaseUrl(): string | undefined {
@@ -52,23 +50,26 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     effectiveApiKey,
     getCustomProxyBaseUrl(),
   );
-  const [chosenEndpoint, setChosenEndpoint] = useState<DecisionEndpoint | null>(null);
-  const endpoint: DecisionEndpoint =
-    chosenEndpoint ?? (decisionModels.length > 0 ? "/v1/systemone" : "/typesafe/v1/systemone");
-  const [drafts, setDrafts] = useState<Partial<Record<DecisionEndpoint, string>>>({});
+  const [endpoint, setEndpoint] = useState<PlaygroundDecisionRequest["endpoint"]>("/v1/systemone");
+  const [drafts, setDrafts] = useState<Partial<Record<PlaygroundDecisionRequest["endpoint"], string>>>({});
   const [view, setView] = useState<EditorView>("form");
-  const examplePayload =
-    endpoint === "/v1/systemone"
-      ? JSON.stringify(decisionsExample(decisionModels[0] ?? PLACEHOLDER_DECISION_MODEL), null, 2)
-      : EXAMPLE_PAYLOAD;
+  const example = endpoint === "/v1/decisions" ? openAIDecisionsExample : decisionsExample;
+  const examplePayload = JSON.stringify(example(decisionModels[0]), null, 2);
   const rawPayload = drafts[endpoint] ?? examplePayload;
   const activeController = useRef<AbortController | null>(null);
-  const validation = useMemo(() => validateSystemOnePayload(rawPayload, endpoint), [rawPayload, endpoint]);
+  const validated = useMemo(
+    () =>
+      endpoint === "/v1/decisions"
+        ? ({ endpoint, validation: validateOpenAIDecisionsPayload(rawPayload) } as const)
+        : ({ endpoint, validation: validateSystemOnePayload(rawPayload, endpoint) } as const),
+    [rawPayload, endpoint],
+  );
+  const validation = validated.validation;
   const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
 
   const systemOne = useMutation({
-    mutationFn: ({ payload, apiKey, signal, endpoint }: SystemOneSendVariables) =>
-      makeSystemOneRequest(payload, apiKey, getCustomProxyBaseUrl(), { signal, endpoint }),
+    mutationFn: ({ request, apiKey, signal }: SystemOneSendVariables) =>
+      makePlaygroundDecisionRequest(request, apiKey, getCustomProxyBaseUrl(), { signal }),
   });
   const isLoading = systemOne.isPending;
   const { reset: resetSystemOne } = systemOne;
@@ -90,14 +91,12 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   function handlePayloadChange(value: string) {
     if (value !== rawPayload) {
       clearRequestState();
-      setChosenEndpoint(endpoint);
       setDrafts((current) => ({ ...current, [endpoint]: value }));
     }
   }
 
   function handleResetExample() {
     clearRequestState();
-    setChosenEndpoint(endpoint);
     setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== endpoint)));
   }
 
@@ -115,14 +114,18 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   }
 
   function handleSend() {
-    if (!validation.payload || !effectiveApiKey) {
+    const request: PlaygroundDecisionRequest | undefined =
+      validated.endpoint === "/v1/decisions"
+        ? validated.validation.payload && { endpoint: validated.endpoint, payload: validated.validation.payload }
+        : validated.validation.payload && { endpoint: validated.endpoint, payload: validated.validation.payload };
+    if (!request || !effectiveApiKey) {
       return;
     }
     clearRequestState();
-    setChosenEndpoint(endpoint);
+    setDrafts((current) => ({ ...current, [endpoint]: rawPayload }));
     const controller = new AbortController();
     activeController.current = controller;
-    const variables = { payload: validation.payload, apiKey: effectiveApiKey, signal: controller.signal, endpoint };
+    const variables = { request, apiKey: effectiveApiKey, signal: controller.signal };
     systemOne.mutate(variables);
   }
 
@@ -134,43 +137,37 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <Select
             value={endpoint}
             onValueChange={(value) => {
-              if (value === "/v1/systemone" || value === "/typesafe/v1/systemone") {
+              if (value === "/v1/decisions" || value === "/v1/systemone") {
                 clearRequestState();
-                setChosenEndpoint(value);
+                setEndpoint(value);
               }
             }}
           >
             <SelectTrigger className="w-80" aria-label="Decision endpoint">
-              <SelectValue>
-                {endpoint === "/v1/systemone" ? "System One · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
-              </SelectValue>
+              <SelectValue>{endpoint}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="/v1/systemone">System One · /v1/systemone</SelectItem>
-              <SelectItem value="/typesafe/v1/systemone">TypeSafe · /typesafe/v1/systemone</SelectItem>
+              <SelectItem value="/v1/decisions">/v1/decisions</SelectItem>
+              <SelectItem value="/v1/systemone">/v1/systemone</SelectItem>
             </SelectContent>
           </Select>
-          {endpoint === "/v1/systemone" && (
-            <>
-              <span className="ml-2 text-sm font-medium text-muted-foreground">Model</span>
-              <div className="w-80">
-                <SearchSelect
-                  aria-label="Decision model"
-                  options={decisionModels.map((model) => ({ label: model, value: model }))}
-                  value={payloadModel(rawPayload) ?? null}
-                  onValueChange={handleModelPick}
-                  placeholder={decisionModels.length > 0 ? "Pick a decision model" : "No decision models yet"}
-                  emptyText="No decision models found"
-                  disabled={hasSyntaxError}
-                  allowClear={false}
-                />
-              </div>
-              {decisionModelsLoaded && decisionModels.length === 0 && (
-                <a href={uiHref("models-and-endpoints")} className="text-sm text-primary underline">
-                  Add a decision model
-                </a>
-              )}
-            </>
+          <span className="ml-2 text-sm font-medium text-muted-foreground">Model</span>
+          <div className="w-80">
+            <SearchSelect
+              aria-label="Decision model"
+              options={decisionModels.map((model) => ({ label: model, value: model }))}
+              value={payloadModel(rawPayload) ?? null}
+              onValueChange={handleModelPick}
+              placeholder={decisionModels.length > 0 ? "Pick a decision model" : "No decision models yet"}
+              emptyText="No decision models found"
+              disabled={hasSyntaxError}
+              allowClear={false}
+            />
+          </div>
+          {decisionModelsLoaded && decisionModels.length === 0 && (
+            <a href={uiHref("models-and-endpoints")} className="text-sm text-primary underline">
+              Add a decision model
+            </a>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -230,13 +227,12 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         </div>
         <Alert role="note" aria-label="Decision endpoint notice">
           <Info />
-          <AlertTitle>
-            {endpoint === "/v1/systemone" ? "Decision models · System One" : "TypeSafe Jev · System One"}
-          </AlertTitle>
+          <AlertTitle>{endpoint}</AlertTitle>
           <AlertDescription>
-            {endpoint === "/v1/systemone"
-              ? "Sends choice, noul, and score questions through /v1/systemone to a decision model on your proxy. Pick one under Model, or omit model to use the proxy's configured default."
-              : "Sends requests through /typesafe/v1/systemone and requires TYPESAFE_API_KEY on the proxy."}{" "}
+            {endpoint === "/v1/decisions"
+              ? "Uses input and a questions array with predicate, choice, and score questions. Edit the form or JSON and inspect the response JSON in the OpenAI Decisions format."
+              : "Uses state and a questions object with noul, choice, and score questions in the System One format."}{" "}
+            Pick a decision model under Model, or omit model to use the proxy&apos;s configured default.{" "}
             <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
               How to call /v1/decisions and /v1/systemone
             </a>
@@ -249,7 +245,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       </section>
 
       <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="System One request editor">
+        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="Decisions request editor">
           <Tabs
             value={view}
             onValueChange={(value) => (value === "form" || value === "json") && setView(value)}
@@ -260,27 +256,45 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               <TabsTrigger value="json">JSON</TabsTrigger>
             </TabsList>
             <TabsContent value="form" className="flex min-h-0 flex-col">
-              <SystemOneForm
+              {validated.endpoint === "/v1/decisions" ? (
+                <OpenAIDecisionsForm
+                  value={rawPayload}
+                  onChange={handlePayloadChange}
+                  validation={validated.validation}
+                  onOpenJson={() => setView("json")}
+                />
+              ) : (
+                <SystemOneForm
+                  value={rawPayload}
+                  onChange={handlePayloadChange}
+                  validation={validated.validation}
+                  onOpenJson={() => setView("json")}
+                />
+              )}
+            </TabsContent>
+            <TabsContent value="json" className="flex min-h-0 flex-col">
+              <JsonEditor
                 value={rawPayload}
                 onChange={handlePayloadChange}
                 validation={validation}
-                onOpenJson={() => setView("json")}
+                label={endpoint === "/v1/decisions" ? "Decisions JSON payload" : "System One JSON payload"}
+                placeholder={`Paste or write a ${endpoint} request`}
               />
-            </TabsContent>
-            <TabsContent value="json" className="flex min-h-0 flex-col">
-              <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
             </TabsContent>
           </Tabs>
         </section>
-        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="System One results">
+        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
           <ResponseView
             response={systemOne.data?.response}
+            view={view}
             fallbackModel={validation.payload?.model}
             latencyMs={systemOne.data?.latencyMs}
             error={systemOne.error?.message}
             isLoading={isLoading}
           />
-          <QuestionBreakdown payload={validation.payload} />
+          {view === "form" && validated.endpoint === "/v1/systemone" && (
+            <QuestionBreakdown payload={validated.validation.payload} />
+          )}
         </section>
       </div>
     </div>

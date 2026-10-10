@@ -387,6 +387,8 @@ BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
 BEDROCK_REALTIME_SDK_SUPPORTED_RANGE: Final = ">=0.10.0,<0.12.0"
 CLIENT_REQUESTED_MODEL_SCOPE_KEY: Final = "litellm.client_requested_model"
 MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolved"
+MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
+MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
@@ -2215,6 +2217,8 @@ USAGE_TOP_API_KEYS_DEFAULT: Final[int] = 100
 USAGE_TOP_API_KEYS_MAX: Final[int] = 1000
 USAGE_KEY_PAGE_DEFAULT: Final[int] = 50
 USAGE_KEY_PAGE_MAX: Final[int] = 100
+USAGE_USER_PAGE_DEFAULT: Final[int] = 50
+USAGE_USER_PAGE_MAX: Final[int] = 100
 USAGE_KEY_SEARCH_DEFAULT: Final[int] = 100
 USAGE_KEY_SEARCH_MAX: Final[int] = 100
 USAGE_MODEL_TOP_KEYS_DEFAULT: Final[int] = 5
