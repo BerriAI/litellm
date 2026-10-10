@@ -6186,3 +6186,70 @@ def test_azure_embedding_exceptions():
             mock_response="error",
         )
     assert str(exc_info.value) == "Mock error"
+
+
+def test_completion_marks_usage_missing_when_provider_omits_usage():
+    # Regression test for #45586: a usage-less provider response must be
+    # distinguishable from a real 0-token one.
+    api_base: Final = "http://localhost:12347/v1"
+    response_body: Final = {
+        "id": "chatcmpl-missing-usage",
+        "created": 1784657740,
+        "model": "gpt-5.6",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+            }
+        ],
+    }
+    with respx.mock(assert_all_called=False) as router:
+        mock_route: Final = router.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+            return_value=httpx.Response(status_code=200, json=response_body)
+        )
+        response: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+        )
+    assert mock_route.called
+    assert response.hidden_params["usage_missing"] is True
+    # the zero-filled default stays intact for downstream consumers
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.completion_tokens == 0
+
+
+def test_completion_real_zero_usage_is_not_marked_missing():
+    api_base: Final = "http://localhost:12348/v1"
+    response_body: Final = {
+        "id": "chatcmpl-zero-usage",
+        "created": 1784657740,
+        "model": "gpt-5.6",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+            }
+        ],
+        "usage": {"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0},
+    }
+    with respx.mock(assert_all_called=False) as router:
+        mock_route: Final = router.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+            return_value=httpx.Response(status_code=200, json=response_body)
+        )
+        response: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+        )
+    assert mock_route.called
+    assert "usage_missing" not in response.hidden_params
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.completion_tokens == 0
+    assert response.usage.total_tokens == 0
