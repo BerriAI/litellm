@@ -1533,6 +1533,8 @@ async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(
 async def test_non_stream_auto_execute_bills_nothing_for_rounds_served_from_the_response_cache(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
+    """A cached final round hands back the id of the turn that cached it, so that turn's row is logged under a
+    unique id prefixed by the client's, and as a cache hit only when no round was paid."""
     monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
     provider: Final = _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY, _ROUND_TWO_BODY))
     warm: Final = _RoundRecorder()
@@ -1556,7 +1558,7 @@ async def test_non_stream_auto_execute_bills_nothing_for_rounds_served_from_the_
     assert provider.call_count == 3
     for logged, client in ((first_cached.logged, first_cached_response), (all_cached.logged, all_cached_response)):
         assert len(logged) == 1
-        assert logged[0]["id"] == client.id
+        assert logged[0]["id"].startswith(client.id)
         assert _output_types(logged[0]["response"]["output"]) == _output_types(client.output)
         assert "function_call" not in _output_types(client.output)
         assert (logged[0]["prompt_tokens"], logged[0]["completion_tokens"]) == (71 + 149, 19 + 5)
@@ -1565,3 +1567,7 @@ async def test_non_stream_auto_execute_bills_nothing_for_rounds_served_from_the_
     assert first_cached_response.hidden_params["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
     assert all_cached.logged[0]["response_cost"] == 0.0
     assert all_cached_response.hidden_params["response_cost"] == 0.0
+    assert first_cached.logged[0]["id"] == first_cached_response.id
+    assert first_cached.logged[0]["cache_hit"] is None
+    assert all_cached.logged[0]["id"].startswith(f"{all_cached_response.id}_cache_hit")
+    assert all_cached.logged[0]["cache_hit"] is True

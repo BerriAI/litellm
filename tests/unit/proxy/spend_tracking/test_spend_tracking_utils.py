@@ -4026,6 +4026,36 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
     assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
 
 
+@pytest.mark.parametrize("cached", [True, False])
+def test_get_logging_payload_gives_a_response_served_from_the_cache_a_unique_request_id(cached: bool):
+    """A parent call that returns an internal sub-call's cached response reuses the cached response's id,
+    and SpendLogs skips a duplicate request_id, so the row would be dropped unless its id is made unique."""
+    from litellm.litellm_core_utils.hidden_params import set_hidden_params
+
+    response_obj: Final = litellm.ModelResponse(
+        id="chatcmpl-cached-src",
+        model="gpt-5.6",
+        usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    set_hidden_params(response_obj, {"cache_hit": True, "response_cost": 0.0} if cached else {})
+    now: Final = datetime.datetime.now(timezone.utc)
+
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "openai/gpt-5.6",
+            "call_type": "aresponses",
+            "litellm_call_id": "parent-call-id",
+            "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+        },
+        response_obj=response_obj,
+        start_time=now,
+        end_time=now,
+    )
+
+    assert payload["request_id"].startswith("chatcmpl-cached-src_cache_hit") is cached
+    assert (payload["request_id"] == "chatcmpl-cached-src") is not cached
+
+
 class TestSpendLogKeyRedaction:
     """Regression: plaintext API keys with Bearer prefix were stored in
     SpendLogs for failed requests (LIT-4121)"""

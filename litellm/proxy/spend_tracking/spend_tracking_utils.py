@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
@@ -517,6 +518,7 @@ def get_logging_payload(
         kwargs = {}
 
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
+    response_served_from_cache: Final = served_from_cache(response_obj)
     if response_obj is None:
         response_obj = {}
     elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
@@ -777,7 +779,7 @@ def get_logging_payload(
         cache_key = litellm_params["preset_cache_key"]
     else:
         cache_key = litellm.cache.get_cache_key(**kwargs)
-    if cache_hit is True:
+    if cache_hit is True or response_served_from_cache:
         import time
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id

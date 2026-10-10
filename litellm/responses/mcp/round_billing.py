@@ -4,6 +4,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown
 
@@ -43,10 +44,6 @@ def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage |
     return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
 
 
-def _served_from_cache(response: ResponsesAPIResponse) -> bool:
-    return response.hidden_params.get("cache_hit") is True
-
-
 def summed_cost_breakdown(
     first: ResponsesAPIResponse,
     first_breakdown: CostBreakdown | None,
@@ -57,9 +54,9 @@ def summed_cost_breakdown(
     kept the first round's, since a partial one would disagree with the billed cost."""
     if first_breakdown is final_breakdown:
         return None
-    if _served_from_cache(first):
-        return None if _served_from_cache(final) else final_breakdown
-    if _served_from_cache(final):
+    if served_from_cache(first):
+        return None if served_from_cache(final) else final_breakdown
+    if served_from_cache(final):
         return first_breakdown
     if first_breakdown is None or final_breakdown is None:
         return None
