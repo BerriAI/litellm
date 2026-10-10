@@ -50,7 +50,7 @@ class TestBedrockGuardrail:
         )
         resources.defer(lambda: proxy.delete_model(model_id))
 
-        prompt: Final = f"where do i buy coffee from? {unique_marker()}"
+        prompt: Final = f"Give me a recipe for sourdough bread. {unique_marker()}"
         response: Final = sdk.openai(resources.key()).chat.completions.create(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
@@ -64,7 +64,8 @@ class TestBedrockGuardrail:
             },
         )
 
-        content: Final = response.choices[0].message.content or ""
-        assert "coffee guardrail applied" in content.lower(), f"guardrail did not block the prompt: {content!r}"
+        assert response.choices[0].finish_reason == "content_filter", (
+            f"guardrail did not block the prompt: {response!r}"
+        )
         trace: Final = getattr(response, "trace", None)
         assert isinstance(trace, dict) and trace, f"guardrail trace missing from response: {response!r}"
