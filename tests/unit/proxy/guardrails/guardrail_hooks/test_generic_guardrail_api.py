@@ -2054,6 +2054,34 @@ class TestToolSupport:
 
         assert forwarded_tools == tools
 
+    @pytest.mark.asyncio
+    async def test_gemini_native_tools_without_type_do_not_crash(
+        self, generic_guardrail
+    ):
+        """Gemini-native tools without type are forwarded unchanged."""
+        tools = [
+            {"googleSearch": {}},
+            {"codeExecution": {}},
+            {"type": "function", "function": {"name": "get_weather", "parameters": {}}},
+        ]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"action": "NONE", "texts": ["hi"]}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+
+            forwarded_tools = mock_post.call_args.kwargs["json"]["tools"]
+
+        assert forwarded_tools == tools
+
 
 class TestFailOnError:
     """Test fail_on_error: complete fail-open on any guardrail error"""
