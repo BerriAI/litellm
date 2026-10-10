@@ -21248,3 +21248,33 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
         "guardrail": "bedrock",
         "aws_secret_access_key": "aws-secret",
     }
+
+
+@pytest.mark.parametrize("tiers", (None, (), ("default", "priority")))
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest, RegenerateKeyRequest))
+def test_only_proxy_admin_can_set_or_clear_key_service_tiers(
+    tiers: tuple[str, ...] | None,
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest] | type[RegenerateKeyRequest],
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import check_permissions_caller_permission
+
+    request: Final = request_type(key="test-key", allowed_service_tiers=tiers)
+    with pytest.raises(HTTPException) as error:
+        check_permissions_caller_permission(request, UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert error.value.status_code == 403
+    assert "allowed_service_tiers" in str(error.value.detail)
+    check_permissions_caller_permission(request, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tiers", (None, (), ("default", "priority")))
+async def test_key_service_tier_update_round_trips_and_omission_preserves_existing_policy(
+    tiers: tuple[str, ...] | None,
+) -> None:
+    existing: Final = LiteLLM_VerificationToken(token="test-key", allowed_service_tiers=("default",))
+    requested: Final = UpdateKeyRequest(key="test-key", allowed_service_tiers=tiers)
+    update: Final = await prepare_key_update_data(requested, existing)
+    assert json.loads(update["allowed_service_tiers"]) == (list(tiers) if tiers is not None else None)
+    assert _effective_key_after_update(existing, update).allowed_service_tiers == tiers
+    omitted: Final = await prepare_key_update_data(UpdateKeyRequest(key="test-key", key_alias="renamed"), existing)
+    assert _effective_key_after_update(existing, omitted).allowed_service_tiers == ("default",)

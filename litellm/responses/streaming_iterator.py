@@ -23,7 +23,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError, RateLimitError
+from litellm.exceptions import MidStreamFallbackError, PermissionDeniedError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_b
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
+from litellm.litellm_core_utils.service_tier_policy import apply_service_tier_policy, service_tier_policy
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -2131,12 +2132,11 @@ class ResponsesWebSocketStreaming:
         return modified
 
     def _with_request_defaults(self, msg_obj: dict[str, object]) -> dict[str, object]:
-        if self.request_defaults is None:
-            return msg_obj
         nested: Final = msg_obj.get("response")
-        if _is_json_object(nested):
-            return {**msg_obj, "response": self.request_defaults.merged_into(nested)}
-        return {**self.request_defaults.merged_into(msg_obj), "type": msg_obj["type"]}
+        request: Final = nested if _is_json_object(nested) else msg_obj
+        merged: Final = self.request_defaults.merged_into(request) if self.request_defaults is not None else request
+        permitted: Final = apply_service_tier_policy(merged, service_tier_policy(self.request_data))
+        return {**msg_obj, "response": permitted} if _is_json_object(nested) else {**permitted, "type": msg_obj["type"]}
 
     async def _mask_response_create(self, message: str) -> str:
         """
@@ -2459,6 +2459,10 @@ class ResponsesWebSocketStreaming:
                 self._store_event(masked)
                 await self.backend_ws.send(masked)
 
+        except PermissionDeniedError as e:
+            await self.websocket.send_text(
+                json.dumps({"type": "error", "status": 403, "error": {"type": "permission_denied", "message": str(e)}})
+            )
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
 

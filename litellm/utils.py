@@ -1488,6 +1488,18 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
             if result is not None:
                 modified_kwargs = result
 
+    if typed_call_type in (CallTypes.acompletion, CallTypes.aresponses, CallTypes.responses):
+        from litellm.litellm_core_utils.service_tier_policy import apply_service_tier_policy, service_tier_policy
+
+        policy_request: Final = TypeAdapter(dict[str, object]).validate_python(modified_kwargs)
+        return dict(
+            apply_service_tier_policy(
+                policy_request,
+                service_tier_policy(
+                    policy_request, "metadata" if typed_call_type == CallTypes.acompletion else "litellm_metadata"
+                ),
+            )
+        )
     return modified_kwargs
 
 
@@ -2141,7 +2153,10 @@ def client(original_function):
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    stream_messages: Final = TypeAdapter[Sequence[object] | None](
+                        Sequence[object] | None
+                    ).validate_python(kwargs.get("messages"))
+                    return litellm.stream_chunk_builder(chunks, messages=stream_messages)
                 else:
                     _update_response_metadata(
                         result=result,

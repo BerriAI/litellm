@@ -32008,6 +32008,11 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /**
+             * Allowed Service Tiers
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             */
+            allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /**
@@ -32178,6 +32183,11 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /**
+             * Allowed Service Tiers
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             */
+            allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
@@ -33649,6 +33659,8 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /** Allowed Service Tiers */
+            allowed_service_tiers?: string[] | null;
             /**
              * Auto Rotate
              * @default false
@@ -35408,6 +35420,8 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /** Allowed Service Tiers */
+            allowed_service_tiers?: string[] | null;
             /**
              * Auto Rotate
              * @default false
@@ -38633,6 +38647,11 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /**
+             * Allowed Service Tiers
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             */
+            allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
@@ -40990,6 +41009,11 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /**
+             * Allowed Service Tiers
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             */
+            allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /**
@@ -46912,6 +46936,11 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /**
+             * Allowed Service Tiers
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             */
+            allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Auto Rotate */
@@ -47979,6 +48008,8 @@ export interface components {
              * @default []
              */
             allowed_routes: unknown[] | null;
+            /** Allowed Service Tiers */
+            allowed_service_tiers?: string[] | null;
             /** Api Key */
             api_key?: string | null;
             /**

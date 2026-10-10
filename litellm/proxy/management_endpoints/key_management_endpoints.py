@@ -363,7 +363,7 @@ async def _enforce_custom_key_policy(
         )
 
 
-_KEY_UPDATE_JSON_STRING_COLUMNS: Final = frozenset({"router_settings", "budget_limits"})
+_KEY_UPDATE_JSON_STRING_COLUMNS: Final = frozenset({"router_settings", "budget_limits", "allowed_service_tiers"})
 
 _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
     (*LiteLLM_ManagementEndpoint_MetadataFields_Premium, *LiteLLM_ManagementEndpoint_MetadataFields)
@@ -1036,6 +1036,11 @@ def check_permissions_caller_permission(
     omits the field (default flows through) is distinct from one that
     sends any explicit value.
     """
+    if (
+        "allowed_service_tiers" in data.model_fields_set
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(status_code=403, detail="Only proxy admins can set allowed_service_tiers")
     permissions_in_request: Final = "permissions" in data.model_fields_set
     if not permissions_in_request and not data.permissions:
         return
@@ -1572,7 +1577,16 @@ async def _common_key_generation_helper(
                 prisma_client=prisma_client,
             )
 
-    response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key", llm_router=llm_router)
+    requested_service_tiers: Final = TypeAdapter[tuple[str, ...] | None](tuple[str, ...] | None).validate_python(
+        data_json.pop("allowed_service_tiers", None)
+    )
+    response = await generate_key_helper_fn(
+        request_type="key",
+        allowed_service_tiers=requested_service_tiers,
+        **data_json,
+        table_name="key",
+        llm_router=llm_router,
+    )
 
     response["soft_budget"] = data.soft_budget  # include the user-input soft budget in the response
 
@@ -2591,7 +2605,14 @@ async def prepare_key_update_data(
         data=data, non_default_values=non_default_values, existing_metadata=_metadata
     )
 
-    return non_default_values
+    return {
+        **non_default_values,
+        **(
+            {"allowed_service_tiers": safe_dumps(data.allowed_service_tiers)}
+            if "allowed_service_tiers" in data.model_fields_set
+            else {}
+        ),
+    }
 
 
 async def _handle_update_object_permission(
@@ -3545,7 +3566,7 @@ async def update_key_fn(
         # Handle rotation fields if auto_rotate is being enabled
         _set_key_rotation_fields(
             non_default_values,
-            non_default_values.get("auto_rotate", False),
+            non_default_values.get("auto_rotate", False) is True,
             non_default_values.get("rotation_interval"),
             existing_key_alias=existing_key_row.key_alias,
         )
@@ -4637,6 +4658,7 @@ async def generate_key_helper_fn(
     created_by: str | None = None,
     updated_by: str | None = None,
     allowed_routes: list | None = None,
+    allowed_service_tiers: tuple[str, ...] | None = None,
     key_type: str | None = None,
     sso_user_id: str | None = None,
     object_permission_id: str | None = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
@@ -4777,6 +4799,7 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "allowed_service_tiers": safe_dumps(allowed_service_tiers),
             "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
@@ -4796,7 +4819,7 @@ async def generate_key_helper_fn(
             pass
         else:
             key_data["key_name"] = abbreviate_api_key(api_key=token)
-        saved_token: Final = copy.deepcopy(key_data)
+        saved_token: Final = copy.deepcopy({**key_data, "allowed_service_tiers": allowed_service_tiers})
         if isinstance(saved_token["aliases"], str):
             saved_token["aliases"] = json.loads(saved_token["aliases"])
         if isinstance(saved_token["config"], str):
@@ -4891,7 +4914,7 @@ async def generate_key_helper_fn(
         # if this is a /user/new request update the key_date with user_data fields
         key_data.update(user_data)
 
-    return key_data
+    return {**key_data, "allowed_service_tiers": allowed_service_tiers}
 
 
 async def _team_key_deletion_check(
@@ -5172,6 +5195,7 @@ def _transform_verification_tokens_to_deleted_records(
             "model_max_budget",
             "budget_fallbacks",
             "router_settings",
+            "allowed_service_tiers",
         ]:
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])

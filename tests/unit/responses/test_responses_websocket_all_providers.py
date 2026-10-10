@@ -3339,3 +3339,58 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
 
         assert await handler.bidirectional_forward() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("tier_source", ("first_frame", "later_frame", "deployment", "override"))
+async def test_native_websocket_service_tier_policy_blocks_each_effective_frame(
+    nested: bool, tier_source: str
+) -> None:
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+    from litellm.types.responses.streaming_websocket import (
+        ResponsesBackendWebSocket,
+        ResponsesClientWebSocket,
+        ResponsesWebSocketRequestDefaults,
+    )
+
+    allowed: Final = {"model": "test-model", "input": "test", "service_tier": "default"}
+    denied: Final = {
+        "model": "test-model",
+        "input": "test",
+        **({"service_tier": "ultrafast"} if tier_source in ("first_frame", "later_frame") else {}),
+    }
+    allowed_frame: Final = {"type": "response.create", **({"response": allowed} if nested else allowed)}
+    denied_frame: Final = {"type": "response.create", **({"response": denied} if nested else denied)}
+    client: Final = AsyncMock(spec=ResponsesClientWebSocket)
+    backend: Final = AsyncMock(spec=ResponsesBackendWebSocket)
+    client.receive_text.side_effect = (json.dumps(denied_frame), RuntimeError("client closed"))
+    logger: Final = Logging(
+        model="test-model", messages=[], stream=True, call_type="aresponses",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc), litellm_call_id="tier-test", function_id="tier-test",
+    )
+    relay: Final = ResponsesWebSocketStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=logger,
+        request_data={"litellm_metadata": {"user_api_key_auth": UserAPIKeyAuth(allowed_service_tiers=("default",))}},
+        first_message=json.dumps(allowed_frame if tier_source == "later_frame" else denied_frame),
+        authorized_model="test-model",
+        request_defaults=ResponsesWebSocketRequestDefaults(
+            fill_missing={"service_tier": "ultrafast"} if tier_source == "deployment" else {},
+            overrides={"service_tier": "ultrafast"} if tier_source == "override" else {},
+        ),
+    )
+    await relay.client_to_backend()
+    assert backend.send.await_count == (1 if tier_source == "later_frame" else 0)
+    if tier_source == "later_frame":
+        assert json.loads(backend.send.call_args.args[0]) == allowed_frame
+    error: Final = json.loads(client.send_text.call_args.args[0])
+    assert error["status"] == 403
+    assert error["error"]["type"] == "permission_denied"
+    assert "service_tier=ultrafast" in error["error"]["message"]

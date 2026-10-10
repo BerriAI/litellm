@@ -614,7 +614,12 @@ async def new_user(
             teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
-        response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        requested_service_tiers: Final = TypeAdapter[tuple[str, ...] | None](tuple[str, ...] | None).validate_python(
+            data_json.pop("allowed_service_tiers", None)
+        )
+        response: Final = await generate_key_helper_fn(
+            request_type="user", allowed_service_tiers=requested_service_tiers, **data_json, llm_router=None
+        )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:
             forget_missing_user(created_user_id)

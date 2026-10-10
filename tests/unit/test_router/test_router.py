@@ -25121,3 +25121,104 @@ def test_reset_custom_routing_strategy():
     assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ("chat", "responses"))
+@pytest.mark.parametrize("tier_source", ("request", "deployment", "extra_body", "fallback"))
+async def test_key_service_tier_permission_blocks_upstream_attempts(
+    surface: str, tier_source: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/test-service-tier",
+                    "api_base": "https://tier-primary.example/v1",
+                    "api_key": "test-key",
+                    **({"service_tier": "ultrafast"} if tier_source == "deployment" else {}),
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/test-service-tier",
+                    "api_base": "https://tier-backup.example/v1",
+                    "api_key": "test-key",
+                    "extra_body": {"service_tier": "ultrafast"},
+                },
+            },
+        ],
+        num_retries=0,
+        fallbacks=[{"primary": ["backup"]}] if tier_source == "fallback" else [],
+    )
+    auth: Final = UserAPIKeyAuth(allowed_service_tiers=("default", "priority"))
+    request: Final = {
+        "model": "primary",
+        "litellm_metadata" if surface == "responses" else "metadata": {"user_api_key_auth": auth},
+        "metadata" if surface == "responses" else "litellm_metadata": {"user_api_key_auth": {"allowed_service_tiers": None}},
+        **({"service_tier": "ultrafast"} if tier_source == "request" else {}),
+        **({"extra_body": {"service_tier": "ultrafast"}} if tier_source == "extra_body" else {}),
+    }
+    endpoint: Final = "responses" if surface == "responses" else "chat/completions"
+    with respx.mock(assert_all_called=False) as upstream:
+        primary: Final = upstream.post(f"https://tier-primary.example/v1/{endpoint}").respond(
+            429, json={"error": {"message": "test overload", "type": "rate_limit_exceeded"}}
+        )
+        backup: Final = upstream.post(f"https://tier-backup.example/v1/{endpoint}").respond(500)
+        call: Final = (
+            router.aresponses(input="test", **request)
+            if surface == "responses"
+            else router.acompletion(messages=[{"role": "user", "content": "test"}], **request)
+        )
+        with pytest.raises(litellm.RateLimitError if tier_source == "fallback" else litellm.PermissionDeniedError) as error:
+            await call
+        assert error.value.status_code == (429 if tier_source == "fallback" else 403)
+        assert "service_tier=ultrafast" in str(error.value)
+        assert primary.call_count == (1 if tier_source == "fallback" else 0)
+        assert backup.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ("chat", "responses"))
+@pytest.mark.parametrize("allowed", (None, ("default",)))
+async def test_key_service_tier_permission_allows_standard_provider_calls(
+    surface: str, allowed: tuple[str, ...] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[{
+            "model_name": "standard",
+            "litellm_params": {
+                "model": "openai/test-service-tier", "api_base": "https://tier.example/v1", "api_key": "test-key",
+            },
+        }],
+        num_retries=0,
+    )
+    auth: Final = UserAPIKeyAuth(allowed_service_tiers=allowed)
+    with respx.mock(assert_all_called=True) as upstream:
+        endpoint: Final = "responses" if surface == "responses" else "chat/completions"
+        wire: Final = upstream.post(f"https://tier.example/v1/{endpoint}").respond(
+            200,
+            json={
+                "id": "resp_test", "object": "response", "created_at": 0, "status": "completed",
+                "model": "test-service-tier", "output": [], "error": None,
+                "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+            } if surface == "responses" else {
+                "id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": "test-service-tier",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+        if surface == "responses":
+            result: Final = await router.aresponses(model="standard", input="test", litellm_metadata={"user_api_key_auth": auth})
+            assert result.status == "completed"
+        else:
+            completion: Final = await router.acompletion(
+                model="standard", messages=[{"role": "user", "content": "test"}], metadata={"user_api_key_auth": auth},
+            )
+            assert isinstance(completion, litellm.ModelResponse)
+            assert completion.choices[0].message.content == "ok"
+        sent: Final = json.loads(wire.calls[0].request.content)
+        assert sent.get("service_tier") == ("default" if allowed is not None else None)

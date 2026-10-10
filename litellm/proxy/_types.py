@@ -1362,6 +1362,11 @@ class KeyRequestBase(GenerateRequestBase):
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
+    allowed_service_tiers: tuple[str, ...] | None = Field(
+        default=None,
+        description="Allowed service tiers for Chat Completions and Responses, including WebSockets. "
+        "Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.",
+    )
     allowed_passthrough_routes: list | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None

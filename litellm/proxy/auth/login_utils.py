@@ -339,6 +339,7 @@ async def _sign_in(
             response = await generate_key_helper_fn(
                 llm_router=None,
                 request_type="key",
+                allowed_service_tiers=None,
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
                     "duration": LITELLM_UI_SESSION_DURATION,
