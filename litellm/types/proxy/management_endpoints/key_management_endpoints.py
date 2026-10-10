@@ -5,14 +5,14 @@ from pydantic import ConfigDict, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.verification_token import LiteLLM_VerificationToken
-from litellm.proxy._types import (
+from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from litellm.types.proxy.management_endpoints.key_requests import (
     GenerateKeyRequest,
-    LiteLLM_ObjectPermissionBase,
     RegenerateKeyRequest,
     UpdateKeyRequest,
 )
-from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
-from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from litellm.types.proxy.management_endpoints.request_base import LiteLLM_ObjectPermissionBase
 
 
 class KeyTokenWhere(TypedDict):
