@@ -122,7 +122,10 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     expect(await screen.findByLabelText("Upstream API Base")).toHaveValue("");
     fill("Credential Name:", "anthropic-key");
     await user.click(screen.getByRole("button", { name: "Add Credential" }));
-    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "anthropic-key", custom_llm_provider: "Anthropic" }, []);
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "anthropic-key", custom_llm_provider: "Anthropic", credential_values: {} },
+      [],
+    );
   });
 
   it("creates a federated credential from the federation fields and never sends an API key", async () => {
@@ -143,9 +146,11 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     const expectedPayload = {
       credential_name: "anthropic-federated",
       custom_llm_provider: "Anthropic",
-      anthropic_federation_rule_id: "fdrl_new",
-      anthropic_organization_id: "org-new",
-      anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+      credential_values: {
+        anthropic_federation_rule_id: "fdrl_new",
+        anthropic_organization_id: "org-new",
+        anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+      },
     };
     expect(onSubmit).toHaveBeenCalledWith(expectedPayload, []);
   });
@@ -168,8 +173,10 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
 
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
-        anthropic_identity_source: "keycloak",
-        anthropic_keycloak_client_secret_ref: "os.environ/KEYCLOAK_CLIENT_SECRET",
+        credential_values: expect.objectContaining({
+          anthropic_identity_source: "keycloak",
+          anthropic_keycloak_client_secret_ref: "os.environ/KEYCLOAK_CLIENT_SECRET",
+        }),
       }),
       [],
     );
@@ -203,7 +210,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "anthropic-federated", custom_llm_provider: "anthropic" },
+      { credential_name: "anthropic-federated", custom_llm_provider: "anthropic", credential_values: {} },
       [],
     );
   });
@@ -220,7 +227,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       {
         credential_name: "anthropic-federated",
         custom_llm_provider: "anthropic",
-        anthropic_organization_id: "org-edited",
+        credential_values: { anthropic_organization_id: "org-edited" },
       },
       [],
     );
@@ -240,7 +247,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     expect(values).toEqual({
       credential_name: "anthropic-federated",
       custom_llm_provider: "anthropic",
-      api_key: "sk-ant-replacement",
+      credential_values: { api_key: "sk-ant-replacement" },
     });
     expect([...valuesToDelete].sort()).toEqual(Object.keys(federatedCredential.credential_values).sort());
   });
@@ -262,9 +269,11 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     const expectedValues = {
       credential_name: "azure-prod",
       custom_llm_provider: "Anthropic",
-      anthropic_federation_rule_id: "fdrl_new",
-      anthropic_organization_id: "org-new",
-      anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+      credential_values: {
+        anthropic_federation_rule_id: "fdrl_new",
+        anthropic_organization_id: "org-new",
+        anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+      },
     };
     expect(values).toEqual(expectedValues);
     expect([...valuesToDelete].sort()).toEqual(["api_base", "api_key", "api_version"]);
@@ -281,7 +290,10 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
 
     expect(await screen.findByLabelText("Azure API Base")).toHaveValue("https://corp.openai.azure.com");
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
-    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "azure-prod", custom_llm_provider: "Azure" }, []);
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "azure-prod", custom_llm_provider: "Azure", credential_values: {} },
+      [],
+    );
   });
 
   it("deletes the stored base URL when the admin clears it on a federated credential", async () => {
@@ -297,7 +309,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "anthropic-federated", custom_llm_provider: "anthropic" },
+      { credential_name: "anthropic-federated", custom_llm_provider: "anthropic", credential_values: {} },
       ["api_base"],
     );
   });
@@ -313,7 +325,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
     const [values, valuesToDelete] = onSubmit.mock.calls[0];
-    expect(values).toMatchObject({ custom_llm_provider: "OpenAI", api_key: "sk-openai-new" });
+    expect(values).toMatchObject({ custom_llm_provider: "OpenAI", credential_values: { api_key: "sk-openai-new" } });
     expect([...valuesToDelete].sort()).toEqual(Object.keys(federatedCredential.credential_values).sort());
   });
 
@@ -328,7 +340,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "anthropic-key-and-federation", custom_llm_provider: "anthropic" },
+      { credential_name: "anthropic-key-and-federation", custom_llm_provider: "anthropic", credential_values: {} },
       ["api_key"],
     );
   });
@@ -382,7 +394,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       {
         credential_name: "anthropic-unknown-source",
         custom_llm_provider: "anthropic",
-        anthropic_organization_id: "org-edited",
+        credential_values: { anthropic_organization_id: "org-edited" },
       },
       [],
     );
@@ -397,7 +409,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "anthropic-unknown-source", custom_llm_provider: "anthropic" },
+      { credential_name: "anthropic-unknown-source", custom_llm_provider: "anthropic", credential_values: {} },
       ["anthropic_identity_source"],
     );
   });
@@ -418,7 +430,11 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     await user.click(screen.getByRole("button", { name: "Add Credential" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "anthropic-env", custom_llm_provider: "Anthropic", anthropic_organization_id: "org-new" },
+      {
+        credential_name: "anthropic-env",
+        custom_llm_provider: "Anthropic",
+        credential_values: { anthropic_organization_id: "org-new" },
+      },
       [],
     );
   });
@@ -436,7 +452,7 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       {
         credential_name: "anthropic-env-ids",
         custom_llm_provider: "Anthropic",
-        anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+        credential_values: { anthropic_identity_token_file: "/var/run/secrets/anthropic/token" },
       },
       [],
     );
@@ -474,9 +490,11 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
     const expectedPayload = {
       credential_name: "openai-federated",
       custom_llm_provider: "OpenAI",
-      openai_identity_provider_id: "idp_new",
-      openai_service_account_id: "svc_new",
-      openai_identity_token_file: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      credential_values: {
+        openai_identity_provider_id: "idp_new",
+        openai_service_account_id: "svc_new",
+        openai_identity_token_file: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      },
     };
     expect(onSubmit).toHaveBeenCalledWith(expectedPayload, []);
   });
@@ -493,7 +511,10 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
 
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
-    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "openai-federated", custom_llm_provider: "openai" }, []);
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "openai-federated", custom_llm_provider: "openai", credential_values: {} },
+      [],
+    );
   });
 
   it("refuses a base URL the proxy would not federate with, and drops that check once the admin picks an API key", async () => {
@@ -518,8 +539,7 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
     const expectedPayload = {
       credential_name: "openai-gateway",
       custom_llm_provider: "OpenAI",
-      api_base: "https://gateway.example.com/v1",
-      api_key: "sk-proj-new",
+      credential_values: { api_base: "https://gateway.example.com/v1", api_key: "sk-proj-new" },
     };
     expect(onSubmit).toHaveBeenCalledWith(expectedPayload, []);
   });
@@ -537,7 +557,10 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
 
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
-    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "openai-federated", custom_llm_provider: "openai" }, []);
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "openai-federated", custom_llm_provider: "openai", credential_values: {} },
+      [],
+    );
   });
 
   it("deletes the stored OpenAI federation values when the admin switches the credential to an API key", async () => {
@@ -554,7 +577,7 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
     expect(values).toEqual({
       credential_name: "openai-federated",
       custom_llm_provider: "openai",
-      api_key: "sk-proj-replacement",
+      credential_values: { api_key: "sk-proj-replacement" },
     });
     expect([...valuesToDelete].sort()).toEqual([
       "openai_identity_provider_id",
@@ -577,7 +600,53 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
     );
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
     expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "anthropic-federated", custom_llm_provider: "Anthropic" },
+      { credential_name: "anthropic-federated", custom_llm_provider: "Anthropic", credential_values: {} },
+      [],
+    );
+  });
+});
+
+describe("CredentialModal display name wiring", () => {
+  it("submits the typed label alongside the credential name and stored values", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: Providers.OpenAI });
+    await screen.findByLabelText("OpenAI API Key");
+    fill("Credential Name:", "openai-prod");
+    fill("Display Name:", "Prod OpenAI");
+    fill("OpenAI API Key", "sk-new");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential_name: "openai-prod",
+        display_name: "Prod OpenAI",
+        credential_values: expect.objectContaining({ api_key: "sk-new" }),
+      }),
+      [],
+    );
+  });
+
+  it("edits the opened credential even when its stored values reuse the top-level keys", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({
+      mode: "edit",
+      existingCredential: {
+        credential_name: "legacy-a",
+        display_name: "Legacy A",
+        credential_values: { api_key: "sk-a****", credential_name: "other-credential", display_name: "Inner label" },
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    });
+    await screen.findByLabelText("OpenAI API Key");
+
+    expect(screen.getByLabelText("Credential Name:")).toHaveValue("legacy-a");
+    expect(screen.getByLabelText("Credential Name:")).toBeDisabled();
+    expect(screen.getByLabelText("Display Name:")).toHaveValue("Legacy A");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "legacy-a", custom_llm_provider: "openai", credential_values: {} },
       [],
     );
   });
