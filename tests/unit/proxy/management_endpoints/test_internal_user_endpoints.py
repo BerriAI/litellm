@@ -3043,13 +3043,12 @@ async def test_get_user_daily_activity_aggregated_rejects_other_non_admin(monkey
 async def test_get_user_daily_activity_aggregated_maps_failures(monkeypatch):
     import litellm.proxy.management_endpoints.internal_user_endpoints as endpoints
 
+    class FailingRepository:
+        async def aggregated(self, *args, **kwargs):
+            raise RuntimeError("aggregate unavailable")
+
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-    monkeypatch.setattr(endpoints, "daily_activity_repository", lambda client: object())
-
-    async def fail_aggregate(repository, scope):
-        raise RuntimeError("aggregate unavailable")
-
-    monkeypatch.setattr(endpoints, "get_daily_activity_aggregated", fail_aggregate)
+    monkeypatch.setattr(endpoints, "daily_activity_repository", lambda client: FailingRepository())
 
     with pytest.raises(HTTPException) as exc_info:
         await endpoints.get_user_daily_activity_aggregated(
