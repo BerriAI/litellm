@@ -29,6 +29,13 @@
       ]
     },
     {
+      "path": "litellm/rust_bridge/host/AGENTS.md",
+      "description": "Conventions for code under litellm/rust_bridge/host/",
+      "scope": [
+        "litellm/rust_bridge/host/**"
+      ]
+    },
+    {
       "path": "litellm/tracing/AGENTS.md",
       "description": "Conventions for code under litellm/tracing/",
       "scope": [

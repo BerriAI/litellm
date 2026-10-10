@@ -214,7 +214,7 @@ impl MessagesPythonHost {
     ) -> PyResult<MessagesShaping> {
         let module = py.import(ROUTE_HOST_MODULE)?;
         let capabilities: MessagesModelCapabilities = from_py(
-            &py.import("litellm.rust_bridge.model_capabilities")?
+            &py.import("litellm.rust_bridge.host.model_capabilities")?
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
         )?;

@@ -2320,7 +2320,7 @@ async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_c
     else:
         client_type: Final = pytest.importorskip("google.cloud.kms_v1").KeyManagementServiceClient
 
-    from litellm.rust_bridge.secret_manager import native_secret_manager_config
+    from litellm.rust_bridge.host.secret_manager import native_secret_manager_config
 
     credentials_file: Final = tmp_path / "credentials.json"
     credentials_file.write_text(

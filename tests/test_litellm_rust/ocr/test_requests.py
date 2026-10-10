@@ -629,7 +629,8 @@ def test_native_projection_errors_never_select_python(
     import dataclasses
     import ssl
 
-    from litellm.rust_bridge import runtime, settings
+    from litellm.rust_bridge import runtime
+    from litellm.rust_bridge.host import settings
     from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
     from litellm.rust_bridge.configuration import Rollout
     from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR

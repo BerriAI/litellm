@@ -7,6 +7,8 @@ use pyo3::prelude::*;
 
 use super::mutation::{error_value, http_message, json_value};
 
+const HTTP_TRANSPORT_MODULE: &str = "litellm.rust_bridge.host.http_transport";
+
 pub(super) fn failure_value(
     py: Python<'_>,
     failure: Failure,
@@ -82,7 +84,7 @@ fn cause_message(py: Python<'_>, kind: FailureKind, context: &ErrorContext) -> P
                 kwargs.set_item("model", "default-model-name")?;
                 kwargs.set_item("llm_provider", "litellm-httpx-handler")?;
                 kwargs.set_item("headers", pyo3::types::PyDict::new(py))?;
-                py.import("litellm")?
+                py.import("litellm.exceptions")?
                     .getattr("Timeout")?
                     .call((), Some(&kwargs))?
                     .str()?
@@ -173,9 +175,9 @@ impl ErrorContext {
         Ok(Self {
             timeout: timeout.map(|value| value.str()?.extract()).transpose()?,
             aiohttp: py
-                .import("litellm.llms.custom_httpx.http_handler")?
-                .getattr("AsyncHTTPHandler")?
-                .call_method0("_should_use_aiohttp_transport")?
+                .import(HTTP_TRANSPORT_MODULE)?
+                .getattr("uses_aiohttp_transport")?
+                .call0()?
                 .extract()?,
         })
     }

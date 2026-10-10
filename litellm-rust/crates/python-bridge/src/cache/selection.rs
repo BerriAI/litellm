@@ -9,6 +9,8 @@ use litellm_host::{
 use pyo3::{prelude::*, types::PyDict};
 use std::sync::Arc;
 
+const CACHE_HOST_MODULE: &str = "litellm.rust_bridge.host.cache";
+
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 
 impl<P: Protocol> Protocol for Cached<P> {
@@ -56,7 +58,10 @@ fn selected_cache<'py>(
     kwargs: &Bound<'py, PyDict>,
     call_type: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let configured = py.import("litellm")?.getattr("cache")?;
+    let configured = py
+        .import(CACHE_HOST_MODULE)?
+        .getattr("configured_cache")?
+        .call0()?;
     if configured.is_none()
         || kwargs
             .get_item("caching")?
