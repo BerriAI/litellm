@@ -227,7 +227,6 @@ function LoginPageContent() {
 
               <div className="text-center">
                 <h3 className="text-2xl font-semibold text-foreground">Login</h3>
-                <p className="text-sm text-muted-foreground">Access your LiteLLM Admin UI.</p>
               </div>
 
               {!uiConfig?.hide_default_credentials_hint && (
