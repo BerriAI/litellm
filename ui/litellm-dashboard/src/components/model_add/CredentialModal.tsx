@@ -19,6 +19,8 @@ import { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import {
+  displayNameChange,
+  initialFormValues,
   resetCredentialFormOnProviderChange,
   withoutRestrictedFields,
   type CredentialSubmission,
@@ -70,37 +72,6 @@ interface CredentialModalProps {
 
 const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
   (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
-
-const displayNameChange = (
-  value: unknown,
-  existingCredential: CredentialItem | null | undefined,
-): { display_name?: string | null } => {
-  const typed = typeof value === "string" ? value : "";
-  if (!existingCredential) {
-    return typed ? { display_name: typed } : {};
-  }
-  if (typed === (existingCredential.display_name ?? "")) {
-    return {};
-  }
-  return { display_name: typed || null };
-};
-
-const initialFormValues = (
-  existingCredential: CredentialItem | null | undefined,
-  initialProvider: string | null | undefined,
-): MountedFormValues | undefined => {
-  if (existingCredential) {
-    return {
-      ...Object.fromEntries(
-        Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
-      ),
-      credential_name: existingCredential.credential_name,
-      display_name: existingCredential.display_name ?? "",
-      custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
-    };
-  }
-  return initialProvider ? { custom_llm_provider: initialProvider } : undefined;
-};
 
 export default function CredentialModal({
   open,

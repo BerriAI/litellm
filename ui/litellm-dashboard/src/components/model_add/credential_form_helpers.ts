@@ -1,3 +1,6 @@
+import type { MountedFormValues } from "../common_components/MountedFormField";
+import type { CredentialItem } from "../networking";
+
 interface CredentialFormAdapter {
   getFieldValue: (field: string) => unknown;
   resetFields: () => void;
@@ -38,6 +41,37 @@ export const buildCredential = (submission: CredentialSubmission, credentialValu
     custom_llm_provider: submission.custom_llm_provider,
   },
 });
+
+export const displayNameChange = (
+  value: unknown,
+  existingCredential: CredentialItem | null | undefined,
+): { display_name?: string | null } => {
+  const typed = typeof value === "string" ? value : "";
+  if (!existingCredential) {
+    return typed ? { display_name: typed } : {};
+  }
+  if (typed === (existingCredential.display_name ?? "")) {
+    return {};
+  }
+  return { display_name: typed || null };
+};
+
+export const initialFormValues = (
+  existingCredential: CredentialItem | null | undefined,
+  initialProvider: string | null | undefined,
+): MountedFormValues | undefined => {
+  if (existingCredential) {
+    return {
+      ...Object.fromEntries(
+        Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
+      ),
+      credential_name: existingCredential.credential_name,
+      display_name: existingCredential.display_name ?? "",
+      custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
+    };
+  }
+  return initialProvider ? { custom_llm_provider: initialProvider } : undefined;
+};
 
 export const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));

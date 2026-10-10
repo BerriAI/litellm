@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
-import { buildCredential, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import {
+  buildCredential,
+  displayNameChange,
+  initialFormValues,
+  resetCredentialFormOnProviderChange,
+} from "./credential_form_helpers";
+import type { CredentialItem } from "../networking";
 
 /**
  * Build a minimal FormInstance stub that records calls. We don't depend
@@ -119,5 +125,66 @@ describe("buildCredential", () => {
     expect(credential.credential_name).toBe("openai-prod");
     expect(credential.display_name).toBe("Prod OpenAI");
     expect(credential.credential_values).toEqual(credentialValues);
+  });
+});
+
+describe("displayNameChange", () => {
+  const stored: CredentialItem = {
+    credential_name: "openai-prod",
+    display_name: "Prod",
+    credential_values: {},
+    credential_info: {},
+  };
+
+  it.each([
+    ["sends a typed label as is", "  Prod OpenAI  ", { display_name: "  Prod OpenAI  " }],
+    [
+      "sends a long label without its own length check",
+      "\u{1F600}".repeat(300),
+      { display_name: "\u{1F600}".repeat(300) },
+    ],
+    ["omits a blank label", "", {}],
+  ])("in add mode %s", (_, typed, expected) => {
+    expect(displayNameChange(typed, null)).toEqual(expected);
+  });
+
+  it.each([
+    ["omits an unchanged label", "Prod", {}],
+    ["sends an edited label", "Staging", { display_name: "Staging" }],
+    ["clears an emptied label with null", "", { display_name: null }],
+    ["leaves whitespace for the server to reject", "   ", { display_name: "   " }],
+  ])("in edit mode %s", (_, typed, expected) => {
+    expect(displayNameChange(typed, stored)).toEqual(expected);
+  });
+});
+
+describe("initialFormValues", () => {
+  it("prefills the credential's own name, label, and provider over stored values that reuse those keys", () => {
+    const credential: CredentialItem = {
+      credential_name: "legacy-a",
+      display_name: "Legacy A",
+      credential_values: {
+        api_key: "sk-a****",
+        credential_name: "other-credential",
+        display_name: "Inner label",
+        custom_llm_provider: "anthropic",
+      },
+      credential_info: { custom_llm_provider: "openai" },
+    };
+
+    expect(initialFormValues(credential, null)).toEqual({
+      api_key: "sk-a****",
+      credential_name: "legacy-a",
+      display_name: "Legacy A",
+      custom_llm_provider: "openai",
+    });
+  });
+
+  it("prefills an empty label when the credential has none and only the provider when adding", () => {
+    const credential: CredentialItem = { credential_name: "plain", credential_values: {}, credential_info: {} };
+
+    expect(initialFormValues(credential, null)).toMatchObject({ credential_name: "plain", display_name: "" });
+    expect(initialFormValues(null, "OpenAI")).toEqual({ custom_llm_provider: "OpenAI" });
+    expect(initialFormValues(null, null)).toBeUndefined();
   });
 });

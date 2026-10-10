@@ -14,7 +14,7 @@ interface CredentialIdentityProps {
 export function CredentialIdentity({ credentialName, label, icon, className }: CredentialIdentityProps) {
   const shown = label ?? credentialName;
   return (
-    <span className={cn("flex min-w-0 flex-col gap-0.5", className)}>
+    <span className={cn("flex min-w-0 flex-col gap-0.5", className)} title={credentialName}>
       <span className="flex min-w-0 items-center gap-1.5">
         {icon}
         <span className="truncate">{shown}</span>

@@ -189,13 +189,22 @@ def test_update_credential_still_answers_200_on_a_successful_write(credential_st
     assert response.json()["success"] is True
 
 
-def _credential_row(display_name: str, api_key: str) -> dict:
+def _credential_row(display_name: str, api_key: str, name: str = "replicated") -> dict:
     return {
-        "credential_name": "replicated",
+        "credential_name": name,
         "display_name": display_name,
         "credential_values": {"api_key": api_key},
         "credential_info": {"custom_llm_provider": "openai"},
     }
+
+
+def _credentials_table(row: dict | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        find_many=AsyncMock(),
+        create=AsyncMock(),
+        find_unique=AsyncMock(return_value=row),
+        update=AsyncMock(return_value=None),
+    )
 
 
 def test_update_credential_merges_onto_the_writer_row_not_a_lagging_replica(restore_credential_list):
@@ -205,18 +214,8 @@ def test_update_credential_merges_onto_the_writer_row_not_a_lagging_replica(rest
     from litellm.proxy.db.prisma_client import PrismaWrapper
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
-    writer_table = SimpleNamespace(
-        find_many=AsyncMock(),
-        create=AsyncMock(),
-        find_unique=AsyncMock(return_value=_credential_row("Relabeled", "sk-B")),
-        update=AsyncMock(return_value=None),
-    )
-    reader_table = SimpleNamespace(
-        find_many=AsyncMock(),
-        create=AsyncMock(),
-        find_unique=AsyncMock(return_value=_credential_row("Original", "sk-A")),
-        update=AsyncMock(),
-    )
+    writer_table = _credentials_table(_credential_row("Relabeled", "sk-B"))
+    reader_table = _credentials_table(_credential_row("Original", "sk-A"))
     writer_inner = SimpleNamespace(litellm_credentialstable=writer_table)
     reader_inner = SimpleNamespace(litellm_credentialstable=reader_table)
     prisma_client = MagicMock()
@@ -2343,11 +2342,18 @@ class TestCredentialDisplayName:
         self, restore_credential_list, monkeypatch, display_name
     ):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
-        with _repository_holding(_labeled_credential()) as repository:
+        table = _credentials_table(_credential_row("Prod OpenAI", "sk-old", name="openai-prod"))
+        prisma_client = MagicMock()
+        prisma_client.db = SimpleNamespace(litellm_credentialstable=table)
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
+        ):
             response = _patch_credential("openai-prod", {"display_name": display_name, "credential_info": {}})
 
         assert response.status_code == 200, response.text
-        assert repository.update_by_name.await_args.kwargs["data"]["display_name"] == display_name
+        assert table.update.await_args.kwargs["where"] == {"credential_name": "openai-prod"}
+        assert table.update.await_args.kwargs["data"]["display_name"] == display_name
 
     def test_create_rejects_a_control_character_in_display_name(self, restore_credential_list):
         with _repository_holding(None) as repository:

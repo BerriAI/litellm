@@ -833,3 +833,49 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
     );
   });
 });
+
+describe("CredentialModal display name wiring", () => {
+  it("submits the typed label alongside the credential name and stored values", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: Providers.OpenAI });
+    await screen.findByLabelText("OpenAI API Key");
+    fill("Credential Name:", "openai-prod");
+    fill("Display Name:", "Prod OpenAI");
+    fill("OpenAI API Key", "sk-new");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential_name: "openai-prod",
+        display_name: "Prod OpenAI",
+        credential_values: expect.objectContaining({ api_key: "sk-new" }),
+      }),
+      [],
+    );
+  });
+
+  it("edits the opened credential even when its stored values reuse the top-level keys", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({
+      mode: "edit",
+      existingCredential: {
+        credential_name: "legacy-a",
+        display_name: "Legacy A",
+        credential_values: { api_key: "sk-a****", credential_name: "other-credential", display_name: "Inner label" },
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    });
+    await screen.findByLabelText("OpenAI API Key");
+
+    expect(screen.getByLabelText("Credential Name:")).toHaveValue("legacy-a");
+    expect(screen.getByLabelText("Credential Name:")).toBeDisabled();
+    expect(screen.getByLabelText("Display Name:")).toHaveValue("Legacy A");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "legacy-a", custom_llm_provider: "openai", credential_values: {} },
+      [],
+    );
+  });
+});
