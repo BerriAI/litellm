@@ -48,14 +48,14 @@ def _transform_response(
 
 def _build_decisions(config: ScaleDownChatConfig, messages: list, optional_params: dict) -> dict:
     body = config.transform_request(
-        model="scaledown/classify", messages=messages, optional_params=optional_params, litellm_params={}, headers={}
+        model="scaledown/decisions", messages=messages, optional_params=optional_params, litellm_params={}, headers={}
     )
     config.sign_request(
         headers={},
         optional_params=optional_params,
         request_data=body,
         api_base=f"{BASE}/v1/scaledown",
-        model="scaledown/classify",
+        model="scaledown/decisions",
     )
     return body
 
@@ -95,7 +95,7 @@ def test_missing_api_key_is_rejected_before_any_request(config, monkeypatch):
         ("scaledown/extract", "/extract"),
         ("scaledown/summarize", "/summarization/abstractive"),
         ("scaledown/compress", "/compress/raw/"),
-        ("scaledown/classify", "/v1/scaledown"),
+        ("scaledown/classify", "/classify"),
         ("scaledown/decisions", "/v1/scaledown"),
     ],
 )
@@ -114,7 +114,7 @@ def test_api_base_with_or_without_v1_resolves_to_the_same_host(config, api_base)
         api_base=api_base, api_key="k", model="scaledown/extract", optional_params={}, litellm_params={}
     )
     decisions = config.get_complete_url(
-        api_base=api_base, api_key="k", model="scaledown/classify", optional_params={}, litellm_params={}
+        api_base=api_base, api_key="k", model="scaledown/decisions", optional_params={}, litellm_params={}
     )
 
     assert extract == "https://staging.scaledown.xyz/extract"
@@ -131,7 +131,7 @@ def test_decisions_request_carries_state_and_questions_without_chat_keys(config)
     }
 
     body = config.transform_request(
-        model="scaledown/classify",
+        model="scaledown/decisions",
         messages=[{"role": "user", "content": "I was charged twice."}],
         optional_params={"questions": questions},
         litellm_params={},
@@ -157,54 +157,18 @@ def test_decisions_alias_sends_the_only_model_upstream_accepts(config):
     assert body["model"] == DECISIONS_UPSTREAM_MODEL
 
 
-def test_explicit_state_with_document_is_forwarded_verbatim(config):
-    state = {"document": "BASE64", "document_mime_type": "image/jpeg"}
-
-    body = config.transform_request(
-        model="scaledown/classify",
-        messages=[],
-        optional_params={"state": state, "questions": {"q": {"type": "noul"}}},
-        litellm_params={},
-        headers={},
-    )
-
-    assert body["state"] == state
-
-
-def test_document_fields_move_into_derived_state(config):
-    body = config.transform_request(
-        model="scaledown/classify",
-        messages=[{"role": "user", "content": "invoice text"}],
-        optional_params={
-            "document": "BASE64",
-            "document_mime_type": "application/pdf",
-            "questions": {"q": {"type": "noul"}},
-        },
-        litellm_params={},
-        headers={},
-    )
-
-    assert body["state"] == {
-        "text": "invoice text",
-        "document": "BASE64",
-        "document_mime_type": "application/pdf",
-    }
-
-
 def test_decisions_without_questions_is_rejected(config):
     with pytest.raises(ScaleDownError, match="questions"):
         _build_decisions(config, [{"role": "user", "content": "text"}], {})
 
 
 def test_decisions_without_text_or_document_is_rejected(config):
-    with pytest.raises(ScaleDownError, match="text to decide on"):
-        _build_decisions(
-            config, [{"role": "system", "content": "no user message"}], {"questions": {"q": {"type": "noul"}}}
-        )
+    with pytest.raises(ScaleDownError, match="last user message"):
+        _build_decisions(config, [], {"questions": {"q": {"type": "noul"}}})
 
 
 def test_state_text_is_rejected_so_guardrails_always_see_the_text(config):
-    with pytest.raises(ScaleDownError, match="may only carry"):
+    with pytest.raises(ScaleDownError, match="text through messages only"):
         _build_decisions(
             config,
             [{"role": "user", "content": "innocuous"}],
@@ -212,36 +176,8 @@ def test_state_text_is_rejected_so_guardrails_always_see_the_text(config):
         )
 
 
-def test_image_message_becomes_a_document_in_state(config):
-    body = _build_decisions(
-        config,
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Is this an invoice?"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
-                ],
-            }
-        ],
-        {"questions": {"q": {"type": "noul"}}},
-    )
-
-    assert body["state"] == {"text": "Is this an invoice?", "document": "aGVsbG8=", "document_mime_type": "image/png"}
-
-
-def test_image_only_message_is_accepted(config):
-    body = _build_decisions(
-        config,
-        [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}],
-        {"questions": {"q": {"type": "noul"}}},
-    )
-
-    assert body["state"] == {"document": "aGVsbG8=", "document_mime_type": "image/png"}
-
-
 def test_remote_image_url_is_rejected(config):
-    with pytest.raises(ScaleDownError, match="base64 data URLs"):
+    with pytest.raises(ScaleDownError, match="text only"):
         _build_decisions(
             config,
             [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]}],
@@ -269,12 +205,12 @@ def test_extra_body_may_set_extract_options(config):
         ("scaledown/summarize", {"text": "secret"}),
         ("scaledown/compress", {"prompt": "x"}),
         ("scaledown/compress", {"context": "x"}),
-        ("scaledown/classify", {"model": "other"}),
-        ("scaledown/classify", {"text": "secret"}),
+        ("scaledown/decisions", {"model": "other"}),
+        ("scaledown/decisions", {"text": "secret"}),
     ],
 )
 def test_extra_body_cannot_override_the_model_or_prompt_text(config, model, extra_body):
-    with pytest.raises(ScaleDownError, match="may only set|is not accepted"):
+    with pytest.raises(ScaleDownError, match=r"may only set|is not accepted"):
         config.transform_extra_body(extra_body=extra_body, request={}, model=model, litellm_params={})
 
 
@@ -287,24 +223,6 @@ def test_compress_rate_via_extra_body_sets_the_scaledown_rate(config):
     )
 
     assert merged == {"scaledown": {"rate": 0.5}}
-
-
-def test_extra_body_decisions_cannot_override_the_upstream_model_or_state_text(config):
-    request = {"model": DECISIONS_UPSTREAM_MODEL, "state": {"text": "from messages"}}
-
-    merged = config.transform_extra_body(
-        extra_body={"questions": {"q": {"type": "noul"}}, "state": {"document": "QQ=="}},
-        request=request,
-        model="scaledown/classify",
-        litellm_params={},
-    )
-
-    assert "model" not in merged
-    assert merged["state"] == {"text": "from messages", "document": "QQ=="}
-    with pytest.raises(ScaleDownError, match="may only carry"):
-        config.transform_extra_body(
-            extra_body={"state": {"text": "smuggled"}}, request=request, model="scaledown/classify", litellm_params={}
-        )
 
 
 def test_env_key_is_not_sent_to_an_untrusted_api_base(config):
@@ -335,10 +253,15 @@ def test_empty_key_does_not_unlock_the_env_key_for_an_untrusted_api_base(config,
 
 def test_explicit_key_or_trusted_api_base_is_allowed(config, monkeypatch):
     kwargs = dict(headers={}, model="scaledown/extract", messages=[], optional_params={}, litellm_params={})
-    config.validate_environment(api_key="own", api_base="https://elsewhere.example", **kwargs)
-    config.validate_environment(api_base=f"{BASE}/v1", **kwargs)
+    assert (
+        config.validate_environment(api_key="own", api_base="https://elsewhere.example", **kwargs)["x-api-key"] == "own"
+    )
+    assert config.validate_environment(api_base=f"{BASE}/v1", **kwargs)["x-api-key"] == "sk-scaledown-test"
     monkeypatch.setenv("SCALEDOWN_API_BASE", "https://staging.scaledown.xyz")
-    config.validate_environment(api_base="https://staging.scaledown.xyz/", **kwargs)
+    assert (
+        config.validate_environment(api_base="https://staging.scaledown.xyz/", **kwargs)["x-api-key"]
+        == "sk-scaledown-test"
+    )
 
 
 def test_max_completion_tokens_maps_to_max_tokens(config):
@@ -353,7 +276,7 @@ def test_max_completion_tokens_maps_to_max_tokens(config):
 def test_router_params_are_accepted_and_not_forwarded(config):
     assert (
         config.map_openai_params(
-            non_default_params={"max_retries": 2}, optional_params={}, model="scaledown/classify", drop_params=False
+            non_default_params={"max_retries": 2}, optional_params={}, model="scaledown/decisions", drop_params=False
         )
         == {}
     )
@@ -367,7 +290,7 @@ def test_every_model_fakes_a_stream(config):
 def test_unknown_question_type_is_rejected(config):
     with pytest.raises(ScaleDownError, match="expected one of"):
         config.transform_request(
-            model="scaledown/classify",
+            model="scaledown/decisions",
             messages=[{"role": "user", "content": "t"}],
             optional_params={"questions": {"q": {"type": "ranking"}}},
             litellm_params={},
@@ -378,7 +301,7 @@ def test_unknown_question_type_is_rejected(config):
 def test_choice_question_without_criteria_is_rejected(config):
     with pytest.raises(ScaleDownError, match="non-empty 'criteria' map"):
         config.transform_request(
-            model="scaledown/classify",
+            model="scaledown/decisions",
             messages=[{"role": "user", "content": "t"}],
             optional_params={"questions": {"q": {"type": "choice", "criteria": {}}}},
             litellm_params={},
@@ -390,7 +313,7 @@ def test_choice_question_without_criteria_is_rejected(config):
 def test_score_criteria_outside_two_to_ten_is_rejected(config, levels):
     with pytest.raises(ScaleDownError, match="ordered list"):
         config.transform_request(
-            model="scaledown/classify",
+            model="scaledown/decisions",
             messages=[{"role": "user", "content": "t"}],
             optional_params={"questions": {"q": {"type": "score", "criteria": ["l"] * levels}}},
             litellm_params={},
@@ -403,7 +326,7 @@ def test_score_criteria_within_two_to_ten_is_accepted(config, levels):
     criteria = [f"level {index}" for index in range(levels)]
 
     body = config.transform_request(
-        model="scaledown/classify",
+        model="scaledown/decisions",
         messages=[{"role": "user", "content": "t"}],
         optional_params={"questions": {"q": {"type": "score", "criteria": criteria}}},
         litellm_params={},
@@ -475,30 +398,10 @@ def test_deeply_nested_schema_is_rejected_cleanly(config):
         _extract_body(config, schema)
 
 
-def test_extract_and_summarize_send_an_image_as_a_native_document(config):
-    messages = [
-        {
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,aGVsbG8="}}],
-        }
-    ]
-    schema = {
-        "response_format": {"type": "json_schema", "json_schema": {"name": "n", "schema": {"properties": {"a": {}}}}}
-    }
-
-    extract = config.transform_request("scaledown/extract", messages, schema, {}, {})
-    summarize = config.transform_request("scaledown/summarize", messages, {}, {}, {})
-
-    for body in (extract, summarize):
-        assert body["document"] == "aGVsbG8="
-        assert body["document_mime_type"] == "application/pdf"
-        assert "text" not in body
-
-
 def test_more_than_one_image_is_rejected(config):
     image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
 
-    with pytest.raises(ScaleDownError, match="one image or document"):
+    with pytest.raises(ScaleDownError, match="text only"):
         _build_decisions(config, [{"role": "user", "content": [image, image]}], {"questions": {"q": {"type": "noul"}}})
 
 
@@ -684,7 +587,7 @@ def test_decisions_response_ignores_the_upstream_cost_field(config):
         "usage": {"input_tokens": 62, "output_tokens": 1, "cost": 0.00543},
     }
 
-    response = _transform_response(config, "scaledown/classify", payload)
+    response = _transform_response(config, "scaledown/decisions", payload)
 
     assert json.loads(response.choices[0].message.content) == payload["answers"]
     assert response.usage.prompt_tokens == 62
@@ -714,7 +617,7 @@ def test_score_answer_survives_the_envelope_intact(config):
 
 def test_decisions_response_without_answers_is_an_error(config):
     with pytest.raises(ScaleDownError, match="no answers"):
-        _transform_response(config, "scaledown/classify", {"model": "classify-1"})
+        _transform_response(config, "scaledown/decisions", {"model": "classify-1"})
 
 
 def test_empty_native_response_is_an_error(config):
@@ -731,7 +634,7 @@ def test_non_json_response_reports_the_upstream_status(config):
 
     with pytest.raises(ScaleDownError) as exc:
         config.transform_response(
-            model="scaledown/classify",
+            model="scaledown/decisions",
             raw_response=raw_response,
             model_response=ModelResponse(),
             logging_obj=None,
@@ -746,7 +649,7 @@ def test_non_json_response_reports_the_upstream_status(config):
 
 
 def test_decisions_takes_no_openai_sampling_params(config):
-    assert config.get_supported_openai_params("scaledown/classify") == ["stream"]
+    assert config.get_supported_openai_params("scaledown/decisions") == ["stream"]
 
 
 def test_unsupported_param_is_rejected_unless_dropped(config):
@@ -754,7 +657,7 @@ def test_unsupported_param_is_rejected_unless_dropped(config):
         config.map_openai_params(
             non_default_params={"temperature": 0.7},
             optional_params={},
-            model="scaledown/classify",
+            model="scaledown/decisions",
             drop_params=False,
         )
 
@@ -762,7 +665,7 @@ def test_unsupported_param_is_rejected_unless_dropped(config):
         config.map_openai_params(
             non_default_params={"temperature": 0.7},
             optional_params={},
-            model="scaledown/classify",
+            model="scaledown/decisions",
             drop_params=True,
         )
         == {}
@@ -791,7 +694,7 @@ def test_completion_sends_x_api_key_to_the_native_summarize_endpoint():
 
 
 @respx.mock
-def test_completion_routes_classify_to_the_decisions_endpoint():
+def test_completion_routes_decisions_to_the_decisions_endpoint():
     route = respx.post(f"{BASE}/v1/scaledown").mock(
         return_value=httpx.Response(
             200,
@@ -811,7 +714,7 @@ def test_completion_routes_classify_to_the_decisions_endpoint():
     )
 
     response = litellm.completion(
-        model="scaledown/classify",
+        model="scaledown/decisions",
         messages=[{"role": "user", "content": "I was charged twice."}],
         questions={
             "category": {
@@ -871,13 +774,13 @@ def test_completion_cost_comes_from_input_tokens_not_upstream_usage_cost():
     )
 
     response = litellm.completion(
-        model="scaledown/classify",
+        model="scaledown/decisions",
         messages=[{"role": "user", "content": "text"}],
         questions={"q": {"type": "noul", "instructions": "Positive?"}},
     )
 
-    cost = litellm.completion_cost(completion_response=response, model="scaledown/classify")
-    assert cost == pytest.approx(1000 * litellm.model_cost["scaledown/classify"]["input_cost_per_token"])
+    cost = litellm.completion_cost(completion_response=response, model="scaledown/decisions")
+    assert cost == pytest.approx(1000 * litellm.model_cost["scaledown/decisions"]["input_cost_per_token"])
 
 
 @respx.mock
@@ -895,7 +798,7 @@ def test_completion_honors_scaledown_api_base(monkeypatch):
     )
 
     litellm.completion(
-        model="scaledown/classify",
+        model="scaledown/decisions",
         messages=[{"role": "user", "content": "text"}],
         questions={"q": {"type": "noul", "instructions": "Positive?"}},
     )
@@ -909,7 +812,7 @@ def test_upstream_payment_error_surfaces_the_detail():
 
     with pytest.raises(litellm.exceptions.BadRequestError) as exc:
         litellm.completion(
-            model="scaledown/classify",
+            model="scaledown/decisions",
             messages=[{"role": "user", "content": "text"}],
             questions={"q": {"type": "noul", "instructions": "Positive?"}},
         )
@@ -923,7 +826,7 @@ def test_malformed_decisions_request_never_reaches_the_network():
 
     with pytest.raises(Exception, match="questions"):
         litellm.completion(
-            model="scaledown/classify",
+            model="scaledown/decisions",
             messages=[{"role": "user", "content": "text"}],
         )
 
@@ -945,7 +848,7 @@ def test_questions_passed_through_extra_body_reach_scaledown():
     questions = {"q": {"type": "noul", "instructions": "Positive?"}}
 
     litellm.completion(
-        model="scaledown/classify",
+        model="scaledown/decisions",
         messages=[{"role": "user", "content": "text"}],
         extra_body={"questions": questions},
     )
@@ -969,3 +872,209 @@ def test_streaming_request_is_served_as_a_single_chunk():
     )
 
     assert "compressed_prompt" in "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    "structured,expected",
+    [
+        (None, {"vendor": "Northwind"}),
+        (
+            {"invoice": {"amount": 500, "amount_span_anchor": "$500"}},
+            {"vendor": "Northwind", "invoice": {"amount": 500}},
+        ),
+    ],
+)
+def test_extract_merges_first_scalar_match_with_nested_fields(config, structured, expected):
+    payload = {
+        "entities": [
+            {"type": "vendor", "text": "Northwind", "confidence": 1.0},
+            {"type": "vendor", "text": "Contoso", "confidence": 0.8},
+            {"type": "unrequested", "text": "ignore"},
+        ],
+        "structured_result": structured,
+        "input_tokens": 161,
+    }
+    response = _transform_response(
+        config,
+        "scaledown/extract",
+        payload,
+        {"entities": {"vendor": "company name", "missing": "absent field", "invoice": {"amount": "total"}}},
+    )
+
+    assert json.loads(response.choices[0].message.content) == expected
+    assert response._hidden_params["scaledown_response"] == payload
+    assert response.usage.prompt_tokens == 161
+
+
+@respx.mock
+def test_strict_extraction_is_rejected_before_network():
+    route = respx.post(f"{BASE}/extract")
+    with pytest.raises(litellm.BadRequestError, match="strict JSON schemas"):
+        litellm.completion(
+            model="scaledown/extract",
+            messages=[{"role": "user", "content": "Invoice from Northwind. Total: $500."}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "invoice",
+                    "strict": True,
+                    "schema": {"type": "object", "properties": {"amount": {"type": "string"}}, "required": ["amount"]},
+                },
+            },
+        )
+    assert not route.called
+
+
+@pytest.mark.parametrize("model", ["classify", "decisions", "extract", "summarize", "compress"])
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}],
+        [
+            {"type": "text", "text": "invoice"},
+            {"type": "file", "file": {"file_data": "data:application/pdf;base64,aGVsbG8="}},
+        ],
+    ],
+)
+def test_multimodal_inputs_are_rejected_instead_of_dropped(config, model, content):
+    with pytest.raises(ScaleDownError, match="text only"):
+        config.transform_request(f"scaledown/{model}", [{"role": "user", "content": content}], {}, {}, {})
+
+
+@pytest.mark.parametrize("params", [{"document": "QQ=="}, {"state": {"document": "QQ=="}}, {"text": "override"}])
+def test_native_input_overrides_are_rejected(config, params):
+    with pytest.raises(ScaleDownError, match="text through messages only"):
+        config.transform_request("scaledown/decisions", [{"role": "user", "content": "text"}], params, {}, {})
+
+
+@pytest.mark.parametrize("model", ["classify", "decisions", "extract"])
+def test_unsupported_system_instructions_are_rejected(config, model):
+    with pytest.raises(ScaleDownError, match="does not support system messages"):
+        config.transform_request(
+            f"scaledown/{model}",
+            [{"role": "system", "content": "instructions"}, {"role": "user", "content": "text"}],
+            {},
+            {},
+            {},
+        )
+
+
+@respx.mock
+@pytest.mark.parametrize("nested", [False, True])
+def test_classify_uses_native_labels_and_preserves_scores(nested):
+    payload = {"top_label": "urgent", "scores": {"urgent": 0.9, "routine": 0.1}, "input_tokens": 521}
+    route = respx.post(f"{BASE}/classify").mock(return_value=httpx.Response(200, json=payload))
+    labels = [
+        {"name": "urgent", "rubric": "Service is unavailable."},
+        {"name": "routine", "rubric": "A cosmetic issue."},
+    ]
+    options = {"extra_body": {"labels": labels}} if nested else {"labels": labels}
+
+    response = litellm.completion(
+        model="scaledown/classify",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Server is down."}]}],
+        **options,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {"text": "Server is down.", "labels": labels}
+    assert json.loads(response.choices[0].message.content) == payload
+    assert response.usage.prompt_tokens == 521
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        521 * litellm.model_cost["scaledown/classify"]["input_cost_per_token"]
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize("labels", [None, [], ["urgent"], [{"name": "urgent"}]])
+def test_classify_requires_labels_before_network(labels):
+    route = respx.post(f"{BASE}/classify")
+    with pytest.raises(litellm.BadRequestError, match=r"labels|rubric"):
+        litellm.completion(
+            model="scaledown/classify", messages=[{"role": "user", "content": "text"}], extra_body={"labels": labels}
+        )
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_extraction_keeps_flat_fields_and_usage():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    route = respx.post(f"{BASE}/extract").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "entities": [{"type": "vendor", "text": "Northwind"}],
+                "structured_result": None,
+                "input_tokens": 161,
+            },
+        )
+    )
+    client = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        response = await litellm.acompletion(
+            model="scaledown/extract",
+            messages=[{"role": "user", "content": "Invoice from Northwind."}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "invoice",
+                    "strict": False,
+                    "schema": {"properties": {"vendor": {"type": "string"}}},
+                },
+            },
+            client=client,
+        )
+    finally:
+        await client.close()
+    assert json.loads(response.choices[0].message.content) == {"vendor": "Northwind"}
+    assert response.usage.prompt_tokens == 161
+    assert json.loads(route.calls[0].request.content) == {
+        "text": "Invoice from Northwind.",
+        "entities": {"vendor": "vendor"},
+    }
+
+
+@respx.mock
+def test_router_stream_includes_usage_without_sending_stream_options_upstream():
+    route = respx.post(f"{BASE}/summarization/abstractive").mock(
+        return_value=httpx.Response(200, json={"summary": "Fixed billing.", "input_tokens": 90})
+    )
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "summary", "litellm_params": {"model": "scaledown/summarize", "api_key": "test-key"}}
+        ],
+        num_retries=0,
+    )
+    chunks = list(
+        router.completion(
+            model="summary",
+            messages=[{"role": "user", "content": "Billing was fixed on Monday."}],
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+    assert (
+        json.loads("".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices))["summary"]
+        == "Fixed billing."
+    )
+    assert chunks[-1].usage.prompt_tokens == 90
+    assert json.loads(route.calls[0].request.content) == {"text": "Billing was fixed on Monday."}
+
+
+@respx.mock
+def test_pydantic_response_format_does_not_silently_claim_strict_support():
+    from pydantic import BaseModel, ConfigDict
+
+    class Invoice(BaseModel):
+        model_config = ConfigDict(frozen=True)
+        vendor: str
+
+    route = respx.post(f"{BASE}/extract")
+    with pytest.raises(litellm.BadRequestError, match="strict JSON schemas"):
+        litellm.completion(
+            model="scaledown/extract",
+            messages=[{"role": "user", "content": "Invoice from Northwind."}],
+            response_format=Invoice,
+        )
+    assert not route.called

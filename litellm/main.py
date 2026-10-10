@@ -1972,17 +1972,6 @@ def _complete_together_ai(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
-def _complete_scaledown(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
-    from litellm.llms.scaledown.chat.handler import complete_scaledown
-
-    return complete_scaledown(
-        base_llm_http_handler=base_llm_http_handler,
-        client=_dispatch_client_http(ctx),
-        encoding=_get_encoding(),
-        ctx=ctx,
-    )
-
-
 def _complete_heroku(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -2083,7 +2072,7 @@ def _complete_ragflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     return response
 
 
-def _complete_xai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_native_http(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -6000,15 +5989,13 @@ def completion(
             response = _complete_together_ai(_dispatch_ctx)
         elif custom_llm_provider == "heroku":
             response = _complete_heroku(_dispatch_ctx)
-        elif custom_llm_provider == "scaledown":
-            response = _complete_scaledown(_dispatch_ctx)
 
         elif custom_llm_provider == "ragflow":
             ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
             response = _complete_ragflow(_dispatch_ctx)
-        elif custom_llm_provider == "xai":
+        elif custom_llm_provider in ("xai", "scaledown"):
             ## COMPLETION CALL
-            response = _complete_xai(_dispatch_ctx)
+            response = _complete_native_http(_dispatch_ctx)
         elif custom_llm_provider == "groq":
             response = _complete_groq(_dispatch_ctx)
         elif custom_llm_provider == "bedrock_mantle":
