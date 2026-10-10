@@ -1,28 +1,53 @@
-"""Every cost tracking case: the JSON corpus plus the per-provider Python literals under cases/."""
+"""Every cost tracking case, gathered from the per-provider literal modules under cases/."""
 
 from __future__ import annotations
 
 import json
 from typing import Final
 
-from integration.cost_calculation.cases import openai
+from integration.cost_calculation.cases import (
+    anthropic,
+    azure,
+    batch_realtime,
+    bedrock_converse,
+    fireworks_ai,
+    gemini,
+    misc,
+    openai,
+    together_ai,
+    vertex_ai,
+)
 from integration.cost_calculation.cost_tracking_case import (
-    BATCH_CASES,
     COST_MAP,
-    JSON_CASES,
     PRIOR_RESPONSE_ID_MARKER,
-    REALTIME_CASES,
+    BatchCostCase,
     CostTrackingTestCase,
     ExactExpected,
     FailureExpected,
     JsonResponse,
+    RealtimeCostCase,
     RecountExpected,
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
-CASES: Final[tuple[CostTrackingTestCase, ...]] = (*JSON_CASES, *openai.CASES)
-PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = openai.PARITY
+_PROVIDER_MODULES: Final = (
+    openai,
+    anthropic,
+    gemini,
+    bedrock_converse,
+    vertex_ai,
+    azure,
+    fireworks_ai,
+    together_ai,
+    misc,
+)
+CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(case for module in _PROVIDER_MODULES for case in module.CASES)
+PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
+    pair for module in _PROVIDER_MODULES for pair in module.PARITY
+)
+BATCH_CASES: Final[tuple[BatchCostCase, ...]] = batch_realtime.BATCH_CASES
+REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = batch_realtime.REALTIME_CASES
 _PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed))
 STANDALONE_CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(
     case for case in CASES if case.name not in _PARITY_LEGS
