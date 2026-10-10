@@ -158,7 +158,9 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         )
-    resolved_api_key: Final = provider_config.resolve_api_key(dynamic_api_key or api_key)
+    resolved_api_key: Final = provider_config.resolve_credential(
+        dynamic_api_key or api_key, resolved_api_base, {**kwargs, "api_key": api_key}
+    )
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",

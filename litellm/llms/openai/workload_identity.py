@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
 import httpx
+from openai import DEFAULT_MAX_RETRIES as OPENAI_SDK_DEFAULT_MAX_RETRIES
 from openai import NOT_GIVEN, AsyncOpenAI, NotGiven, OpenAI
 
 import litellm
-from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, DEFAULT_MAX_RETRIES
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
@@ -70,7 +71,7 @@ def resolve_openai_workload_identity_config(
         _config_value(litellm_params, param_key, env_name) for param_key, env_name in _IDENTITY_PARAM_ENV_NAMES
     )
     if identity_provider_id is None or service_account_id is None or token_file is None:
-        if _carries_deployment_identity(litellm_params):
+        if static_api_key is None and _carries_deployment_identity(litellm_params):
             raise OpenAIError(status_code=500, message=_incomplete_identity_message(litellm_params))
         return None
     return OpenAIWorkloadIdentityConfig(
@@ -105,7 +106,22 @@ def resolve_openai_bearer_token(
     return get_workload_identity_bearer_token(workload_identity_config)
 
 
+async def resolve_openai_bearer_token_async(
+    static_api_key: str | None,
+    api_base: str | None,
+    litellm_params: Mapping[str, object] | None,
+) -> str | None:
+    workload_identity_config: Final = resolve_openai_workload_identity_config(
+        api_key=static_api_key, api_base=api_base, litellm_params=litellm_params
+    )
+    if workload_identity_config is None:
+        return static_api_key
+    return await _workload_identity_auth(workload_identity_config).get_token_async()
+
+
 def _deployment_identity_outranks(static_api_key: str, litellm_params: Mapping[str, object] | None) -> bool:
+    if litellm_params is None or _param_str(litellm_params, "api_key") is not None:
+        return False
     return _carries_deployment_identity(litellm_params) and static_api_key in _process_wide_static_keys()
 
 
@@ -156,7 +172,7 @@ def build_openai_client(
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
     )
-    retries: Final = _max_retries_or_default(max_retries)
+    retries: Final = _max_retries_or_sdk_default(max_retries)
     if workload_identity_config is None:
         return OpenAI(
             api_key=api_key,
@@ -209,7 +225,7 @@ def build_async_openai_client(
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
     )
-    retries: Final = _max_retries_or_default(max_retries)
+    retries: Final = _max_retries_or_sdk_default(max_retries)
     if workload_identity_config is None:
         return AsyncOpenAI(
             api_key=api_key,
@@ -269,8 +285,8 @@ def _client_cache_params(
     }
 
 
-def _max_retries_or_default(max_retries: int | None) -> int:
-    return DEFAULT_MAX_RETRIES if max_retries is None else max_retries
+def _max_retries_or_sdk_default(max_retries: int | None) -> int:
+    return OPENAI_SDK_DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
 
 def _targets_openai_api(api_base: str | None) -> bool:

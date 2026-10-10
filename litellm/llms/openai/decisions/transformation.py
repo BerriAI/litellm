@@ -6,6 +6,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionsIRAnswer,
@@ -307,6 +308,11 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
 
     def transform_decisions_request(
         self,

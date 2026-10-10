@@ -605,7 +605,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             resolve_openai_workload_identity_config(
                 api_key=api_key,
                 api_base=litellm_params.api_base,
-                litellm_params=litellm_params.model_dump(include=set(OPENAI_WIF_KWARGS_KEYS)),
+                litellm_params=litellm_params.model_dump(include={"api_key", *OPENAI_WIF_KWARGS_KEYS}),
             )
             if self.custom_llm_provider is LlmProviders.OPENAI
             else None

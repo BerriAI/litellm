@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 from collections.abc import Callable
@@ -7,6 +8,7 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from openai import DEFAULT_MAX_RETRIES as OPENAI_SDK_DEFAULT_MAX_RETRIES
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 
 import litellm
@@ -21,6 +23,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     _workload_identity_auth,
@@ -432,13 +435,26 @@ class TestResolveConfigFromDeployment:
         assert f"missing {missing_key}." in error.value.message
         assert all(key not in error.value.message.split(".")[0] for key in partial)
 
-    def test_partial_litellm_params_never_fall_back_to_the_process_key(
+    def test_partial_litellm_params_fall_back_to_the_process_key(
         self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
         partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
-        with pytest.raises(OpenAIError, match="missing openai_identity_token_file"):
+        assert (
             resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=partial)
+            is None
+        )
+
+    def test_deployment_key_equal_to_the_process_key_still_wins(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-shared")
+        assert (
+            resolve_openai_workload_identity_config(
+                api_key="sk-shared", api_base=None, litellm_params={**deployment_wif, "api_key": "sk-shared"}
+            )
+            is None
+        )
 
     def test_partial_litellm_params_yield_to_the_deployments_own_key(self, deployment_wif: dict[str, str]) -> None:
         partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
@@ -547,6 +563,16 @@ class TestDeploymentClientConstruction:
         assert other is not first
         assert async_again is async_first
         assert isinstance(async_first, AsyncOpenAI)
+
+    @pytest.mark.parametrize("builder", [build_openai_client, build_async_openai_client])
+    def test_unset_max_retries_keep_the_sdk_default_and_explicit_ones_stick(
+        self, deployment_wif: dict[str, str], builder: Callable[..., OpenAI | AsyncOpenAI]
+    ) -> None:
+        assert builder(api_key="sk-static", api_base=None, max_retries=None).max_retries == OPENAI_SDK_DEFAULT_MAX_RETRIES
+        assert builder(api_key=None, api_base=None, max_retries=None, litellm_params=deployment_wif).max_retries == (
+            OPENAI_SDK_DEFAULT_MAX_RETRIES
+        )
+        assert builder(api_key=None, api_base=None, max_retries=0, litellm_params=deployment_wif).max_retries == 0
 
     def test_builders_never_cache_static_key_clients(self) -> None:
         first: Final = build_openai_client(api_key="sk-static", api_base=None, litellm_params=None)
@@ -722,6 +748,19 @@ class TestResponsesValidateEnvironmentFromDeployment:
             litellm_params=GenericLiteLLMParams(api_key="sk-responses", **deployment_wif),
         )
         assert headers["Authorization"] == "Bearer sk-responses"
+
+    def test_static_key_equal_to_the_process_key_wins(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-shared")
+        assert (
+            OpenAIResponsesAPIConfig().validate_environment(
+                headers={},
+                model="gpt-4o-mini",
+                litellm_params=GenericLiteLLMParams(api_key="sk-shared", **deployment_wif),
+            )["Authorization"]
+            == "Bearer sk-shared"
+        )
 
 
 class TestResolveBearerToken:
@@ -1508,3 +1547,172 @@ class TestDeploymentNonChatSurfaces:
 
         assert moderation_route.call_count == 3
         assert exchange_route.call_count == 1
+
+
+EMBEDDING_BODY: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+DECISIONS_URL: Final = "https://api.openai.com/v1/decisions"
+DECISIONS_BODY: Final = {
+    "model": "gpt-6-luna",
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+    "usage": {
+        "input_tokens": 3,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 1,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 4,
+    },
+}
+INPUT_TOKENS_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
+DEPLOYMENT_KEY_ROUTES: Final = (
+    pytest.param(
+        EMBEDDINGS_URL,
+        httpx.Response(200, json=EMBEDDING_BODY),
+        lambda p: litellm.embedding(model="openai/text-embedding-3-small", input=["hi"], **p),
+        id="embedding",
+    ),
+    pytest.param(
+        IMAGES_URL,
+        httpx.Response(200, json=IMAGE_BODY),
+        lambda p: litellm.image_generation(model="openai/gpt-image-2", prompt="a cat", **p),
+        id="image_generation",
+    ),
+    pytest.param(
+        TRANSCRIPTIONS_URL,
+        httpx.Response(200, json={"text": "hi"}),
+        lambda p: litellm.transcription(model="openai/gpt-4o-mini-transcribe", file=("tone.wav", b"RIFF"), **p),
+        id="transcription",
+    ),
+    pytest.param(
+        MODERATIONS_URL,
+        httpx.Response(200, json=MODERATION_BODY),
+        lambda p: litellm.moderation(input="hi", model="omni-moderation-latest", **p),
+        id="moderation",
+    ),
+    pytest.param(
+        MODERATIONS_URL,
+        httpx.Response(200, json=MODERATION_BODY),
+        lambda p: asyncio.run(litellm.amoderation(input="hi", model="omni-moderation-latest", **p)),
+        id="amoderation",
+    ),
+    pytest.param(
+        ASSISTANTS_URL,
+        httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]}),
+        lambda p: litellm.get_assistants(custom_llm_provider="openai", **p),
+        id="get_assistants",
+    ),
+    pytest.param(
+        ASSISTANTS_URL,
+        httpx.Response(200, json=ASSISTANT_BODY),
+        lambda p: litellm.create_assistants(custom_llm_provider="openai", model="gpt-5.4-nano", **p),
+        id="create_assistants",
+    ),
+    pytest.param(
+        f"{ASSISTANTS_URL}/asst-1",
+        httpx.Response(200, json=ASSISTANT_DELETED_BODY),
+        lambda p: litellm.delete_assistant(custom_llm_provider="openai", assistant_id="asst-1", **p),
+        id="delete_assistant",
+    ),
+    pytest.param(
+        DECISIONS_URL,
+        httpx.Response(200, json=DECISIONS_BODY),
+        lambda p: litellm.decisions(
+            model="openai/gpt-6-luna",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            **p,
+        ),
+        id="decisions",
+    ),
+)
+
+
+@pytest.mark.parametrize(("url", "response", "invoke"), DEPLOYMENT_KEY_ROUTES)
+class TestDeploymentKeyBesideIdentity:
+    @respx.mock
+    def test_deployment_key_equal_to_the_process_key_wins_without_an_exchange(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        url: str,
+        response: httpx.Response,
+        invoke: Callable[[dict[str, str]], object],
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-shared")
+        exchange: Final = mock_token_exchange()
+        route: Final = respx.route(url__startswith=url).mock(return_value=response)
+
+        invoke({"api_key": "sk-shared", **deployment_wif})
+
+        assert bearer_of(route) == "Bearer sk-shared"
+        assert exchange.call_count == 0
+
+    @respx.mock
+    def test_deployment_identity_beats_the_process_key(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        url: str,
+        response: httpx.Response,
+        invoke: Callable[[dict[str, str]], object],
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-shared")
+        mock_token_exchange("identity-bearer")
+        route: Final = respx.route(url__startswith=url).mock(return_value=response)
+
+        invoke(deployment_wif)
+
+        assert bearer_of(route) == "Bearer identity-bearer"
+
+
+class TestCountTokensFromDeployment:
+    @staticmethod
+    async def count(litellm_params: dict[str, str]) -> int | None:
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": litellm_params},
+        )
+        return None if result is None else result.total_tokens
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_keyless_deployment_counts_with_the_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("count-bearer")
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+
+        assert await self.count(deployment_wif) == 7
+        assert bearer_of(route) == "Bearer count-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_deployment_identity_beats_the_process_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        mock_token_exchange("count-outranks-env")
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+
+        await self.count(deployment_wif)
+
+        assert bearer_of(route) == "Bearer count-outranks-env"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_deployment_key_wins_without_an_exchange(self, deployment_wif: dict[str, str]) -> None:
+        exchange: Final = mock_token_exchange()
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+
+        await self.count({"api_key": "sk-count", **deployment_wif})
+
+        assert bearer_of(route) == "Bearer sk-count"
+        assert exchange.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_nothing_configured_falls_back_to_local_counting(self, deployment_wif: dict[str, str]) -> None:
+        assert await self.count({"model": "gpt-4o-mini"}) is None
