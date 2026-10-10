@@ -617,6 +617,7 @@ request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
 DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
+ENTRA_AGENT_IDENTITY_FACET: Final = "11"
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
 # replaced with the original base_url. This is a common misconfiguration where
 # developers deploy agents with development URLs in their agent cards.

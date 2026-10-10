@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
+from litellm.constants import ENTRA_AGENT_IDENTITY_FACET
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import (
     AgentExecutionMode,
@@ -25,6 +26,7 @@ class IdentityFields(TypedDict, total=False):
     client_id: ReadOnly[str]
     issuer: ReadOnly[str]
     service_principal_id: ReadOnly[str | None]
+    blueprint_id: ReadOnly[str | None]
     required_roles: ReadOnly[tuple[str, ...]]
     required_scopes: ReadOnly[tuple[str, ...]]
     active: ReadOnly[bool]
@@ -143,6 +145,7 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
         "tenant_id": identity.tenant_id,
         "client_id": identity.client_id,
         "service_principal_id": identity.service_principal_id,
+        "blueprint_id": identity.blueprint_id,
         "required_roles": identity.required_roles,
         "required_scopes": identity.required_scopes,
         "issuer": identity.issuer,
@@ -176,6 +179,8 @@ def classify_agent_subject(
         binding.client_id,
     ):
         return AgentIdentityFailure(message="Token does not match the registered Entra application")
+    if binding.blueprint_id is not None and not _issued_by_blueprint(claims, binding.blueprint_id):
+        return AgentIdentityFailure(message="Token was not issued to an agent identity of the configured blueprint")
     oid: Final = claims.get("oid")
     if not isinstance(oid, str) or not oid:
         return AgentIdentityFailure(message="Entra token must identify its object subject")
@@ -200,3 +205,14 @@ def classify_agent_subject(
     if not frozenset(binding.required_roles).issubset(roles):
         return AgentIdentityFailure(message="Token lacks the required application roles")
     return AgentSubject(kind="application", oid=oid, mode="autonomous")
+
+
+def _issued_by_blueprint(claims: Mapping[str, object], blueprint_id: str) -> bool:
+    parent: Final = claims.get("xms_par_app_azp")
+    actor: Final = claims.get("xms_act_fct")
+    return (
+        isinstance(parent, str)
+        and parent.lower() == blueprint_id
+        and isinstance(actor, str)
+        and ENTRA_AGENT_IDENTITY_FACET in actor.split()
+    )

@@ -2554,6 +2554,17 @@
               "title": "Agent Id",
               "type": "string"
             },
+            "blueprint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Blueprint Id"
+            },
             "client_id": {
               "title": "Client Id",
               "type": "string"
@@ -3648,6 +3659,18 @@
         "EntraIdentityConfig": {
           "additionalProperties": false,
           "properties": {
+            "blueprint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Entra Agent ID blueprint application ID. When set, only tokens issued to an agent identity created from this blueprint are accepted",
+              "title": "Blueprint Id"
+            },
             "client_id": {
               "title": "Client Id",
               "type": "string"

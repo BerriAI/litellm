@@ -150,6 +150,7 @@ describe("AddAgentForm submit payload", () => {
       tenant_id: tenant,
       client_id: clientId,
       service_principal_id: "33333333-3333-4333-8333-333333333333",
+      blueprint_id: null,
       required_roles: [],
       required_scopes: ["user_impersonation"],
     };
@@ -161,6 +162,55 @@ describe("AddAgentForm submit payload", () => {
         "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("sends the Agent ID Blueprint field as identity.blueprint_id", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const tenant = "11111111-1111-4111-8111-111111111111";
+    const blueprint = "55555555-5555-4555-8555-555555555555";
+    vi.mocked(networking.apiClient.get).mockResolvedValue([`https://login.microsoftonline.com/${tenant}/v2.0`]);
+    renderForm();
+    fireEvent.change(await screen.findByLabelText("Agent Name"), { target: { value: "Bound agent" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://runtime.example/a2a" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "Bound agent" } });
+    fireEvent.change(screen.getByPlaceholderText("Describe what this agent does..."), {
+      target: { value: "Test agent" },
+    });
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    await user.click(screen.getByLabelText("Trusted Entra Tenant"));
+    await user.click(await screen.findByRole("option", { name: tenant }));
+    fireEvent.change(screen.getByLabelText("Application (Client) ID"), {
+      target: { value: "22222222-2222-4222-8222-222222222222" },
+    });
+    fireEvent.change(screen.getByLabelText("Enterprise Application Object ID"), {
+      target: { value: "33333333-3333-4333-8333-333333333333" },
+    });
+    fireEvent.change(screen.getByLabelText("Agent ID Blueprint"), { target: { value: blueprint } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: "Use Entra JWT authentication" }));
+    await user.click(screen.getByRole("button", { name: /Create Agent/ }));
+    await waitFor(() => expect(networking.createAgentCall).toHaveBeenCalledTimes(1));
+    const payload = createdPayload();
+    expect(payload.identity).toMatchObject({ blueprint_id: blueprint });
+  });
+
+  it("trims surrounding spaces before validating the Agent ID Blueprint UUID", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const tenant = "11111111-1111-4111-8111-111111111111";
+    vi.mocked(networking.apiClient.get).mockResolvedValue([`https://login.microsoftonline.com/${tenant}/v2.0`]);
+    renderForm();
+    await user.click(await screen.findByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    const blueprint = screen.getByLabelText("Agent ID Blueprint");
+    fireEvent.change(blueprint, { target: { value: "not-a-uuid" } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    expect(await screen.findByText("Enter a valid blueprint application UUID")).toBeInTheDocument();
+    fireEvent.change(blueprint, { target: { value: "  55555555-5555-4555-8555-555555555555  " } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await waitFor(() => expect(screen.queryByText("Enter a valid blueprint application UUID")).not.toBeInTheDocument());
   });
 
   it("sends every a2a field the user filled across all collapsible panels", async () => {
