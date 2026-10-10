@@ -104,6 +104,12 @@ BETA_TRANSCRIPTION_UPDATE: Final[dict[str, JsonValue]] = {
     "input_audio_transcription": {"model": TRANSCRIBE_MODEL},
 }
 VOICE_UPDATE: Final[dict[str, JsonValue]] = {"type": "realtime", "instructions": "answer briefly"}
+VOICE_UPDATE_GATED: Final[dict[str, JsonValue]] = {
+    **VOICE_UPDATE,
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
+}
+# The client's first update races the proxy's own gate, so it is gated as a first update or forwarded as a later one
+VOICE_UPDATE_FORWARDINGS: Final = (VOICE_UPDATE, VOICE_UPDATE_GATED)
 RE_ENABLE_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": True}}},
@@ -599,6 +605,13 @@ def _session_updates(observed: tuple[dict[str, JsonValue], ...]) -> tuple[JsonVa
     return tuple(frame.get("session") for frame in _sent(observed) if frame.get("type") == "session.update")
 
 
+def _assert_voice_updates(observed: tuple[dict[str, JsonValue], ...], *later: dict[str, JsonValue]) -> None:
+    updates: Final = _session_updates(observed)
+    assert updates[0] == GA_INJECTED_UPDATE, updates
+    assert updates[1] in VOICE_UPDATE_FORWARDINGS, updates
+    assert updates[2:] == later, updates
+
+
 def _query(upgrade: dict[str, JsonValue]) -> JsonValue:
     return upgrade["query"]
 
@@ -913,7 +926,7 @@ def test_voice_session_keeps_the_injected_update_and_the_clean_transcript_flows(
             "input_audio_buffer.commit",
             "response.create",
         ), _sent(observed)
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE), _session_updates(observed)
+        _assert_voice_updates(observed)
         rows: Final = _spend_rows(key, 1)
         assert rows[0]["call_type"] == "_arealtime", rows
 
@@ -938,7 +951,7 @@ def test_voice_session_blocked_transcript_is_refused_through_the_backend(guardra
             "conversation.item.create",
             "response.create",
         ), _sent(observed)
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE), _session_updates(observed)
+        _assert_voice_updates(observed)
 
 
 def test_voice_session_cannot_re_enable_auto_response_with_a_later_update(guardrail_proxy: OwnedProxy) -> None:
@@ -951,11 +964,7 @@ def test_voice_session_cannot_re_enable_auto_response_with_a_later_update(guardr
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.types[-1] == RESPONSE_DONE, session
         assert session.errors == (), session
-        assert _session_updates(observed) == (
-            GA_INJECTED_UPDATE,
-            VOICE_UPDATE,
-            RE_ENABLE_FORWARDED,
-        ), _session_updates(observed)
+        _assert_voice_updates(observed, RE_ENABLE_FORWARDED)
 
 
 def test_client_declared_transcription_type_does_not_bypass_the_voice_guardrail(guardrail_proxy: OwnedProxy) -> None:
@@ -1210,7 +1219,7 @@ def test_opt_in_guardrail_gates_a_voice_session_on_an_opted_out_key(guardrail_pr
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
         assert session.errors == (GUARDRAIL_VIOLATION,), session
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE), _session_updates(observed)
+        _assert_voice_updates(observed)
 
 
 def test_opt_in_guardrail_leaves_a_transcription_session_alone_on_an_opted_out_key(guardrail_proxy: OwnedProxy) -> None:
