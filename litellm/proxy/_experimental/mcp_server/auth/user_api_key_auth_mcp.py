@@ -1625,7 +1625,7 @@ class MCPRequestHandler:
         )
         litellm_api_key: Final = (
             headers.get(custom_key_header_name)
-            if custom_key_header_name is not None
+            if custom_key_header_name is not None and custom_key_header_name in headers
             else next(
                 (header_value for header_name in admission_header_names if (header_value := headers.get(header_name))),
                 None,

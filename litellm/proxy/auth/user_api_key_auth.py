@@ -1601,7 +1601,7 @@ async def user_api_key_auth_builder(
             request=request,
         )
         custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
-        if custom_litellm_key_header_name is not None:
+        if custom_litellm_key_header_name is not None and custom_litellm_key_header_name in request.headers:
             api_key = get_api_key_from_custom_header(
                 request=request,
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
