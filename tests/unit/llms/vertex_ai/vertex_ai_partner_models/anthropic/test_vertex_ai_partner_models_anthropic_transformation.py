@@ -3,8 +3,12 @@ import copy
 import json
 from typing import Final
 
+import httpx
 import pytest
+import respx
+from google.oauth2.credentials import Credentials
 
+import litellm
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
@@ -487,6 +491,64 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     assert "anthropic_beta" not in result
     assert "extra_headers" not in result
     assert "anthropic-beta" not in headers
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+) -> None:
+    from litellm.main import vertex_partner_models_chat_completion
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        vertex_partner_models_chat_completion._credentials_project_mapping,
+        ("test-vertex-credentials", "test-project"),
+        (Credentials(token="test-vertex-token"), "test-project"),
+    )
+    route: Final = respx_mock.post(
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
+        "publishers/anthropic/models/claude-3-5-sonnet-v2@20241022:rawPredict"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-cache",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet-v2-20241022",
+                "content": [{"type": "text", "text": "cached"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 1},
+            },
+        )
+    )
+    cached_block: Final = {
+        "type": "text",
+        "text": "Cache this request",
+        "cache_control": {"type": "ephemeral"},
+    }
+    call_params: Final = {
+        "model": "vertex_ai/claude-3-5-sonnet-v2@20241022",
+        "messages": [{"role": "user", "content": [cached_block]}],
+        "vertex_project": "test-project",
+        "vertex_location": "us-east5",
+        "vertex_credentials": "test-vertex-credentials",
+        "max_retries": 0,
+    }
+
+    if sync_mode:
+        litellm.completion(**call_params)
+    else:
+        await litellm.acompletion(**call_params)
+
+    assert route.call_count == 1
+    request: Final = route.calls[0].request
+    assert json.loads(request.content)["messages"] == [{"role": "user", "content": [cached_block]}]
+    assert "anthropic-beta" not in request.headers
+    assert "anthropic_beta" not in json.loads(request.content)
 
 
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():

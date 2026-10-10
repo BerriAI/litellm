@@ -6,8 +6,10 @@ import io
 import json
 import logging
 import os
+import threading
 import urllib.parse
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
@@ -2015,6 +2017,186 @@ def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of
     ]
 
 
+def test_parallel_function_call_stream_reassembles_each_arguments_payload():
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function, ModelResponseStream, StreamingChoices
+
+    def chunk(tool_calls: list[ChatCompletionDeltaToolCall], finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-parallel-tools",
+            created=1751934860,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(tool_calls=tool_calls), finish_reason=finish_reason)
+            ],
+        )
+
+    chunks: Final = [
+        chunk(
+            [
+                ChatCompletionDeltaToolCall(
+                    id="call_weather",
+                    index=0,
+                    type="function",
+                    function=Function(name="weather", arguments='{"city":"'),
+                ),
+                ChatCompletionDeltaToolCall(
+                    id="call_time",
+                    index=1,
+                    type="function",
+                    function=Function(name="time", arguments='{"zone":"'),
+                ),
+            ]
+        ),
+        chunk(
+            [
+                ChatCompletionDeltaToolCall(index=0, function=Function(arguments='Paris"}')),
+                ChatCompletionDeltaToolCall(index=1, function=Function(arguments='UTC"}')),
+            ],
+            finish_reason="tool_calls",
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+    tool_calls: Final = response.choices[0].message.tool_calls
+
+    assert tool_calls is not None
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        ("call_weather", "weather", '{"city":"Paris"}'),
+        ("call_time", "time", '{"zone":"UTC"}'),
+    ]
+
+
+def _responses_sse(events: tuple[Mapping[str, object], ...]) -> bytes:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+@respx.mock
+def test_parallel_function_call_stream_over_responses_bridge_ignores_events_it_does_not_translate():
+    response_stub: Final = {
+        "id": "resp_parallel",
+        "object": "response",
+        "created_at": 1,
+        "status": "in_progress",
+        "model": "gpt-6-luna",
+        "output": [],
+    }
+    sf_args: Final = '{"location":"San Francisco, CA"}'
+    tokyo_args: Final = '{"location":"Tokyo"}'
+    sf_call: Final = {
+        "type": "function_call",
+        "id": "fc_sf",
+        "call_id": "call_sf",
+        "name": "get_current_weather",
+        "arguments": "",
+        "status": "in_progress",
+    }
+    tokyo_call: Final = {**sf_call, "id": "fc_tokyo", "call_id": "call_tokyo"}
+    events: Final = (
+        {"type": "response.created", "sequence_number": 0, "response": response_stub},
+        {"type": "response.in_progress", "sequence_number": 1, "response": response_stub},
+        {"type": "response.output_item.added", "sequence_number": 2, "output_index": 0, "item": sf_call},
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 3,
+            "item_id": "fc_sf",
+            "output_index": 0,
+            "delta": sf_args[:12],
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 4,
+            "item_id": "fc_sf",
+            "output_index": 0,
+            "delta": sf_args[12:],
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 5,
+            "item_id": "fc_sf",
+            "output_index": 0,
+            "arguments": sf_args,
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 6,
+            "output_index": 0,
+            "item": {**sf_call, "arguments": sf_args, "status": "completed"},
+        },
+        {"type": "response.output_item.added", "sequence_number": 7, "output_index": 1, "item": tokyo_call},
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 8,
+            "item_id": "fc_tokyo",
+            "output_index": 1,
+            "delta": tokyo_args,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 9,
+            "item_id": "fc_tokyo",
+            "output_index": 1,
+            "arguments": tokyo_args,
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 10,
+            "output_index": 1,
+            "item": {**tokyo_call, "arguments": tokyo_args, "status": "completed"},
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 11,
+            "response": {
+                **response_stub,
+                "status": "completed",
+                "output": [
+                    {**sf_call, "arguments": sf_args, "status": "completed"},
+                    {**tokyo_call, "arguments": tokyo_args, "status": "completed"},
+                ],
+                "usage": {"input_tokens": 80, "output_tokens": 40, "total_tokens": 120},
+            },
+        },
+    )
+    route: Final = respx.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events)
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="gpt-6-luna",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "What's the weather like in San Francisco and Tokyo?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+        complete_response=True,
+    )
+
+    assert route.call_count == 1
+    message: Final = response.choices[0].message
+    assert message.content is None
+    assert [(call.id, call.function.name, call.function.arguments) for call in message.tool_calls] == [
+        ("call_sf", "get_current_weather", sf_args),
+        ("call_tokyo", "get_current_weather", tokyo_args),
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
@@ -2593,132 +2775,108 @@ async def test_retrying() -> None:
         )
 
 
-def test_anthropic_disable_url_suffix_env_var():
-    """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/messages suffix."""
-    import os
-    from unittest.mock import MagicMock, patch
+def test_anthropic_disable_url_suffix_env_var(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com")
+    default_route: Final = respx_mock.post("https://api.example.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "test response"}],
+                "model": "claude-3-sonnet",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        )
+    )
+    default_response: Final = litellm.completion(
+        model="anthropic/claude-3-sonnet",
+        messages=[{"role": "user", "content": "test"}],
+        api_key="test-key",
+    )
 
-    from litellm import completion
+    assert default_response.choices[0].message.content == "test response"
+    assert default_route.called
+    assert str(default_route.calls.last.request.url) == "https://api.example.com/v1/messages"
 
-    # Test with environment variable disabled (default behavior)
-    with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
-        actual_api_base = None
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com/custom/path")
+    monkeypatch.setenv("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX", "true")
+    disabled_route: Final = respx_mock.post("https://api.example.com/custom/path").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "test response"}],
+                "model": "claude-3-sonnet",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        )
+    )
+    disabled_response: Final = litellm.completion(
+        model="anthropic/claude-3-sonnet",
+        messages=[{"role": "user", "content": "test"}],
+        api_key="test-key",
+    )
 
-        with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
-
-            def capture_completion(**kwargs):
-                nonlocal actual_api_base
-                actual_api_base = kwargs.get("api_base")
-                mock_response = MagicMock()
-                mock_response.choices = [MagicMock()]
-                return mock_response
-
-            mock_anthropic.completion = capture_completion
-
-            # This should append /v1/messages
-            completion(
-                model="anthropic/claude-3-sonnet",
-                messages=[{"role": "user", "content": "test"}],
-                api_key="test-key",
-            )
-
-            # Verify the api_base has /v1/messages appended
-            assert actual_api_base.endswith("/v1/messages")
-            assert actual_api_base == "https://api.example.com/v1/messages"
-
-    # Test with environment variable enabled
-    with patch.dict(
-        os.environ,
-        {
-            "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
-            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
-        },
-    ):
-        actual_api_base = None
-
-        with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
-
-            def capture_completion(**kwargs):
-                nonlocal actual_api_base
-                actual_api_base = kwargs.get("api_base")
-                mock_response = MagicMock()
-                mock_response.choices = [MagicMock()]
-                return mock_response
-
-            mock_anthropic.completion = capture_completion
-
-            # This should NOT append /v1/messages
-            completion(
-                model="anthropic/claude-3-sonnet",
-                messages=[{"role": "user", "content": "test"}],
-                api_key="test-key",
-            )
-
-            # Verify the api_base does not have /v1/messages appended
-            assert actual_api_base == "https://api.example.com/custom/path"
-            assert not actual_api_base.endswith("/v1/messages")
+    assert disabled_response.choices[0].message.content == "test response"
+    assert disabled_route.called
+    assert str(disabled_route.calls.last.request.url) == "https://api.example.com/custom/path"
 
 
-def test_anthropic_text_disable_url_suffix_env_var():
-    """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/complete suffix for anthropic_text."""
-    import os
-    from unittest.mock import MagicMock, patch
+def test_anthropic_text_disable_url_suffix_env_var(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com")
+    default_route: Final = respx_mock.post("https://api.example.com/v1/complete").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "completion": "test response",
+                "stop_reason": "stop_sequence",
+                "model": "claude-instant-1",
+            },
+        )
+    )
+    default_response: Final = litellm.text_completion(
+        model="anthropic_text/claude-instant-1",
+        prompt="test",
+        api_key="test-key",
+    )
 
-    from litellm import completion
+    assert default_response.choices[0].text == "test response"
+    assert default_route.called
+    assert str(default_route.calls.last.request.url) == "https://api.example.com/v1/complete"
 
-    # Test with environment variable disabled (default behavior)
-    with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
-        actual_api_base = None
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com/custom/complete")
+    monkeypatch.setenv("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX", "true")
+    disabled_route: Final = respx_mock.post("https://api.example.com/custom/complete").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "completion": "test response",
+                "stop_reason": "stop_sequence",
+                "model": "claude-instant-1",
+            },
+        )
+    )
+    disabled_response: Final = litellm.text_completion(
+        model="anthropic_text/claude-instant-1",
+        prompt="test",
+        api_key="test-key",
+    )
 
-        with patch("litellm.main.base_llm_http_handler") as mock_handler:
-
-            def capture_completion(**kwargs):
-                nonlocal actual_api_base
-                actual_api_base = kwargs.get("api_base")
-                return MagicMock()
-
-            mock_handler.completion = capture_completion
-
-            # This should append /v1/complete
-            completion(
-                model="anthropic_text/claude-instant-1",
-                messages=[{"role": "user", "content": "test"}],
-                api_key="test-key",
-            )
-
-            # Verify the api_base has /v1/complete appended
-            assert actual_api_base.endswith("/v1/complete")
-            assert actual_api_base == "https://api.example.com/v1/complete"
-
-    # Test with environment variable enabled
-    with patch.dict(
-        os.environ,
-        {
-            "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
-            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
-        },
-    ):
-        actual_api_base = None
-
-        with patch("litellm.main.base_llm_http_handler") as mock_handler:
-
-            def capture_completion(**kwargs):
-                nonlocal actual_api_base
-                actual_api_base = kwargs.get("api_base")
-                return MagicMock()
-
-            mock_handler.completion = capture_completion
-
-            # This should NOT append /v1/complete
-            completion(
-                model="anthropic_text/claude-instant-1",
-                messages=[{"role": "user", "content": "test"}],
-                api_key="test-key",
-            )
-
-            # Verify the api_base does not have /v1/complete appended
-            assert actual_api_base == "https://api.example.com/custom/complete"
-            assert not actual_api_base.endswith("/v1/complete")
+    assert disabled_response.choices[0].text == "test response"
+    assert disabled_route.called
+    assert str(disabled_route.calls.last.request.url) == "https://api.example.com/custom/complete"
 
 
 def test_image_edit_merges_headers_and_extra_headers():
@@ -5293,26 +5451,1255 @@ def test_completion_anthropic_hanging():
         messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
     )
 
-    print(f"converted_messages: {converted_messages}")
-
-    ## ENSURE USER / ASSISTANT ALTERNATING
+    assert len(converted_messages) == 3
     for i, msg in enumerate(converted_messages):
         if i < len(converted_messages) - 1:
             assert msg["role"] != converted_messages[i + 1]["role"]
 
 
+@respx.mock
+def test_completion_openai_returns_the_scripted_assistant_message():
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-migration-openai",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "scripted answer"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-openai-key",
+    )
+
+    assert response.choices[0].message.content == "scripted answer"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer test-openai-key"
+
+
+@respx.mock
+def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, openai_api_response):
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_body: Final = json.loads(request.content)
+        headers: Final = {
+            "x-ratelimit-remaining-tokens": "99",
+            "x-ratelimit-remaining-requests": "9",
+        }
+        if request_body.get("stream"):
+            chunks: Final = (
+                {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": request_body["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "Hello!"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": request_body["model"],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            )
+            body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+            return httpx.Response(
+                200,
+                text=body,
+                headers={**headers, "content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json=openai_api_response, headers=headers)
+
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    monkeypatch.setattr(litellm, "return_response_headers", True)
+
+    response: Final = litellm.completion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert len(route.calls) == 1
+    assert response._response_headers["x-ratelimit-remaining-tokens"] == "99"
+    assert response._hidden_params["additional_headers"]["x-ratelimit-remaining-requests"] == "9"
+    assert response._hidden_params["additional_headers"]["llm_provider-x-ratelimit-remaining-requests"] == "9"
+    stream: Final = litellm.completion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+    )
+    chunks: Final = list(stream)
+    assert len(route.calls) == 2
+    assert stream._response_headers["x-ratelimit-remaining-tokens"] == "99"
+    assert stream._hidden_params["additional_headers"]["x-ratelimit-remaining-requests"] == "9"
+    assert chunks[0].choices[0].delta.content == "Hello!"
+
+    respx.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            headers={"x-ratelimit-remaining-tokens": "98"},
+        )
+    )
+    embedding: Final = litellm.embedding(model="text-embedding-3-small", input="hello")
+    assert embedding._response_headers["x-ratelimit-remaining-tokens"] == "98"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, openai_api_response):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    stream_body: Final = (
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-6-sol",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+            }
+        )
+        + "\n\ndata: [DONE]\n\n"
+    )
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(200, json=openai_api_response, headers={"x-ratelimit-remaining-tokens": "99"}),
+            httpx.Response(
+                200,
+                text=stream_body,
+                headers={"x-ratelimit-remaining-tokens": "97", "content-type": "text/event-stream"},
+            ),
+        )
+    )
+    respx.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            headers={"x-ratelimit-remaining-tokens": "98"},
+        )
+    )
+    monkeypatch.setattr(litellm, "return_response_headers", True)
+
+    response: Final = await litellm.acompletion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    stream: Final = await litellm.acompletion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+    )
+    stream_text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+    embedding: Final = await litellm.aembedding(model="text-embedding-3-small", input="hello")
+
+    assert len(route.calls) == 2
+    assert response._response_headers["x-ratelimit-remaining-tokens"] == "99"
+    assert stream._response_headers["x-ratelimit-remaining-tokens"] == "97"
+    assert stream_text == "Hi"
+    assert embedding._response_headers["x-ratelimit-remaining-tokens"] == "98"
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@respx.mock
+async def test_azure_rate_limit_error_carries_retry_after_header(async_mode: bool, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("https://example.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings").mock(
+        return_value=httpx.Response(
+            429,
+            json={"error": {"message": "Rate Limit Error!", "code": "429"}},
+            headers={"retry-after": "30"},
+        )
+    )
+    request: Final = {
+        "model": "azure/text-embedding-3-small",
+        "input": "hello",
+        "api_base": "https://example.openai.azure.com",
+        "api_version": "2024-02-01",
+        "api_key": "azure-test-key",
+        "max_retries": 0,
+    }
+
+    with pytest.raises(litellm.RateLimitError) as error:
+        await (litellm.aembedding(**request) if async_mode else asyncio.to_thread(litellm.embedding, **request))
+
+    assert error.value.litellm_response_headers["retry-after"] == "30"
+
+
+@respx.mock
+def test_completion_preserves_empty_openai_message_content():
+    response_data: Final = {
+        "id": "chatcmpl-empty",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-6-sol",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+    }
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+
+    response: Final = litellm.completion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": ""}],
+    )
+
+    assert len(route.calls) == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "gpt-6-sol",
+        "messages": [{"role": "user", "content": ""}],
+    }
+    assert response.choices[0].message.content == ""
+
+
+@respx.mock
+def test_openai_completion_parses_scripted_chat_response(openai_api_response):
+    response_data: Final = {**openai_api_response, "model": "gpt-6-sol"}
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    response: Final = litellm.completion(model="gpt-6-sol", messages=messages)
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {"model": "gpt-6-sol", "messages": messages}
+    assert response.choices[0].message.content == response_data["choices"][0]["message"]["content"]
+    assert response.usage.total_tokens == response_data["usage"]["total_tokens"]
+
+
+@respx.mock
+def test_completion_logprobs_parses_top_logprobs():
+    response_data: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-6-sol",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "hello"},
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "hello",
+                            "logprob": -0.1,
+                            "bytes": [104, 101, 108, 108, 111],
+                            "top_logprobs": [
+                                {"token": "hello", "logprob": -0.1, "bytes": [104, 101, 108, 108, 111]},
+                                {"token": "hi", "logprob": -0.2, "bytes": [104, 105]},
+                                {"token": "hey", "logprob": -0.3, "bytes": [104, 101, 121]},
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+
+    response: Final = litellm.completion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        logprobs=True,
+        top_logprobs=3,
+        reasoning_effort="none",
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "gpt-6-sol",
+        "messages": [{"role": "user", "content": "hello"}],
+        "logprobs": True,
+        "top_logprobs": 3,
+        "reasoning_effort": "none",
+    }
+    assert [
+        item.token for item in response.choices[0].logprobs.content[0].top_logprobs
+    ] == ["hello", "hi", "hey"]
+    choice: Final = response.choices[0]
+    assert "logprobs" in choice
+    assert "content" in choice.logprobs
+    assert "delta" not in choice
+    assert "token" not in choice.logprobs
+
+
+@respx.mock
+def test_completion_logprobs_stream_parses_top_logprobs():
+    chunks: Final = (
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-6-sol",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "hello"},
+                    "finish_reason": None,
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "hello",
+                                "logprob": -0.1,
+                                "bytes": [104, 101, 108, 108, 111],
+                                "top_logprobs": [
+                                    {"token": "hello", "logprob": -0.1, "bytes": [104, 101, 108, 108, 111]},
+                                    {"token": "hi", "logprob": -0.2, "bytes": [104, 105]},
+                                    {"token": "hey", "logprob": -0.3, "bytes": [104, 101, 121]},
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-6-sol",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop", "logprobs": {"content": []}}],
+        },
+    )
+    stream_body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    streamed_response: Final = litellm.completion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        logprobs=True,
+        top_logprobs=3,
+        reasoning_effort="none",
+        stream=True,
+    )
+    response_chunks: Final = list(streamed_response)
+
+    assert len(route.calls) == 1
+    stream_request_body: Final = json.loads(route.calls[0].request.content)
+    assert stream_request_body == {
+        "model": "gpt-6-sol",
+        "messages": [{"role": "user", "content": "hello"}],
+        "logprobs": True,
+        "top_logprobs": 3,
+        "reasoning_effort": "none",
+        "stream_options": {"include_usage": True},
+        "stream": True,
+    }
+    assert [
+        item.token for item in response_chunks[0].choices[0].logprobs.content[0].top_logprobs
+    ] == ["hello", "hi", "hey"]
+
+
+@respx.mock
+def test_completion_fireworks_ai_parses_response():
+    response_data: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "accounts/fireworks/models/deepseek-v4-pro-0813",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Hello there!"},
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+    }
+    route: Final = respx.post("https://api.fireworks.ai/inference/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    response: Final = litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813",
+        messages=messages,
+        api_key="fireworks-test-key",
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "accounts/fireworks/models/deepseek-v4-pro-0813",
+        "messages": messages,
+    }
+    assert response.choices[0].message.content == "Hello there!"
+    assert response.usage.total_tokens == 12
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@respx.mock
+async def test_bedrock_converse_parses_scripted_response(
+    async_mode: bool, monkeypatch: pytest.MonkeyPatch, fake_provider_credentials: None
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-sonnet-5-5/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "Hello from Bedrock."}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 8, "outputTokens": 5, "totalTokens": 13},
+                "metrics": {"latencyMs": 12},
+            },
+        )
+    )
+    request: Final = {
+        "model": "bedrock/converse/us.anthropic.claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "api_key": "test-bedrock-token",
+        "aws_region_name": "us-west-2",
+    }
+    response: Final = (
+        await litellm.acompletion(**request) if async_mode else litellm.completion(**request)
+    )
+
+    assert route.calls[0].request.headers["authorization"] == "Bearer test-bedrock-token"
+    assert json.loads(route.calls[0].request.content) == {
+        "messages": [{"role": "user", "content": [{"text": "hello"}]}],
+        "inferenceConfig": {},
+    }
+    assert response.choices[0].message.content == "Hello from Bedrock."
+    assert response.usage.prompt_tokens == 8
+    assert response.usage.completion_tokens == 5
+
+
+@respx.mock
+def test_bedrock_converse_parses_scripted_tool_call_arguments(
+    fake_provider_credentials: None,
+):
+    route: Final = respx.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "call_trade",
+                                    "name": "trade",
+                                    "input": {
+                                        "orders": [
+                                            {
+                                                "action": "buy",
+                                                "asset": "BTC",
+                                                "amount": 0.1,
+                                            }
+                                        ]
+                                    },
+                                }
+                            }
+                        ],
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 8, "outputTokens": 5, "totalTokens": 13},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Buy 0.1 BTC"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "trade",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "orders": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "action": {"type": "string"},
+                                        "asset": {"type": "string"},
+                                        "amount": {"type": "number"},
+                                    },
+                                    "required": ["action", "asset", "amount"],
+                                },
+                            }
+                        },
+                        "required": ["orders"],
+                    },
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "trade"}},
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
+    )
+
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+    assert route.call_count == 1
+    assert tool_call.function.name == "trade"
+    assert json.loads(tool_call.function.arguments) == {
+        "orders": [{"action": "buy", "asset": "BTC", "amount": 0.1}]
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "invoke_model_id", "response_body", "expected_request_body"),
+    [
+        (
+            "bedrock/mistral.mistral-7b-instruct-v0:2",
+            "mistral.mistral-7b-instruct-v0:2",
+            {"outputs": [{"text": "Going well, thanks!", "stop_reason": "stop"}]},
+            {"prompt": "<s>[INST] Hey! how's it going? [/INST]\n", "temperature": 0.2, "max_tokens": 200},
+        ),
+        (
+            "bedrock/invoke/meta.llama3-8b-instruct-v1:0",
+            "meta.llama3-8b-instruct-v1:0",
+            {
+                "generation": "Going well, thanks!",
+                "prompt_token_count": 12,
+                "generation_token_count": 5,
+                "stop_reason": "stop",
+            },
+            {
+                "prompt": "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nHey! how's it going?<|eot_id|>"
+                "<|start_header_id|>assistant<|end_header_id|>\n\n",
+                "temperature": 0.2,
+                "max_gen_len": 200,
+            },
+        ),
+    ],
+)
+@respx.mock
+def test_bedrock_invoke_signs_request_and_parses_scripted_response(
+    model: str,
+    invoke_model_id: str,
+    response_body: dict[str, object],
+    expected_request_body: dict[str, object],
+    fake_provider_credentials: None,
+):
+    route: Final = respx.post(
+        f"https://bedrock-runtime.us-west-2.amazonaws.com/model/{invoke_model_id}/invoke"
+    ).mock(return_value=httpx.Response(200, json=response_body))
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        temperature=0.2,
+        max_tokens=200,
+        aws_region_name="us-west-2",
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=unit-test/"
+    )
+    assert "/us-west-2/bedrock/aws4_request" in request.headers["authorization"]
+    assert request.headers["x-amz-date"].endswith("Z")
+    assert json.loads(request.content) == expected_request_body
+    assert response.choices[0].message.content == "Going well, thanks!"
+    assert response.choices[0].finish_reason == "stop"
+
+
+@respx.mock
+def test_completion_azure_ad_token_is_forwarded(openai_api_response):
+    route: Final = respx.post(
+        "https://example.openai.azure.com/openai/deployments/gpt-6.1-sol/chat/completions"
+    ).mock(return_value=httpx.Response(200, json=openai_api_response))
+
+    litellm.completion(
+        model="azure/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://example.openai.azure.com",
+        api_version="2023-07-01-preview",
+        azure_ad_token="my-special-token",
+    )
+
+    assert route.calls[0].request.headers["Authorization"] == "Bearer my-special-token"
+
+
+@respx.mock
+def test_completion_azure_extra_headers_are_forwarded(openai_api_response):
+    route: Final = respx.post(
+        "https://example.openai.azure.com/openai/deployments/gpt-6.1-sol/chat/completions"
+    ).mock(return_value=httpx.Response(200, json=openai_api_response))
+
+    litellm.completion(
+        model="azure/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://example.openai.azure.com",
+        api_version="2023-07-01-preview",
+        api_key="azure-test-key",
+        extra_headers={
+            "Authorization": "my-bad-key",
+            "Ocp-Apim-Subscription-Key": "test-subscription-key",
+        },
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["Authorization"] == "my-bad-key"
+    assert request.headers["Ocp-Apim-Subscription-Key"] == "test-subscription-key"
+
+
+@respx.mock
+def test_completion_azure_api_key_argument_is_forwarded(openai_api_response):
+    route: Final = respx.post(
+        "https://example.openai.azure.com/openai/deployments/gpt-6.1-sol/chat/completions"
+    ).mock(return_value=httpx.Response(200, json=openai_api_response))
+
+    response: Final = litellm.completion(
+        model="azure/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://example.openai.azure.com",
+        api_version="2023-07-01-preview",
+        api_key="azure-test-key",
+    )
+
+    assert route.calls[0].request.headers["api-key"] == "azure-test-key"
+    assert response._hidden_params["custom_llm_provider"] == "azure"
+
+
+@respx.mock
+def test_completion_forwards_openai_optional_parameters(openai_api_response):
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=openai_api_response)
+    )
+    messages: Final = [{"role": "user", "content": "return json"}]
+
+    litellm.completion(
+        model="gpt-6-sol",
+        messages=messages,
+        temperature=0.25,
+        top_p=0.5,
+        seed=12,
+        max_tokens=10,
+        user="test-user",
+        response_format={"type": "json_object"},
+        reasoning_effort="none",
+        logit_bias=None,
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "gpt-6-sol",
+        "messages": messages,
+        "temperature": 0.25,
+        "top_p": 0.5,
+        "seed": 12,
+        "max_completion_tokens": 10,
+        "user": "test-user",
+        "response_format": {"type": "json_object"},
+        "reasoning_effort": "none",
+    }
+
+
+@respx.mock
+def test_completion_drops_unsupported_o3_mini_temperature(openai_api_response):
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model="o3-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        temperature=0.0,
+        drop_params=True,
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "o3-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_anthropic_tool_result_after_tool_call_is_translated(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    response_data: Final = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_test",
+                "name": "submitFruit",
+                "input": {"name": "Apple"},
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 16, "output_tokens": 8},
+    }
+    route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+    messages: Final = [
+        {"role": "system", "content": "Use the submitFruit function for a fruit."},
+        {"role": "user", "content": "I like apples"},
+        {
+            "role": "assistant",
+            "content": "<thinking>Use the submitFruit function.</thinking>",
+            "tool_calls": [
+                {
+                    "id": "toolu_test",
+                    "type": "function",
+                    "function": {"name": "submitFruit", "arguments": '{"name": "Apple"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_test", "content": '{"success":true}'},
+    ]
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "submitFruit",
+                "description": "Submits a fruit",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            },
+        }
+    ]
+
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=messages,
+        tools=tools,
+        max_tokens=128,
+        api_key="anthropic-test-key",
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body["messages"][1]["content"] == [
+        {"type": "text", "text": "<thinking>Use the submitFruit function.</thinking>"},
+        {
+            "type": "tool_use",
+            "id": "toolu_test",
+            "name": "submitFruit",
+            "input": {"name": "Apple"},
+        },
+    ]
+    assert request_body["messages"][2]["content"][0]["type"] == "tool_result"
+    assert request_body["messages"][2]["content"][0]["tool_use_id"] == "toolu_test"
+    assert response.choices[0].message.tool_calls[0].function.name == "submitFruit"
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {"name": "Apple"}
+
+
+@respx.mock
+def test_gemini_completion_translates_messages_and_parses_candidate():
+    response_data: Final = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello there!"}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 2,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 4,
+        },
+        "modelVersion": "gemini-3.8-flash",
+    }
+    route: Final = respx.post(
+        "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash:generateContent"
+    ).mock(return_value=httpx.Response(200, json=response_data))
+
+    safety_settings: Final = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    response: Final = litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {"role": "system", "content": "Be a good bot!"},
+            {"role": "user", "content": "Hey, how's it going?"},
+        ],
+        safety_settings=safety_settings,
+        api_key="test-gemini-key",
+    )
+
+    request: Final = route.calls[0].request
+    request_body: Final = json.loads(request.content)
+    assert request.headers["x-goog-api-key"] == "test-gemini-key"
+    assert request_body["system_instruction"] == {"parts": [{"text": "Be a good bot!"}]}
+    assert request_body["contents"] == [{"parts": [{"text": "Hey, how's it going?"}], "role": "user"}]
+    assert request_body["safetySettings"] == safety_settings
+    assert response.choices[0].message.content == "Hello there!"
+    assert response.usage.total_tokens == 4
+
+
+@respx.mock
+def test_qwen_text_completion_parses_text_and_logprobs():
+    response_data: Final = {
+        "id": "cmpl-test",
+        "object": "text_completion",
+        "created": 1,
+        "model": "gpt-6-sol",
+        "choices": [
+            {
+                "text": "hello",
+                "index": 0,
+                "logprobs": {
+                    "tokens": ["hello"],
+                    "token_logprobs": [-0.1],
+                    "top_logprobs": [{"hello": -0.1}],
+                    "text_offset": [0],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    route: Final = respx.post("https://api.openai.com/v1/completions").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+
+    response: Final = litellm.completion(
+        model="text-completion-openai/gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        logprobs=1,
+    )
+
+    assert len(route.calls) == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {"model": "gpt-6-sol", "prompt": "hello", "logprobs": 1}
+    assert response.choices[0].message.content == "hello"
+    assert response.choices[0].logprobs.token_logprobs == [-0.1]
+
+
+@respx.mock
+def test_replicate_completion_applies_registered_prompt_template(monkeypatch: pytest.MonkeyPatch):
+    model: Final = "replicate/meta/llama-3-70b-instruct"
+    prompt: Final = "You are a good assistant[INST] What is 2 + 2? [/INST]Now answer as best you can:"
+    create_prediction: Final = respx.post(
+        "https://api.replicate.com/v1/models/meta/llama-3-70b-instruct/predictions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "prediction-test",
+                "urls": {
+                    "get": "https://api.replicate.com/v1/predictions/prediction-test",
+                    "cancel": "https://api.replicate.com/v1/predictions/prediction-test/cancel",
+                },
+            },
+        )
+    )
+    respx.get("https://api.replicate.com/v1/predictions/prediction-test").mock(
+        return_value=httpx.Response(200, json={"status": "succeeded", "output": ["4"]})
+    )
+    monkeypatch.setattr(litellm, "custom_prompt_dict", dict(litellm.custom_prompt_dict))
+    litellm.register_prompt_template(
+        model=model,
+        initial_prompt_value="You are a good assistant",
+        final_prompt_value="Now answer as best you can:",
+        roles={
+            "user": {"pre_message": "[INST] ", "post_message": " [/INST]"},
+        },
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What is 2 + 2?"}],
+        api_key="replicate-test-key",
+    )
+
+    request_body: Final = json.loads(create_prediction.calls[0].request.content)
+    assert request_body["input"] == {"prompt": prompt}
+    assert response.choices[0].message.content == "4"
+
+
+@respx.mock
+def test_petals_completion_sends_model_and_messages_to_custom_base():
+    route: Final = respx.post("https://api.petals.dev/").mock(
+        return_value=httpx.Response(200, json={"outputs": "Hello!"})
+    )
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    response: Final = litellm.completion(
+        model="petals-team/StableBeluga2",
+        messages=messages,
+        api_base="https://api.petals.dev",
+        max_tokens=7,
+    )
+
+    request: Final = route.calls[0].request
+    assert str(request.url) == "https://api.petals.dev/"
+    assert request.content == b"model=petals-team%2FStableBeluga2&inputs=hello&max_new_tokens=7"
+    assert response.choices[0].message.content == "Hello!"
+
+
+@respx.mock
+def test_petals_config_fills_unset_params_while_explicit_params_win(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm.PetalsConfig, "temperature", 0.4)
+    monkeypatch.setattr(litellm.PetalsConfig, "top_k", 5)
+    route: Final = respx.post("https://api.petals.dev/").mock(
+        return_value=httpx.Response(200, json={"outputs": "Hello!"})
+    )
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    litellm.completion(model="petals-team/StableBeluga2", messages=messages, api_base="https://api.petals.dev")
+    litellm.completion(
+        model="petals-team/StableBeluga2",
+        messages=messages,
+        api_base="https://api.petals.dev",
+        max_tokens=7,
+        temperature=0.9,
+    )
+
+    assert [urllib.parse.parse_qs(call.request.content.decode()) for call in route.calls] == [
+        {
+            "model": ["petals-team/StableBeluga2"],
+            "inputs": ["hello"],
+            "max_new_tokens": [str(litellm.max_tokens)],
+            "temperature": ["0.4"],
+            "top_k": ["5"],
+        },
+        {
+            "model": ["petals-team/StableBeluga2"],
+            "inputs": ["hello"],
+            "max_new_tokens": ["7"],
+            "temperature": ["0.9"],
+            "top_k": ["5"],
+        },
+    ]
+
+
+@respx.mock
+def test_moderation_posts_input_to_custom_base_and_parses_results():
+    route: Final = respx.post("https://moderation.unit-test/v1/moderations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "modr-unit-test",
+                "model": "omni-moderation-latest",
+                "results": [
+                    {
+                        "flagged": True,
+                        "categories": {"harassment": True, "violence": False},
+                        "category_scores": {"harassment": 0.91, "violence": 0.02},
+                    }
+                ],
+            },
+        )
+    )
+
+    response: Final = litellm.moderation(
+        input="i'm ishaan cto of litellm",
+        model="omni-moderation-latest",
+        api_key="sk-moderation-test",
+        api_base="https://moderation.unit-test/v1",
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer sk-moderation-test"
+    assert json.loads(request.content) == {"input": "i'm ishaan cto of litellm", "model": "omni-moderation-latest"}
+    assert response.id == "modr-unit-test"
+    assert response.results[0].flagged is True
+    assert (response.results[0].categories["harassment"], response.results[0].categories["violence"]) == (True, False)
+    assert (
+        response.results[0].category_scores["harassment"],
+        response.results[0].category_scores["violence"],
+    ) == (0.91, 0.02)
+
+
+@respx.mock
+def test_mistral_tool_use_round_trip():
+    first_response: Final = {
+        "id": "chatcmpl-tool",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "mistral-medium-latest",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {
+                                "name": "get_current_weather",
+                                "arguments": '{"location":"Boston","unit":"fahrenheit"}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+    }
+    final_response: Final = {
+        "id": "chatcmpl-final",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "mistral-large-latest",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "A sunny day."},
+            }
+        ],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_body: Final = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=first_response if request_body["model"] == "mistral-medium-latest" else final_response,
+        )
+
+    route: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(side_effect=respond)
+    messages: Final = [{"role": "user", "content": "What's the weather in Boston?"}]
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    tool_response: Final = litellm.completion(
+        model="mistral/mistral-medium-latest",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+        api_key="test-mistral-key",
+    )
+    tool_call: Final = tool_response.choices[0].message.tool_calls[0]
+    assert tool_call.function.name == "get_current_weather"
+    assert tool_call.function.arguments == '{"location":"Boston","unit":"fahrenheit"}'
+    followup_messages: Final = [
+        *messages,
+        tool_response.choices[0].message.model_dump(exclude_none=True),
+        {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "name": tool_call.function.name,
+            "content": '{"temperature":"72","unit":"fahrenheit"}',
+        },
+    ]
+    final: Final = litellm.completion(
+        model="mistral/mistral-large-latest",
+        messages=followup_messages,
+        tools=tools,
+        tool_choice="auto",
+        api_key="test-mistral-key",
+    )
+
+    assert len(route.calls) == 2
+    second_request: Final = json.loads(route.calls[1].request.content)
+    assert second_request["messages"][-1]["role"] == "tool"
+    assert second_request["messages"][-1]["tool_call_id"] == "call_weather"
+    assert final.choices[0].message.content == "A sunny day."
+
+
+@respx.mock
+def test_mistral_text_content_array_is_sent_as_text():
+    response_data: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "mistral-large-latest",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Hello."},
+            }
+        ],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+    }
+    route: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=response_data)
+    )
+
+    response: Final = litellm.completion(
+        model="mistral/mistral-large-latest",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hey, how's it going?"}],
+            }
+        ],
+        api_key="test-mistral-key",
+        input_cost_per_token=0.0000008,
+        output_cost_per_token=0.0000032,
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "mistral-large-latest",
+        "messages": [{"role": "user", "content": "Hey, how's it going?"}],
+    }
+    assert response._hidden_params["response_cost"] == pytest.approx(8 * 0.0000008 + 2 * 0.0000032)
+
+
+def test_mock_request_returns_requested_response():
+    response: Final = litellm.mock_completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="mocked answer",
+    )
+
+    assert response.choices[0].message.content == "mocked answer"
+
+
+def test_mock_request_with_mock_timeout_raises_litellm_timeout():
+    with pytest.raises(litellm.Timeout) as error:
+        litellm.completion(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": "hello"}],
+            timeout=0.01,
+            mock_timeout=True,
+            num_retries=0,
+        )
+
+    assert error.value.model == "gpt-5.6"
+
+
+def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "gpt-5.6",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.Timeout) as error:
+        router.completion(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": "hello"}],
+            timeout=0.01,
+            mock_timeout=True,
+        )
+
+    assert error.value.model == "gpt-5.6"
+
+
+@respx.mock
+def test_router_mock_request_fallback_uses_fallback_model(openai_api_response):
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={**openai_api_response, "model": "gpt-5.5"})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {"model": "gpt-5.6", "api_key": "test-key"},
+            },
+            {
+                "model_name": "gpt-5.5",
+                "litellm_params": {"model": "gpt-5.5", "api_key": "test-key"},
+            },
+        ],
+        fallbacks=[{"gpt-5.6": ["gpt-5.5"]}],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hello"}],
+        timeout=0.01,
+        mock_timeout=True,
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in route.calls] == ["gpt-5.5"]
+    assert response.model == "gpt-5.5"
+
+
 @pytest.mark.parametrize("drop_params", [True, False])
+@respx.mock
 def test_completion_deep_infra(drop_params):
-    """Test that DeepInfra requests are shaped correctly without making real API calls."""
-    from unittest.mock import MagicMock, patch
-
-    import httpx
-    from openai.types.chat import ChatCompletion, ChatCompletionMessage
-    from openai.types.chat.chat_completion import Choice
-
     litellm.set_verbose = False
-    model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
-    tools = [
+    model_name: Final = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
+    model: Final = "meta-llama/Llama-2-70b-chat-hf"
+    endpoint: Final = "https://api.deepinfra.com/v1/openai/chat/completions"
+    tools: Final = [
         {
             "type": "function",
             "function": {
@@ -5332,131 +6719,114 @@ def test_completion_deep_infra(drop_params):
             },
         }
     ]
-    messages = [
+    messages: Final = [
         {
             "role": "user",
             "content": "What's the weather like in Boston today in Fahrenheit?",
         }
     ]
-
-    mock_response = ChatCompletion(
-        id="chatcmpl-mock",
-        choices=[
-            Choice(
-                finish_reason="stop",
-                index=0,
-                message=ChatCompletionMessage(content="It's sunny.", role="assistant"),
-            )
+    response_body: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "It's sunny."},
+            }
         ],
-        created=1234567890,
-        model="meta-llama/Llama-2-70b-chat-hf",
-        object="chat.completion",
-        usage={"completion_tokens": 5, "prompt_tokens": 20, "total_tokens": 25},
+        "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
+    }
+    route: Final = respx.post(endpoint).mock(
+        return_value=httpx.Response(200, json=response_body)
     )
 
-    mock_raw = MagicMock()
-    mock_raw.parse.return_value = mock_response
-    mock_raw.headers = httpx.Headers({"content-type": "application/json"})
-    mock_raw.status_code = 200
+    if not drop_params:
+        with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+            completion(
+                model=model_name,
+                messages=messages,
+                temperature=0,
+                max_tokens=10,
+                tools=tools,
+                tool_choice={"type": "function", "function": {"name": "get_current_weather"}},
+                drop_params=False,
+                api_key="fake-api-key",
+            )
+        assert route.calls == []
+        return
 
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request",
-        return_value=(mock_raw, mock_response),
-    ) as mock_create:
-        if drop_params is False:
-            # DeepInfra doesn't support tool_choice, should raise UnsupportedParamsError
-            with pytest.raises(litellm.exceptions.UnsupportedParamsError):
-                completion(
-                    model=model_name,
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=10,
-                    tools=tools,
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": "get_current_weather"},
-                    },
-                    drop_params=drop_params,
-                    api_key="fake-api-key",
-                )
-            return
+    response: Final = completion(
+        model=model_name,
+        messages=messages,
+        temperature=0,
+        max_tokens=10,
+        tools=tools,
+        tool_choice={
+            "type": "function",
+            "function": {"name": "get_current_weather"},
+        },
+        drop_params=drop_params,
+        api_key="fake-api-key",
+    )
 
-        response = completion(
-            model=model_name,
-            messages=messages,
-            temperature=0,
-            max_tokens=10,
-            tools=tools,
-            tool_choice={
-                "type": "function",
-                "function": {"name": "get_current_weather"},
-            },
-            drop_params=drop_params,
-            api_key="fake-api-key",
-        )
-
-        # Verify the call was made
-        mock_create.assert_called_once()
-        call_kwargs = mock_create.call_args.kwargs
-
-        # Verify request shape
-        data = call_kwargs["data"]
-        assert data["model"] == "meta-llama/Llama-2-70b-chat-hf"
-        assert data["messages"] == messages
-        assert data["temperature"] == 0
-        assert data["max_tokens"] == 10
-        # tool_choice should be dropped for unsupported params
-        assert "tool_choice" not in data
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls.last.request.read())
+    assert request_body == {
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": 10,
+        "tools": tools,
+    }
+    assert response.choices[0].message.content == "It's sunny."
+    assert response.choices[0].finish_reason == "stop"
 
 
+@respx.mock
 def test_completion_deep_infra_mistral():
-    """Test that DeepInfra Mistral requests are shaped correctly without making real API calls."""
-    from unittest.mock import MagicMock, patch
-
-    import httpx
-    from openai.types.chat import ChatCompletion, ChatCompletionMessage
-    from openai.types.chat.chat_completion import Choice
-
-    model_name = "deepinfra/mistralai/Mistral-7B-Instruct-v0.1"
-
-    mock_response = ChatCompletion(
-        id="chatcmpl-mock",
-        choices=[
-            Choice(
-                finish_reason="stop",
-                index=0,
-                message=ChatCompletionMessage(content="Hello!", role="assistant"),
-            )
+    model_name: Final = "deepinfra/mistralai/Mistral-7B-Instruct-v0.1"
+    model: Final = "mistralai/Mistral-7B-Instruct-v0.1"
+    messages: Final = [{"role": "user", "content": "Say hello."}]
+    endpoint: Final = "https://api.deepinfra.com/v1/openai/chat/completions"
+    response_body: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Hello!"},
+            }
         ],
-        created=1234567890,
-        model="mistralai/Mistral-7B-Instruct-v0.1",
-        object="chat.completion",
-        usage={"completion_tokens": 5, "prompt_tokens": 20, "total_tokens": 25},
+        "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
+    }
+    route: Final = respx.post(endpoint).mock(
+        return_value=httpx.Response(200, json=response_body)
     )
 
-    mock_raw = MagicMock()
-    mock_raw.parse.return_value = mock_response
-    mock_raw.headers = httpx.Headers({"content-type": "application/json"})
-    mock_raw.status_code = 200
+    response: Final = completion(
+        model=model_name,
+        messages=messages,
+        temperature=0.01,
+        max_tokens=10,
+        api_key="fake-api-key",
+    )
 
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request",
-        return_value=(mock_raw, mock_response),
-    ) as mock_create:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            temperature=0.01,
-            max_tokens=10,
-            api_key="fake-api-key",
-        )
-
-        mock_create.assert_called_once()
-        call_kwargs = mock_create.call_args.kwargs
-        data = call_kwargs["data"]
-        assert data["model"] == "mistralai/Mistral-7B-Instruct-v0.1"
-        assert data["temperature"] == 0.01
-        assert data["max_tokens"] == 10
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls.last.request.read())
+    assert request_body == {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.01,
+        "max_tokens": 10,
+    }
+    assert response.choices[0].message.content == "Hello!"
+    assert response.choices[0].finish_reason == "stop"
 
 
 @pytest.mark.parametrize(
@@ -6186,6 +7556,580 @@ def test_azure_embedding_exceptions():
             mock_response="error",
         )
     assert str(exc_info.value) == "Mock error"
+
+
+@respx.mock
+def test_openai_chat_stream_routes_legacy_function_calls_and_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "return_response_headers", True)
+    api_base: Final = "https://openai-unit.test/v1"
+    messages: Final = ({"role": "user", "content": "What is the weather in SF?"},)
+    functions: Final = (
+        {
+            "name": "get_current_weather",
+            "description": "Get current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"],
+            },
+        },
+    )
+    answer_events: Final = (
+        {
+            "id": "chatcmpl-answer",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "The answer is "},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-answer",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "42."},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-answer",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-answer",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        },
+    )
+    function_events: Final = (
+        {
+            "id": "chatcmpl-function",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "function_call": {
+                            "name": "get_current_weather",
+                            "arguments": '{"location":',
+                        },
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-function",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"function_call": {"arguments": '"San Francisco"}'}},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-function",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {"index": 0, "delta": {}, "finish_reason": "function_call"}
+            ],
+        },
+    )
+
+    def response_body(events: tuple[dict[str, object], ...]) -> str:
+        return "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+
+    scripted_responses: Final = iter(
+        (
+            httpx.Response(
+                200,
+                text=response_body(answer_events),
+                headers={
+                    "content-type": "text/event-stream",
+                    "x-ratelimit-remaining-requests": "17",
+                },
+            ),
+            httpx.Response(
+                200,
+                text=response_body(function_events),
+                headers={"content-type": "text/event-stream"},
+            ),
+        )
+    )
+    route: Final = respx.post(f"{api_base}/chat/completions").mock(
+        side_effect=lambda _: next(scripted_responses)
+    )
+    stream: Final = litellm.completion(
+        model="gpt-4o-mini",
+        api_key="sk-test",
+        api_base=api_base,
+        messages=messages,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    answer_chunks: Final = tuple(stream)
+
+    assert "".join(
+        chunk.choices[0].delta.content
+        for chunk in answer_chunks
+        if chunk.choices and chunk.choices[0].delta.content
+    ) == "The answer is 42."
+    assert tuple(
+        chunk.choices[0].finish_reason
+        for chunk in answer_chunks
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
+    assert answer_chunks[-2].choices[0].finish_reason == "stop"
+    assert tuple(getattr(chunk, "usage", None) for chunk in answer_chunks[:-1]) == (
+        None,
+        None,
+        None,
+    )
+    assert answer_chunks[-1].usage is not None
+    assert answer_chunks[-1].usage.prompt_tokens == 4
+    assert answer_chunks[-1].usage.completion_tokens == 2
+    assert answer_chunks[-1].usage.total_tokens == 6
+    assert stream._hidden_params["api_base"] == api_base
+    assert (
+        answer_chunks[0]._hidden_params["additional_headers"][
+            "llm_provider-x-ratelimit-remaining-requests"
+        ]
+        == "17"
+    )
+
+    function_stream: Final = litellm.completion(
+        model="gpt-4o-mini",
+        api_key="sk-test",
+        api_base=api_base,
+        messages=messages,
+        functions=functions,
+        function_call={"name": "get_current_weather"},
+        stream=True,
+    )
+    function_chunks: Final = tuple(function_stream)
+    assembled: Final = litellm.stream_chunk_builder(
+        chunks=function_chunks, messages=messages
+    )
+    function_call: Final = assembled.choices[0].message.function_call
+
+    assert function_call is not None
+    assert function_call.name == "get_current_weather"
+    assert json.loads(function_call.arguments) == {"location": "San Francisco"}
+    assert tuple(
+        chunk.choices[0].finish_reason
+        for chunk in function_chunks
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    ) == ("function_call",)
+    assert route.call_count == 2
+    assert json.loads(route.calls[0].request.content)["stream_options"] == {
+        "include_usage": True
+    }
+    assert json.loads(route.calls[1].request.content)["function_call"] == {
+        "name": "get_current_weather"
+    }
+    assert json.loads(route.calls[1].request.content)["functions"] == list(functions)
+
+
+@respx.mock
+async def test_async_openai_stream_options_include_usage_on_the_last_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    events: Final = (
+        {
+            "id": "chatcmpl-async-usage",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "async reply"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-async-usage",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-async-usage",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
+    )
+    body: Final = "".join(
+        f"data: {json.dumps(event)}\n\n" for event in events
+    ) + "data: [DONE]\n\n"
+    route: Final = respx.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+    )
+    stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "say hello"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    chunks: Final = tuple([chunk async for chunk in stream])
+
+    assert "".join(
+        chunk.choices[0].delta.content
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].delta.content
+    ) == "async reply"
+    assert tuple(getattr(chunk, "usage", None) for chunk in chunks[:-1]) == (
+        None,
+        None,
+    )
+    assert chunks[-1].usage.prompt_tokens == 3
+    assert chunks[-1].usage.completion_tokens == 2
+    assert chunks[-1].usage.total_tokens == 5
+    assert json.loads(route.calls[0].request.content)["stream_options"] == {
+        "include_usage": True
+    }
+
+
+@respx.mock
+async def test_parallel_openai_streams_keep_prompt_responses_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        prompt: Final = json.loads(request.content)["messages"][0]["content"]
+        response_text: Final = {
+            "request one": "response one",
+            "request two": "response two",
+        }[prompt]
+        events: Final = (
+            {
+                "id": "chatcmpl-parallel",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": response_text},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-parallel",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        )
+        body: Final = "".join(
+            f"data: {json.dumps(event)}\n\n" for event in events
+        ) + "data: [DONE]\n\n"
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    route: Final = respx.post(
+        "https://api.openai.com/v1/chat/completions"
+    ).mock(side_effect=respond)
+
+    async def collect(prompt: str) -> tuple[str, tuple[str, ...]]:
+        stream = await litellm.acompletion(
+            model="gpt-4o-mini",
+            api_key="sk-test",
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+        )
+        chunks: Final = tuple([chunk async for chunk in stream])
+        response_text: Final = "".join(
+            chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices
+        )
+        finish_reasons: Final = tuple(
+            chunk.choices[0].finish_reason
+            for chunk in chunks
+            if chunk.choices and chunk.choices[0].finish_reason is not None
+        )
+        return response_text, finish_reasons
+
+    responses: Final = tuple(
+        await asyncio.gather(collect("request one"), collect("request two"))
+    )
+
+    assert tuple(response for response, _ in responses) == (
+        "response one",
+        "response two",
+    )
+    assert tuple(finish_reasons for _, finish_reasons in responses) == (
+        ("stop",),
+        ("stop",),
+    )
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_parallel_sync_openai_streams_in_threads_keep_prompt_responses_separate() -> None:
+    both_requests_in_flight: Final = threading.Barrier(2, timeout=10)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        prompt: Final = json.loads(request.content)["messages"][0]["content"]
+        both_requests_in_flight.wait()
+        events: Final = (
+            {
+                "id": "chatcmpl-parallel-sync",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": prompt.replace("request", "response")},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-parallel-sync",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        )
+        body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+
+    def collect(prompt: str) -> tuple[str, tuple[str, ...]]:
+        stream: Final = litellm.completion(
+            model="gpt-4o-mini",
+            api_key="sk-test",
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+        )
+        chunks: Final = tuple(stream)
+        return (
+            "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices),
+            tuple(
+                chunk.choices[0].finish_reason
+                for chunk in chunks
+                if chunk.choices and chunk.choices[0].finish_reason is not None
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses: Final = tuple(pool.map(collect, ("request one", "request two")))
+
+    assert responses == (("response one", ("stop",)), ("response two", ("stop",)))
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_openai_streaming_tool_call_arguments_are_valid_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chunks: Final = (
+        {
+            "id": "chatcmpl-tools",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_weather",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_current_weather",
+                                    "arguments": '{"location":"Boston",',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-tools",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {"arguments": '"unit":"fahrenheit"}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-tools",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
+    stream: Final = litellm.completion(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {"type": "string"},
+                        },
+                        "required": ["location", "unit"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+        api_key="test-openai-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert json.loads(assembled.choices[0].message.tool_calls[0].function.arguments) == {
+        "location": "Boston",
+        "unit": "fahrenheit",
+    }
+
+
+@respx.mock
+def test_streaming_openai_usage_includes_test_owned_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model_name: Final = "stream-cost-test-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model_name,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    chunks: Final = (
+        {
+            "id": "chatcmpl-cost",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": model_name,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant", "content": "priced"}, "finish_reason": None}
+            ],
+        },
+        {
+            "id": "chatcmpl-cost",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": model_name,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-cost",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": model_name,
+            "choices": [],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    stream: Final = litellm.completion(
+        model=f"openai/{model_name}",
+        messages=[{"role": "user", "content": "price the response"}],
+        stream=True,
+        stream_options={"include_usage": True},
+        api_key="test-openai-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    usage_chunks: Final = tuple(
+        getattr(chunk, "usage", None)
+        for chunk in stream_chunks
+        if getattr(chunk, "usage", None) is not None
+    )
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].cost == pytest.approx(4 * 0.001 + 2 * 0.002)
 
 
 

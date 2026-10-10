@@ -1,7 +1,15 @@
 import base64
+import functools
 import json
+import re
+import sys
+from types import SimpleNamespace
+from typing import Final
 
 from dotenv import load_dotenv
+import httpx
+import respx
+from google.oauth2.credentials import Credentials
 
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.prompt_templates
@@ -13,7 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
-from litellm import get_optional_params
+from litellm import Router, get_optional_params
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 from litellm.types.llms.vertex_ai import BlobType
 
@@ -1535,3 +1543,1407 @@ def test_system_prompt_only_adds_blank_user_message():
     #########################################################
     assert len(data["system_instruction"]) == 1
     assert data["system_instruction"]["parts"][0]["text"] == SYSTEM_INSTRUCTION
+
+
+@pytest.fixture
+def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
+    from litellm.main import (
+        vertex_chat_completion,
+        vertex_embedding,
+        vertex_model_garden_chat_completion,
+        vertex_partner_models_chat_completion,
+    )
+
+    credential_key: Final = "test-vertex-gemini-credentials"
+    credentials: Final = Credentials(token="test-vertex-token")
+    for vertex_configuration in (
+        vertex_chat_completion,
+        vertex_embedding,
+        vertex_model_garden_chat_completion,
+        vertex_partner_models_chat_completion,
+    ):
+        monkeypatch.setitem(
+            vertex_configuration._credentials_project_mapping,
+            (credential_key, "test-project"),
+            (credentials, "test-project"),
+        )
+    return credential_key
+
+
+def test_litellm_completion_vertex_exception(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": 400,
+                    "message": "Gemini rejected the request.",
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="vertex_ai/gemini-3.5-flash-lite",
+            messages=[{"role": "user", "content": "hello"}],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            vertex_credentials=_cached_vertex_credentials,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "vertex_ai"
+    assert "Gemini rejected the request." in exc_info.value.message
+    assert route.call_count == 1
+
+
+def test_router_completion_vertex_exception(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            429,
+            json={
+                "error": {
+                    "code": 429,
+                    "message": "Vertex Gemini quota exceeded.",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini-test",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash-lite",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "vertex_credentials": _cached_vertex_credentials,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        router.completion(
+            model="vertex-gemini-test",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.llm_provider == "vertex_ai"
+    assert "Vertex Gemini quota exceeded." in exc_info.value.message
+    assert route.call_count == 1
+
+
+def _vertex_gemini_response(text: str = "hello") -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": text}]},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 1,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 2,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_completion_fine_tuned_model(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/endpoints/4965075652664360960:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json=_vertex_gemini_response("A canvas vast"))
+    )
+
+    response: Final = await litellm.acompletion(
+        model="vertex_ai_beta/4965075652664360960",
+        messages=[{"role": "user", "content": "Write a short poem about the sky"}],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "contents": [
+            {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
+        ]
+    }
+    assert response.choices[0].message.content.startswith("A canvas vast")
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.total_tokens == 2
+
+
+@pytest.mark.parametrize(
+    ("base_model", "metadata"),
+    [
+        (None, {"model_info": {"base_model": "vertex_ai/gemini-1.5-pro"}}),
+        ("vertex_ai/gemini-1.5-pro", None),
+    ],
+)
+def test_gemini_finetuned_endpoint(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    base_model: str | None,
+    metadata: dict[str, object] | None,
+) -> None:
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/endpoints/4965075652664360960:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json=_vertex_gemini_response())
+    )
+
+    litellm.completion(
+        model="vertex_ai/4965075652664360960",
+        messages=[{"role": "user", "content": "search for weather in boston"}],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        base_model=base_model,
+        metadata=metadata,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert str(route.calls[0].request.url).endswith(
+        "endpoints/4965075652664360960:generateContent"
+    )
+
+
+def test_gemini_nullable_object_tool_schema_httpx(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    url: Final = (
+        "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/"
+        "publishers/google/models/gemini-3.5-flash:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json=_vertex_gemini_response())
+    )
+
+    litellm.completion(
+        model="vertex_ai/gemini-3.5-flash",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=[
+            {
+                "type": "function",
+                "strict": True,
+                "function": {
+                    "name": "create_support_ticket",
+                    "description": "Create a support ticket",
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["ticket_id", "customer_context"],
+                        "properties": {
+                            "ticket_id": {"type": "string"},
+                            "optional_context": {
+                                "type": ["object", "null"],
+                                "additionalProperties": False,
+                                "required": ["source"],
+                                "properties": {"source": {"type": "string"}},
+                            },
+                            "customer_context": {
+                                "anyOf": [
+                                    {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["user_id", "plan"],
+                                        "properties": {
+                                            "user_id": {"type": "string"},
+                                            "plan": {"type": "string"},
+                                        },
+                                    },
+                                    {"type": "null"},
+                                ],
+                            },
+                        },
+                    },
+                },
+            }
+        ],
+        tool_choice="required",
+        vertex_project="test-project",
+        vertex_location="global",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    parameters_schema: Final = request_body["tools"][0]["function_declarations"][0][
+        "parameters"
+    ]
+    context_schema: Final = parameters_schema["properties"]["customer_context"]
+    nullable_object_schema: Final = context_schema["anyOf"][0]
+    assert nullable_object_schema["nullable"] is True
+    assert nullable_object_schema["properties"] == {
+        "user_id": {"type": "string"},
+        "plan": {"type": "string"},
+    }
+    assert parameters_schema["properties"]["optional_context"]["anyOf"] == [
+        {
+            "type": "object",
+            "required": ["source"],
+            "properties": {"source": {"type": "string"}},
+        },
+        {"type": "null"},
+    ]
+
+
+@pytest.mark.parametrize("value_in_dict", [{}, {"disable_attribution": False}])
+def test_gemini_pro_grounding(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    value_in_dict: dict[str, bool],
+) -> None:
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/publishers/google/models/gemini-1.0-pro-001:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "Argentina won the World Cup"}],
+                        },
+                        "finishReason": "STOP",
+                        "groundingMetadata": {
+                            "webSearchQueries": ["latest world cup winner"],
+                            "groundingChunks": [
+                                {
+                                    "web": {
+                                        "uri": "https://example.com",
+                                        "title": "Example",
+                                    }
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 2,
+                    "totalTokenCount": 3,
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="vertex_ai_beta/gemini-1.0-pro-001",
+        messages=[{"role": "user", "content": "Who won the world cup?"}],
+        tools=[{"googleSearchRetrieval": value_in_dict}],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body["tools"] == [{"googleSearchRetrieval": value_in_dict}]
+    assert response._hidden_params["vertex_ai_grounding_metadata"] == [
+        {
+            "webSearchQueries": ["latest world cup winner"],
+            "groundingChunks": [
+                {"web": {"uri": "https://example.com", "title": "Example"}}
+            ],
+        }
+    ]
+
+
+_CUSTOM_API_BASE: Final = "https://vertex-proxy.example.com/v1/custom-route"
+
+
+@pytest.mark.parametrize(
+    ("model", "endpoint", "response_body"),
+    [
+        ("gemini-2.5-flash-lite", "generateContent", _vertex_gemini_response()),
+        (
+            "claude-3-5-sonnet@20240620",
+            "rawPredict",
+            {
+                "id": "msg-custom-base",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet-20240620",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        ),
+    ],
+)
+def test_gemini_pro_httpx_custom_api_base(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    model: str,
+    endpoint: str,
+    response_body: dict[str, object],
+) -> None:
+    route: Final = respx_mock.post(f"{_CUSTOM_API_BASE}:{endpoint}").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+
+    response: Final = litellm.completion(
+        model=f"vertex_ai/{model}",
+        messages=[{"role": "user", "content": "Hello world"}],
+        api_base=_CUSTOM_API_BASE,
+        extra_headers={"hello": "world"},
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert str(route.calls[0].request.url) == f"{_CUSTOM_API_BASE}:{endpoint}"
+    assert route.calls[0].request.headers["hello"] == "world"
+    assert response.choices[0].message.content == "hello"
+
+
+def test_prompt_factory() -> None:
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        gemini_convert_messages_with_history,
+    )
+
+    messages: Final = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        },
+        {"role": "user", "content": "What is the weather in San Francisco?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_weather",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location":"San Francisco"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_weather",
+            "content": "Sunny, 68 degrees",
+        },
+    ]
+
+    translated: Final = gemini_convert_messages_with_history(messages=messages)
+
+    assert translated == [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "You are a helpful assistant."},
+                {"text": "What is the weather in San Francisco?"},
+            ],
+        },
+        {
+            "role": "model",
+            "parts": [
+                {"text": ""},
+                {
+                    "function_call": {
+                        "name": "get_weather",
+                        "args": {"location": "San Francisco"},
+                    }
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "get_weather",
+                        "response": {"content": "Sunny, 68 degrees"},
+                    }
+                }
+            ],
+        },
+    ]
+
+
+def test_signed_s3_url_with_format(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json=_vertex_gemini_response())
+    )
+
+    litellm.completion(
+        model="vertex_ai/gemini-2.0-flash-001",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://images.example.com/logo.png?signature=test",
+                            "format": "image/jpeg",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            }
+        ],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body["contents"][0]["parts"] == [
+        {
+            "file_data": {
+                "mime_type": "image/jpeg",
+                "file_uri": "https://images.example.com/logo.png?signature=test",
+            }
+        },
+        {"text": "Describe this image"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_deepseek(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/endpoints/openapi/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "index": 0,
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+                "model": "deepseek-ai/deepseek-r1-0528-maas",
+            },
+        )
+    )
+
+    await litellm.acompletion(
+        model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas",
+        messages=[{"role": "user", "content": "Hi!"}],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "deepseek-ai/deepseek-r1-0528-maas",
+        "messages": [{"role": "user", "content": "Hi!"}],
+        "stream": False,
+    }
+
+
+def test_vertex_ai_response_id(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "responseId": "vertex_ai_response_123",
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "Hello! How can I help you today?"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 8,
+                    "totalTokenCount": 18,
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="vertex_ai/gemini-1.5-pro",
+        messages=[{"role": "user", "content": "Hi!"}],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert response.id == "vertex_ai_response_123"
+    assert response.choices[0].message.content == "Hello! How can I help you today?"
+
+
+@pytest.mark.asyncio
+async def test_vertexai_embedding_finetuned(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
+        "locations/us-central1/endpoints/1004708436694269952:predict"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    [[-0.000431762, -0.04416759, -0.03443353]],
+                    [[-0.000431762, -0.04416759, -0.03443353]],
+                ]
+            },
+        )
+    )
+    inputs: Final = ["good morning from litellm", "this is another item"]
+
+    response: Final = await litellm.aembedding(
+        model="vertex_ai/1004708436694269952",
+        input=inputs,
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "instances": [{"inputs": item} for item in inputs],
+        "parameters": {},
+    }
+    assert [item["embedding"] for item in response.data] == [
+        [-0.000431762, -0.04416759, -0.03443353],
+        [-0.000431762, -0.04416759, -0.03443353],
+    ]
+
+
+@pytest.mark.parametrize("max_retries", [None, 3])
+@pytest.mark.asyncio
+async def test_vertexai_model_garden_model_completion(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+    max_retries: int | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        sys.modules,
+        "vertexai",
+        SimpleNamespace(preview=SimpleNamespace(language_models=SimpleNamespace())),
+    )
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/test-project/"
+        "locations/us-central1/endpoints/5464397967697903616/chat/completions"
+    )
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is your name?"},
+    ]
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chat-vertex-model-garden",
+                "object": "chat.completion",
+                "created": 1731702782,
+                "model": "meta-llama/Llama-3.1-8B-Instruct",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Litellm Bot"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 2,
+                    "total_tokens": 5,
+                },
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="vertex_ai/openai/5464397967697903616",
+        messages=messages,
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=max_retries,
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "",
+        "messages": messages,
+        "stream": False,
+    }
+    assert response.id == "chat-vertex-model-garden"
+    assert response.created == 1731702782
+    assert response.model == "vertex_ai/meta-llama/Llama-3.1-8B-Instruct"
+    assert len(response.choices) == 1
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content == "Litellm Bot"
+    assert response.choices[0].finish_reason == "stop"
+    assert (
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+        response.usage.total_tokens,
+    ) == (3, 2, 5)
+
+
+@pytest.mark.asyncio
+async def test_partner_models_httpx_ai21(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/test-project/"
+        "locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
+    )
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in San Francisco?"},
+    ]
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chat-ai21",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Checking the weather.",
+                            "tool_calls": [
+                                {
+                                    "id": "call-weather",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"location":"San Francisco"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                },
+                "model": "jamba-1.5-mini@001",
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="vertex_ai/jamba-1.5-mini@001",
+        messages=messages,
+        tools=tools,
+        top_p=0.5,
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jamba-1.5-mini@001",
+        "messages": messages,
+        "top_p": 0.5,
+        "tools": tools,
+        "stream": False,
+    }
+    assert response.id == "chat-ai21"
+    assert len(response.choices) == 1
+    assert response.choices[0].message.content == "Checking the weather."
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert (
+        response.choices[0].message.tool_calls[0].function.arguments
+        == '{"location":"San Francisco"}'
+    )
+    assert (
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+        response.usage.total_tokens,
+    ) == (3, 4, 7)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_context_caching_anthropic_format(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    sync_mode: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    cache_list_route: Final = respx_mock.get(
+        url__regex=r".*cachedContents.*"
+    ).mock(return_value=httpx.Response(200, json={"cachedContents": []}))
+    cache_route: Final = respx_mock.post(url__regex=r".*cachedContents.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "cachedContents/test-cache",
+                "model": "models/gemini-2.5-flash-lite-001",
+                "expireTime": "2024-08-26T22:36:15Z",
+                "usageMetadata": {"totalTokenCount": 323383},
+            },
+        )
+    )
+    generation_route: Final = respx_mock.post(
+        url__regex=r".*generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Legal agreement " * 4000,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Summarize the agreement",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "The agreement lasts one year."},
+        {"role": "user", "content": "What is its duration?"},
+    ]
+
+    if sync_mode:
+        litellm.completion(
+            model="gemini/gemini-2.5-flash-lite-001",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=10,
+        )
+    else:
+        await litellm.acompletion(
+            model="gemini/gemini-2.5-flash-lite-001",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=10,
+        )
+
+    assert cache_route.call_count == 1
+    assert generation_route.call_count == 1
+    assert cache_list_route.call_count == 1
+    assert [(call.request.method, str(call.request.url)) for call in respx_mock.calls] == [
+        ("GET", "https://generativelanguage.googleapis.com/v1beta/cachedContents"),
+        ("POST", "https://generativelanguage.googleapis.com/v1beta/cachedContents"),
+        (
+            "POST",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-001:generateContent",
+        ),
+    ]
+    cache_request: Final = json.loads(cache_route.calls[0].request.content)
+    assert cache_request["model"] == "models/gemini-2.5-flash-lite-001"
+    assert cache_request["contents"] == [
+        {"role": "user", "parts": [{"text": "Summarize the agreement"}]}
+    ]
+    assert cache_request["system_instruction"] == {
+        "parts": [{"text": "Legal agreement " * 4000}]
+    }
+    assert json.loads(generation_route.calls[0].request.content) == {
+        "contents": [
+            {"role": "model", "parts": [{"text": "The agreement lasts one year."}]},
+            {"role": "user", "parts": [{"text": "What is its duration?"}]},
+        ],
+        "generationConfig": {"temperature": 0.2, "max_output_tokens": 10},
+        "cachedContent": "cachedContents/test-cache",
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_message_via_anthropic_messages(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
+    from litellm.utils import ProviderConfigManager
+
+    provider_configs: Final = (
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="vertex_ai/claude-3-5-sonnet@20240620",
+            provider=litellm.LlmProviders.VERTEX_AI,
+        ),
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-3-5-sonnet@20240620",
+            provider=litellm.LlmProviders.VERTEX_AI,
+        ),
+    )
+    for provider_config in provider_configs:
+        assert isinstance(provider_config, VertexAIPartnerModelsAnthropicMessagesConfig)
+        monkeypatch.setitem(
+            provider_config._credentials_project_mapping,
+            (_cached_vertex_credentials, "test-project"),
+            (Credentials(token="test-vertex-token"), "test-project"),
+        )
+    route: Final = respx_mock.post(
+        url__regex=r".*claude-3-5-sonnet@20240620.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-vertex",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet-20240620",
+                "content": [{"type": "text", "text": "Here are the recipes."}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 5},
+            },
+        )
+    )
+    messages: Final = [{"role": "user", "content": "List 5 cookie recipes"}]
+    call_params: Final = {
+        "model": "vertex_ai/claude-3-5-sonnet@20240620",
+        "messages": messages,
+        "max_tokens": 100,
+        "vertex_project": "test-project",
+        "vertex_location": "us-east5",
+        "vertex_credentials": _cached_vertex_credentials,
+        "max_retries": 0,
+    }
+
+    response: Final = await litellm.anthropic_messages(**call_params)
+    completion_response: Final = await litellm.acompletion(**call_params)
+
+    assert response["stop_reason"] == "end_turn"
+    assert completion_response.choices[0].message.content == "Here are the recipes."
+    assert route.call_count == 2
+    messages_request: Final = route.calls[0].request
+    completion_request: Final = route.calls[1].request
+    assert str(messages_request.url) == (
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
+        "publishers/anthropic/models/claude-3-5-sonnet@20240620:rawPredict"
+    )
+    assert str(completion_request.url) == str(messages_request.url)
+    for request in (messages_request, completion_request):
+        assert request.headers["authorization"] == "Bearer test-vertex-token"
+        assert request.headers["content-type"] == "application/json"
+    messages_body: Final = json.loads(messages_request.content)
+    assert messages_body == {
+        "anthropic_version": "vertex-2023-10-16",
+        "max_tokens": 100,
+        "messages": messages,
+        "stream": False,
+    }
+    assert set(json.loads(completion_request.content)) <= set(messages_body)
+
+
+def test_gemini_fine_tuned_model_request_consistency(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r".*publishers/google/models/.*:generateContent"
+    ).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    common_params: Final = {
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": _cached_vertex_credentials,
+        "max_retries": 0,
+    }
+
+    litellm.completion(model="vertex_ai/gemini/ft-uuid", **common_params)
+    litellm.completion(model="vertex_ai/gemini-2.5-flash", **common_params)
+
+    assert route.call_count == 2
+    first_request: Final = json.loads(route.calls[0].request.content)
+    second_request: Final = json.loads(route.calls[1].request.content)
+    assert str(route.calls[0].request.url) == (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/"
+        "publishers/google/models/ft-uuid:generateContent"
+    )
+    assert first_request["system_instruction"] == {
+        "parts": [{"text": "You are a helpful assistant."}]
+    }
+    assert first_request["tools"][0]["function_declarations"][0]["name"] == "get_weather"
+    assert first_request == second_request
+
+
+_RECIPES_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "recipes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"recipe_name": {"type": "string"}},
+                "required": ["recipe_name"],
+            },
+        }
+    },
+    "required": ["recipes"],
+    "additionalProperties": False,
+}
+
+
+def _recipes_response(model: str, invalid_response: bool) -> dict[str, object]:
+    if "claude" in model and invalid_response:
+        return {
+            "id": "msg-recipes",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-5-sonnet-20240620",
+            "content": [{"type": "text", "text": "Hi! My name is Claude."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        }
+    if "claude" in model:
+        return {
+            "id": "msg-recipes",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-5-sonnet-20240620",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu-recipes",
+                    "name": "json_tool_call",
+                    "input": {"recipes": [{"recipe_name": "Sugar Cookies"}]},
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        }
+    if invalid_response:
+        return _vertex_gemini_response('[{"recipe_world": "Sugar Cookies"}]')
+    return _vertex_gemini_response('{"recipes": [{"recipe_name": "Sugar Cookies"}]}')
+
+
+_JSON_SCHEMA_MODELS: Final = pytest.mark.parametrize(
+    ("model", "vertex_location", "endpoint"),
+    [
+        ("vertex_ai_beta/gemini-2.0-flash-001", "us-central1", "gemini-2.0-flash-001:generateContent"),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", "gemini-2.5-flash-lite:generateContent"),
+        ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", "claude-3-5-sonnet@20240620:rawPredict"),
+    ],
+)
+
+
+@_JSON_SCHEMA_MODELS
+@pytest.mark.parametrize("invalid_response", [True, False])
+@pytest.mark.parametrize("enforce_validation", [True, False])
+def test_gemini_pro_json_schema_args_sent_httpx(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    model: str,
+    vertex_location: str,
+    endpoint: str,
+    invalid_response: bool,
+    enforce_validation: bool,
+) -> None:
+    route: Final = respx_mock.post(url__regex=rf".*/{re.escape(endpoint)}$").mock(
+        return_value=httpx.Response(200, json=_recipes_response(model, invalid_response))
+    )
+    call: Final = functools.partial(
+        litellm.completion,
+        model=model,
+        messages=[{"role": "user", "content": "List 5 cookie recipes"}],
+        response_format={
+            "type": "json_object",
+            "response_schema": _RECIPES_SCHEMA,
+            "enforce_validation": enforce_validation,
+        },
+        vertex_project="test-project",
+        vertex_location=vertex_location,
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    if invalid_response and enforce_validation:
+        with pytest.raises(litellm.JSONSchemaValidationError):
+            call()
+    else:
+        response = call()
+        assert response.model == model.split("/")[1]
+        if not invalid_response:
+            assert json.loads(response.choices[0].message.content) == {
+                "recipes": [{"recipe_name": "Sugar Cookies"}]
+            }
+
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    if "claude" in model:
+        assert request_body["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+        assert request_body["tools"] == [{"name": "json_tool_call", "input_schema": _RECIPES_SCHEMA}]
+    else:
+        assert request_body["generationConfig"]["response_mime_type"] == "application/json"
+        assert request_body["generationConfig"]["response_json_schema"] == _RECIPES_SCHEMA
+
+
+@_JSON_SCHEMA_MODELS
+@pytest.mark.parametrize("invalid_response", [True, False])
+@pytest.mark.parametrize("enforce_validation", [True, False])
+def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    vertex_location: str,
+    endpoint: str,
+    invalid_response: bool,
+    enforce_validation: bool,
+) -> None:
+    from pydantic import BaseModel
+
+    class Recipe(BaseModel):
+        recipe_name: str
+
+    class ResponseSchema(BaseModel):
+        recipes: list[Recipe]
+
+    monkeypatch.setattr(litellm, "enable_json_schema_validation", enforce_validation)
+    route: Final = respx_mock.post(url__regex=rf".*/{re.escape(endpoint)}$").mock(
+        return_value=httpx.Response(200, json=_recipes_response(model, invalid_response))
+    )
+    call: Final = functools.partial(
+        litellm.completion,
+        model=model,
+        messages=[{"role": "user", "content": "List 5 cookie recipes"}],
+        response_format=ResponseSchema,
+        vertex_project="test-project",
+        vertex_location=vertex_location,
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    if invalid_response and enforce_validation:
+        with pytest.raises(litellm.JSONSchemaValidationError):
+            call()
+    else:
+        response = call()
+        assert response.model == model.split("/")[1]
+        if not invalid_response:
+            assert json.loads(response.choices[0].message.content) == {
+                "recipes": [{"recipe_name": "Sugar Cookies"}]
+            }
+
+    assert route.call_count == 1
+    request_body: Final = json.loads(route.calls[0].request.content)
+    if "claude" in model:
+        assert request_body["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+        assert set(request_body["tools"][0]["input_schema"]["properties"]) == {"recipes"}
+    else:
+        generation_config: Final = request_body["generationConfig"]
+        assert generation_config["response_mime_type"] == "application/json"
+        assert set(generation_config["response_json_schema"]["properties"]) == {"recipes"}
+
+
+@pytest.mark.parametrize("content_filter_type", ["prompt", "response"])
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_httpx_content_policy_error(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    content_filter_type: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = (
+        {
+            "promptFeedback": {"blockReason": "OTHER"},
+            "usageMetadata": {"promptTokenCount": 1, "totalTokenCount": 1},
+        }
+        if content_filter_type == "prompt"
+        else {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": []},
+                    "finishReason": "SAFETY",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 1, "totalTokenCount": 1},
+        }
+    )
+    route: Final = respx_mock.post(
+        url__regex=r".*gemini-2.5-flash-lite:generateContent"
+    ).mock(return_value=httpx.Response(200, json=response_body))
+
+    response: Final = await litellm.acompletion(
+        model="vertex_ai_beta/gemini-2.5-flash-lite",
+        messages=[{"role": "user", "content": "List recipes"}],
+        response_format={"type": "json_object"},
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert response.choices[0].finish_reason == "content_filter"
+
+
+@pytest.mark.parametrize("route_type", ["completion", "embedding"])
+def test_litellm_api_base(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+    route: Final = respx_mock.post(url__regex=r"https://litellm\.com.*").mock(
+        return_value=httpx.Response(
+            200,
+            json=(
+                _vertex_gemini_response()
+                if route_type == "completion"
+                else {
+                    "predictions": [
+                        {"embeddings": {"values": [0.1, 0.2], "statistics": {"token_count": 1}}}
+                    ]
+                }
+            ),
+        )
+    )
+
+    if route_type == "completion":
+        litellm.completion(
+            model="vertex_ai/gemini-2.0-flash-001",
+            messages=[{"role": "user", "content": "Hello"}],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            vertex_credentials=_cached_vertex_credentials,
+            max_retries=0,
+        )
+    else:
+        litellm.embedding(
+            model="vertex_ai/gemini-2.0-flash-001",
+            input=["Hello"],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            vertex_credentials=_cached_vertex_credentials,
+            max_retries=0,
+        )
+
+    assert route.call_count == 1
+    assert str(route.calls[0].request.url) == (
+        "https://litellm.com/v1/projects/test-project/locations/us-central1/publishers/google/models/"
+        f"gemini-2.0-flash-001:{'generateContent' if route_type == 'completion' else 'predict'}"
+    )
+
+
+def test_vertex_anthropic_completion(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r".*claude-sonnet-4-6@default.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-vertex",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6@default",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "I will greet the user.",
+                        "signature": "test-signature",
+                    },
+                    {"type": "text", "text": "Hello, world!"},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 2, "output_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="vertex_ai/claude-sonnet-4-6@default",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        vertex_project="test-project",
+        vertex_location="global",
+        vertex_credentials=_cached_vertex_credentials,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.002,
+        max_retries=0,
+    )
+
+    assert route.call_count == 1
+    assert response.model == "claude-sonnet-4-6@default"
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        2 * 0.001 + 3 * 0.002
+    )
+    assert response.choices[0].message.reasoning_content == "I will greet the user."
+    assert response.choices[0].message.thinking_blocks == [
+        {
+            "type": "thinking",
+            "thinking": "I will greet the user.",
+            "signature": "test-signature",
+        }
+    ]
+    assert response.choices[0].message.content == "Hello, world!"
+
+
+def test_vertex_gemini_streaming_returns_text_and_finish_reason(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=(
+            r"https://us-central1-aiplatform\.googleapis\.com/v1(?:beta1)?/projects/"
+            r"test-project/locations/us-central1/publishers/google/models/"
+            r"gemini-2\.5-flash-lite:streamGenerateContent.*"
+        )
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                'data: {"candidates":[{"content":{"parts":[{"text":"Vertex streams "}],'
+                '"role":"model"},"index":0}]}\n\n'
+                'data: {"candidates":[{"content":{"parts":[{"text":"without a live API."}],'
+                '"role":"model"},"index":0,"finishReason":"STOP"}]}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    stream: Final = litellm.completion(
+        model="vertex_ai_beta/gemini-2.5-flash-lite",
+        messages=[{"role": "user", "content": "Say a sentence."}],
+        stream=True,
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        vertex_credentials=_cached_vertex_credentials,
+        max_retries=0,
+    )
+    chunks: Final = tuple(stream)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
+        "Vertex streams without a live API."
+    )
+    assert tuple(
+        chunk.choices[0].finish_reason
+        for chunk in chunks
+        if chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
+    assert route.call_count == 1

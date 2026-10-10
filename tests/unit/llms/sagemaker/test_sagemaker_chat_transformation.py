@@ -13,7 +13,7 @@ steady provider stream into gap-then-burst delivery.
 import binascii
 import json
 import struct
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Final, Iterator
 from unittest.mock import MagicMock
 
 import httpx
@@ -372,3 +372,33 @@ def test_get_complete_url_sagemaker_base_url_override_wins() -> None:
         stream=False,
     )
     assert url == "https://my-private-endpoint.example.com/invocations"
+
+
+def test_sagemaker_default_region_is_us_west_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    url: Final = SagemakerChatConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="my-endpoint",
+        optional_params={},
+        litellm_params={},
+        stream=False,
+    )
+
+    assert url == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-endpoint/invocations"
+
+
+def test_sagemaker_explicit_region_overrides_the_default() -> None:
+    url: Final = SagemakerChatConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="my-endpoint",
+        optional_params={"aws_region_name": "us-east-1"},
+        litellm_params={},
+        stream=False,
+    )
+
+    assert url == "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations"
