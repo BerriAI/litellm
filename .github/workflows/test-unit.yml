@@ -335,6 +335,7 @@ jobs:
               tests/unit/llms/snowflake
               tests/unit/llms/soniox
               tests/unit/llms/stability
+              tests/unit/llms/strands_decider
               tests/unit/llms/tavily
               tests/unit/llms/tencent
               tests/unit/llms/tinyfish
