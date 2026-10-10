@@ -1,7 +1,7 @@
 import React from "react";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGuardrailCall,
@@ -12,6 +12,7 @@ import {
 } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import AddGuardrailForm from "./add_guardrail_form";
+import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 
 vi.mock("@/lib/toast", () => ({
   toast: {
@@ -62,7 +63,6 @@ describe("AddGuardrailForm decision model questions", () => {
   };
 
   const pickTypesafeModel = async (user: ReturnType<typeof userEvent.setup>) => {
-    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
     await user.click(await screen.findByLabelText("Decision Model"));
     await user.click(await screen.findByTitle("jev-latest"));
   };
@@ -74,26 +74,81 @@ describe("AddGuardrailForm decision model questions", () => {
     fireEvent.change(screen.getByLabelText(`Question ${nameInputs.length}`), { target: { value: instructions } });
   };
 
-  it("filters the model picker by the selected provider and clears the model when it changes", async () => {
+  it("lists every decision model on the proxy with its provider logo and no provider picker", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "gpt-5", providers: ["openai"], mode: "evaluation" },
+        { model_group: "gpt-4o-mini", providers: ["openai"], mode: "chat" },
+      ],
+    });
     await renderDecisionModel(user);
 
-    expect(await screen.findByLabelText("Decision Provider")).toHaveTextContent("Select a provider");
-    await user.click(screen.getByLabelText("Decision Provider"));
-    await user.click(await screen.findByText("TypeSafe"));
-    expect(
-      within(screen.getByLabelText("Decision Provider")).getByRole("img", { name: "TypeSafe logo" }),
-    ).toBeVisible();
+    await user.click(await screen.findByLabelText("Decision Model"));
+    const jev = await screen.findByTitle("jev-latest");
+    expect(within(jev).getByRole("img", { name: "TypeSafe logo" })).toBeInTheDocument();
+    expect(within(screen.getByTitle("gpt-5")).getByRole("img", { name: "OpenAI logo" })).toBeInTheDocument();
+    expect(screen.queryByTitle("gpt-4o-mini")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Decision Provider")).not.toBeInTheDocument();
+    expect(screen.queryByRole("note", { name: "No decision models" })).not.toBeInTheDocument();
+
+    await user.click(jev);
+    expect(screen.getByLabelText("Decision Model")).toHaveValue("jev-latest");
+  });
+
+  it("prompts to add a model when the proxy has no decision models", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [{ model_group: "gpt-6-luna", providers: ["openai"], mode: "chat" }],
+    });
+    await renderDecisionModel(user);
+
+    const note = await screen.findByRole("note", { name: "No decision models" });
+    expect(note).toHaveTextContent("Add a decision model to use this guardrail");
+    expect(within(note).getByRole("link", { name: "Add a model" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/models-and-endpoints$/),
+    );
+    expect(screen.getByLabelText("Decision Model")).toHaveAttribute("placeholder", "No decision models yet");
+  });
+
+  it("lists only the garden card's provider models when opened from a card", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    renderWithProviders(
+      <AddGuardrailForm
+        visible={true}
+        onClose={vi.fn()}
+        accessToken="test-token"
+        onSuccess={vi.fn()}
+        preset={GUARDRAIL_PRESETS.dm_typesafe_jev}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Guardrail Name")).toHaveValue("TypeSafe Jev"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
     await user.click(await screen.findByLabelText("Decision Model"));
     expect(await screen.findByTitle("jev-latest")).toBeInTheDocument();
     expect(screen.queryByTitle("gpt-5")).not.toBeInTheDocument();
-    await user.click(await screen.findByTitle("jev-latest"));
+  });
 
-    await user.click(screen.getByLabelText("Decision Provider"));
-    await user.click(await screen.findByText("OpenAI"));
+  it("names the card's provider when it has no decision models", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    renderWithProviders(
+      <AddGuardrailForm
+        visible={true}
+        onClose={vi.fn()}
+        accessToken="test-token"
+        onSuccess={vi.fn()}
+        preset={GUARDRAIL_PRESETS.dm_databricks}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Guardrail Name")).toHaveValue("Databricks Decision Model"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
 
-    const modelInput = screen.getByLabelText("Decision Model");
-    expect(modelInput).not.toHaveValue("jev-latest");
+    expect(await screen.findByRole("note", { name: "No decision models" })).toHaveTextContent(
+      "Add a decision model from the Databricks (Qwen API) provider to use this guardrail",
+    );
   });
 
   it("shows only an Add question button until it is clicked, then a blank question per click", async () => {
@@ -369,7 +424,6 @@ describe("AddGuardrailForm decision model create flow", () => {
     const user = userEvent.setup({ delay: null });
     await openDecisionModelStep(user, "dm-1");
 
-    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
     await user.click(await screen.findByLabelText("Decision Model"));
     await user.click(await screen.findByTitle("jev-latest"));
     await user.click(screen.getByRole("button", { name: "Add question" }));
@@ -403,7 +457,6 @@ describe("AddGuardrailForm decision model create flow", () => {
   it("clears the decision model error once a model is picked", async () => {
     const user = userEvent.setup({ delay: null });
     await openDecisionModelStep(user, "dm-2");
-    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
     await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
     expect(await screen.findByText("Select a decision model")).toBeInTheDocument();
 

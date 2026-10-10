@@ -4,8 +4,7 @@ import {
   buildDecisionTestBody,
   DECISION_TEST_CHIP_TONE,
   DECISION_TEST_HISTORY_CAP,
-  decisionModelsForProvider,
-  decisionProvidersForGroups,
+  decisionModelOptions,
   decisionTestChip,
   decisionTestOverall,
   newDecisionCheckDraft,
@@ -55,39 +54,48 @@ describe("parseDecisionModelGroups", () => {
   });
 });
 
-describe("decisionProvidersForGroups", () => {
-  it("keeps only decisions providers that appear on model groups", () => {
-    const providers = decisionProvidersForGroups(["typesafe", "openrouter", "cloudflare"], groups);
+describe("decisionModelOptions", () => {
+  const allowed = ["typesafe", "openrouter", "cloudflare", "openai"];
 
-    expect(providers).toEqual(["typesafe", "cloudflare"]);
-  });
-
-  it("omits a provider whose only groups are chat models", () => {
-    const chatOnly = [
-      { model_group: "gpt-4o-mini", providers: ["openai"], mode: "chat" },
-      { model_group: "gpt-6-luna", providers: ["openai"], mode: "chat" },
+  it("lists every evaluation model on an allowed provider with that provider, sorted by name", () => {
+    const mixed = [
+      { model_group: "zeta-eval", providers: ["typesafe"], mode: "evaluation" },
+      ...groups,
+      { model_group: "nimble", providers: ["bespoke"], mode: "evaluation" },
     ];
 
-    expect(decisionProvidersForGroups(["openai"], chatOnly)).toEqual([]);
-    expect(decisionModelsForProvider(chatOnly, "openai")).toEqual([]);
+    expect(decisionModelOptions(allowed, mixed, null)).toEqual([
+      { model: "clef", provider: "cloudflare" },
+      { model: "jev-latest", provider: "typesafe" },
+      { model: "zeta-eval", provider: "typesafe" },
+    ]);
   });
 
-  it("excludes groups with a null or missing mode", () => {
-    const noMode = [
+  it("keeps only the given provider's models when one is set", () => {
+    expect(decisionModelOptions(allowed, groups, "typesafe")).toEqual([{ model: "jev-latest", provider: "typesafe" }]);
+    expect(decisionModelOptions(allowed, groups, "openrouter")).toEqual([]);
+  });
+
+  it("lists nothing for a provider the proxy does not allow", () => {
+    expect(decisionModelOptions(["cloudflare"], groups, "typesafe")).toEqual([]);
+  });
+
+  it("labels a group with its first allowed provider", () => {
+    const shared = [
+      { model_group: "shared-eval", providers: ["bespoke", "openrouter", "typesafe"], mode: "evaluation" },
+    ];
+
+    expect(decisionModelOptions(allowed, shared, null)).toEqual([{ model: "shared-eval", provider: "openrouter" }]);
+  });
+
+  it("skips chat models and groups with a null or missing mode", () => {
+    const notDecision = [
+      { model_group: "gpt-6-luna", providers: ["openai"], mode: "chat" },
       { model_group: "legacy-eval", providers: ["typesafe"] },
       { model_group: "unset-eval", providers: ["typesafe"], mode: null },
     ];
 
-    expect(decisionProvidersForGroups(["typesafe"], noMode)).toEqual([]);
-    expect(decisionModelsForProvider(noMode, "typesafe")).toEqual([]);
-  });
-});
-
-describe("decisionModelsForProvider", () => {
-  it("lists only the model groups on the selected provider, sorted", () => {
-    expect(decisionModelsForProvider(groups, "typesafe")).toEqual(["jev-latest"]);
-    expect(decisionModelsForProvider(groups, "openrouter")).toEqual([]);
-    expect(decisionModelsForProvider(groups, null)).toEqual([]);
+    expect(decisionModelOptions(allowed, notDecision, null)).toEqual([]);
   });
 });
 

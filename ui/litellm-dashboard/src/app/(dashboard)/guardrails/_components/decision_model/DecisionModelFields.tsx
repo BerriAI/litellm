@@ -1,8 +1,9 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { Info, Plus, X } from "lucide-react";
 import React from "react";
 import { useWatch } from "react-hook-form";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -19,18 +20,17 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { uiHref } from "@/utils/uiHref";
 import { asText, GuardrailField, labelWithHint, requiredRule, type GuardrailFormControl } from "../GuardrailFormField";
 import { duplicateDecisionCheckNames, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
 import DecisionTestSection from "./DecisionTestSection";
-import { newDecisionCheckDraft } from "./decisionModelQuestion";
+import { newDecisionCheckDraft, type DecisionModelOption } from "./decisionModelQuestion";
 
 export interface DecisionModelFieldsProps {
   accessToken: string | null;
-  decisionProviders: string[];
-  selectedProvider: string | null;
-  onProviderChange: (provider: string | null) => void;
+  providerFilter: string | null;
   onModelChange: () => void;
-  decisionModels: string[];
+  decisionModels: DecisionModelOption[];
   checks: DecisionModelCheckDraft[];
   onChecksChange: (checks: DecisionModelCheckDraft[]) => void;
   control: GuardrailFormControl;
@@ -41,13 +41,25 @@ const ACTION_ITEMS = [
   { label: "Log only", value: "log" },
 ];
 
-const ProviderLabel: React.FC<{ provider: string }> = ({ provider }) => {
-  const { displayName } = getProviderLogoAndName(provider);
+const ProviderLogo: React.FC<{ provider: string }> = ({ provider }) => (
+  <Logo provider={provider} label={getProviderLogoAndName(provider).displayName} className="size-4 shrink-0" />
+);
+
+const NoDecisionModels: React.FC<{ providerFilter: string | null }> = ({ providerFilter }) => {
+  const source = providerFilter ? ` from the ${getProviderLogoAndName(providerFilter).displayName} provider` : "";
   return (
-    <span className="flex items-center gap-2">
-      <Logo provider={provider} label={displayName} className="size-4" />
-      {displayName}
-    </span>
+    <Alert variant="info" role="note" aria-label="No decision models">
+      <Info />
+      <AlertTitle>No decision models yet</AlertTitle>
+      <AlertDescription>
+        <p>
+          Add a decision model{source} to use this guardrail. A model shows up here once its mode is evaluation.{" "}
+          <a href={uiHref("models-and-endpoints")} target="_blank" rel="noopener noreferrer">
+            Add a model
+          </a>
+        </p>
+      </AlertDescription>
+    </Alert>
   );
 };
 
@@ -74,9 +86,7 @@ const ThresholdSlider: React.FC<{
 
 const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   accessToken,
-  decisionProviders,
-  selectedProvider,
-  onProviderChange,
+  providerFilter,
   onModelChange,
   decisionModels,
   checks,
@@ -85,6 +95,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
 }) => {
   const selectedModel = asText(useWatch({ control, name: "decision_model" }));
   const duplicateNames = duplicateDecisionCheckNames(checks);
+  const providerByModel = new Map(decisionModels.map((option) => [option.model, option.provider]));
 
   const updateCheck = (id: string, patch: Partial<DecisionModelCheckDraft>) =>
     onChecksChange(checks.map((check) => (check.id === id ? { ...check, ...patch } : check)));
@@ -101,31 +112,6 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
         set to Log only.
       </div>
 
-      <Field>
-        <FieldLabel>Decision Provider</FieldLabel>
-        <Select
-          items={decisionProviders.map((provider) => {
-            const { displayName } = getProviderLogoAndName(provider);
-            return { label: displayName, value: provider };
-          })}
-          value={selectedProvider}
-          onValueChange={(next: string | null) => onProviderChange(next)}
-        >
-          <SelectTrigger className="w-full" aria-label="Decision Provider">
-            <SelectValue>
-              {(provider: string | null) => (provider ? <ProviderLabel provider={provider} /> : "Select a provider")}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {decisionProviders.map((provider) => (
-              <SelectItem key={provider} value={provider}>
-                <ProviderLabel provider={provider} />
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-
       <GuardrailField
         control={control}
         name="decision_model"
@@ -137,7 +123,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
       >
         {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
           <Combobox
-            items={decisionModels}
+            items={decisionModels.map((option) => option.model)}
             value={asText(value) || null}
             onValueChange={(next: string | null) => {
               onChange(next);
@@ -148,28 +134,30 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               id={id}
               aria-invalid={ariaInvalid}
               aria-describedby={ariaDescribedBy}
-              placeholder="Select a decision model"
+              placeholder={decisionModels.length > 0 ? "Select a decision model" : "No decision models yet"}
               className="w-full"
             />
             <ComboboxContent>
               <ComboboxEmpty>No matching models</ComboboxEmpty>
               <ComboboxList>
-                {(model: string) => (
-                  <ComboboxItem key={model} value={model} title={model}>
-                    {model}
-                  </ComboboxItem>
-                )}
+                {(model: string) => {
+                  const provider = providerByModel.get(model);
+                  return (
+                    <ComboboxItem key={model} value={model} title={model}>
+                      <span className="flex items-center gap-2">
+                        {provider && <ProviderLogo provider={provider} />}
+                        {model}
+                      </span>
+                    </ComboboxItem>
+                  );
+                }}
               </ComboboxList>
             </ComboboxContent>
           </Combobox>
         )}
       </GuardrailField>
 
-      {selectedProvider && decisionModels.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No decision models for this provider. Set model_info.mode: evaluation on a deployment to list it here.
-        </p>
-      )}
+      {decisionModels.length === 0 && <NoDecisionModels providerFilter={providerFilter} />}
 
       <Field>
         <FieldLabel>Questions</FieldLabel>

@@ -81,7 +81,8 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
       <div className="space-y-1">
         <FieldLabel>Test</FieldLabel>
         <p className="m-0 text-xs text-muted-foreground">
-          Try your questions on a sample input before you save. Uses the thresholds above.
+          Try your questions on a sample input before you save. Uses the thresholds above. Each run is a real call to
+          the decision model, so it is billed and shows up in Logs.
         </p>
       </div>
       <Textarea

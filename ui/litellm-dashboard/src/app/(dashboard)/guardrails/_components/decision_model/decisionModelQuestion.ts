@@ -25,22 +25,24 @@ export function parseDecisionModelGroups(data: unknown): DecisionModelGroup[] {
   });
 }
 
-export function decisionProvidersForGroups(
-  allowedProviders: readonly string[],
-  groups: readonly DecisionModelGroup[],
-): string[] {
-  const deployed = new Set(
-    groups.filter((group) => isDecisionMode(group.mode)).flatMap((group) => group.providers ?? []),
-  );
-  return allowedProviders.filter((provider) => deployed.has(provider));
+export interface DecisionModelOption {
+  model: string;
+  provider: string;
 }
 
-export function decisionModelsForProvider(groups: readonly DecisionModelGroup[], provider: string | null): string[] {
-  if (!provider) return [];
+export function decisionModelOptions(
+  allowedProviders: readonly string[],
+  groups: readonly DecisionModelGroup[],
+  onlyProvider: string | null,
+): DecisionModelOption[] {
+  const providers = onlyProvider ? allowedProviders.filter((provider) => provider === onlyProvider) : allowedProviders;
   return groups
-    .filter((group) => isDecisionMode(group.mode) && (group.providers ?? []).includes(provider))
-    .map((group) => group.model_group)
-    .toSorted((a, b) => a.localeCompare(b));
+    .filter((group) => isDecisionMode(group.mode))
+    .flatMap((group) => {
+      const provider = (group.providers ?? []).find((candidate) => providers.includes(candidate));
+      return provider ? [{ model: group.model_group, provider }] : [];
+    })
+    .toSorted((a, b) => a.model.localeCompare(b.model));
 }
 
 export interface DecisionTestBody {

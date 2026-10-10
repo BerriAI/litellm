@@ -75,8 +75,7 @@ import {
   type DecisionModelCheckDraft,
 } from "./decision_model/buildDecisionModelParams";
 import {
-  decisionModelsForProvider,
-  decisionProvidersForGroups,
+  decisionModelOptions,
   parseDecisionModelGroups,
   type DecisionModelGroup,
 } from "./decision_model/decisionModelQuestion";
@@ -103,6 +102,7 @@ interface GuardrailPreset {
   // modes seeded, not one; the form already normalises either shape.
   mode: string | string[];
   defaultOn: boolean;
+  decisionProvider?: string;
 }
 
 interface AddGuardrailFormProps {
@@ -274,18 +274,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     return (providerValue || "").toLowerCase() === "tool_permission";
   }, [selectedProvider]);
   const isDecisionModelProvider = useMemo(() => shouldRenderDecisionModelFields(selectedProvider), [selectedProvider]);
-  const decisionProviders = useMemo(
-    () => decisionProvidersForGroups(guardrailSettings?.decision_model_providers ?? [], decisionModelGroups),
-    [guardrailSettings, decisionModelGroups],
-  );
   const decisionModels = useMemo(
-    () => decisionModelsForProvider(decisionModelGroups, decisionProvider),
-    [decisionModelGroups, decisionProvider],
+    () =>
+      decisionModelOptions(guardrailSettings?.decision_model_providers ?? [], decisionModelGroups, decisionProvider),
+    [guardrailSettings, decisionModelGroups, decisionProvider],
   );
-  const changeDecisionProvider = (provider: string | null) => {
-    setDecisionProvider(provider);
-    form.setValue("decision_model", undefined);
-  };
   const revalidateDecisionModel = () => {
     if (form.getFieldState("decision_model").error) {
       void form.trigger("decision_model");
@@ -333,6 +326,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
     // Set provider
     setSelectedProvider(preset.provider);
+    setDecisionProvider(preset.decisionProvider ?? null);
     const baseValues: Record<string, unknown> = {
       provider: preset.provider,
       guardrail_name: preset.guardrailNameSuggestion,
@@ -1046,9 +1040,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           return (
             <DecisionModelFields
               accessToken={accessToken}
-              decisionProviders={decisionProviders}
-              selectedProvider={decisionProvider}
-              onProviderChange={changeDecisionProvider}
+              providerFilter={decisionProvider}
               onModelChange={revalidateDecisionModel}
               decisionModels={decisionModels}
               checks={decisionChecks}
