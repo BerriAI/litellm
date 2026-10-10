@@ -406,3 +406,20 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.parametrize(
+    ("callback_name", "module_path", "class_name"),
+    (
+        ("dynamic_rate_limiter", "litellm.proxy.hooks.dynamic_rate_limiter", "PROXY_DynamicRateLimitHandler"),
+        ("dynamic_rate_limiter_v3", "litellm.proxy.hooks.dynamic_rate_limiter_v3", "PROXY_DynamicRateLimitHandlerV3"),
+    ),
+)
+def test_lazy_proxy_callback_classes_resolve_in_registry_lookups(
+    callback_name: str, module_path: str, class_name: str
+) -> None:
+    proxy_class: Final = getattr(importlib.import_module(module_path), class_name)
+
+    assert CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name) is proxy_class
+    assert CustomLoggerRegistry.get_callback_str_from_class_type(proxy_class) == callback_name
+    assert CustomLoggerRegistry.get_all_callback_strs_from_class_type(proxy_class) == [callback_name]
