@@ -1,5 +1,5 @@
 """
-Tests for MiniMax (Hailuo-03) video generation transformation.
+Tests for MiniMax-H3 video generation transformation.
 """
 
 import base64
@@ -679,26 +679,30 @@ class TestMinimaxVideoList:
 
 
 class TestMinimaxVideoRemix:
-    def test_remix_is_rejected_instead_of_silently_dropping_the_prompt(self):
+    @pytest.mark.asyncio
+    async def test_remix_is_a_client_error_instead_of_a_retryable_500(self, monkeypatch: pytest.MonkeyPatch):
         """MiniMax regeneration only upscales to 2K and ignores any prompt, so
-        mapping remix onto it would return a video that ignores the edit."""
-        encoded_video_id = encode_video_id_with_provider("424010985738629", "minimax", "MiniMax-H3")
+        remix is refused with a 400 the router does not retry."""
+        monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+        encoded_video_id: Final = encode_video_id_with_provider("424010985738629", "minimax", "MiniMax-H3")
 
-        with pytest.raises(NotImplementedError, match="remix is not supported by MiniMax"):
-            MinimaxVideoConfig().transform_video_remix_request(
+        with pytest.raises(litellm.BadRequestError, match="remix is not supported by MiniMax") as raised:
+            await litellm.avideo_remix(
                 video_id=encoded_video_id,
                 prompt="a different ending",
-                api_base=API_BASE,
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
+                custom_llm_provider="minimax",
             )
 
+        assert raised.value.status_code == 400
+
     def test_remix_response_is_rejected(self):
-        with pytest.raises(NotImplementedError, match="remix is not supported by MiniMax"):
+        with pytest.raises(UnsupportedParamsError, match="remix is not supported by MiniMax") as raised:
             MinimaxVideoConfig().transform_video_remix_response(
                 raw_response=_mock_response({}),
                 logging_obj=None,
             )
+
+        assert raised.value.status_code == 400
 
 
 class TestMinimaxVideoDelete:

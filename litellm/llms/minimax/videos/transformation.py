@@ -168,7 +168,7 @@ _CREATE_BODY_KEYS: Final = (
     "extra",
 )
 
-_ParsedT = TypeVar("_ParsedT")
+_ParsedT: Final = TypeVar("_ParsedT")
 
 
 def _minimax_error(status_code: int, message: str) -> MinimaxVideoError:
@@ -240,13 +240,16 @@ def _ratio_from_size(size: object, model: str) -> str:
     return f"{width // divisor}:{height // divisor}"
 
 
-def _duration_param(seconds: object, model: str) -> int:
+def _whole_seconds(seconds: object) -> int:
     if isinstance(seconds, int) and not isinstance(seconds, bool):
-        parsed = seconds
-    elif isinstance(seconds, str) and seconds.isdigit():
-        parsed = int(seconds)
-    else:
-        parsed = 0
+        return seconds
+    if isinstance(seconds, str) and seconds.isdigit():
+        return int(seconds)
+    return 0
+
+
+def _duration_param(seconds: object, model: str) -> int:
+    parsed: Final = _whole_seconds(seconds)
     if parsed <= 0:
         raise _invalid_param("seconds", seconds, "a positive whole number of seconds", model)
     return parsed
@@ -282,9 +285,9 @@ def _image_url(image: object) -> str:
 def _first_frame_content_item(
     image: object,
 ) -> dict[str, object]:  # mutable-ok: content items are JSON request-body fragments
-    return {  # mutable-ok: request-body content item serialized to JSON by the handler
+    return {
         "type": "image_url",
-        "image_url": {"url": _image_url(image)},  # mutable-ok: request-body content item field
+        "image_url": {"url": _image_url(image)},
         "role": "first_frame",
     }
 
@@ -333,7 +336,7 @@ def _create_cost_usd(model: str, duration: float, resolution: str | None, input_
     """
     try:
         info: Final = get_model_info(model=model, custom_llm_provider="minimax")
-    except Exception:
+    except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped model
         return None
     provider_specific: Final = info.get("provider_specific_entry")
     free_images: Final = (
@@ -362,9 +365,20 @@ def _video_url_from_task(task: _MiniMaxTask) -> str:
     raise _minimax_error(400, f"Video has no downloadable content (status: {task.status}).")
 
 
+def _remix_unsupported() -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=(
+            "Video remix is not supported by MiniMax. Its regeneration endpoint only upscales a finished 768P "
+            "MiniMax-H3 task to 2K and ignores the prompt; send a new video_generation() request with the edited "
+            "prompt instead."
+        ),
+        llm_provider="minimax",
+    )
+
+
 class MinimaxVideoConfig(BaseVideoConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract returns list
-        return [  # mutable-ok: BaseVideoConfig contract returns list
+        return [
             "model",
             "prompt",
             "input_reference",
@@ -505,13 +519,13 @@ class MinimaxVideoConfig(BaseVideoConfig):
                     ),
                     llm_provider="minimax",
                 ) from e
-            return [  # mutable-ok: JSON request-body content
+            return [
                 {"type": "text", "text": prompt},
                 *(item.model_dump(exclude_none=True) for item in media),
             ]
 
         content_items: Final[list[dict[str, object]]] = [  # mutable-ok: JSON request-body content items
-            {"type": "text", "text": prompt}  # mutable-ok: JSON request-body content item
+            {"type": "text", "text": prompt}
         ]
         input_reference: Final = video_create_optional_request_params.get("input_reference")
         if input_reference is not None:
@@ -637,11 +651,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
-        raise NotImplementedError(
-            "Video remix is not supported by MiniMax. Its regeneration endpoint only upscales a finished 768P "
-            "MiniMax-H3 task to 2K and ignores the prompt; send a new video_generation() request with the edited "
-            "prompt instead."
-        )
+        raise _remix_unsupported()
 
     def transform_video_remix_response(
         self,
@@ -649,7 +659,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         logging_obj: "Logging",
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
-        raise NotImplementedError("Video remix is not supported by MiniMax.")
+        raise _remix_unsupported()
 
     def transform_video_list_request(
         self,
