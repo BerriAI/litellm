@@ -5,7 +5,7 @@ import { useId, useRef } from "react";
 import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 SyntaxHighlighter.registerLanguage("json", json);
@@ -83,7 +83,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
   return (
     <div
       className={cn(
-        "flex min-h-96 flex-1 flex-col overflow-hidden rounded-md border bg-[#282c34]",
+        "flex min-h-96 flex-1 flex-col overflow-hidden rounded-md border bg-[#1e1e1e]",
         hasErrors && "border-destructive/60",
       )}
     >
@@ -104,7 +104,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
         <div ref={highlightRef} aria-hidden="true" className={cn("absolute inset-0 overflow-hidden", EDITOR_TEXT)}>
           <SyntaxHighlighter
             language="json"
-            style={oneDark}
+            style={vscDarkPlus}
             customStyle={TRANSPARENT_PRE}
             PreTag="div"
             codeTagProps={CODE_TAG_PROPS}
