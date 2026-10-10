@@ -534,6 +534,11 @@ class MCPSemanticFilterSettings(LiteLLMBaseModel):
         le=1.0,
     )
 
+    defer_index_build: bool = Field(
+        default=False,
+        description="Build the tool embedding index in the background so proxy startup is not blocked. Requests pass through unfiltered until the index is ready.",
+    )
+
 
 class MCPSemanticFilterSettingsResponse(SettingsResponse):
     """Response model for MCP semantic filter settings"""

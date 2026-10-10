@@ -335,6 +335,32 @@ async def test_semantic_filter_extract_user_query():
     assert query3 == ""
 
 
+@pytest.mark.asyncio
+async def test_semantic_filter_extract_user_query_skips_non_text_blocks():
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "find"}, None, 5, "weather"],
+        },
+    ]
+
+    assert filter_instance.extract_user_query(messages) == "find weather"
+
+
 @requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_triggers_on_completion():
@@ -2239,3 +2265,277 @@ async def test_semantic_filter_hook_narrows_only_references_the_gateway_serves()
     )
 
     assert narrowed == [{**gateway_reference, "allowed_tools": ["srv-tool_1"]}, external_tool]
+
+
+def _make_gated_embedding_router(release: asyncio.Event):
+    """
+    Mock litellm Router where sync embedding() and async aembedding() record
+    their inputs separately, and aembedding parks on `release` until the test
+    lets it finish. Embeds with the same keyword one-hots as
+    _make_keyword_embedding_router so ranking assertions stay deterministic.
+    """
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    def _vector(text):
+        lowered = text.lower()
+        if "linear" in lowered or "issue" in lowered or "ticket" in lowered:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+
+    def _response(texts):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=_vector(t), index=i, object="embedding") for i, t in enumerate(texts)],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    sync_inputs = []
+
+    def mock_embedding_sync(*args, **kwargs):
+        sync_inputs.append(list(kwargs["input"]))
+        return _response(kwargs["input"])
+
+    async_inputs = []
+
+    async def mock_embedding_async(*args, **kwargs):
+        async_inputs.append(list(kwargs["input"]))
+        await release.wait()
+        return _response(kwargs["input"])
+
+    mock_router = Mock()
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+    mock_router.sync_inputs = sync_inputs
+    mock_router.async_inputs = async_inputs
+    return mock_router
+
+
+def _patch_registry_with_tools(tools):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return (
+        patch.object(global_mcp_server_manager, "get_registry", return_value={"srv-1": Mock()}),
+        patch.object(global_mcp_server_manager, "get_tools_for_server", new=AsyncMock(return_value=tools)),
+    )
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_deferred_filter_passes_through_until_index_ready():
+    """
+    defer_index_build=True must make filter_tools return every tool untouched
+    while the background index build is still in flight, instead of lazily
+    indexing request-time tools and racing the startup build.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    release = asyncio.Event()
+    mock_router = _make_gated_embedding_router(release)
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=1,
+        similarity_threshold=0.3,
+        enabled=True,
+        defer_index_build=True,
+    )
+    tools = [_linear_issue_tool(), _weather_tool()]
+
+    filtered = await filter_instance.filter_tools(
+        query="what is Linear ticket LIT-3794 about",
+        available_tools=tools,
+    )
+
+    assert filtered == tools
+    assert mock_router.sync_inputs == []
+    assert mock_router.async_inputs == []
+    print("✅ Deferred filter passes all tools through while the index builds")
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_deferred_index_build_uses_only_async_encoder():
+    """
+    The deferred startup build must embed every tool description through
+    aembedding. If _abuild_router fell back to the sync encoder (the
+    SemanticRouter auto_sync path or its dims probe), the event loop would
+    block for the whole build, so mock_router.embedding must never fire.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    release = asyncio.Event()
+    release.set()
+    mock_router = _make_gated_embedding_router(release)
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=1,
+        similarity_threshold=0.3,
+        enabled=True,
+        defer_index_build=True,
+    )
+    tools = [_linear_issue_tool(), _weather_tool()]
+    registry_patch, tools_patch = _patch_registry_with_tools(tools)
+
+    with registry_patch, tools_patch:
+        await filter_instance.build_router_from_mcp_registry(async_index=True)
+
+    assert mock_router.sync_inputs == []
+    embedded_texts = [text for batch in mock_router.async_inputs for text in batch]
+    assert "Get a Linear issue (ticket) by its identifier such as LIT-1234" in embedded_texts
+    assert "Get the current weather conditions for a city" in embedded_texts
+    assert filter_instance.startup_index_ready is True
+    assert filter_instance.tool_router is not None
+
+    filtered = await filter_instance.filter_tools(
+        query="what is Linear ticket LIT-3794 about",
+        available_tools=tools,
+    )
+    assert [t.name for t in filtered] == ["linear_stub-get_issue"]
+    print("✅ Deferred index build embeds only through the async encoder")
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_deferred_index_build_failure_unblocks_passthrough_and_lazy_indexing():
+    """
+    If the deferred build raises (not a context-window error), requests must
+    stop passing through and fall back to the normal request-time indexing
+    path instead of staying unfiltered forever.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter.hook import _run_deferred_index_build
+
+    state = {"fail": True}
+    recorded_inputs = []
+    mock_router = _make_keyword_embedding_router(recorded_inputs)
+    real_aembedding = mock_router.aembedding
+
+    async def flaky_aembedding(*args, **kwargs):
+        if state["fail"]:
+            raise RuntimeError("embedding backend down")
+        return await real_aembedding(*args, **kwargs)
+
+    mock_router.aembedding = flaky_aembedding
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=1,
+        similarity_threshold=0.3,
+        enabled=True,
+        defer_index_build=True,
+    )
+    registry_patch, tools_patch = _patch_registry_with_tools([_linear_issue_tool()])
+
+    with registry_patch, tools_patch:
+        await _run_deferred_index_build(filter_instance)
+
+    assert filter_instance.startup_index_ready is True
+    assert filter_instance.tool_router is None
+
+    state["fail"] = False
+    tools = [_linear_issue_tool(), _weather_tool()]
+    filtered = await filter_instance.filter_tools(
+        query="what is Linear ticket LIT-3794 about",
+        available_tools=tools,
+    )
+
+    assert [t.name for t in filtered] == ["linear_stub-get_issue"]
+    print("✅ Failed deferred build unblocks the request-time indexing fallback")
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_initialize_from_config_defer_registers_hook_before_index_lands():
+    """
+    With defer_index_build on, initialize_from_config must return a registered
+    hook while the index build is still parked mid-embedding: the hook passes
+    requests through untouched until the task completes, then filters for real.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    release = asyncio.Event()
+    mock_router = _make_gated_embedding_router(release)
+    tools = [_linear_issue_tool(), _weather_tool()]
+    registry_patch, tools_patch = _patch_registry_with_tools(tools)
+
+    with registry_patch, tools_patch:
+        hook = await SemanticToolFilterHook.initialize_from_config(
+            config={"enabled": True, "top_k": 1, "defer_index_build": True},
+            llm_router=mock_router,
+        )
+
+        assert hook is not None
+        assert hook.index_build_task is not None
+        assert hook.filter.startup_index_ready is False
+
+        await asyncio.sleep(0)
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "what is Linear ticket LIT-3794 about"}],
+            "tools": list(tools),
+            "metadata": {},
+        }
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=Mock(),
+            cache=Mock(),
+            data=data,
+            call_type="completion",
+        )
+        assert result is None
+        assert data["tools"] == tools
+
+        release.set()
+        await hook.index_build_task
+
+        assert hook.filter.startup_index_ready is True
+        assert hook.filter.tool_router is not None
+        assert mock_router.sync_inputs == []
+
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=Mock(),
+            cache=Mock(),
+            data=data,
+            call_type="completion",
+        )
+        assert result is data
+        assert [t.name for t in data["tools"]] == ["linear_stub-get_issue"]
+    print("✅ Deferred init registers the hook immediately and filters once the index lands")
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_initialize_from_config_default_still_awaits_index_build():
+    """
+    Without defer_index_build the current behavior is unchanged: the index
+    build is awaited inside initialize_from_config, so the returned hook is
+    already serving filtered requests.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    release = asyncio.Event()
+    release.set()
+    mock_router = _make_gated_embedding_router(release)
+    tools = [_linear_issue_tool(), _weather_tool()]
+    registry_patch, tools_patch = _patch_registry_with_tools(tools)
+
+    with registry_patch, tools_patch:
+        hook = await SemanticToolFilterHook.initialize_from_config(
+            config={"enabled": True, "top_k": 1},
+            llm_router=mock_router,
+        )
+
+    assert hook is not None
+    assert hook.index_build_task is None
+    assert hook.filter.startup_index_ready is True
+    assert hook.filter.tool_router is not None
+    print("✅ Default init still blocks until the index is built")

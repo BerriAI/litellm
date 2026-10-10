@@ -5,6 +5,8 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
+import asyncio
+import importlib.util
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
@@ -36,6 +38,17 @@ class SemanticToolFilterConfig(TypedDict, total=False):
     embedding_model: ReadOnly[str]
     top_k: ReadOnly[int]
     similarity_threshold: ReadOnly[float]
+    defer_index_build: ReadOnly[bool]
+
+
+async def _run_deferred_index_build(semantic_filter: "SemanticMCPToolFilter") -> None:
+    """Background task for defer_index_build; swallows failures so requests keep passing through."""
+    try:
+        await semantic_filter.build_router_from_mcp_registry(async_index=True)
+    except Exception:  # noqa: BLE001  # background task must not die; requests keep passing through
+        verbose_proxy_logger.exception(
+            "MCP semantic tool index deferred build failed; request-time indexing remains active"
+        )
 
 
 def _truncate_csv_at_tool_name_boundary(tool_names_csv: str, max_length: int) -> str:
@@ -69,6 +82,7 @@ class SemanticToolFilterHook(CustomLogger):
         """
         super().__init__()
         self.filter = semantic_filter
+        self.index_build_task: asyncio.Task[None] | None = None
 
         verbose_proxy_logger.debug(
             "Initialized SemanticToolFilterHook with filter: enabled=%s, top_k=%s",
@@ -314,8 +328,11 @@ class SemanticToolFilterHook(CustomLogger):
         if self._should_expand_mcp_tools(tools):
             verbose_proxy_logger.debug("Detected litellm_proxy MCP references, expanding before semantic filtering")
 
-            if not self.filter.enabled:
-                verbose_proxy_logger.debug("Semantic filter disabled, leaving MCP references untouched")
+            if not self.filter.enabled or not self.filter.startup_index_ready:
+                verbose_proxy_logger.debug(
+                    "Semantic filter %s, leaving MCP references untouched",
+                    "disabled" if not self.filter.enabled else "index still building",
+                )
                 return None
 
             try:
@@ -360,8 +377,11 @@ class SemanticToolFilterHook(CustomLogger):
             verbose_proxy_logger.debug("No messages in request, skipping semantic filter")
             return None
 
-        if not self.filter.enabled:
-            verbose_proxy_logger.debug("Semantic filter disabled, skipping")
+        if not self.filter.enabled or not self.filter.startup_index_ready:
+            verbose_proxy_logger.debug(
+                "Semantic filter %s, skipping",
+                "disabled" if not self.filter.enabled else "index still building",
+            )
             return None
 
         try:
@@ -503,6 +523,7 @@ class SemanticToolFilterHook(CustomLogger):
             embedding_model: Final = config.get("embedding_model", DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL)
             top_k: Final = config.get("top_k", DEFAULT_MCP_SEMANTIC_FILTER_TOP_K)
             similarity_threshold = config.get("similarity_threshold", DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD)
+            defer_index_build: Final = bool(config.get("defer_index_build", False))
 
             semantic_filter: Final = SemanticMCPToolFilter(
                 embedding_model=embedding_model,
@@ -510,18 +531,25 @@ class SemanticToolFilterHook(CustomLogger):
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
                 enabled=True,
+                defer_index_build=defer_index_build,
             )
-
-            # Build router from MCP registry on startup
-            await semantic_filter.build_router_from_mcp_registry()
 
             hook: Final = SemanticToolFilterHook(semantic_filter)
 
+            if defer_index_build:
+                if importlib.util.find_spec("semantic_router") is None:
+                    raise ImportError("No module named 'semantic_router'")
+                hook.index_build_task = asyncio.create_task(_run_deferred_index_build(semantic_filter))
+            else:
+                # Build router from MCP registry on startup
+                await semantic_filter.build_router_from_mcp_registry()
+
             verbose_proxy_logger.info(
-                "✅ MCP Semantic Tool Filter enabled: embedding_model=%s, top_k=%s, similarity_threshold=%s",
+                "✅ MCP Semantic Tool Filter enabled: embedding_model=%s, top_k=%s, similarity_threshold=%s, defer_index_build=%s",
                 embedding_model,
                 top_k,
                 similarity_threshold,
+                defer_index_build,
             )
 
             return hook

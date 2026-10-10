@@ -86,7 +86,10 @@ litellm_settings:
     embedding_model: "openai/text-embedding-3-small"
     top_k: 10
     similarity_threshold: 0.3
+    defer_index_build: false
 ```
+
+With `defer_index_build`, `initialize_from_config` starts `build_router_from_mcp_registry(async_index=True)` as a background task stored on `hook.index_build_task`, and `filter_tools` returns every tool until `startup_index_ready` is set
 
 ## Error Handling
 

@@ -36907,6 +36907,12 @@ export interface components {
          */
         MCPSemanticFilterSettings: {
             /**
+             * Defer Index Build
+             * @description Build the tool embedding index in the background so proxy startup is not blocked. Requests pass through unfiltered until the index is ready.
+             * @default false
+             */
+            defer_index_build: boolean;
+            /**
              * Embedding Model
              * @description Embedding model to use for semantic similarity (e.g., 'text-embedding-3-small', 'text-embedding-ada-002')
              * @default text-embedding-3-small
