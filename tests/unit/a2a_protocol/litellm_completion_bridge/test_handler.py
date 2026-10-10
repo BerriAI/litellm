@@ -37,10 +37,15 @@ def _a2a_params() -> dict[str, object]:
     ("litellm_params", "expected"),
     [
         ({"custom_llm_provider": "databricks_agent", "model": "my-agent"}, "databricks_agent/my-agent"),
-        ({"custom_llm_provider": "databricks_agent", "model": "databricks_agent/my-agent"}, "databricks_agent/my-agent"),
-        ({"custom_llm_provider": "databricks_agent"}, "databricks_agent/agent"),
-        ({"custom_llm_provider": "databricks_agent", "model": None}, "databricks_agent/agent"),
+        (
+            {"custom_llm_provider": "databricks_agent", "model": "databricks_agent/my-agent"},
+            "databricks_agent/my-agent",
+        ),
+        ({"custom_llm_provider": "databricks_agent"}, "databricks_agent/"),
+        ({"custom_llm_provider": "databricks_agent", "model": None}, "databricks_agent/"),
         ({"custom_llm_provider": "databricks_agent", "model": ""}, "databricks_agent/"),
+        ({"custom_llm_provider": "langgraph"}, "langgraph/agent"),
+        ({"custom_llm_provider": "langgraph", "model": None}, "langgraph/agent"),
         ({"model": "gpt-5"}, "gpt-5"),
     ],
 )
@@ -90,17 +95,17 @@ async def test_databricks_agent_message_send_through_the_bridge(httpx_transport:
 
 
 @respx.mock
-async def test_databricks_app_uses_the_minted_oauth_header_over_a_pat(httpx_transport: None) -> None:
+async def test_databricks_app_credential_wins_over_a_forwarded_client_authorization(httpx_transport: None) -> None:
     route = respx.post(APP_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
     await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id="req-1",
         params=_a2a_params(),
-        litellm_params={"custom_llm_provider": "databricks_agent", "api_key": "pat-1"},
+        litellm_params={"custom_llm_provider": "databricks_agent", "api_key": "minted-oauth"},
         api_base=APP_URL,
-        agent_extra_headers={"Authorization": "Bearer minted-oauth", "X-LiteLLM-User-Id": "u-1"},
+        agent_extra_headers={"authorization": "Bearer client-token", "X-LiteLLM-User-Id": "u-1"},
     )
     sent = route.calls.last.request
-    assert sent.headers["Authorization"] == "Bearer minted-oauth"
+    assert sent.headers.get_list("Authorization") == ["Bearer minted-oauth"]
     assert sent.headers["X-LiteLLM-User-Id"] == "u-1"
 
 

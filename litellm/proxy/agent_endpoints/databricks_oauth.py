@@ -275,6 +275,13 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
 databricks_app_oauth_token_cache: Final = DatabricksAppOAuthTokenCache()
 
 
+async def _resolve_token(litellm_params: Mapping[str, object] | None) -> str | None:
+    config: Final = parse_databricks_oauth_config(litellm_params)
+    if config is None:
+        return None
+    return await databricks_app_oauth_token_cache.async_get_token(config)
+
+
 async def resolve_databricks_app_auth_header(
     litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
@@ -282,9 +289,23 @@ async def resolve_databricks_app_auth_header(
 
     Returns ``None`` when the agent is not configured for Databricks App OAuth.
     """
-    config: Final = parse_databricks_oauth_config(litellm_params)
-    if config is None:
-        return None
+    token: Final = await _resolve_token(litellm_params)
+    return None if token is None else {"Authorization": f"Bearer {token}"}
 
-    token: Final = await databricks_app_oauth_token_cache.async_get_token(config)
-    return {"Authorization": f"Bearer {token}"}
+
+@dataclass(frozen=True, slots=True)
+class AgentBackendAuth:
+    litellm_params: dict[str, object]  # mutable-ok: asend_message takes litellm_params as a dict
+    header: Mapping[str, str] | None
+
+
+async def resolve_databricks_backend_auth(litellm_params: Mapping[str, object]) -> AgentBackendAuth:
+    """A ``databricks_agent`` completes with the minted token as its ``api_key``, so the token outranks a personal
+    access token and a client ``Authorization`` header; any other agent sends it as the outbound header."""
+    forwarded: Final = without_databricks_oauth_params(litellm_params)
+    token: Final = await _resolve_token(litellm_params)
+    if token is None:
+        return AgentBackendAuth(litellm_params=forwarded, header=None)
+    if _is_databricks_agent(litellm_params):
+        return AgentBackendAuth(litellm_params={**forwarded, "api_key": token}, header=None)
+    return AgentBackendAuth(litellm_params=forwarded, header={"Authorization": f"Bearer {token}"})

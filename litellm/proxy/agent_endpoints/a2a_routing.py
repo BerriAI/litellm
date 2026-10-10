@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -19,41 +19,68 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.databricks_oauth import (
-    resolve_databricks_app_auth_header,
-    without_databricks_oauth_params,
-)
+from litellm.proxy.agent_endpoints.databricks_oauth import resolve_databricks_backend_auth
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 
 
-def _extra_headers(source: Mapping[str, object]) -> Mapping[str, str] | None:
-    extra_headers: Final = source.get("extra_headers")
+def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
+    extra_headers: Final = agent_kwargs.get("extra_headers")
     return None if extra_headers is None else _HEADERS.validate_python(extra_headers)
 
 
-def _with_backend_auth(data: Mapping[str, object], backend_auth: Mapping[str, str] | None) -> Mapping[str, object]:
+def _drop_params_enabled(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or data.get("drop_params") is True or litellm_params.get("drop_params") is True
+
+
+def _client_extra_headers(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> Mapping[str, str] | None:
+    extra_headers: Final = data.get("extra_headers")
+    if not extra_headers:
+        return None
+    try:
+        return _HEADERS.validate_python(extra_headers)
+    except ValidationError as e:
+        if _drop_params_enabled(data, litellm_params):
+            return None
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "extra_headers must be an object mapping header names to string values, "
+                "or set drop_params: true to drop it"
+            ),
+        ) from e
+
+
+def _with_headers(data: Mapping[str, object], extra_headers: Mapping[str, str] | None) -> Mapping[str, object]:
+    request: Final = {key: value for key, value in data.items() if key != "extra_headers"}
+    return {**request, **({"extra_headers": extra_headers} if extra_headers else {})}
+
+
+def _with_backend_auth(
+    data: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    backend_auth: Mapping[str, str] | None,
+) -> Mapping[str, object]:
     if not backend_auth:
         return data
-    return {
-        **data,
-        "extra_headers": merge_agent_headers(dynamic_headers=_extra_headers(data), static_headers=backend_auth),
-    }
+    return _with_headers(
+        data,
+        merge_agent_headers(dynamic_headers=_client_extra_headers(data, litellm_params), static_headers=backend_auth),
+    )
 
 
 def _bridge_request_data(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    agent_kwargs: Final = agent_completion_kwargs(without_databricks_oauth_params(litellm_params))
+    agent_kwargs: Final = agent_completion_kwargs(litellm_params)
     extra_headers: Final = merge_agent_headers(
-        dynamic_headers=_extra_headers(data), static_headers=_extra_headers(agent_kwargs)
+        dynamic_headers=_client_extra_headers(data, litellm_params),
+        static_headers=_agent_extra_headers(agent_kwargs),
     )
-    return {
-        **data,
-        **agent_kwargs,
-        "model": bridge_model_name(litellm_params),
-        **({"extra_headers": extra_headers} if extra_headers else {}),
-    }
+    return _with_headers(
+        {**data, **agent_kwargs, "model": bridge_model_name(litellm_params)},
+        extra_headers,
+    )
 
 
 async def route_a2a_agent_request(
@@ -111,12 +138,10 @@ async def route_a2a_agent_request(
             )
 
     litellm_params: Final = agent.litellm_params or {}
-    backend_auth: Final = await resolve_databricks_app_auth_header(litellm_params)
+    backend_auth: Final = await resolve_databricks_backend_auth(litellm_params)
 
     if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
-        return _call_route(
-            route_type, _with_backend_auth(_bridge_agent_request(data, agent, litellm_params), backend_auth)
-        )
+        return _call_route(route_type, _bridge_agent_request(data, agent, backend_auth.litellm_params))
 
     # Get API base URL from agent config
     if not agent.agent_card_params or "url" not in agent.agent_card_params:
@@ -128,7 +153,7 @@ async def route_a2a_agent_request(
     data["api_base"] = agent.agent_card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
-    return _call_route(route_type, _with_backend_auth(data, backend_auth))
+    return _call_route(route_type, _with_backend_auth(data, litellm_params, backend_auth.header))
 
 
 def _bridge_agent_request(

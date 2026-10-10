@@ -176,19 +176,28 @@ def test_transform_request_joins_text_content_parts() -> None:
     assert body == {"input": [{"role": "user", "content": "ping"}]}
 
 
-def test_validate_environment_keeps_a_minted_authorization_header_over_the_api_key() -> None:
+def test_validate_environment_lets_the_api_key_replace_a_header_authorization() -> None:
     headers = DatabricksAgentConfig().validate_environment(
-        headers={"authorization": "Bearer minted-oauth", "X-LiteLLM-User-Id": "u1"},
+        headers={"authorization": "Bearer client-token", "X-LiteLLM-User-Id": "u1"},
         model="my-agent",
         messages=[],
         optional_params={},
         litellm_params={},
         api_key="pat-1",
     )
-    assert headers["authorization"] == "Bearer minted-oauth"
-    assert "Authorization" not in headers
-    assert headers["X-LiteLLM-User-Id"] == "u1"
-    assert headers["Content-Type"] == "application/json"
+    assert headers == {"X-LiteLLM-User-Id": "u1", "Content-Type": "application/json", "Authorization": "Bearer pat-1"}
+
+
+def test_validate_environment_uses_a_header_authorization_when_no_api_key_is_set() -> None:
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={"authorization": "Bearer client-token"},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+    )
+    assert headers == {"authorization": "Bearer client-token", "Content-Type": "application/json"}
 
 
 def test_validate_environment_uses_the_pat_as_bearer() -> None:

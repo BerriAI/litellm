@@ -22,6 +22,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2AStreamingContext,
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
+from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse
@@ -45,10 +46,15 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
 
 
 def bridge_model_name(litellm_params: Mapping[str, object]) -> str:
-    """The litellm model string a bridge agent completes with: ``<custom_llm_provider>/<model>``."""
+    """The litellm model string a bridge agent completes with: ``<custom_llm_provider>/<model>``.
+
+    A provider bridged on chat names a real upstream endpoint with ``model``, so a missing one stays empty for that
+    provider to reject or ignore instead of becoming a made-up ``agent`` endpoint.
+    """
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    configured_model: Final = litellm_params.get("model", "agent")
-    model: Final = configured_model if isinstance(configured_model, str) else "agent"
+    default_model: Final = "" if custom_llm_provider in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS else "agent"
+    configured_model: Final = litellm_params.get("model")
+    model: Final = configured_model if isinstance(configured_model, str) else default_model
     if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
         return model
     return f"{custom_llm_provider}/{model}"

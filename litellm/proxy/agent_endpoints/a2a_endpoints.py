@@ -34,9 +34,9 @@ from litellm.proxy.a2a.version_convert import (
     normalize_stream_event,
 )
 from litellm.proxy.agent_endpoints.databricks_oauth import (
+    AgentBackendAuth,
     has_databricks_oauth,
-    resolve_databricks_app_auth_header,
-    without_databricks_oauth_params,
+    resolve_databricks_backend_auth,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -167,13 +167,17 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
     )
 
 
-async def _resolve_backend_auth_header(
+async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
-) -> Mapping[str, str] | None:
+) -> AgentBackendAuth:
+    databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
     if has_databricks_oauth(litellm_params):
-        return await resolve_databricks_app_auth_header(litellm_params)
-    return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
+        return databricks_auth
+    return AgentBackendAuth(
+        litellm_params=databricks_auth.litellm_params,
+        header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
+    )
 
 
 def _forwarding_headers(
@@ -820,6 +824,7 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
+        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider)
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
@@ -827,9 +832,9 @@ async def invoke_agent_a2a(
                 dynamic_headers=dynamic_headers or None,
                 static_headers=static_headers or None,
             ),
-            backend_auth_header=await _resolve_backend_auth_header(litellm_params, custom_llm_provider),
+            backend_auth_header=backend_auth.header,
         )
-        forwarded_litellm_params: Final = without_databricks_oauth_params(litellm_params)
+        forwarded_litellm_params: Final = backend_auth.litellm_params
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model

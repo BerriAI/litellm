@@ -402,7 +402,8 @@ async def test_databricks_agent_flat_oauth_fields_mint_the_token_and_stay_off_th
 
     assert token_client.post.call_args.args[0] == "https://adb-1.azuredatabricks.net/oidc/v1/token"
     call_kwargs = mock_asend.call_args.kwargs
-    assert call_kwargs["agent_extra_headers"].get("Authorization") == "Bearer flat-minted"
+    assert call_kwargs["litellm_params"]["api_key"] == "flat-minted"
+    assert "Authorization" not in (call_kwargs["agent_extra_headers"] or {})
     assert not {"client_id", "client_secret"} & set(call_kwargs["litellm_params"])
     assert call_kwargs["litellm_params"]["custom_llm_provider"] == "databricks_agent"
 
@@ -414,13 +415,10 @@ async def test_non_databricks_agent_skips_oauth_resolution():
     mock_agent.litellm_params = {"require_trace_id_on_calls_to_agent": False}
     mock_request = _make_mock_request()
 
-    with patch(
-        "litellm.proxy.agent_endpoints.a2a_endpoints.resolve_databricks_app_auth_header",
-        new_callable=AsyncMock,
-    ) as mock_resolve:
+    with patch("litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client") as mock_token_client:
         mock_asend = await _invoke(mock_agent, mock_request, None)
 
-    mock_resolve.assert_not_called()
+    mock_token_client.assert_not_called()
     headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
     assert headers == {"x-custom": "v", "X-LiteLLM-User-Id": "u1"}
     assert "Authorization" not in headers

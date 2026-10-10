@@ -134,6 +134,10 @@ def _has_authorization(headers: Mapping[str, object]) -> bool:
     return any(name.lower() == "authorization" for name in headers)
 
 
+def _without_authorization(headers: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: value for name, value in headers.items() if name.lower() != "authorization"}
+
+
 class DatabricksAgentConfig(BaseConfig):
     @staticmethod
     def resolve_api_base_and_key(api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
@@ -164,17 +168,21 @@ class DatabricksAgentConfig(BaseConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        if api_key:
+            return {
+                **_without_authorization(headers),
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            }
         if _has_authorization(headers):
             return {**headers, "Content-Type": "application/json"}
-        if not api_key:
-            raise DatabricksException(
-                status_code=400,
-                message=(
-                    "Missing Databricks credentials: set api_key to a personal access token, set the "
-                    "DATABRICKS_API_KEY environment variable, or register the agent with OAuth client credentials"
-                ),
-            )
-        return {**headers, "Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+        raise DatabricksException(
+            status_code=400,
+            message=(
+                "Missing Databricks credentials: set api_key to a personal access token, set the "
+                "DATABRICKS_API_KEY environment variable, or register the agent with OAuth client credentials"
+            ),
+        )
 
     def get_complete_url(
         self,
