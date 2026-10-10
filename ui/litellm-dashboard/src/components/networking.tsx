@@ -7102,7 +7102,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
 
   const data = await response.json();
   if (data.token) {
-    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+    storeLoginToken(data.token);
   }
   return data.token;
 };
