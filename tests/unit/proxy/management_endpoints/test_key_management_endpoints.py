@@ -3254,6 +3254,46 @@ async def test_update_key_with_key_and_alias_selects_by_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_creator_clearing_max_budget_is_denied_and_cap_is_kept(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    key_in_db = LiteLLM_VerificationToken(
+        token="hashed-creator-key",
+        user_id="creator-123",
+        created_by="creator-123",
+        max_budget=10.0,
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.update_data = AsyncMock()
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    creator = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-creator",
+        user_id="creator-123",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key="sk-test-key", max_budget=None),
+            user_api_key_dict=creator,
+            litellm_changed_by=None,
+        )
+
+    assert str(exc_info.value.code) == "403"
+    mock_prisma_client.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_block_key_existing_key_succeeds(monkeypatch):
     """
     Test that block_key successfully blocks an existing key and
@@ -12385,6 +12425,59 @@ class TestKeyOwnerPrivilegeEscalation:
                     user_api_key_cache=MagicMock(),
                 )
         mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_creator_cannot_clear_own_max_budget(self):
+        """An explicit max_budget null removes the key's cap, so it is a budget change."""
+        data = UpdateKeyRequest(key="sk-test", max_budget=None)
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = 10.0
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            with pytest.raises(HTTPException):
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing,
+                    user_api_key_dict=auth,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+        mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_creator_null_max_budget_on_uncapped_key_needs_no_admin(self):
+        """The dashboard form always sends max_budget, null when empty, so echoing the stored null is not a change."""
+        data = UpdateKeyRequest(key="sk-test", max_budget=None, key_alias="renamed")
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = None
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            result = await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert result is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cleared_value", [[], None])

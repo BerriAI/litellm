@@ -3192,16 +3192,16 @@ async def _validate_update_key_data(
     #   / key-owner / team-admin / org-admin of the key).
     # - max_budget / spend / budget_limits: always require the admin
     #   check, even for the key owner or a team member (matches the
-    #   existing admin-only budget semantics).  budget_limits uses
-    #   model_fields_set because an explicit null/[] clears the field
-    #   and must gate the same as setting or changing it.
+    #   existing admin-only budget semantics).  max_budget and
+    #   budget_limits use model_fields_set because an explicit null
+    #   clears the field and must gate the same as setting or changing it.
     # - spend gates on presence alone (not a value diff): the DB spend
     #   lags the live cross-pod counter, so letting an "unchanged" spend
     #   through the non-admin path would let a key owner / team member
     #   overwrite the live counter below real usage and silently weaken
     #   enforcement.
     _is_budget_change: Final = (
-        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
+        ("max_budget" in data.model_fields_set and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
         or "soft_budget" in data.model_fields_set
