@@ -409,8 +409,9 @@ class Cache:
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
     def get_cache_key(
-        self, **kwargs: object
-    ) -> str | None:  # kwargs-ok: dynamic request parameters are part of the cache key
+        self,
+        **kwargs: object,  # kwargs-ok: dynamic request parameters are part of the cache key
+    ) -> str | None:
         """
         Get the cache key for the given arguments.
 
@@ -884,17 +885,17 @@ class Cache:
             cache_key = self.get_cache_key(**kwargs)  # rebind-ok: derive caller key
         if cache_key is not None:
             if isinstance(result, BaseModel):
-                result = result.model_dump_json()
+                result = result.model_dump_json()  # rebind-ok: normalize cache payload
 
             ## DEFAULT TTL ##
             if self.ttl is not None:
-                kwargs["ttl"] = self.ttl
+                kwargs["ttl"] = self.ttl  # rebind-ok: apply cache TTL override
             ## Get Cache-Controls ##
             _cache_kwargs: Final = kwargs.get("cache", None)
             if isinstance(_cache_kwargs, dict):
                 for k, v in _cache_kwargs.items():
                     if k == "ttl":
-                        kwargs["ttl"] = v
+                        kwargs["ttl"] = v  # rebind-ok: apply request cache control
 
             cached_data: Final = {"timestamp": time.time(), "response": result}
             return cache_key, cached_data, kwargs
@@ -1060,7 +1061,7 @@ class Cache:
         input: str,
         kwargs: dict,
         idx_in_result_data: int = 0,
-    ) -> tuple[str, dict, dict] | None:
+    ) -> tuple[str, dict, dict] | None:  # mutable-ok: returns mutable request data for cache writeback
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
         embedding_response: Final = result.data[idx_in_result_data]
@@ -1119,7 +1120,7 @@ class Cache:
                         cache_entry = self.add_embedding_response_to_cache(result, i, kwargs, idx)
                         if cache_entry is None:
                             return
-                        cache_key, cached_data, kwargs = cache_entry
+                        cache_key, cached_data, kwargs = cache_entry  # rebind-ok: use normalized cache entry
                         cache_list.append((cache_key, cached_data))
                 elif isinstance(kwargs["input"], str):
                     cache_entry = self.add_embedding_response_to_cache(  # rebind-ok: embedding entry is optional
@@ -1127,7 +1128,7 @@ class Cache:
                     )
                     if cache_entry is None:
                         return
-                    cache_key, cached_data, kwargs = cache_entry
+                    cache_key, cached_data, kwargs = cache_entry  # rebind-ok: use normalized cache entry
                     cache_list.append((cache_key, cached_data))
 
                 if dynamic_cache_object is not None:
@@ -1164,7 +1165,7 @@ class Cache:
         )
         if cache_entry is None:
             return
-        cache_key, cached_data, kwargs = cache_entry
+        cache_key, cached_data, kwargs = cache_entry  # rebind-ok: use normalized cache entry
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
     async def ping(self):

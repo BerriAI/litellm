@@ -776,7 +776,9 @@ def get_logging_payload(
     elif litellm_params.get("preset_cache_key") is not None:
         cache_key = litellm_params["preset_cache_key"]
     else:
-        cache_key = litellm.cache.get_cache_key(**cast(dict[str, object], kwargs)) or "Cache OFF"
+        cache_key = litellm.cache.get_cache_key(
+            **cast(dict[str, object], kwargs)  # cast-ok: spend-log kwargs are string keyed
+        ) or "Cache OFF"
     if cache_hit is True:
         import time
 
