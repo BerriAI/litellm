@@ -495,7 +495,11 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
 #[rstest]
 #[tokio::test]
 async fn bedrock_opens_a_stream_when_the_wire_body_has_no_stream_field(call: MessagesCall) {
-    let upstream = upstream([ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new())]).await;
+    let upstream = upstream([ResponseTemplate::new(200)
+        .set_body_raw(Vec::<u8>::new(), "application/vnd.amazon.eventstream")
+        .insert_header("content-encoding", "identity")
+        .insert_header("request-id", "bedrock-stream")])
+    .await;
     let host = RecordingStreamHost::new(
         MessagesCall {
             custom_llm_provider: Some("bedrock".into()),
@@ -512,10 +516,22 @@ async fn bedrock_opens_a_stream_when_the_wire_body_has_no_stream_field(call: Mes
     .await
     .unwrap();
     assert!(matches!(result, MessagesOutput::StreamEnded));
-    assert!(matches!(
-        host.seen.lock().unwrap().as_slice(),
-        [Seen::Open(_)]
-    ));
+    let seen = host.seen.into_inner().unwrap();
+    let [Seen::Open(headers)] = seen.as_slice() else {
+        panic!("the empty stream must open exactly once");
+    };
+    let content_types: Vec<_> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(content_types, ["text/event-stream"]);
+    assert!(headers.contains(&("request-id".into(), "bedrock-stream".into())));
+    assert!(
+        !headers
+            .iter()
+            .any(|(name, _)| { matches!(name.as_str(), "content-length" | "content-encoding") })
+    );
     let sent = only_request(&upstream).await;
     assert_eq!(
         sent.url.path(),

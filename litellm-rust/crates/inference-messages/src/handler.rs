@@ -216,7 +216,15 @@ fn streaming_response(
     let headers = response
         .headers()
         .iter()
+        .filter(|(name, _)| {
+            decoder.is_none()
+                || !matches!(
+                    name.as_str(),
+                    "content-type" | "content-length" | "content-encoding"
+                )
+        })
         .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .chain(decoder.map(|_| ("content-type".into(), "text/event-stream".into())))
         .collect();
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
