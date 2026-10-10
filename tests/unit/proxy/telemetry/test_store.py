@@ -1,10 +1,9 @@
 from dataclasses import dataclass
 from typing import Final
 
-from typing_extensions import LiteralString
-
 import pytest
 from prisma.errors import PrismaError
+from typing_extensions import LiteralString
 
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
 from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hash_secret
@@ -29,7 +28,11 @@ class _FakeDatabase:
             raise PrismaError("database is down")
         return ({"value": self.instance_id if args[0] == "telemetry_instance_id" else self.hash_secret},)
 
+    failed_ids: tuple[object, ...] = ()
+
     async def execute_raw(self, query: LiteralString, *args: object) -> int:
+        if self.fail_writes and query.lstrip().startswith("INSERT"):
+            self.failed_ids = (*self.failed_ids, args[0])
         if self.fail_writes or (self.fail_prune and query.lstrip().startswith("DELETE")):
             raise PrismaError("database is down")
         self.executed = (*self.executed, (query, args))
@@ -69,6 +72,20 @@ async def test_an_idle_window_is_not_stored() -> None:
 async def test_a_database_failure_keeps_the_window_for_the_next_flush() -> None:
     exporter: Final = LocalTableExporter(TelemetryStore(_FakeDatabase(fail_writes=True), retention_days=7))
     assert await exporter.export(_report()) is ExportOutcome.RETRY
+
+
+@pytest.mark.asyncio
+async def test_retrying_a_window_whose_insert_may_have_committed_overwrites_it_instead_of_adding_a_copy() -> None:
+    db: Final = _FakeDatabase(fail_writes=True)
+    exporter: Final = LocalTableExporter(TelemetryStore(db, retention_days=7))
+    assert await exporter.export(_report()) is ExportOutcome.RETRY
+    db.fail_writes = False
+    assert await exporter.export(_report()) is ExportOutcome.SENT
+    assert await exporter.export(_report(dropped_records=5)) is ExportOutcome.SENT
+    insert_ids: Final = [args[0] for query, args in db.executed if 'LiteLLM_TelemetryReport" (id' in query]
+    retried, next_window = insert_ids
+    assert retried == db.failed_ids[0] and next_window != retried
+    assert "ON CONFLICT (id) DO UPDATE" in db.executed[0][0]
 
 
 @pytest.mark.asyncio

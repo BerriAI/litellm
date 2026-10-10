@@ -99,11 +99,12 @@ class TelemetryStore:
             json.dumps({"groups": sorted(group.value for group in consent.groups)}),
         )
 
-    async def save(self, report: Report) -> None:
+    async def save(self, report_id: str, report: Report) -> None:
         await self._db.execute_raw(
             """INSERT INTO "LiteLLM_TelemetryReport" (id, window_start, window_end, report)
-            VALUES ($1, $2, $3, $4::jsonb)""",
-            uuid.uuid4().hex,
+            VALUES ($1, $2, $3, $4::jsonb)
+            ON CONFLICT (id) DO UPDATE SET window_end = EXCLUDED.window_end, report = EXCLUDED.report""",
+            report_id,
             report.window_start,
             report.window_end,
             json.dumps(report_to_json(report)),
@@ -139,15 +140,23 @@ class LocalTableExporter:
 
     def __init__(self, store: TelemetryStore) -> None:
         self._store: Final = store
+        self._retrying: tuple[float, str] | None = None
+
+    def _report_id(self, report: Report) -> str:
+        retrying: Final = self._retrying
+        return retrying[1] if retrying is not None and retrying[0] == report.window_start else uuid.uuid4().hex
 
     async def export(self, report: Report) -> ExportOutcome:
         if not (report.requests or report.attempts or report.ui_events or report.dropped_records):
             return ExportOutcome.SENT
+        report_id: Final = self._report_id(report)
         try:
-            await self._store.save(report)
+            await self._store.save(report_id, report)
         except store_read_errors() as e:
             verbose_proxy_logger.debug("telemetry: could not store the report locally: %s", e)
+            self._retrying = (report.window_start, report_id)
             return ExportOutcome.RETRY
+        self._retrying = None
         try:
             await self._store.prune()
         except store_read_errors() as e:
