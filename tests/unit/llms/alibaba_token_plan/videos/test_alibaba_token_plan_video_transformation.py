@@ -12,6 +12,7 @@ from litellm.llms.alibaba_token_plan.common_utils import VIDEO_PATH
 from litellm.llms.alibaba_token_plan.videos.transformation import AlibabaTokenPlanVideoConfig
 from litellm.llms.custom_httpx import http_handler as http_handler_module
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, blocked_cookie_jar
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import decode_video_id_with_provider, encode_video_id_with_provider
 
@@ -176,3 +177,15 @@ def test_video_download_failure_does_not_expose_the_signed_url(monkeypatch: pyte
             )
     assert "secret-value" not in str(error.value)
     assert "Signature" not in str(error.value)
+
+
+def test_native_input_cannot_replace_the_guardrail_checked_prompt() -> None:
+    request, _, _ = AlibabaTokenPlanVideoConfig().transform_video_create_request(
+        model="happyhorse-1.1-t2v",
+        prompt="checked prompt",
+        api_base=GATEWAY,
+        video_create_optional_request_params={"input": {"prompt": "unchecked prompt", "negative_prompt": "blur"}},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["input"] == {"prompt": "checked prompt", "negative_prompt": "blur"}

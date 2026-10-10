@@ -111,7 +111,7 @@ class AlibabaTokenPlanVideoConfig(BaseVideoConfig):
         return (
             {
                 "model": model,
-                "input": {"prompt": prompt, **media, **native_input},
+                "input": {**media, **native_input, "prompt": prompt},
                 "parameters": {
                     **_size_parameters(params.get("size")),
                     **({"duration": int(str(seconds))} if seconds is not None else {}),
