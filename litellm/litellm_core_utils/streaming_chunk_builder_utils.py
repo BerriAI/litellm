@@ -412,15 +412,37 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
+        saw_tool_call = False
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
+                choice = chunk["choices"][0]
+                delta = choice.get("delta") if isinstance(choice, dict) else getattr(choice, "delta", None)
+                if delta is not None:
+                    delta_tool_calls = (
+                        delta.get("tool_calls") if isinstance(delta, dict) else getattr(delta, "tool_calls", None)
+                    )
+                    if delta_tool_calls:
+                        saw_tool_call = True
+                message = choice.get("message") if isinstance(choice, dict) else getattr(choice, "message", None)
+                if message is not None:
+                    msg_tool_calls = (
+                        message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+                    )
+                    if msg_tool_calls:
+                        saw_tool_call = True
                 chunk_finish_reason = None
-                if hasattr(chunk["choices"][0], "finish_reason"):
-                    chunk_finish_reason = chunk["choices"][0].finish_reason
-                elif "finish_reason" in chunk["choices"][0]:
-                    chunk_finish_reason = chunk["choices"][0]["finish_reason"]
+                if hasattr(choice, "finish_reason"):
+                    chunk_finish_reason = choice.finish_reason
+                elif "finish_reason" in choice:
+                    chunk_finish_reason = choice["finish_reason"]
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
+        if finish_reason == "stop" and saw_tool_call:
+            # A tool-calling stream whose chunks never surfaced an explicit
+            # finish_reason must aggregate to "tool_calls" (OpenAI spec),
+            # not the default "stop" - otherwise callbacks (e.g. OpenTelemetry)
+            # record a wrong finish reason for single-chunk streams. (litellm#45796)
+            finish_reason = "tool_calls"
 
         # Initialize the response dictionary
         response = ModelResponse(

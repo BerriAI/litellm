@@ -2783,6 +2783,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         transformed: Final = []
         for msg in messages:
+            # Normalize pydantic / LiteLLM wrapper objects (e.g. a ModelResponse
+            # Message) to something we can read with .get(); "tool_calls" in msg
+            # is False for those objects, which silently dropped tool calls.
+            if not isinstance(msg, dict):
+                normalized = self._to_dict(msg)
+                if normalized is None:
+                    continue
+                msg = normalized
+
             role = msg.get("role", "user")
             content = msg.get("content", "")
             parts = []
@@ -2797,11 +2806,24 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     else:
                         parts.append({"type": "text", "content": str(part)})
 
+            # Record tool calls as GenAI tool_call parts (OpenLLMetry-compatible)
+            # so id / name / arguments are not dropped from the trace.
+            for tc in msg.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id")
+                    fn = tc.get("function") or {}
+                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                    fn_arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                else:
+                    tc_id = getattr(tc, "id", None)
+                    fn = getattr(tc, "function", None) or {}
+                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                    fn_arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                parts.append({"type": "tool_call", "id": tc_id, "name": fn_name, "arguments": fn_arguments})
+
             transformed_msg = {"role": role, "parts": parts}
             if "id" in msg:
                 transformed_msg["id"] = msg["id"]
-            if "tool_calls" in msg:
-                transformed_msg["tool_calls"] = msg["tool_calls"]
             if "tool_call_id" in msg:
                 transformed_msg["tool_call_id"] = msg["tool_call_id"]
             transformed.append(transformed_msg)
