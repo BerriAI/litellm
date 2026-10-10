@@ -6,7 +6,7 @@ import time
 import types
 import unittest
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -16,6 +16,7 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import (
     Choices,
     Message,
@@ -2810,7 +2811,113 @@ def test_langfuse_v2_uses_standard_logging_model_parameters():
 
     from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 
-    fallback_sanitized = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
+    fallback_sanitized: Final = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
     assert "api_key" not in fallback_sanitized
     assert "secret_fields" not in fallback_sanitized
     assert fallback_sanitized["temperature"] == 0.5
+
+
+def _assert_langfuse_prompt_fields(prompt: str | list[dict[str, str]]) -> None:
+    from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
+
+    generation_params: Final = {"model": "gpt-4o"}
+    clean_metadata: Final = {
+        "prompt": {
+            "name": "support-answer",
+            "version": 9,
+            "config": {"temperature": 0.2},
+            "labels": ["latest"],
+            "tags": ["support"],
+            "prompt": prompt,
+        }
+    }
+    result: Final = _add_prompt_to_generation_params(
+        generation_params=generation_params,
+        clean_metadata=clean_metadata,
+        prompt_management_metadata=None,
+        langfuse_client=Mock(),
+    )
+    prompt_client: Final = result["prompt"]
+    assert prompt_client.name == "support-answer"
+    assert prompt_client.version == 9
+    expected_prompt: Final = (
+        [{"type": "message", **message} for message in prompt] if isinstance(prompt, list) else prompt
+    )
+    assert prompt_client.prompt == expected_prompt
+    assert prompt_client.config == {"temperature": 0.2}
+
+
+def test_langfuse_prompt_type():
+    _assert_langfuse_prompt_fields("Hello {{name}}")
+    _assert_langfuse_prompt_fields(
+        [{"role": "system", "content": "You are concise"}, {"role": "user", "content": "{{question}}"}]
+    )
+
+
+def test_langfuse_logging_metadata():
+    from litellm.integrations.langfuse.langfuse import log_requester_metadata
+
+    metadata: Final = {"key": "value", "requester_metadata": {"key": "value"}}
+    assert log_requester_metadata(clean_metadata=metadata) == {"requester_metadata": {"key": "value"}}
+
+
+def test_langfuse_logging_tool_calling():
+    logger, exporter = _steering_logger()
+    timestamp: Final = datetime.datetime(2025, 1, 1)
+    tool_calls: Final = [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+        }
+    ]
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "weather"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}]
+        ),
+        start_time=timestamp,
+        end_time=timestamp,
+    )
+    span = _exported_span(logger, exporter)
+
+    assert json.loads(span.attributes["langfuse.observation.output"]) == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": tool_calls,
+        "function_call": None,
+        "provider_specific_fields": None,
+    }
+
+
+def test_langfuse_logging_without_request_response(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _steering_logger()
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": _LANGFUSE_REDACTED}}]
+        ),
+    )
+    span = _exported_span(logger, exporter)
+
+    assert json.loads(span.attributes["langfuse.observation.input"]) == {
+        "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}]
+    }
+    assert json.loads(span.attributes["langfuse.observation.output"]) == {
+        "role": "assistant",
+        "content": _LANGFUSE_REDACTED,
+        "function_call": None,
+        "tool_calls": None,
+        "provider_specific_fields": None,
+    }
