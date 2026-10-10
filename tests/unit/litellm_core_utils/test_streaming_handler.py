@@ -2458,7 +2458,7 @@ async def _wait_for_condition(predicate, timeout: float = 5.0) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_aclose_logs_partial_stream_success():
+async def test_aclose_logs_partial_stream_success(monkeypatch):
     """Breaking early then aclose() still emits exactly one success event built
     from the chunks actually read."""
     from litellm.integrations.custom_logger import CustomLogger
@@ -2467,29 +2467,25 @@ async def test_aclose_logs_partial_stream_success():
         pass
 
     logger = CountingLogger()
-    previous_callbacks = litellm.callbacks
-    litellm.callbacks = [logger]
-    try:
-        stream = await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            mock_response="one two three four five",
-        )
-        first_chunk = await stream.__anext__()
-        expected_content = first_chunk.choices[0].delta.content
-        await stream.aclose()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    stream = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="one two three four five",
+    )
+    first_chunk = await stream.__anext__()
+    expected_content = first_chunk.choices[0].delta.content
+    await stream.aclose()
 
-        assert await _wait_for_condition(lambda: len(logger.success_events) >= 1)
-        assert len(logger.success_events) == 1
-        assert logger.success_events[0].choices[0].message.content == expected_content
-        assert len(logger.failure_events) == 0
-    finally:
-        litellm.callbacks = previous_callbacks
+    assert await _wait_for_condition(lambda: len(logger.success_events) >= 1)
+    assert len(logger.success_events) == 1
+    assert logger.success_events[0].choices[0].message.content == expected_content
+    assert len(logger.failure_events) == 0
 
 
 @pytest.mark.asyncio
-async def test_aclose_after_full_read_logs_single_success():
+async def test_aclose_after_full_read_logs_single_success(monkeypatch):
     """A stream read to natural end then aclose() logs success exactly once."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -2497,29 +2493,25 @@ async def test_aclose_after_full_read_logs_single_success():
         pass
 
     logger = CountingLogger()
-    previous_callbacks = litellm.callbacks
-    litellm.callbacks = [logger]
-    try:
-        stream = await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            mock_response="one two three four five",
-        )
-        async for _ in stream:
-            pass
-        await stream.aclose()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    stream = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="one two three four five",
+    )
+    async for _ in stream:
+        pass
+    await stream.aclose()
 
-        assert await _wait_for_condition(lambda: len(logger.success_events) >= 1)
-        await asyncio.sleep(0.5)
-        assert len(logger.success_events) == 1
-        assert logger.success_events[0].choices[0].message.content == "one two three four five"
-    finally:
-        litellm.callbacks = previous_callbacks
+    assert await _wait_for_condition(lambda: len(logger.success_events) >= 1)
+    await asyncio.sleep(0.5)
+    assert len(logger.success_events) == 1
+    assert logger.success_events[0].choices[0].message.content == "one two three four five"
 
 
 @pytest.mark.asyncio
-async def test_dropped_stream_logs_partial_success_on_del():
+async def test_dropped_stream_logs_partial_success_on_del(monkeypatch):
     """del on an unconsumed stream schedules partial success logging via __del__."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -2527,28 +2519,24 @@ async def test_dropped_stream_logs_partial_success_on_del():
         pass
 
     logger = CountingLogger()
-    previous_callbacks = litellm.callbacks
-    litellm.callbacks = [logger]
-    try:
-        stream = await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            mock_response="one two three four five",
-        )
-        await stream.__anext__()
-        del stream
-        gc.collect()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    stream = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="one two three four five",
+    )
+    await stream.__anext__()
+    del stream
+    gc.collect()
 
-        assert await _wait_for_condition(lambda: len(logger.success_events) >= 1)
-        assert len(logger.success_events) == 1
-        assert len(logger.failure_events) == 0
-    finally:
-        litellm.callbacks = previous_callbacks
+    assert await _wait_for_condition(lambda: len(logger.success_events) >= 1)
+    assert len(logger.success_events) == 1
+    assert len(logger.failure_events) == 0
 
 
 @pytest.mark.asyncio
-async def test_aclose_after_mid_stream_failure_logs_no_success():
+async def test_aclose_after_mid_stream_failure_logs_no_success(monkeypatch):
     """A stream that fails mid-way emits the failure event and aclose() does not
     fabricate a success."""
     from litellm.integrations.custom_logger import CustomLogger
@@ -2564,31 +2552,27 @@ async def test_aclose_after_mid_stream_failure_logs_no_success():
             raise RuntimeError("mid-stream boom")
 
     logger = CountingLogger()
-    previous_callbacks = litellm.callbacks
-    litellm.callbacks = [logger]
-    try:
-        stream = await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            mock_response="one two three four five",
-        )
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    stream = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="one two three four five",
+    )
+    await stream.__anext__()
+    stream.completion_stream = _RaisingStream()
+    with pytest.raises(Exception):
         await stream.__anext__()
-        stream.completion_stream = _RaisingStream()
-        with pytest.raises(Exception):
-            await stream.__anext__()
-        await stream.aclose()
+    await stream.aclose()
 
-        assert await _wait_for_condition(lambda: len(logger.failure_events) >= 1)
-        await asyncio.sleep(0.5)
-        assert len(logger.success_events) == 0
-        assert len(logger.failure_events) == 1
-    finally:
-        litellm.callbacks = previous_callbacks
+    assert await _wait_for_condition(lambda: len(logger.failure_events) >= 1)
+    await asyncio.sleep(0.5)
+    assert len(logger.success_events) == 0
+    assert len(logger.failure_events) == 1
 
 
 @pytest.mark.asyncio
-async def test_aclose_early_emits_single_otel_span():
+async def test_aclose_early_emits_single_otel_span(monkeypatch):
     """Regression test for #45736: an OTel callback records exactly one
     litellm_request span when the consumer stops reading early."""
     from opentelemetry.sdk.trace import TracerProvider
@@ -2602,26 +2586,22 @@ async def test_aclose_early_emits_single_otel_span():
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
     otel = OpenTelemetry(tracer_provider=tracer_provider)
 
-    previous_callbacks = litellm.callbacks
-    litellm.callbacks = [otel]
-    try:
-        stream = await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            mock_response="one two three four five",
-        )
-        await stream.__anext__()
-        await stream.aclose()
+    monkeypatch.setattr(litellm, "callbacks", [otel])
+    stream = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="one two three four five",
+    )
+    await stream.__anext__()
+    await stream.aclose()
 
-        assert await _wait_for_condition(
-            lambda: len([s for s in exporter.get_finished_spans() if s.name == "litellm_request"]) >= 1
-        )
-        await asyncio.sleep(0.5)
-        request_spans = [s for s in exporter.get_finished_spans() if s.name == "litellm_request"]
-        assert len(request_spans) == 1
-    finally:
-        litellm.callbacks = previous_callbacks
+    assert await _wait_for_condition(
+        lambda: len([s for s in exporter.get_finished_spans() if s.name == "litellm_request"]) >= 1
+    )
+    await asyncio.sleep(0.5)
+    request_spans = [s for s in exporter.get_finished_spans() if s.name == "litellm_request"]
+    assert len(request_spans) == 1
 
 
 def test_content_not_dropped_when_finish_reason_already_set(

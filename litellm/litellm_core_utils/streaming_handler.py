@@ -39,6 +39,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    TextCompletionResponse,
     Usage,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -60,8 +61,7 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
-# Strong refs keep __del__-scheduled partial-stream log tasks alive until they finish.
-_pending_partial_stream_log_tasks: Final[set["asyncio.Task[None]"]] = set()
+_pending_partial_stream_log_tasks: Final[set["asyncio.Task[None]"]] = set()  # fmt: skip  # mutable-ok: asyncio only weakly references tasks; strong refs keep __del__-scheduled log tasks alive
 
 
 def _next_sync_or_exhausted(it: Iterator[object]) -> object:
@@ -230,7 +230,7 @@ class CustomStreamWrapper:
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
     ):
-        self.model = model
+        self.model: str = model if isinstance(model, str) else ""
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
@@ -285,11 +285,13 @@ class CustomStreamWrapper:
         self.logging_loop = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
-        self.messages = getattr(logging_obj, "messages", None)
+        self.messages: Sequence[object] | None = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
         self.tool_call = False
-        self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.chunks: list[
+            ModelResponseStream
+        ] = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
@@ -411,30 +413,33 @@ class CustomStreamWrapper:
         except Exception as del_error:  # noqa: BLE001  # __del__ must never raise; no running loop means no partial log
             verbose_logger.debug("could not schedule partial stream logging in __del__: %s", del_error)
 
-    async def _log_partial_stream_success(self) -> None:
-        """Log the chunks seen so far as a success event for a stream that ended
-        early (aclose or dropped reference) before natural exhaustion."""
+    def _build_partial_stream_response(self) -> "ModelResponse | TextCompletionResponse | None":
         if (
             litellm.disable_streaming_logging
-            or self.logging_obj is None
             or self._terminal_logging_scheduled
             or not self.chunks
             or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success")
         ):
-            return
+            return None
         self._terminal_logging_scheduled = True
+        partial_response: Final = litellm.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType]  # stream_chunk_builder's params are untyped upstream
+            chunks=self.chunks,
+            messages=self.messages if isinstance(self.messages, list) else None,
+            logging_obj=self.logging_obj,
+            count_prompt_tokens=self.count_prompt_tokens,
+        )
+        if partial_response is None:
+            return None
+        if self.model:
+            partial_response.model = self.model
+        return partial_response
+
+    async def _log_partial_stream_success(self) -> None:
         try:
-            partial_response: Final = litellm.stream_chunk_builder(
-                chunks=self.chunks,
-                messages=self.messages if isinstance(self.messages, list) else None,
-                logging_obj=self.logging_obj,
-                count_prompt_tokens=self.count_prompt_tokens,
-            )
+            partial_response: Final = self._build_partial_stream_response()
             if partial_response is None:
                 return
-            if self.model:
-                partial_response.model = self.model
-            await self.logging_obj.dispatch_success_handlers(
+            await self.logging_obj.dispatch_success_handlers(  # pyright: ignore[reportUnknownMemberType]  # dispatch_success_handlers' params are untyped upstream
                 partial_response,
                 cache_hit=self.custom_llm_provider == "cached_response",
                 start_time=None,
@@ -445,27 +450,10 @@ class CustomStreamWrapper:
             verbose_logger.debug("could not log partial stream success: %s", log_error)
 
     def _log_partial_stream_success_sync(self) -> None:
-        """Sync counterpart of _log_partial_stream_success for close()."""
-        if (
-            litellm.disable_streaming_logging
-            or self.logging_obj is None
-            or self._terminal_logging_scheduled
-            or not self.chunks
-            or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success")
-        ):
-            return
-        self._terminal_logging_scheduled = True
         try:
-            partial_response: Final = litellm.stream_chunk_builder(
-                chunks=self.chunks,
-                messages=self.messages if isinstance(self.messages, list) else None,
-                logging_obj=self.logging_obj,
-                count_prompt_tokens=self.count_prompt_tokens,
-            )
+            partial_response: Final = self._build_partial_stream_response()
             if partial_response is None:
                 return
-            if self.model:
-                partial_response.model = self.model
             self.run_success_logging_and_cache_storage(
                 partial_response,
                 self.custom_llm_provider == "cached_response",
@@ -474,10 +462,8 @@ class CustomStreamWrapper:
             verbose_logger.debug("could not log partial stream success: %s", log_error)
 
     def close(self) -> None:
-        """Sync close: release the provider stream and log the chunks read so
-        far when the stream is abandoned before natural exhaustion."""
         self._stream_closed = True
-        stream_to_close: Final = self.completion_stream
+        stream_to_close: Final = getattr(self, "completion_stream", None)
         self.completion_stream = None
         if stream_to_close is not None:
             close_fn: Final = getattr(stream_to_close, "close", None)
@@ -570,7 +556,9 @@ class CustomStreamWrapper:
         last_content: Final = self.chunks[-1].choices[0].delta.content
 
         if (
-            last_content is None or not isinstance(last_content, str) or len(last_content) <= 2
+            last_content is None
+            or not isinstance(last_content, str)  # pyright: ignore[reportUnnecessaryIsInstance]  # providers can stuff non-str content into a delta despite the declared type
+            or len(last_content) <= 2
         ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
             self._repeated_messages_count = 1
             return
@@ -1802,7 +1790,7 @@ class CustomStreamWrapper:
         if not cache_hit and self.logging_obj.llm_caching_handler is not None:
             await self.logging_obj.llm_caching_handler.add_streaming_response_to_cache(processed_chunk)
 
-    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk: object, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
         """
@@ -2580,7 +2568,7 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
+def calculate_total_usage(chunks: Iterable[ModelResponse | ModelResponseStream]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,
