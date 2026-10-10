@@ -24,7 +24,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
 import litellm
@@ -192,6 +192,16 @@ def _is_transient_file_retrieve_error(error: Exception) -> bool:
     if isinstance(status_code, int):
         return status_code in {408, 429} or status_code >= 500
     return isinstance(error, (httpx.TransportError, APIConnectionError, asyncio.TimeoutError))
+
+
+_REFRESH_SAVE_ATTEMPTS: Final = 3
+
+
+def _stored_json_text(raw_file_object: object) -> str:
+    """JSON text of a stored file object exactly as read, for a write that must not race a newer one."""
+    if isinstance(raw_file_object, BaseModel):
+        return raw_file_object.model_dump_json()
+    return json.dumps(raw_file_object)
 
 
 def _with_measured_size(file_object: OpenAIFileObject, size_bytes: int | None) -> OpenAIFileObject:
@@ -842,19 +852,29 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self,
         stored: LiteLLM_ManagedFileTable,
         file_object: OpenAIFileObject,
-    ) -> None:
-        stored_size: Final = stored.file_object.bytes if stored.file_object is not None else None
-        sized_file_object: Final = _with_measured_size(file_object, stored_size)
-        if not await ManagedFileRepository(self.prisma_client).update_file_object(
-            stored.unified_file_id, sized_file_object
-        ):
-            return
-        refreshed_row: Final = stored.model_copy(update={"file_object": sized_file_object})
-        await self.internal_usage_cache.async_set_cache(
-            key=stored.unified_file_id,
-            value=refreshed_row.model_dump(),
-            litellm_parent_otel_span=None,
-        )
+    ) -> OpenAIFileObject | None:
+        """Save refreshed details, keeping a size another writer stored after this row was read."""
+        repository: Final = ManagedFileRepository(self.prisma_client, use_writer=True)
+        for _ in range(_REFRESH_SAVE_ATTEMPTS):
+            current_row = await repository.table.find_first(where={"unified_file_id": stored.unified_file_id})  # rebind-ok: re-read after a concurrent write
+            if current_row is None:
+                return None
+            current_object = _parse_managed_file_object(current_row.file_object, stored.unified_file_id)  # rebind-ok: re-read after a concurrent write
+            sized_file_object = _with_measured_size(  # rebind-ok: re-read after a concurrent write
+                file_object, current_object.bytes if current_object is not None else None
+            )
+            if await repository.update_file_object(
+                stored.unified_file_id,
+                sized_file_object,
+                if_file_object=_stored_json_text(current_row.file_object) if current_row.file_object is not None else None,
+            ):
+                await self.internal_usage_cache.async_set_cache(
+                    key=stored.unified_file_id,
+                    value=stored.model_copy(update={"file_object": sized_file_object}).model_dump(),
+                    litellm_parent_otel_span=None,
+                )
+                return sized_file_object
+        return None
 
     async def store_batch_output_file(
         self,
@@ -1954,8 +1974,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
-                    await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
-                    return _public_file_object(_with_measured_size(refreshed_file_object, file_object.bytes), file_id)
+                    saved_file_object: Final = await self._save_refreshed_file_object(
+                        stored_file_object, refreshed_file_object
+                    )
+                    return _public_file_object(
+                        saved_file_object or _with_measured_size(refreshed_file_object, file_object.bytes), file_id
+                    )
                 except Exception as error:
                     verbose_logger.warning(
                         "Failed to refresh batch file object for "
