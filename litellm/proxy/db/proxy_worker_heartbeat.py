@@ -1,7 +1,7 @@
 """
 Live proxy worker census, one row per worker process.
 
-Every uvicorn worker upserts its own row on a fixed heartbeat, so counting
+Every uvicorn worker upserts its own row on a configurable heartbeat, so counting
 rows with a recent heartbeat answers "how many workers share this database?"
 without any coordination. The Admin UI's "no Redis" banner uses that count to
 hide itself for deployments that are provably a single worker, where per-worker
@@ -13,13 +13,16 @@ still agree.
 from __future__ import annotations
 
 import socket
-from typing import TYPE_CHECKING, Final
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import APSCHEDULER_MISFIRE_GRACE_TIME
+from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
@@ -31,19 +34,20 @@ PROXY_WORKER_LIVENESS_WINDOW_SECONDS: Final = 3 * PROXY_WORKER_HEARTBEAT_INTERVA
 STALE_ROW_RETENTION_SECONDS: Final = 3600
 
 BEAT_SQL: Final = """
-INSERT INTO "LiteLLM_ProxyWorkerHeartbeat" (worker_id, hostname, last_heartbeat_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat_at = NOW()
+INSERT INTO "LiteLLM_ProxyWorkerHeartbeat" (worker_id, hostname, last_heartbeat_at, expires_at)
+VALUES ($1, $2, NOW(), NOW() + make_interval(secs => $3))
+ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat_at = NOW(), expires_at = EXCLUDED.expires_at
 """
 
 PRUNE_SQL: Final = """
 DELETE FROM "LiteLLM_ProxyWorkerHeartbeat"
 WHERE last_heartbeat_at < NOW() - make_interval(secs => $1)
+AND COALESCE(expires_at, last_heartbeat_at + make_interval(secs => $2)) <= NOW()
 """
 
 COUNT_SQL: Final = """
 SELECT COUNT(*)::int AS live_workers FROM "LiteLLM_ProxyWorkerHeartbeat"
-WHERE last_heartbeat_at > NOW() - make_interval(secs => $1)
+WHERE COALESCE(expires_at, last_heartbeat_at + make_interval(secs => $1)) > NOW()
 """
 
 DEREGISTER_SQL: Final = """
@@ -58,22 +62,65 @@ class _LiveWorkerCountRow(TypedDict):
 _COUNT_ROWS_ADAPTER: Final = TypeAdapter(tuple[_LiveWorkerCountRow, ...])
 
 
+class HeartbeatScheduler(Protocol):
+    def add_job(
+        self,
+        func: Callable[[], Awaitable[None]],
+        trigger: str,
+        *,
+        seconds: int,
+        id: str,
+        replace_existing: bool,
+        misfire_grace_time: int,
+    ) -> object: ...
+
+
+def _heartbeat_interval_seconds() -> int:
+    interval: Final = get_env_int("PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS", PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS)
+    if interval >= 0:
+        return interval
+    verbose_proxy_logger.warning("PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS must be non-negative; using 60 seconds")
+    return PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS
+
+
 class ProxyWorkerHeartbeat:
     def __init__(self, prisma_client: PrismaClient, worker_id: str | None = None) -> None:
         self.prisma_client: Final = prisma_client
         self.worker_id: Final[str] = worker_id or str(uuid.uuid4())
         self.hostname: Final = socket.gethostname()
+        self.interval_seconds: Final = _heartbeat_interval_seconds()
+
+    async def start(self, scheduler: HeartbeatScheduler) -> None:
+        if self.interval_seconds == 0:
+            return
+        await self.beat()
+        scheduler.add_job(
+            self.beat,
+            "interval",
+            seconds=self.interval_seconds,
+            id="proxy_worker_heartbeat_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
     async def beat(self) -> None:
+        if self.interval_seconds == 0:
+            return
         try:
             async with db_span("proxy_worker_heartbeat", "LiteLLM_ProxyWorkerHeartbeat"):
-                await self.prisma_client.db.execute_raw(BEAT_SQL, self.worker_id, self.hostname)
+                await self.prisma_client.db.execute_raw(
+                    BEAT_SQL, self.worker_id, self.hostname, 3 * self.interval_seconds
+                )
             async with db_span("prune_proxy_worker_heartbeats", "LiteLLM_ProxyWorkerHeartbeat"):
-                await self.prisma_client.db.execute_raw(PRUNE_SQL, STALE_ROW_RETENTION_SECONDS)
+                await self.prisma_client.db.execute_raw(
+                    PRUNE_SQL, STALE_ROW_RETENTION_SECONDS, PROXY_WORKER_LIVENESS_WINDOW_SECONDS
+                )
         except Exception as beat_err:  # noqa: BLE001  # a missed heartbeat must never take down the worker
             verbose_proxy_logger.debug("Proxy worker heartbeat write failed: %s", beat_err)
 
     async def deregister(self) -> None:
+        if self.interval_seconds == 0:
+            return
         try:
             async with db_span("deregister_proxy_worker", "LiteLLM_ProxyWorkerHeartbeat"):
                 await self.prisma_client.db.execute_raw(DEREGISTER_SQL, self.worker_id)
@@ -87,6 +134,9 @@ async def count_live_proxy_workers(prisma_client: PrismaClient) -> int | None:
     cannot answer. Callers must treat None as "unknown", not as zero. Always
     counts on the primary: a lagging read replica must never undercount.
     """
+    interval_seconds: Final = _heartbeat_interval_seconds()
+    if interval_seconds == 0:
+        return None
     try:
         db: Final = prisma_client.db
         primary_db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db

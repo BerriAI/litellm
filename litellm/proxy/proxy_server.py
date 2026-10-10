@@ -557,7 +557,7 @@ from litellm.proxy.db.master_key_migration import (
     migrate_if_requested,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
-    PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    HeartbeatScheduler,
     ProxyWorkerHeartbeat,
 )
 from litellm.proxy.db.request_error_tracking import (
@@ -10879,14 +10879,8 @@ class ProxyStartupEvent:
 
         ### PROXY WORKER HEARTBEAT ###
         worker_heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma_client)
-        await worker_heartbeat.beat()
-        scheduler.add_job(
-            worker_heartbeat.beat,
-            "interval",
-            seconds=PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
-            id="proxy_worker_heartbeat_job",
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        await worker_heartbeat.start(
+            cast(HeartbeatScheduler, scheduler)  # cast-ok: APScheduler has no stubs for its add_job API
         )
 
         ### RESET BUDGET ###

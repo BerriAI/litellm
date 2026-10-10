@@ -1130,6 +1130,7 @@ model LiteLLM_ProxyWorkerHeartbeat {
   hostname          String
   started_at        DateTime @default(now())
   last_heartbeat_at DateTime @default(now())
+  expires_at        DateTime?
 }
 
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
