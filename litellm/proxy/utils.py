@@ -285,6 +285,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+    from litellm.models.end_user import LiteLLM_EndUserTable
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
@@ -8935,6 +8936,27 @@ async def _agent_access_group_visible_models(
     )
 
 
+async def _get_customer_allowed_models(
+    user_api_key_dict: "UserAPIKeyAuth",
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> Optional["LiteLLM_EndUserTable"]:
+    """Load the customer/end-user object for listing-time scope narrowing, or ``None`` when unrestricted/unknown."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    if user_api_key_dict.end_user_id is None or prisma_client is None or user_api_key_cache is None:
+        return None
+    return await get_end_user_object(
+        end_user_id=user_api_key_dict.end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        token_end_user_max_budget=user_api_key_dict.end_user_max_budget,
+        key_end_user_budget_id=None,
+    )
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -9059,10 +9081,29 @@ async def get_available_models_for_user(
         team_id=effective_team_id,
         resolve_agent_ceiling=resolve_agent_ceiling,
     )
-    if agent_visible is None:
-        return all_models
-    capped: Final = [m for m in all_models if m in agent_visible]
-    return capped
+    visible_models: Final = all_models if agent_visible is None else [m for m in all_models if m in agent_visible]
+
+    end_user_object: Final = await _get_customer_allowed_models(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if end_user_object is None or not end_user_object.models:
+        return visible_models
+
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    return [
+        model
+        for model in visible_models
+        if customer_can_call_model(
+            model=model,
+            end_user_object=end_user_object,
+            llm_router=llm_router,
+            valid_token=user_api_key_dict,
+        )
+    ]
 
 
 def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:

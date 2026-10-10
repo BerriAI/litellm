@@ -5639,6 +5639,25 @@ def can_customer_access_model(
     return True
 
 
+def customer_can_call_model(
+    model: str,
+    end_user_object: LiteLLM_EndUserTable,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth | None,
+) -> bool:
+    """Non-raising form of the per-customer model check that request-time authorization enforces."""
+    try:
+        can_customer_access_model(
+            model=model,
+            end_user_object=end_user_object,
+            llm_router=llm_router,
+            valid_token=valid_token,
+        )
+    except ProxyException:
+        return False
+    return True
+
+
 async def can_user_call_model(
     model: str | list[str],
     llm_router: Router | None,

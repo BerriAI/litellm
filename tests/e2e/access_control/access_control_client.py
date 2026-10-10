@@ -9,14 +9,20 @@ from pydantic import BaseModel, ValidationError
 
 from proxy_client import ProxyClient
 from e2e_metadata import step
-from e2e_http import NoBody, StreamingResponse, is_ok, unwrap
+from e2e_http import EndUserHeaders, NoBody, StreamingResponse, is_ok, unwrap
 from models import (
     ChatBody,
     ChatMessage,
+    CustomerInfoParams,
+    CustomerNewBody,
+    CustomerResponse,
     KeyGenerateBody,
     LiteLLMParamsBody,
     ModelInfoBody,
+    ModelListEntry,
     ModelNewBody,
+    ModelsListParams,
+    ModelsListResponse,
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
@@ -62,9 +68,7 @@ class AccessControlClient:
 
     @step("Generate a virtual key that can only call LLM API routes")
     def llm_only_key(self) -> str:
-        return self.proxy.generate_key(
-            KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
-        )
+        return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
     @step("Delete the virtual key")
     def delete_key(self, key: str) -> None:
@@ -147,6 +151,44 @@ class AccessControlClient:
                 return
             time.sleep(self.proxy.poll_interval)
         raise AssertionError(f"/team/info never resolved team {team_id!r} created by /team/new")
+
+    @step("Create the customer {user_id} with models: {models}")
+    def create_customer(self, user_id: str, models: list[str] | None) -> str:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/customer/new",
+                headers=self.proxy.transport.master,
+                json=CustomerNewBody(user_id=user_id, models=models),
+                response_type=CustomerResponse,
+            )
+        )
+        return user_id
+
+    @step("Read the customer {user_id}'s recorded models from /customer/info")
+    def customer_models(self, user_id: str) -> list[str] | None:
+        return unwrap(
+            self.proxy.transport.get(
+                "/customer/info",
+                headers=self.proxy.transport.master,
+                params=CustomerInfoParams(end_user_id=user_id),
+                response_type=CustomerResponse,
+            )
+        ).models
+
+    @step("List the model ids GET /v1/models returns for the end user {end_user_id}")
+    def models_for_customer(self, end_user_id: str) -> list[str]:
+        entries: tuple[ModelListEntry, ...] = unwrap(
+            self.proxy.transport.get(
+                "/v1/models",
+                headers=EndUserHeaders(
+                    authorization=self.proxy.transport.master.authorization,
+                    x_litellm_end_user_id=end_user_id,
+                ),
+                params=ModelsListParams(),
+                response_type=ModelsListResponse,
+            )
+        ).data
+        return sorted(entry.id for entry in entries)
 
     @step("Add a deployment named {model_name} that calls openai/gpt-4o-mini with the given key")
     def create_model_status(self, key: str, model_name: str) -> StreamingResponse:

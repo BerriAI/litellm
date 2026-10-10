@@ -53,6 +53,13 @@ class AnthropicHeaders(AuthHeaders):
     x_litellm_session_id: str | None = Field(default=None, serialization_alias="x-litellm-session-id")
 
 
+class EndUserHeaders(AuthHeaders):
+    """Auth plus the ``x-litellm-end-user-id`` header the discovery routes read to
+    resolve the customer/end-user whose model allow-list narrows the listing."""
+
+    x_litellm_end_user_id: str | None = Field(default=None, serialization_alias="x-litellm-end-user-id")
+
+
 class PartialBody(BaseModel):
     """A body for a partial-update route (absent = keep, null = clear): a field left
     unset is omitted from the wire, and a field set to None is sent as JSON null."""
