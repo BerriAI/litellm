@@ -9,10 +9,17 @@ Tests cover:
 - merge_agent_headers utility
 """
 
+import base64
+import json
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
+
+import litellm
 
 # ---------------------------------------------------------------------------
 # Helper: build a minimal mock agent
@@ -378,34 +385,77 @@ async def test_databricks_oauth_overrides_static_authorization():
     assert headers.get("Authorization") == "Bearer oauth-wins"
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_databricks_agent_flat_oauth_fields_mint_the_token_and_stay_off_the_bridge():
-    from litellm.proxy.agent_endpoints import databricks_oauth
+async def test_databricks_agent_flat_oauth_send_reaches_the_endpoint_with_the_minted_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_token_cache
+    from litellm.types.agents import AgentResponse
 
-    databricks_oauth.databricks_app_oauth_token_cache.flush_cache()
+    workspace: Final = "https://adb-1.azuredatabricks.net"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    databricks_app_oauth_token_cache.flush_cache()
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="dbx-agent-id",
+            agent_name="dbx-agent",
+            agent_card_params={"url": workspace},
+            litellm_params={
+                "custom_llm_provider": "databricks_agent",
+                "model": "my-agent",
+                "api_base": workspace,
+                "client_id": "cid",
+                "client_secret": "secret",
+            },
+        )
+    )
+    token: Final = respx.post(f"{workspace}/oidc/v1/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "flat-minted", "expires_in": 3600})
+    )
+    endpoint: Final = respx.post(f"{workspace}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "pong"}],
+                    }
+                ]
+            },
+        )
+    )
 
-    mock_agent = _make_mock_agent(url="https://adb-1.azuredatabricks.net")
-    mock_agent.litellm_params = {
-        "custom_llm_provider": "databricks_agent",
-        "model": "my-agent",
-        "api_base": "https://adb-1.azuredatabricks.net",
-        "client_id": "cid",
-        "client_secret": "secret",
-    }
-    token_client = _mock_databricks_token_client("flat-minted")
-
-    with patch(
-        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
-        return_value=token_client,
+    with (
+        patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry),
+        patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            side_effect=lambda data, **kw: data,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
     ):
-        mock_asend = await _invoke(mock_agent, _make_mock_request(), None)
+        response = await invoke_agent_a2a(
+            agent_id="dbx-agent",
+            request=_make_mock_request(),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+        )
 
-    assert token_client.post.call_args.args[0] == "https://adb-1.azuredatabricks.net/oidc/v1/token"
-    call_kwargs = mock_asend.call_args.kwargs
-    assert call_kwargs["litellm_params"]["api_key"] == "flat-minted"
-    assert "Authorization" not in (call_kwargs["agent_extra_headers"] or {})
-    assert not {"client_id", "client_secret"} & set(call_kwargs["litellm_params"])
-    assert call_kwargs["litellm_params"]["custom_llm_provider"] == "databricks_agent"
+    basic: Final = base64.b64encode(b"cid:secret").decode()
+    assert token.calls.last.request.headers["Authorization"] == f"Basic {basic}"
+    sent: Final = endpoint.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer flat-minted"
+    assert json.loads(sent.content) == {"input": [{"role": "user", "content": "Hello"}]}
+    assert json.loads(response.body)["result"]["parts"][0]["text"] == "pong"
 
 
 @pytest.mark.asyncio
