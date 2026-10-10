@@ -52,6 +52,7 @@ import {
   ScrollText,
   Search,
   Server,
+  Shuffle,
   Settings as SettingsIcon,
   Shield,
   ShieldCheck,
@@ -223,6 +224,13 @@ const menuGroups: MenuGroup[] = [
         label: "Models + Endpoints",
         icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
+      },
+      {
+        key: "fallbacks",
+        page: "fallbacks",
+        label: "Fallbacks",
+        icon: <Shuffle {...ICON} />,
+        roles: all_admin_roles,
       },
       {
         key: "agentic",

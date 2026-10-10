@@ -8,6 +8,7 @@ export const pageDescriptions: Record<string, string> = {
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
   models: "Configure and manage LLM models and endpoints",
+  fallbacks: "Configure which models to retry when the primary model fails",
   agents: "Create and manage AI agents",
   agentic: "Manage agentic resources: agents, workflow runs, and memory",
   workflows: "Track and inspect durable workflow run history",
