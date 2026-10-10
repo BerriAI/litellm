@@ -34,6 +34,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_chat_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_assistant_message_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     merge_guardrailed_scoped_messages,
@@ -112,6 +113,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        skip_assistant: Final = effective_skip_assistant_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         texts_to_check: Final[list[str]] = []
@@ -132,6 +134,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                skip_assistant_message=skip_assistant,
                 scan_only_tool_results=scan_only_tool_results,
             )
 
@@ -148,6 +151,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
                 skip_system=skip_system,
                 skip_tool=skip_tool,
+                skip_assistant=skip_assistant,
             )
             if structured_messages:
                 inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
@@ -280,6 +284,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        skip_assistant_message: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
@@ -290,6 +295,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             str(message.get("role") or "").lower(),
             skip_system_message=skip_system_message,
             skip_tool_message=skip_tool_message,
+            skip_assistant_message=skip_assistant_message,
             scan_only_tool_results=scan_only_tool_results,
         ):
             return
