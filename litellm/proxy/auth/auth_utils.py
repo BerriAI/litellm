@@ -412,6 +412,8 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "anthropic_workspace_id",
     "anthropic-workspace-id",
     "bedrock_tags",
+    # Deployment-pinned AgentCore session: every new caller-chosen value provisions another microVM.
+    "agentcore_runtime_session_id",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
