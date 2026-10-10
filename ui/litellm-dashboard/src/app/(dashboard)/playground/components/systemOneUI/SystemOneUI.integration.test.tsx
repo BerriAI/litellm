@@ -551,6 +551,25 @@ describe("SystemOneUI integration", () => {
     expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
   });
 
+  it("looks the decision models up again when the playground is reopened within the cache window", async () => {
+    mockModelLookup.mockResolvedValueOnce(modelInfoResponse([{ model_name: "gpt-5.5", mode: "chat" }]));
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const page = (
+      <QueryClientProvider client={queryClient}>
+        <SystemOneUI accessToken="session-key" />
+      </QueryClientProvider>
+    );
+    const first = rtlRender(page);
+    expect(await screen.findByRole("link", { name: "Add a decision model" })).toBeInTheDocument();
+    first.unmount();
+
+    mockModelLookup.mockResolvedValueOnce(modelInfoResponse(DECISION_AND_CHAT_MODELS));
+    rtlRender(page);
+    const picker = await screen.findByRole("combobox", { name: "Decision model" });
+    await waitFor(() => expect(picker).toHaveValue("jev-latest"));
+    expect(mockModelLookup).toHaveBeenCalledTimes(2);
+  });
+
   it("routes a configured TypeSafe model through the same proxy endpoint", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelInfoResponse([{ model_name: "typesafe/jev-latest", mode: "evaluation" }]));

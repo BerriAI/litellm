@@ -26,6 +26,7 @@ export function useDecisionModels(
     enabled: lookupApiKey !== "",
     retry: false,
     staleTime: 60 * 1000,
+    refetchOnMount: "always" as const,
   };
   const query = useQuery(queryOptions);
   return { decisionModels: query.data ?? NO_DECISION_MODELS, isLoaded: query.isSuccess };
