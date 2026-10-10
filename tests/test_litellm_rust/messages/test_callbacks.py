@@ -1,14 +1,20 @@
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
+from litellm.rust_bridge.public_call import native_call, signature
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -51,6 +57,46 @@ def arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
 def assert_served_natively(server: RecordingServer) -> None:
     assert len(server.requests) == 1
     assert not server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", (False, True), ids=("accepted", "blocked"))
+async def test_native_messages_deferred_success_waits_for_proxy_acceptance(
+    messages_server: RecordingServer, blocked: bool
+) -> None:
+    recorder: Final = RecordingLogger()
+    logger: Final = Logging(
+        model=MESSAGES_MODEL,
+        messages=list(MESSAGES),
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="deferred-messages",
+        function_id="deferred-messages",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logger.defer_async_logging = True
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    response: Final = await binding(
+        native_call(signature(anthropic_messages), (), arguments(messages_server, litellm_logging_obj=logger))
+    )
+    assert isinstance(response, dict)
+    assert_served_natively(messages_server)
+    await drain_logging()
+    assert "async_log_success_event" not in recorder.names
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, exception_raised=blocked)
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, exception_raised=False)
+    await drain_logging()
+
+    assert getattr(logger, "_native_pending_logging", None) is None
+    if blocked:
+        assert "async_log_success_event" not in recorder.names
+    else:
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+        assert len(success) == 1
+        assert success[0].response.choices[0].message.content == response["content"][0]["text"]
 
 
 @pytest.mark.asyncio
