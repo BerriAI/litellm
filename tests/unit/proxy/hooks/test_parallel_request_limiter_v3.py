@@ -4343,6 +4343,131 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
     )
 
 
+_SSE_KEEPALIVE_CALLBACK_TIME: Final = datetime(2026, 1, 1)
+# Long enough that a request answering without waiting never sees a ping.
+_SSE_KEEPALIVE_NEVER_PINGS_SECONDS: Final = 60.0
+# The ping path is forced by holding the upstream until a ping is seen, so this
+# interval only sets how soon the first ping arrives, never which path runs.
+_SSE_KEEPALIVE_PINGS_SECONDS: Final = 0.001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answers_after_ping", [False, True], ids=["answers_before_first_ping", "answers_after_ping"])
+async def test_sse_keepalive_does_not_leak_parallel_slot_v3(answers_after_ping):
+    """
+    Regression for #42819. `open_sse_before_first_byte` runs the request,
+    pre-call hooks included, in its own Task, which works on a copy of the
+    request's context. The limiter records the acquired slot in a ContextVar
+    stash created lazily in that copy, so the success callback, which runs in
+    the request's own context, found no stash and never released the slot: a
+    `max_parallel_requests: N` key 429'd after N sequential streamed requests.
+    """
+    import contextvars
+
+    from fastapi.responses import Response, StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+
+    _api_key: Final = hash_token("sk-sse-keepalive-test")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key: Final = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    async def streamed_request() -> None:
+        upstream_answers: Final = asyncio.Event()
+        if not answers_after_ping:
+            upstream_answers.set()
+
+        async def produce_response() -> Response:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            )
+            await upstream_answers.wait()
+            return Response(content=b"{}")
+
+        response: Final = await open_sse_before_first_byte(
+            produce_response(),
+            ping_interval_seconds=(
+                _SSE_KEEPALIVE_PINGS_SECONDS if answers_after_ping else _SSE_KEEPALIVE_NEVER_PINGS_SECONDS
+            ),
+        )
+        assert isinstance(response, StreamingResponse) is answers_after_ping
+        if isinstance(response, StreamingResponse):
+            body: Final = response.body_iterator
+            first_chunk: Final = await anext(body)
+            upstream_answers.set()
+            rest: Final = tuple([chunk async for chunk in body])
+            assert first_chunk == SSE_COMMENT_PING_BYTES
+            assert rest[-2:] == (b"data: {}\n\n", b"data: [DONE]\n\n")
+
+        await handler.async_log_success_event(
+            kwargs={
+                "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            },
+            response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)),
+            start_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+            end_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+        )
+
+    # Each request gets a fresh context, as each ASGI request does in the proxy.
+    for _ in range(3):
+        await asyncio.create_task(streamed_request(), context=contextvars.Context())
+        assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
+
+
+@pytest.mark.asyncio
+async def test_sse_keepalive_still_enforces_max_parallel_requests_v3():
+    """
+    The #42819 fix shares the request stash with the keepalive Task; it must not
+    weaken the limit itself. Two concurrent wrapped requests on a
+    `max_parallel_requests: 1` key: one is admitted, the other gets a 429.
+    """
+    import contextvars
+
+    from fastapi.responses import Response
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+
+    _api_key: Final = hash_token("sk-sse-keepalive-test")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    # Holds the admitted request in flight until the other one has been answered.
+    upstream_answers: Final = asyncio.Event()
+
+    async def streamed_request() -> object:
+        async def produce_response() -> Response:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"model": "gpt-3.5-turbo"},
+                call_type="",
+            )
+            await upstream_answers.wait()
+            return Response(content=b"{}")
+
+        return await open_sse_before_first_byte(
+            produce_response(), ping_interval_seconds=_SSE_KEEPALIVE_NEVER_PINGS_SECONDS
+        )
+
+    requests: Final = tuple(asyncio.create_task(streamed_request(), context=contextvars.Context()) for _ in range(2))
+    answered, in_flight = await asyncio.wait(requests, return_when=asyncio.FIRST_COMPLETED)
+    upstream_answers.set()
+    await asyncio.wait(in_flight)
+
+    (rejected_request,) = answered
+    rejection: Final = rejected_request.exception()
+    assert isinstance(rejection, HTTPException)
+    assert rejection.status_code == 429
+    (admitted_request,) = in_flight
+    assert isinstance(admitted_request.result(), Response)
+
+
 @pytest.mark.asyncio
 async def test_read_only_gauge_check_counts_without_acquiring_v3():
     """
