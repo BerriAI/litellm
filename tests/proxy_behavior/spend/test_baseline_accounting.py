@@ -3,7 +3,8 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -56,7 +57,9 @@ def record() -> Callable[..., BaselineAccountingRecord]:
         },
     )
 
-    def create(label: str = "first", started: float = 10000.0, identical: bool = True) -> BaselineAccountingRecord:
+    def create(
+        label: str = "first", started: float = 10000.0, identical: bool = True, user_id: str = ""
+    ) -> BaselineAccountingRecord:
         return BaselineAccountingRecord(
             scope="autorouter-baseline:v3:" + run * 2, api_key=run, session_id=run,
             router_name="test-router", baseline_model="anthropic/claude-opus-5",
@@ -76,6 +79,7 @@ def record() -> Callable[..., BaselineAccountingRecord]:
                 total_tokens=6230, spend=0.17, saved_spend=0.0, classifier_cost=0.0,
                 covered=True, cache_hit=False, cache_ttl_seconds=3600, cache_touched=True,
                 baseline_model="anthropic/claude-opus-5",
+                user_id=user_id,
             ),
             daily=DailyBaselineAttribution(
                 date="2026-09-15", api_key=run, model="claude-opus-5", custom_llm_provider="anthropic",
@@ -99,21 +103,36 @@ async def _session(db: Prisma, record: BaselineAccountingRecord):
     return rows[0]
 
 
+async def _user_sessions(db: Prisma, record: BaselineAccountingRecord) -> dict[str, dict[str, object]]:
+    rows: Final = await db.query_raw('SELECT * FROM "LiteLLM_AutoRouterUserSession" WHERE api_key=$1', record.api_key)
+    return {str(row["user_id"]): row for row in rows}
+
+
 async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
     store: Final = _store(db)
-    late: Final = record("late", 10001.0)
-    early: Final = record("early", identical=False)
+    late: Final = record("late", 10001.0, user_id="late-user")
+    early: Final = record("early", identical=False, user_id="early-user")
     await _log(db, late)
     assert await store.append(late) == "recorded"
     assert await store.project(late.scope) == "published"
     before: Final = await _session(db, late)
     assert before["savings_estimated_actual_spend"] == before["spend"] == 0.17
     assert before["saved_spend"] == 0.0
+    before_users: Final = await _user_sessions(db, late)
+    assert set(before_users) == {"late-user"}
+    assert before_users["late-user"]["savings_estimated_turns"] == 1
+    assert before_users["late-user"]["savings_estimated_baseline_models"] == {late.baseline_model: 1}
     await _log(db, early)
     assert await store.append(early) == "recorded"
     pending: Final = await _session(db, late)
     assert pending["spend"] == 0.34 and pending["savings_estimated_turns"] == 0
     assert pending["saved_spend"] == pending["savings_estimated_actual_spend"] == 0.0
+    pending_users: Final = await _user_sessions(db, late)
+    assert set(pending_users) == {"late-user", "early-user"}
+    for user in pending_users.values():
+        assert user["turns"] == 1 and user["spend"] == 0.17
+        assert user["savings_estimated_turns"] == user["savings_estimated_actual_spend"] == user["saved_spend"] == 0
+        assert user["savings_estimated_baseline_models"] == {}
     waiting: Final = await db.query_raw('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id=$1', late.observation.request_id)
     assert waiting[0]["metadata"]["autorouter_savings"] is None
     assert waiting[0]["metadata"]["autorouter_savings_estimate"]["reason"] == "pending_projection"
@@ -125,37 +144,80 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     assert logs[0]["spend"] == 0.17
     assert logs[0]["metadata"]["autorouter_savings_estimate"]["provenance"] == "modeled"
     assert after["saved_spend"] == pytest.approx(logs[0]["metadata"]["autorouter_savings"])
+    after_users: Final = await _user_sessions(db, late)
+    assert after_users["early-user"] == pending_users["early-user"]
+    for field in (
+        "saved_spend", "savings_estimated_turns", "savings_estimated_actual_spend",
+        "savings_estimated_saved_spend", "savings_estimated_baseline_models",
+    ):
+        assert after_users["late-user"][field] == after[field]
+    assert after_users["late-user"]["turns"] == 1 and after_users["late-user"]["spend"] == 0.17
+    days: Final = await db.query_raw(
+        'SELECT * FROM "LiteLLM_AutoRouterDailySpend" WHERE api_key=$1 ORDER BY user_id', late.api_key
+    )
+    assert [(day["date"], day["user_id"]) for day in days] == [("1970-01-01", "early-user"), ("1970-01-01", "late-user")]
+    assert days[0]["saved_spend"] == days[0]["savings_estimated_turns"] == 0
+    for field in ("saved_spend", "savings_estimated_turns", "savings_estimated_actual_spend", "savings_estimated_saved_spend"):
+        assert days[1][field] == after[field]
     for table in ("DailyUserSpend", "DailyTeamSpend", "DailyOrganizationSpend", "DailyEndUserSpend", "DailyAgentSpend", "DailyTagSpend"):
         rows: Final = await db.query_raw(f'SELECT spend,api_requests,autorouter_savings_spend FROM "LiteLLM_{table}" WHERE api_key=$1', late.api_key)
         assert rows[0]["spend"] == rows[0]["api_requests"] == 0
         assert rows[0]["autorouter_savings_spend"] == pytest.approx(after["saved_spend"])
 
 
-async def test_commit_ack_loss_and_concurrent_duplicate_delivery_are_idempotent(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
-    event: Final = record()
+@pytest.mark.parametrize("attributed", [True, False])
+async def test_commit_ack_loss_and_concurrent_duplicate_delivery_are_idempotent(
+    db: Prisma, record: Callable[..., BaselineAccountingRecord], attributed: bool
+) -> None:
+    event: Final = record(user_id="first-user" if attributed else "")
+    other: Final = record("other", 10001.0, user_id="second-user" if attributed else "")
     await _log(db, event)
     assert await _store(db, after_commit=True).append(event) == "unavailable"
     store: Final = _store(db)
     assert set(await asyncio.gather(*(store.append(event) for _ in range(4)))) == {"recorded"}
+    duplicate: Final = event.model_copy(update={
+        "turn": replace(event.turn, turn_at=event.turn.turn_at + timedelta(seconds=1))
+    })
+    assert await store.append(duplicate) == "recorded"
+    await _log(db, other)
+    assert await store.append(other) == "recorded"
+    if not attributed:
+        await db.execute_raw(
+            'UPDATE "LiteLLM_AutoRouterBaselineObservation" SET data=(data::jsonb #- \'{turn,user_id}\')::text WHERE scope=$1',
+            event.scope,
+        )
     assert await store.project(event.scope) == "published"
     assert await store.project(event.scope) == "unchanged"
     session: Final = await _session(db, event)
-    assert session["turns"] == session["savings_estimated_turns"] == 1
-    assert session["spend"] == session["savings_estimated_actual_spend"] == 0.17
+    assert session["turns"] == session["savings_estimated_turns"] == 2
+    assert session["spend"] == session["savings_estimated_actual_spend"] == 0.34
+    users: Final = await _user_sessions(db, event)
+    assert set(users) == ({"first-user", "second-user"} if attributed else set())
+    for user in users.values():
+        assert user["turns"] == user["savings_estimated_turns"] == 1
+        assert user["spend"] == user["savings_estimated_actual_spend"] == 0.17
+        assert user["savings_estimated_baseline_models"] == {event.baseline_model: 1}
 
 
 async def test_publication_rollback_keeps_dirty_revision_for_retry(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
-    event: Final = record()
+    event: Final = record(user_id="rollback-user")
     await _log(db, event)
     store: Final = _store(db)
     assert await store.append(event) == "recorded"
     assert await _store(db, before_commit=True).project(event.scope) == "unavailable"
     session: Final = await _session(db, event)
     assert session["spend"] == 0.17 and session["savings_estimated_turns"] == 0
+    before_users: Final = await _user_sessions(db, event)
+    assert before_users["rollback-user"]["spend"] == 0.17
+    assert before_users["rollback-user"]["savings_estimated_turns"] == 0
+    assert before_users["rollback-user"]["savings_estimated_baseline_models"] == {}
     revisions: Final = await db.query_raw('SELECT revision,published_revision FROM "LiteLLM_AutoRouterBaselineComparison" WHERE scope=$1', event.scope)
     assert revisions[0]["revision"] > revisions[0]["published_revision"]
     assert await store.project(event.scope) == "published"
     assert (await _session(db, event))["savings_estimated_turns"] == 1
+    after_users: Final = await _user_sessions(db, event)
+    assert after_users["rollback-user"]["turns"] == after_users["rollback-user"]["savings_estimated_turns"] == 1
+    assert after_users["rollback-user"]["spend"] == after_users["rollback-user"]["savings_estimated_actual_spend"] == 0.17
 
 
 async def test_conflicting_duplicate_cannot_restore_an_observed_estimate(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
@@ -192,16 +254,10 @@ async def test_retired_history_never_recreates_an_initial_zero(db: Prisma, recor
     assert after["savings_estimated_turns"] == 1 and after["savings_estimated_actual_spend"] == 0.17
 
 
-async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_attribution(
-    db: Prisma, record: Callable[..., BaselineAccountingRecord], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import os
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+def _native_observation_payload(event: BaselineAccountingRecord) -> dict[str, object]:
+    """The spend payload a captured, sessioned, auto-routed anthropic_messages request produces."""
     from litellm.proxy.hooks.autorouter_baseline_cache import CapturedBaselineObservation
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-    event: Final = record("routed", identical=False)
     capture: Final = CapturedBaselineObservation(
         scope=event.scope, api_key=event.api_key, session_id=event.session_id,
         router_name=event.router_name, baseline_model=event.baseline_model,
@@ -214,7 +270,7 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
         "autorouter_savings": None, "autorouter_savings_estimate": {"version": 3, "status": "unknown", "reason": "pending_projection"},
         "autorouter_baseline_observation": capture.model_dump_json(),
     }
-    payload: Final = {
+    return {
         "request_id": event.observation.request_id, "api_key": event.api_key, "session_id": event.session_id,
         "startTime": datetime.fromtimestamp(event.observation.started_at, timezone.utc).isoformat(),
         "endTime": datetime.fromtimestamp(event.observation.available_at, timezone.utc).isoformat(),
@@ -224,6 +280,19 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
         "user": None, "team_id": "", "organization_id": "org", "agent_id": None,
         "end_user": "", "request_tags": '["tag","tag"]',
     }
+
+
+async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_attribution(
+    db: Prisma, record: Callable[..., BaselineAccountingRecord], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+    event: Final = record("routed", identical=False)
+    payload: Final = _native_observation_payload(event)
     monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
     client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
     writer: Final = DBSpendUpdateWriter()
@@ -261,3 +330,42 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
         assert tag_rows[0]["spend"] == tag_rows[0]["api_requests"] == 0
     finally:
         await client.db.disconnect()
+
+
+async def test_without_spend_logs_a_captured_turn_keeps_only_its_router_day_row(
+    db: Prisma, record: Callable[..., BaselineAccountingRecord], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.db.autorouter_session_rollup import flush_autorouter_turn_transactions
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+    event: Final = record("unlogged", identical=False)
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+    client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
+    try:
+        await client.db.connect()
+        await DBSpendUpdateWriter()._enqueue_autorouter_turn_transaction(
+            _native_observation_payload(event), client, spend_logs_kept=False
+        )
+        assert client.baseline_accounting_transactions == []
+        (turn,) = client.autorouter_turn_transactions
+        await flush_autorouter_turn_transactions(client, (turn,), n_retry_times=0)
+    finally:
+        client.autorouter_turn_transactions.clear()
+        await client.db.disconnect()
+
+    assert await db.query_raw(
+        'SELECT 1 FROM "LiteLLM_AutoRouterBaselineObservation" WHERE request_id=$1', event.observation.request_id
+    ) == []
+    days: Final = await db.query_raw(
+        'SELECT turns, spend FROM "LiteLLM_AutoRouterDailySpend" WHERE api_key=$1 AND router_name=$2',
+        event.api_key, event.router_name,
+    )
+    assert [(day["turns"], day["spend"]) for day in days] == [(1, 0.17)]
+    for table in ("LiteLLM_AutoRouterSession", "LiteLLM_AutoRouterUserSession"):
+        assert await db.query_raw(
+            f'SELECT 1 FROM "{table}" WHERE api_key=$1 AND router_name=$2', event.api_key, event.router_name
+        ) == []

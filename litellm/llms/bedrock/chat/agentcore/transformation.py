@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
@@ -40,9 +40,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -194,6 +193,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         verbose_logger.debug("Generated new session ID: %s", generated_id)
         return generated_id
 
+    def get_runtime_session_id(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str:
+        return self._get_runtime_session_id(optional_params)
+
     def _get_runtime_user_id(self, optional_params: dict) -> str | None:
         """
         Get runtime user ID if provided
@@ -202,6 +207,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if user_id:
             verbose_logger.debug("Using provided runtimeUserId: %s", user_id)
         return user_id
+
+    def get_runtime_user_id(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str | None:
+        return self._get_runtime_user_id(optional_params)
 
     def transform_request(
         self,
@@ -644,17 +655,20 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified sync streaming - returns a generator that yields ModelResponse chunks.
         """
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
@@ -863,6 +877,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified async streaming - returns an async generator that yields ModelResponse chunks.
@@ -990,7 +1007,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

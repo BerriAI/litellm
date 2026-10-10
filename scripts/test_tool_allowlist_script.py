@@ -6,7 +6,7 @@ Run from repo root:
   uv run python scripts/test_tool_allowlist_script.py
 
 Or run the unit tests:
-  uv run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v
+  uv run pytest tests/unit/proxy/test_tools_allowlist_enforcement.py -v
 """
 
 import asyncio
@@ -148,7 +148,7 @@ def main():
     asyncio.run(test_check_tools_allowlist())
     print("Done. For full unit tests run:")
     print(
-        "  uv run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v"
+        "  uv run pytest tests/unit/proxy/test_tools_allowlist_enforcement.py -v"
     )
 
 

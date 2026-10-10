@@ -11,6 +11,7 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -20,11 +21,13 @@ from litellm.litellm_core_utils.classifier_logging import without_classifier_aud
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
     redact_vertex_ai_metadata_from_logged_object,
 )
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
@@ -245,8 +248,30 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
                 _redact_tool_calls_dict(choice["delta"])
+            elif choice.get("text") is not None:
+                choice["text"] = redacted_str
         else:
             _redact_choice_content(choice)
+
+
+def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    route: Final = metadata.get("_autorouter_baseline_route")
+    if not isinstance(route, BaselineRouteStamp):
+        return metadata
+    return {**metadata, "_autorouter_baseline_route": replace(route, request_parameters=None)}
+
+
+def redacted_litellm_params(params: Mapping[str, object]) -> dict[str, object]:
+    request: Final = params.get("proxy_server_request")
+    return {
+        **params,
+        **{
+            key: _redacted_baseline_metadata(value)
+            for key, value in params.items()
+            if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
+        },
+        **({"proxy_server_request": without_classifier_audit(request)} if isinstance(request, Mapping) else {}),
+    }
 
 
 def perform_redaction(model_call_details: dict, result, redact_streaming_responses: bool = True):
@@ -259,12 +284,12 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     """
     # Redact model_call_details
     params: Final = model_call_details.get("litellm_params")
-    request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
-    if isinstance(params, dict) and isinstance(request, Mapping):
-        model_call_details["litellm_params"] = {**params, "proxy_server_request": without_classifier_audit(request)}
+    if isinstance(params, Mapping):
+        model_call_details["litellm_params"] = redacted_litellm_params(params)
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
+    model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
         model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
@@ -373,7 +398,7 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: Any | None = None) -> Any:
+def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> Any:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True

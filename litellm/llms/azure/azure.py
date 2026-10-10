@@ -112,7 +112,7 @@ class AzureOpenAIAssistantsAPIConfig:
         return optional_params
 
 
-def _check_dynamic_azure_params(
+def check_dynamic_azure_params(
     azure_client_params: dict,
     azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
@@ -127,10 +127,13 @@ def _check_dynamic_azure_params(
     dynamic_params: Final = ["api_version"]
     for k, v in azure_client_params.items():
         if k in dynamic_params and k == "api_version":
-            if v is not None and v != azure_client._custom_query["api-version"]:
+            if v is not None and v != azure_client._custom_query["api-version"]:  # pyright: ignore[reportPrivateUsage]  # SDK query internals
                 return True
 
     return False
+
+
+_check_dynamic_azure_params = check_dynamic_azure_params
 
 
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
@@ -481,7 +484,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            raise
         except Exception as e:
             message: Final = getattr(e, "message", str(e))
             body: Final = getattr(e, "body", None)
@@ -1254,7 +1257,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 and litellm_params is not None
                 and litellm_params.get("base_model", None) is not None
             ):
-                model_response._hidden_params["model"] = litellm_params.get("base_model", None)
+                model_response.hidden_params["model"] = litellm_params.get("base_model", None)
 
             # Azure image generation API doesn't support extra_body parameter
             extra_body: Final = optional_params.pop("extra_body", {})
@@ -1279,7 +1282,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_base=api_base,
                 is_async=False,
             )
-            request_headers: Final = dict(  # mutable-ok: the httpx request helpers take a dict
+            request_headers: Final = dict(
                 get_azure_request_auth_headers(headers=headers, azure_client_params=azure_client_params)
             )
             if aimg_generation is True:
@@ -1411,7 +1414,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },
@@ -1455,7 +1458,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },

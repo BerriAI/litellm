@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 const sharedShape = {
   auto_router_name: z.string().min(1, "Auto router name is required"),

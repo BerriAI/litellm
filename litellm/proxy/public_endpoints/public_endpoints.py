@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
     GetBlogPosts,
     get_blog_posts,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
@@ -199,9 +200,13 @@ def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
     return result
 
 
+_PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(_ProvidersFile)
+_PROVIDER_CREATE_FIELDS_ADAPTER: Final = TypeAdapter(list[ProviderCreateInfo])
+
+
 def _load_endpoints() -> list[_EndpointEntry]:
-    raw: Final[_ProvidersFile] = json.loads(
-        files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8")
+    raw: Final = _PROVIDERS_FILE_ADAPTER.validate_python(
+        json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
     )
     return _build_endpoints(raw)
 
@@ -217,10 +222,10 @@ def _load_endpoints() -> list[_EndpointEntry]:
 async def public_model_hub():
     import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
+        convert_health_check_to_dict,
     )
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,
+        get_model_group_info,
         llm_router,
         prisma_client,
     )
@@ -230,7 +235,7 @@ async def public_model_hub():
 
     model_groups: list[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
+        model_groups = get_model_group_info(  # rebind-ok: pre-existing rebinding on a rename-only line
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,
@@ -244,7 +249,7 @@ async def public_model_hub():
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
+                    health_check_dict = convert_health_check_to_dict(check)
                     health_checks_map[key] = health_check_dict
                     if check.model_name:
                         health_checks_map[check.model_name] = health_check_dict
@@ -296,7 +301,19 @@ async def get_mcp_servers():
     )
 
     public_mcp_servers: Final = global_mcp_server_manager.get_public_mcp_servers()
-    return [MCPPublicServer.model_validate(server.model_dump()) for server in public_mcp_servers]
+    return [
+        MCPPublicServer.model_validate(
+            {
+                **server.model_dump(),
+                "mcp_info": {
+                    **(server.mcp_info or {}),
+                    "is_public": True,
+                    "is_public_explicit": server.server_id in (litellm.public_mcp_servers or ()),
+                },
+            }
+        )
+        for server in public_mcp_servers
+    ]
 
 
 @router.get(
@@ -306,7 +323,7 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
-        _get_prisma_client,
+        get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
@@ -314,7 +331,7 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -350,7 +367,7 @@ async def public_skill_hub():
 )
 async def public_model_hub_info():
     import litellm
-    from litellm.proxy.proxy_server import _title, version
+    from litellm.proxy.proxy_server import title, version
 
     try:
         from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
@@ -360,7 +377,7 @@ async def public_model_hub_info():
         custom_docs_description = None
 
     return PublicModelHubInfo(
-        docs_title=_title,
+        docs_title=title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
@@ -398,7 +415,7 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
     )
 
     with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
+        provider_create_fields: Final = _PROVIDER_CREATE_FIELDS_ADAPTER.validate_python(json.load(f))
 
     return provider_create_fields
 
@@ -437,15 +454,16 @@ async def get_public_fuse_presets() -> FusePresetCatalog:
     "/public/litellm_model_cost_map",
     tags=["public", "model management"],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(catalog_only: bool = False):
     """
     Public endpoint to get the LiteLLM model cost map.
     Returns pricing information for all supported models.
+    With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
     """
     import litellm
 
     try:
-        _model_cost_map: Final = litellm.model_cost
+        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
@@ -480,10 +498,11 @@ _AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecor
 
 
 def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
-    raw: Final = json.loads(
-        files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        json.loads(
+            files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+        )
     )
-    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(raw)
 
 
 async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
@@ -541,7 +560,7 @@ async def get_autorouter_presets(
 
 @router.get(
     "/public/autorouter_presets",
-    tags=["public", "auto router"],  # mutable-ok: FastAPI route tags take a list
+    tags=["public", "auto router"],
     response_model=dict[str, AutoRouterPresetRecord],
 )
 async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:

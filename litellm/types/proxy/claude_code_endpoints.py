@@ -2,24 +2,26 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class PluginAuthor(BaseModel):
+class PluginAuthor(LiteLLMBaseModel):
     """Plugin author information."""
 
     name: str = Field(..., description="Author name")
     email: str | None = Field(None, description="Author email")
 
 
-class PluginOwner(BaseModel):
+class PluginOwner(LiteLLMBaseModel):
     """Marketplace owner information."""
 
     name: str = Field(..., description="Owner name")
     email: str | None = Field(None, description="Owner email")
 
 
-class PluginSpec(BaseModel):
+class PluginSpec(LiteLLMBaseModel):
     """Mutable fields shared by plugin create and update requests."""
 
     source: dict[str, str] = Field(
@@ -71,7 +73,7 @@ class UpdatePluginRequest(PluginSpec):
     version: str | None = Field(None, description="Semantic version; cleared if omitted")
 
 
-class PluginResponse(BaseModel):
+class PluginResponse(LiteLLMBaseModel):
     """Plugin information in API responses."""
 
     id: str = Field(..., description="Plugin unique ID")
@@ -82,7 +84,7 @@ class PluginResponse(BaseModel):
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 
-class RegisterPluginResponse(BaseModel):
+class RegisterPluginResponse(LiteLLMBaseModel):
     """Response from plugin registration."""
 
     status: str = Field(..., description="Operation status")
@@ -90,7 +92,7 @@ class RegisterPluginResponse(BaseModel):
     plugin: PluginResponse = Field(..., description="Plugin information")
 
 
-class PluginListItem(BaseModel):
+class PluginListItem(LiteLLMBaseModel):
     """Plugin item in list responses."""
 
     id: str
@@ -109,14 +111,14 @@ class PluginListItem(BaseModel):
     updated_at: str | None
 
 
-class ListPluginsResponse(BaseModel):
+class ListPluginsResponse(LiteLLMBaseModel):
     """Response from listing plugins."""
 
     plugins: list[PluginListItem]
     count: int
 
 
-class MarketplacePluginEntry(BaseModel):
+class MarketplacePluginEntry(LiteLLMBaseModel):
     """Plugin entry in marketplace.json."""
 
     name: str
@@ -129,7 +131,7 @@ class MarketplacePluginEntry(BaseModel):
     category: str | None = None
 
 
-class MarketplaceResponse(BaseModel):
+class MarketplaceResponse(LiteLLMBaseModel):
     """
     Marketplace catalog response.
 

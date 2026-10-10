@@ -1,3 +1,7 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: true
+  disable_model_info_refresh: true
+
+litellm_settings:
+  callbacks: ["prometheus"]

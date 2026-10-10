@@ -31,8 +31,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    GUARDRAIL_SESSIONS_TARGET,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -121,7 +123,7 @@ class LassoGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def _get_field(obj: Any, field: str, default: object = None) -> Any:
+    def _get_field(obj: object, field: str, default: object = None) -> object:
         """Get a field from either a dict or a Pydantic object."""
         if isinstance(obj, dict):
             return obj.get(field, default)
@@ -130,7 +132,7 @@ class LassoGuardrail(CustomGuardrail):
     @staticmethod
     def _extract_tool_call_fields(
         call: object,
-    ) -> tuple[str | None, str | None, dict[str, object] | None]:
+    ) -> tuple[object, object, dict[str, object] | None]:
         """Extract (call_id, name, parsed_input) from a tool call.
 
         Handles both dict-style and Pydantic object-style tool_calls.
@@ -146,7 +148,7 @@ class LassoGuardrail(CustomGuardrail):
         input_data: dict[str, object] | None = None
         if args_str:
             try:
-                parsed = json.loads(args_str)
+                parsed = json.loads(args_str) if isinstance(args_str, (str, bytes, bytearray)) else None
             except (json.JSONDecodeError, TypeError):
                 parsed = None
             if isinstance(parsed, dict):
@@ -310,6 +312,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return response
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
         """
         Get or generate a conversation_id for this request.
@@ -488,7 +491,7 @@ class LassoGuardrail(CustomGuardrail):
         while preserving the original structure.
         """
         # Index masked content by type so we can look up by id without caring about order.
-        masked_tool_use: Final[dict[str, dict[str, object]]] = {}
+        masked_tool_use: Final[dict[object, dict[str, object]]] = {}
         masked_tool_result: Final[dict[str, str]] = {}
         masked_text: Final[list[str]] = []
 
@@ -565,7 +568,7 @@ class LassoGuardrail(CustomGuardrail):
     def _update_tool_calls_from_masked(
         self,
         tool_calls: list[object],
-        masked_tool_use: dict[str, dict[str, object]],
+        masked_tool_use: Mapping[object, Mapping[str, object]],
     ) -> list[object]:
         """Replace tool_call arguments with masked values returned by Lasso."""
         updated: Final = []
@@ -814,7 +817,7 @@ class LassoGuardrail(CustomGuardrail):
             url=url,
             headers=headers,
             json=payload,
-            timeout=10.0,
+            timeout=self.timeout if self.timeout is not None else 10.0,
         )
         response.raise_for_status()
         return response.json()
@@ -922,7 +925,7 @@ class LassoGuardrail(CustomGuardrail):
     ) -> None:
         """Apply masking to the actual model response when mask=True and masked content is available."""
         # Index masked tool_use blocks by id for O(1) lookup.
-        masked_tool_use: Final[dict[str, dict[str, object]]] = {}
+        masked_tool_use: Final[dict[object, dict[str, object]]] = {}
         masked_text: Final[list[str]] = []
         for masked_msg in masked_messages:
             content = masked_msg.get("content")

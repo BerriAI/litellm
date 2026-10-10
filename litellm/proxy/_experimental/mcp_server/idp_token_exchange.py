@@ -170,6 +170,11 @@ async def identity_from_subject_token(
         return _refusal_for(denied, denied.message)
     except Exception as denied:  # noqa: BLE001  # auth_jwt raises a plain Exception on signature and claim failures
         return _refusal_for(denied, denied)
+    if result.get("agent_id") is not None:
+        return SubjectTokenRefusal(
+            error="invalid_request",
+            description="Agent tokens require direct JWT authentication; this exchange supports users only",
+        )
     user_id: Final = result["user_id"]
     if user_id is None:
         return SubjectTokenRefusal(error="invalid_request", description="subject_token names no user the gateway knows")
@@ -196,9 +201,8 @@ def _check_unavailable_description(outage: GatewayOutage) -> str:
 
 
 def _gateway_could_not_verify(denied: Exception) -> GatewayOutage | None:
-    """A database fault anywhere in the chain (``get_user_object`` wraps prisma failures in a
-    bare ``ValueError``) or a 5xx from JWT auth (the IdP's JWKS unreachable with no cached
-    copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
+    """A database fault anywhere in the chain or a 5xx from JWT auth (the IdP's JWKS
+    unreachable with no cached copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
     version-skewed query engine) is named as such, the way the mint path words it, so the
     client is not told to wait on a deployment that needs repair."""
     fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(denied)

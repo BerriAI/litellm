@@ -40,10 +40,10 @@ def initialize_guardrail(
     return _callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.CONDUCT.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.CONDUCT.value: ConductGuardrail,
 }
