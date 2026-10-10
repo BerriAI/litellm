@@ -519,6 +519,103 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
     }
 
 
+def test_azure_ai_keeps_prompt_cache_breakpoint_for_a_model_that_supports_it(_local_model_cost_map):
+    """
+    Foundry GPT-5.6+ deployments take OpenAI explicit prompt caching, and the breakpoint only
+    counts on a content part, so a system message carrying one must reach the request body as
+    the content-part list it arrived in while the Anthropic-only fields are still stripped.
+    """
+    request = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "stable instructions",
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][1]["content"] == [{"type": "text", "text": "hi"}]
+    assert request["prompt_cache_options"] == {"mode": "explicit"}
+
+
+def test_azure_ai_still_flattens_list_content_for_a_model_without_the_breakpoint_flag(_local_model_cost_map):
+    request = AzureAIStudioConfig().transform_request(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable ", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {"type": "text", "text": "instructions"},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == "stable instructions"
+    assert request["messages"][1]["content"] == "hi"
+    assert not _find_key_anywhere(request["messages"], "prompt_cache_breakpoint")
+
+
+def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint(_local_model_cost_map):
+    """
+    A multi-turn client can echo an assistant turn back with thinking parts inside its content
+    list. Foundry rejects those parts, and the string conversion always dropped them, so a model
+    that keeps content parts must still drop them while the text parts and the breakpoint stay.
+    """
+    request = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {"role": "user", "content": "read the file"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "The user wants me to read a file.", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "text", "text": "Reading it now."},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "thanks"}]},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][2]["content"] == [{"type": "text", "text": "Reading it now."}]
+    assert request["messages"][3]["content"] == [{"type": "text", "text": "thanks"}]
+    assert not _find_key_anywhere(request["messages"], "thinking")
+    assert not _find_key_anywhere(request["messages"], "data")
+
+
 @pytest.mark.parametrize(
     "api_base, expected_url",
     [

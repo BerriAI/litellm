@@ -27,7 +27,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import add_path_to_api_base, supports_tool_choice
+from litellm.utils import add_path_to_api_base, supports_prompt_cache_breakpoint, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -43,6 +43,14 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+
+OPENAI_CHAT_CONTENT_PART_TYPES: Final = frozenset({"text", "image_url", "input_audio", "file", "refusal"})
+
+
+def _openai_content_parts(content: object) -> list[dict]:
+    if not isinstance(content, list):
+        return []
+    return [part for part in content if isinstance(part, dict) and part.get("type") in OPENAI_CHAT_CONTENT_PART_TYPES]
 
 
 class AzureAIGPT5Config(OpenAIGPT5Config):
@@ -232,20 +240,30 @@ class AzureAIStudioConfig(OpenAIConfig):
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
-            2. Transforms list content to a string.
+            2. Transforms list content to a string, except for models that take OpenAI explicit
+               prompt cache breakpoints (`supports_prompt_cache_breakpoint`): Foundry accepts the
+               OpenAI content-part shape for those, and only a content part can carry the
+               breakpoint (a message-level one is silently ignored). Those models keep only the
+               part types OpenAI chat completions define, so a thinking part echoed back as
+               history is dropped the way the string conversion always dropped it.
             3. If message contains an image or audio, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
         stripped_messages: Final = copy.deepcopy(messages)
+        keeps_content_parts: Final = supports_prompt_cache_breakpoint(model=model, custom_llm_provider="azure_ai")
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
                 filter_value_from_dict(message_dict, field)
 
-            # Do nothing if the message contains an image or audio
             if audio_or_image_in_message_content(message):
+                continue
+
+            openai_parts = _openai_content_parts(message_dict.get("content")) if keeps_content_parts else []
+            if openai_parts:
+                message_dict["content"] = openai_parts
                 continue
 
             texts = convert_content_list_to_str(message=message)
