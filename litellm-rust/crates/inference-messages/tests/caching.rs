@@ -13,8 +13,8 @@ use litellm_cache_response::{
     CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService, ScopedCache,
 };
 use litellm_host::interceptors::{
-    Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
-    WireRequest,
+    Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
+    ResultSource, WireRequest,
 };
 use litellm_inference::{
     RouteError,
