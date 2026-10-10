@@ -77,6 +77,11 @@ def get_hidden_params(obj: object) -> MutableMapping[str, object] | None:
     return _as_hidden_params_mapping(hidden_params)
 
 
+def served_from_cache(obj: object) -> bool:
+    hidden_params: Final = get_hidden_params(obj)
+    return hidden_params is not None and hidden_params.get("cache_hit") is True
+
+
 def set_hidden_params(obj: object, hidden_params: dict[str, object] | HiddenParams) -> None:
     if isinstance(obj, dict):
         obj[_HIDDEN_PARAMS_ATTR] = hidden_params

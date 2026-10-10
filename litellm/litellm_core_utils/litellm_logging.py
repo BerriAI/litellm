@@ -79,7 +79,12 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    served_from_cache,
+    set_hidden_param,
+)
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -2000,7 +2005,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         if response_cost is None and not calculation_failed:
             return
-        if self.model_call_details.get("cache_hit") is True:
+        if self.model_call_details.get("cache_hit") is True or _served_from_cache_at_no_charge(result):
             self.model_call_details["zero_cost_diagnostic"] = None
             return
         try:
@@ -2576,6 +2581,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_a2a_response_logging(result=result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
+            if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
+                self.model_call_details["cache_hit"] = True
 
             if isinstance(result, Response) and isinstance(logging_result, (ModelResponse, EmbeddingResponse)):
                 result = logging_result
@@ -6513,6 +6520,11 @@ def _get_status_fields(
     return StandardLoggingPayloadStatusFields(llm_api_status=llm_api_status, guardrail_status=guardrail_status)
 
 
+def _served_from_cache_at_no_charge(result: object) -> bool:
+    hidden_params: Final = get_hidden_params(result)
+    return served_from_cache(result) and hidden_params is not None and hidden_params.get("response_cost") == 0
+
+
 def _extract_response_obj_and_hidden_params(
     init_response_obj: object,
     original_exception: Exception | None,
@@ -6675,8 +6687,9 @@ def get_standard_logging_object_payload(
         )  # maintain backwards compatibility with old request body check
 
         saved_cache_cost: float = 0.0
-        if cache_hit is True:
+        if cache_hit is True or served_from_cache(init_response_obj):
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+        if cache_hit is True:
             saved_cache_cost = (
                 logging_obj.response_cost_calculator(
                     result=init_response_obj,

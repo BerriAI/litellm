@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.hidden_params import (
     get_hidden_params,
     get_hidden_params_storage,
     get_or_create_hidden_params,
+    served_from_cache,
     set_hidden_param,
     set_hidden_params,
 )
@@ -250,3 +251,24 @@ def test_set_hidden_params_replaces_frozen_decisions_response_private_attr() -> 
 
     assert response.hidden_params is replacement
     assert response._hidden_params is replacement
+
+
+@pytest.mark.parametrize(
+    "hidden_params, expected",
+    [
+        ({"cache_hit": True}, True),
+        ({"cache_hit": None}, False),
+        ({"cache_hit": False}, False),
+        ({"cache_hit": "True"}, False),
+        ({}, False),
+    ],
+)
+def test_served_from_cache_is_true_only_for_a_response_the_cache_stamped(
+    hidden_params: dict[str, object], expected: bool
+) -> None:
+    model_response: Final = ModelResponse()
+    set_hidden_params(model_response, dict(hidden_params))
+
+    assert served_from_cache(model_response) is expected
+    assert served_from_cache({HIDDEN_PARAMS_ATTR: dict(hidden_params)}) is expected
+    assert served_from_cache(object()) is False

@@ -771,6 +771,20 @@ class TestZeroCostDiagnostic:
         assert logging_obj.model_call_details["standard_logging_object"]["zero_cost_diagnostic"] is None
         assert self._zero_cost_warnings(caplog) == []
 
+    def test_response_served_from_the_cache_at_no_charge_stays_silent(
+        self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+        response: Final = self._response(usage, response_cost=0.0, cache_hit=True, model_id=self.DEPLOYMENT_ID)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cost: Final = logging_obj.response_cost_calculator(result=response)
+
+        assert cost == 0.0
+        assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+        assert self._zero_cost_warnings(caplog) == []
+
     def test_unbilled_read_route_with_usage_stays_silent(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -5153,6 +5167,63 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
     assert payload is not None
     assert payload["litellm_call_id"] == call_id
+
+
+@pytest.mark.parametrize(
+    "hidden_params, passed_cache_hit, expected_cache_hit, expected_cost, expected_unique_id",
+    [
+        ({"cache_hit": True, "response_cost": 0.0}, None, True, 0.0, True),
+        ({"cache_hit": True, "response_cost": 0.002}, None, None, 0.002, True),
+        ({"cache_hit": True, "response_cost": 0.0}, False, False, 0.0, True),
+        ({"response_cost": 0.0}, None, None, 0.0, False),
+        ({}, None, None, None, False),
+    ],
+)
+def test_success_handler_logs_a_response_served_from_the_cache_under_a_unique_id(
+    hidden_params: dict[str, object],
+    passed_cache_hit: bool | None,
+    expected_cache_hit: bool | None,
+    expected_cost: float | None,
+    expected_unique_id: bool,
+):
+    """A parent call whose response came back from the response cache (an internal sub-call's hit) reuses the
+    id of the row that cached it, so its row needs a unique id, and it is a cache hit only when it cost nothing."""
+    from litellm.litellm_core_utils.hidden_params import set_hidden_params
+
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="parent-call-id",
+        function_id="parent-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="gpt-5.6", custom_llm_provider="openai"
+    )
+    response: Final = ModelResponse(
+        id="chatcmpl-cached-src",
+        model="gpt-5.6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+    )
+    set_hidden_params(response, dict(hidden_params))
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        cache_hit=passed_cache_hit,
+    )
+
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert logging_obj.model_call_details["cache_hit"] is expected_cache_hit
+    assert payload["cache_hit"] is expected_cache_hit
+    if expected_cost is not None:
+        assert payload["response_cost"] == expected_cost
+    assert payload["id"].startswith("chatcmpl-cached-src_cache_hit") is expected_unique_id
+    assert (payload["id"] == "chatcmpl-cached-src") is not expected_unique_id
+    assert payload["saved_cache_cost"] == 0.0 or expected_cache_hit is True
 
 
 @pytest.mark.parametrize(

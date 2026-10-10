@@ -13,6 +13,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm._internal_context import internal_sub_call
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -38,6 +39,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.round_billing import billed_for_every_round, summed_cost_breakdown
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -156,6 +158,9 @@ def mock_responses_api_response(
             "metadata": {},
         }
     )
+
+
+_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 
 async def aresponses_api_with_mcp(
@@ -311,13 +316,16 @@ async def aresponses_api_with_mcp(
     #########################################################
     # Make initial response API call
     #########################################################
-    response: Final = await aresponses(
-        input=input,
-        model=model,
-        tools=all_tools,
-        previous_response_id=previous_response_id,
-        **initial_call_params,
-    )
+    with internal_sub_call():
+        response: Final = await aresponses(
+            input=input,
+            model=model,
+            tools=all_tools,
+            previous_response_id=previous_response_id,
+            **initial_call_params,
+        )
+    logging_obj: Final = _REQUEST_KWARGS.validate_python(kwargs).get("litellm_logging_obj")
+    first_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
 
     verbose_logger.debug("Initial response %s", response)
 
@@ -381,13 +389,14 @@ async def aresponses_api_with_mcp(
                         tool_calls=tool_calls, tool_results=tool_results
                     )
 
-                final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
-                    follow_up_input=follow_up_input,
-                    model=model,
-                    all_tools=all_tools,
-                    response_id=previous_response_id if persistence_disabled else response.id,
-                    **follow_up_call_params,
-                )
+                with internal_sub_call():
+                    final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
+                        follow_up_input=follow_up_input,
+                        model=model,
+                        all_tools=all_tools,
+                        response_id=previous_response_id if persistence_disabled else response.id,
+                        **follow_up_call_params,
+                    )
 
                 # If streaming and we have tool execution events, wrap the response
                 if (
@@ -421,10 +430,20 @@ async def aresponses_api_with_mcp(
                         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                         raw_headers=discovery_raw_headers,
                     )
-                    final_response = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
-                        response=final_response,
-                        mcp_tools_fetched=mcp_tools_for_output,
-                        tool_results=tool_results,
+                    if isinstance(logging_obj, LiteLLMLoggingObj):
+                        logging_obj.cost_breakdown = summed_cost_breakdown(
+                            first=response,
+                            first_breakdown=first_round_breakdown,
+                            final=final_response,
+                            final_breakdown=logging_obj.cost_breakdown,
+                        )
+                    return billed_for_every_round(
+                        first=response,
+                        final=LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+                            response=final_response,
+                            mcp_tools_fetched=mcp_tools_for_output,
+                            tool_results=tool_results,
+                        ),
                     )
                 return final_response
 

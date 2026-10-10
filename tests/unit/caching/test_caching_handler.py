@@ -51,7 +51,8 @@ import json
 import httpx
 import respx
 from fastapi.testclient import TestClient
-from litellm._internal_context import current_service_target, in_post_response_phase
+from contextlib import nullcontext
+from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -2939,3 +2940,59 @@ async def test_async_get_cache_answers_400_for_a_single_object_embedding_input()
             call_type=CallTypes.aembedding.value,
             kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("internal", [False, True])
+async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_callbacks_of_its_own(monkeypatch, internal):
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs: Final = {"model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}], "caching": True}
+    await LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs=kwargs, start_time=datetime.now()
+    ).async_set_cache(
+        result=litellm.ModelResponse(
+            model="gpt-5.4",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+        original_function=litellm.acompletion,
+        kwargs=kwargs,
+    )
+    await asyncio.sleep(0.2)
+    async_logging: Final = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    async_logging.async_success_handler = AsyncMock()
+    async_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
+    sync_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    with internal_sub_call() if internal else nullcontext():
+        async_hit: Final = await LLMCachingHandler(
+            original_function=litellm.acompletion, request_kwargs=kwargs, start_time=datetime.now()
+        ).async_get_cache(
+            model="gpt-5.4",
+            original_function=litellm.acompletion,
+            logging_obj=async_logging,
+            start_time=datetime.now(),
+            call_type=CallTypes.acompletion.value,
+            kwargs=kwargs,
+            args=(),
+        )
+        sync_hit: Final = LLMCachingHandler(
+            original_function=completion, request_kwargs=kwargs, start_time=datetime.now()
+        ).sync_get_cache(
+            model="gpt-5.4",
+            original_function=completion,
+            logging_obj=sync_logging,
+            start_time=datetime.now(),
+            call_type=CallTypes.completion.value,
+            kwargs=kwargs,
+        )
+    await asyncio.sleep(0.2)
+
+    assert async_hit is not None and async_hit.cached_result is not None
+    assert sync_hit.cached_result is not None
+    assert (async_hit.cached_result._hidden_params.get("response_cost") == 0.0) is internal
+    assert (sync_hit.cached_result._hidden_params.get("response_cost") == 0.0) is internal
+    assert async_logging.async_success_handler.called is not internal
+    assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
+    assert sync_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
