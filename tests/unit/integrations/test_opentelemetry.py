@@ -7008,35 +7008,31 @@ def validate_redacted_message_span_attributes(span: ReadableSpan) -> None:
     )
 
 
+async def _first_finished_span(span_exporter: InMemorySpanExporter) -> None:
+    while not span_exporter.get_finished_spans():
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.usefixtures("unset_global_tracer_provider")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("global_redact", [True, False])
-async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
+async def test_awesome_otel_with_message_logging_off(streaming, global_redact, monkeypatch: pytest.MonkeyPatch):
     """
     No content should be logged when message logging is off
 
     tests when litellm.turn_off_message_logging is set to True
     tests when OpenTelemetry(message_logging=False) is set
     """
-    litellm.set_verbose = True
-
-    # Clear exporter at the start to ensure clean state
-    exporter.clear()
-
-    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
+    span_exporter: Final = InMemorySpanExporter()
+    OpenTelemetry(config=OpenTelemetryConfig(exporter=span_exporter))
     if global_redact is False:
-        otel_logger = OpenTelemetry(
-            message_logging=False, config=OpenTelemetryConfig(exporter="console")
-        )
+        otel_logger = OpenTelemetry(message_logging=False, config=OpenTelemetryConfig(exporter="console"))
     else:
-        # use global redaction
-        litellm.turn_off_message_logging = True
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
         otel_logger = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
 
     litellm.callbacks = [otel_logger]
-    litellm.success_callback = []
-    litellm.failure_callback = []
 
     response = await litellm.acompletion(
         model="gpt-4.1-mini",
@@ -7044,27 +7040,14 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
         mock_response="hi",
         stream=streaming,
     )
-    print("response", response)
 
     if streaming is True:
-        async for chunk in response:
-            print("chunk", chunk)
+        async for _ in response:
+            pass
 
-    await asyncio.sleep(1)
-    spans = exporter.get_finished_spans()
-    print("spans", spans)
-    assert len(spans) == 1
-
-    _span = spans[0]
-    print("span attributes", _span.attributes)
-
-    validate_redacted_message_span_attributes(_span)
-
-    # clear in memory exporter
-    exporter.clear()
-
-    if global_redact is True:
-        litellm.turn_off_message_logging = False
+    await asyncio.wait_for(_first_finished_span(span_exporter), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    (span,) = span_exporter.get_finished_spans()
+    validate_redacted_message_span_attributes(span)
 
 
 @pytest.mark.usefixtures("unset_global_tracer_provider", "drained_logging_worker")
