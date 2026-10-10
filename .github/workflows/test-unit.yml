@@ -214,7 +214,7 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: llms-a-to-g
+          - shard: llms-providers
             test-path: |-
               tests/unit/llms/test_cache_control_and_reasoning.py
               tests/unit/llms/test_custom_llm.py
@@ -272,16 +272,6 @@ jobs:
               tests/unit/llms/github_copilot
               tests/unit/llms/gradient_ai
               tests/unit/llms/groq
-              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: llms-h-to-z
-            test-path: |-
               tests/unit/llms/heroku
               tests/unit/llms/hosted_vllm
               tests/unit/llms/huggingface
@@ -362,6 +352,7 @@ jobs:
               tests/unit/llms/xinference
               tests/unit/llms/you_com
               tests/unit/llms/zai
+              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
             python-version: "3.12"
             workers: 4
             reruns: 0
