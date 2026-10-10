@@ -9333,6 +9333,54 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
 
+@pytest.mark.parametrize(
+    "model, expected_cls",
+    [
+        ("gpt-4o-transcribe", "OpenAIGPTAudioTranscriptionConfig"),
+        ("gpt-transcribe", "OpenAIGPTAudioTranscriptionConfig"),
+        ("gpt-transcribe-diarize", "OpenAIGPTAudioTranscriptionConfig"),
+        ("whisper-1", "OpenAIWhisperAudioTranscriptionConfig"),
+    ],
+)
+def test_openai_audio_transcription_config_routing(model, expected_cls):
+    """
+    #44543: gpt-transcribe must route to the GPT audio transcription config.
+
+    The old `"gpt-4o" in model` match missed gpt-transcribe, which fell back
+    to OpenAIWhisperAudioTranscriptionConfig and defaulted
+    response_format=verbose_json - a format OpenAI rejects for gpt-transcribe
+    with HTTP 400. The GPT config overrides transform_audio_transcription_request
+    and sends no default response_format.
+    """
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
+    assert config.__class__.__name__ == expected_cls
+
+
+def test_gpt_transcribe_request_has_no_default_verbose_json():
+    """
+    #44543: the fix must be behavioral - gpt-transcribe requests must not
+    inject response_format=verbose_json when the caller omits it.
+    """
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_audio_transcription_config(
+        model="gpt-transcribe", provider=LlmProviders.OPENAI
+    )
+    data = config.transform_audio_transcription_request(
+        model="gpt-transcribe",
+        audio_file=("sample.wav", b"RIFF", "audio/wav"),
+        optional_params={},
+        litellm_params={},
+    )
+    assert "response_format" not in data.data
+
+
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     """
     Test that get_valid_models returns the correct models for a given provider
