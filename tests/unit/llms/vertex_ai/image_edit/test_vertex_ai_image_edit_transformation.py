@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from io import BytesIO
-from typing import Dict
+from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -14,6 +14,82 @@ from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
 from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({"size": "1536x1024"}, {"aspectRatio": "3:2", "imageSize": "1K"}),
+        ({"size": "4096x4096"}, {"aspectRatio": "1:1", "imageSize": "4K"}),
+        ({"size": "1280x896"}, {"aspectRatio": "4:3", "imageSize": "1K"}),
+        ({"size": "auto"}, None),
+        ({"size": "invalid"}, None),
+        ({}, None),
+        (
+            {"size": "1024x1024", "imageConfig": '{"aspectRatio":"21:9","imageSize":"2K"}'},
+            {"aspectRatio": "21:9", "imageSize": "2K"},
+        ),
+        (
+            {"size": "1536x1024", "image_config": {"image_size": "4K"}},
+            {"aspectRatio": "3:2", "imageSize": "4K"},
+        ),
+        (
+            {"image_config": '{"aspect_ratio":"4:5","image_size":"2K"}'},
+            {"aspectRatio": "4:5", "imageSize": "2K"},
+        ),
+    ],
+)
+def test_vertex_image_edit_maps_sizes_and_native_config(
+    params: dict[str, object], expected: dict[str, str] | None
+) -> None:
+    config: Final = VertexAIGeminiImageEditConfig()
+    mapped: Final = config.map_openai_params(params, "gemini-3.1-flash-image", False)
+    body, _ = config.transform_image_edit_request(
+        model="gemini-3.1-flash-image",
+        prompt="Change the color",
+        image=b"image",
+        image_edit_optional_request_params=mapped,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert json.loads(body)["generationConfig"] == {
+        "response_modalities": ["IMAGE"],
+        **({"imageConfig": expected} if expected else {}),
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"system_instruction": "Preserve the subject"},
+        {"system_instruction": {"parts": [{"text": "Preserve the subject"}]}},
+        {"systemInstruction": {"parts": [{"text": "Preserve the subject"}]}},
+        {"systemInstruction": '{"parts":[{"text":"Preserve the subject"}]}'},
+    ],
+)
+def test_vertex_image_edit_keeps_system_instruction_separate(params: dict[str, object]) -> None:
+    config: Final = VertexAIGeminiImageEditConfig()
+    mapped: Final = config.map_openai_params(params, "gemini-3.1-flash-image", False)
+    body, _ = config.transform_image_edit_request(
+        model="gemini-3.1-flash-image",
+        prompt="Change the color",
+        image=b"image",
+        image_edit_optional_request_params=mapped,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert json.loads(body) == {
+        "contents": {
+            "role": "USER",
+            "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(b"image").decode()}},
+                {"text": "Change the color"},
+            ],
+        },
+        "generationConfig": {"response_modalities": ["IMAGE"]},
+        "systemInstruction": {"parts": [{"text": "Preserve the subject"}]},
+    }
 
 
 class TestVertexAIGeminiImageEditTransformation:
@@ -35,7 +111,7 @@ class TestVertexAIGeminiImageEditTransformation:
             drop_params=False,
         )
 
-        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9"}
 
     def test_get_complete_url(self) -> None:
         """Test URL generation for Vertex AI Gemini"""
@@ -60,7 +136,7 @@ class TestVertexAIGeminiImageEditTransformation:
         image_bytes = b"fake_image_data"
         image = BytesIO(image_bytes)
         optional_params = {
-            "aspectRatio": "1:1",
+            "imageConfig": {"aspectRatio": "1:1"},
         }
 
         request_body_str, files = self.config.transform_image_edit_request(
@@ -88,7 +164,7 @@ class TestVertexAIGeminiImageEditTransformation:
 
         generation_config = request_body["generationConfig"]
         assert generation_config["response_modalities"] == ["IMAGE"]
-        assert generation_config["image_config"]["aspect_ratio"] == "1:1"
+        assert generation_config["imageConfig"]["aspectRatio"] == "1:1"
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Gemini"""
@@ -100,9 +176,7 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode(
-                                        "utf-8"
-                                    ),
+                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
                                 }
                             }
                         ]
@@ -124,9 +198,7 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 1
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises ValueError"""
@@ -338,25 +410,18 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert (
-            reference_images[1]["maskImageConfig"]["maskMode"]
-            == "MASK_MODE_USER_PROVIDED"
-        )
+        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
                     "mimeType": "image/png",
                 },
             ]
@@ -375,12 +440,8 @@ class TestVertexAIImagenImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 2
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
-        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
+        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises ValueError"""
@@ -406,7 +467,4 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert (
-            self.config._read_all_bytes(bytearray(b"test_bytearray"))
-            == b"test_bytearray"
-        )
+        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
