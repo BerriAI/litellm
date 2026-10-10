@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
     delete_cache_key_object,
+    delete_cache_key_objects,
     get_jwt_key_mapping_cache_keys_for_token,
     get_key_end_user_budget_id,
     get_org_object,
@@ -4332,7 +4333,7 @@ async def delete_key_fn(
         HTTPException: If an error occurs during key deletion.
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
         if prisma_client is None:
             raise Exception("Not connected to DB!")
@@ -4352,6 +4353,7 @@ async def delete_key_fn(
                 user_api_key_cache=user_api_key_cache,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
+                proxy_logging_obj=proxy_logging_obj,
             )
             num_keys_to_be_deleted = len(data.keys)
             deleted_keys = data.keys
@@ -4362,6 +4364,7 @@ async def delete_key_fn(
                 user_api_key_cache=user_api_key_cache,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
+                proxy_logging_obj=proxy_logging_obj,
             )
             num_keys_to_be_deleted = len(data.key_aliases)
             deleted_keys = data.key_aliases
@@ -5208,6 +5211,7 @@ async def delete_verification_tokens(
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
 ) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
@@ -5311,11 +5315,11 @@ async def delete_verification_tokens(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
-    for key in tokens:
-        user_api_key_cache.delete_cache(key)
-        # remove hash token from cache
-        hashed_token = hash_token(cast(str, key))
-        user_api_key_cache.delete_cache(hashed_token)
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(key.token for key in authorized_keys if key.token is not None),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # After credential invalidation, so a failure here can never keep a deleted key alive.
     for deleted_key in authorized_keys:
@@ -5437,6 +5441,7 @@ async def delete_key_aliases(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
 ) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
     _keys_being_deleted: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
         where={"key_alias": {"in": key_aliases}}
@@ -5448,6 +5453,7 @@ async def delete_key_aliases(
         user_api_key_cache=user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
 
