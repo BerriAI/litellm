@@ -3,7 +3,6 @@ import {
   EMPTY_DECISION_CATALOG,
   buildDecisionCatalog,
   decisionModelsSublabel,
-  decisionProviderNames,
   isDecisionMode,
   isDecisionSelection,
 } from "./decisionModels";
@@ -105,20 +104,5 @@ describe("isDecisionSelection", () => {
 
   it("is false with no provider and no models", () => {
     expect(isDecisionSelection(catalog, undefined, [])).toBe(false);
-  });
-});
-
-describe("decisionProviderNames", () => {
-  it("lists each provider with decision models by its display name, sorted", () => {
-    expect(decisionProviderNames(buildDecisionCatalog(COST_MAP))).toEqual([
-      "OpenAI",
-      "Perplexity",
-      "Somevendor",
-      "TypeSafe",
-    ]);
-  });
-
-  it("is empty for an empty catalog", () => {
-    expect(decisionProviderNames(EMPTY_DECISION_CATALOG)).toEqual([]);
   });
 });
