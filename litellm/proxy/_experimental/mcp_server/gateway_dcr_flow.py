@@ -946,12 +946,14 @@ async def _describe_upstream_scope_flow(
     for description in descriptions:
         if isinstance(description, Response) or not description["connected"]:
             return description
+    if flow.resource_server_id is not None:
+        return descriptions[0]
     return {
-        "state": "interactive",
+        "state": "unscoped",
         "client_origin": _origin_only(flow.redirect_uri),
         "server_id": None,
         "server_name": None,
-        "connected": True,
+        "connected": None,
     }
 
 

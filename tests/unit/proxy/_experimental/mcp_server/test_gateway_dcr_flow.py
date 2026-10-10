@@ -2624,6 +2624,9 @@ async def test_aggregate_step_up_requires_the_upstream_grant_without_narrowing_g
     premature = await _complete_page(response, scoped_server=server, vendor=vendor)
     assert premature.status_code == 400
     vendor.return_value = "present"
+    ready = await _describe_page(response, scoped_server=server, vendor=vendor)
+    assert json.loads(ready.body)["state"] == "unscoped"
+    assert json.loads(ready.body)["server_id"] is None
     completed = await _complete_page(response, scoped_server=server, vendor=vendor)
     code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
     tokens = await _redeem(code, client_id)
@@ -2840,3 +2843,29 @@ def test_upstream_permission_rejects_noncanonical_tokens(scope):
     from litellm.proxy._experimental.mcp_server.oauth_utils import decode_upstream_scope
 
     assert decode_upstream_scope(scope) is None
+
+
+@pytest.mark.asyncio
+async def test_named_step_up_finish_describes_and_retains_its_single_server_ceiling():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    server = _scoped_mcp_server()
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        response = _scoped_authorize(
+            client_id, SCOPED_RESOURCE, scope=encode_upstream_scope(server.server_id, "tools.write")
+        )
+    vendor = AsyncMock(return_value="present")
+    ready = await _describe_page(response, scoped_server=server, vendor=vendor)
+    payload = json.loads(ready.body)
+    assert payload["state"] == "interactive"
+    assert payload["server_id"] == server.server_id
+    assert payload["connected"] is True
+    completed = await _complete_page(response, scoped_server=server, vendor=vendor)
+    code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    tokens = await _redeem(code, client_id)
+    assert tokens.status_code == 200
+    assert _opened_principal(json.loads(tokens.body)).resource_server_id == server.server_id
