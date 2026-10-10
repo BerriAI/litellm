@@ -167,6 +167,9 @@ _PROVIDERS: Final = (
         False,
         None,
     ),
+    _Provider(
+        "azure_ai", "azure_ai/decision-1", "/providers/microsoft/v1/systemone", "decision-1", _API_KEY, False, None
+    ),
     _Provider("openai", "openai/gpt-6-luna", "/v1/decisions", "gpt-6-luna", _API_KEY, False, "gpt-6-luna", True),
 )
 _SYSTEM_ONE_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if not provider.speaks_openai)

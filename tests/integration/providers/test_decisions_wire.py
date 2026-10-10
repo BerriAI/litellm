@@ -109,6 +109,9 @@ _PROVIDERS: Final = (
         "cloudflare/@cf/cloudflare/clef",
     ),
     _Provider(
+        "azure_ai", "azure_ai/decision-1", "/providers/microsoft/v1/systemone", "decision-1", _API_KEY, False, None
+    ),
+    _Provider(
         "databricks",
         "databricks/databricks-openjev-qwen35-4b",
         "/databricks-openjev-qwen35-4b/invocations",
