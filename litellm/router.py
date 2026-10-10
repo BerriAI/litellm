@@ -1403,6 +1403,16 @@ class Router:
         # Stop contributing to cost-map rebuilds straight away rather than waiting
         # for this router to be collected.
         _live_routers.discard(self)
+        # Drop the per-instance strategy selectors this router registered. They
+        # are registered by identity, so class-key dedup no longer implicitly
+        # caps them at one per class: without this a discarded router (e.g. the
+        # throwaway `user_config` Router built per request) leaks its selectors
+        # into every callback list for the life of the process (issue #44575).
+        selectors: Final = [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
+        selectors.extend(getattr(self, "_override_selectors", {}).values())
+        for group in getattr(self, "_group_selectors", {}).values():
+            selectors.extend(group.values())
+        self._unregister_router_selectors(selectors)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
@@ -1522,20 +1532,28 @@ class Router:
 
     @staticmethod
     def _register_router_selector(selector: RouterStrategySelector) -> None:
+        # Strategy selectors are per-instance stateful callbacks (each holds
+        # its own Router cache), so they must be deduped by identity: the
+        # class-level key would treat a second Router's selector as a duplicate
+        # of the first one and silently drop it, leaving the new Router's
+        # latency/usage cache permanently empty (issue #44575).
         if isinstance(selector, LeastBusyLoggingHandler):
             if isinstance(litellm.input_callback, list):
-                litellm.logging_callback_manager.add_litellm_input_callback(selector)
+                litellm.logging_callback_manager.add_litellm_input_callback(selector, dedupe_by_identity=True)
             else:
                 litellm.input_callback = [selector]
         if isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(selector)
+            litellm.logging_callback_manager.add_litellm_callback(selector, dedupe_by_identity=True)
 
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
         lists by identity. Used before re-init (`routing_strategy_init` /
-        `_init_routing_groups`) so repeated `update_settings` calls don't
-        accumulate dead selectors that keep receiving callback events.
+        `_init_routing_groups`) and on `discard`, so repeated `update_settings`
+        calls (or discarded routers) don't accumulate dead selectors that keep
+        receiving callback events. Covers the success/failure event lists too:
+        `function_setup` promotes general callbacks into them, and the
+        per-instance selectors are no longer capped at one per class.
         """
         for selector in selectors:
             if isinstance(selector, BaseRoutingStrategy):
@@ -1543,10 +1561,7 @@ class Router:
         selector_ids: Final = {id(s) for s in selectors if s is not None}
         if not selector_ids:
             return
-        if isinstance(litellm.callbacks, list):
-            litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
-        if isinstance(litellm.input_callback, list):
-            litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
+        litellm.logging_callback_manager.remove_callbacks_by_id(selector_ids)
 
     def _apply_updated_routing_strategy_args(self) -> None:
         """

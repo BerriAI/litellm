@@ -1,5 +1,6 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence, Set
 from typing import TYPE_CHECKING, Final
+from weakref import WeakSet
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +16,14 @@ else:
     _custom_logger_compatible_callbacks_literal = str
 
 _generic_api_logger_cache: Final[dict[str, GenericAPILogger]] = {}
+
+# CustomLoggers registered with `dedupe_by_identity=True` (router strategy
+# selectors) keep identity-based membership when another code path re-adds them
+# to a different list. `function_setup` copies `litellm.callbacks` into the
+# success/failure event lists, and the class-key dedup there would otherwise
+# drop a second live instance again, leaving the newest Router's cache empty
+# (issue #44575). Weakly held so a discarded logger does not leak.
+_identity_deduped_loggers: Final[WeakSet[CustomLogger]] = WeakSet()
 
 
 class LoggingCallbackManager:
@@ -38,15 +47,30 @@ class LoggingCallbackManager:
         except Exception:
             return False
 
-    def add_litellm_input_callback(self, callback: CustomLogger | str | Callable[..., object]):
+    def add_litellm_input_callback(
+        self,
+        callback: CustomLogger | str | Callable[..., object],
+        dedupe_by_identity: bool = False,
+    ):
         """
         Add a input callback to litellm.input_callback.
         Auto-routes async callbacks to litellm._async_input_callback.
+
+        Args:
+            callback: the callback to add.
+            dedupe_by_identity: if True, CustomLogger instances are deduped by
+                object identity instead of the class-level key. Required for
+                per-instance stateful loggers (router strategy selectors) where
+                two live instances of the same class must coexist.
         """
         if not isinstance(callback, str) and self._is_async_callable(callback):
-            self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_input_callback)
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_input_callback, dedupe_by_identity=dedupe_by_identity
+            )
         else:
-            self._safe_add_callback_to_list(callback=callback, parent_list=litellm.input_callback)
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.input_callback, dedupe_by_identity=dedupe_by_identity
+            )
 
     def add_litellm_service_callback(self, callback: CustomLogger | str | Callable[..., object]):
         """
@@ -54,15 +78,27 @@ class LoggingCallbackManager:
         """
         self._safe_add_callback_to_list(callback=callback, parent_list=litellm.service_callback)
 
-    def add_litellm_callback(self, callback: CustomLogger | str | Callable[..., object]):
+    def add_litellm_callback(
+        self,
+        callback: CustomLogger | str | Callable[..., object],
+        dedupe_by_identity: bool = False,
+    ):
         """
         Add a callback to litellm.callbacks
 
         Ensures no duplicates are added.
+
+        Args:
+            callback: the callback to add.
+            dedupe_by_identity: if True, CustomLogger instances are deduped by
+                object identity instead of the class-level key. Required for
+                per-instance stateful loggers (router strategy selectors) where
+                two live instances of the same class must coexist.
         """
         self._safe_add_callback_to_list(
             callback=callback,
             parent_list=litellm.callbacks,
+            dedupe_by_identity=dedupe_by_identity,
         )
 
     def add_litellm_success_callback(self, callback: CustomLogger | str | Callable[..., object]):
@@ -252,11 +288,20 @@ class LoggingCallbackManager:
         self,
         callback: CustomLogger | Callable[..., object] | str,
         parent_list: list[CustomLogger | Callable[..., object] | str],
+        dedupe_by_identity: bool = False,
     ):
         """
         Safe add a callback to a list, if the callback is already in the list, do not add it again.
 
         Ensures no duplicates are added for `str`, `Callable`, and `CustomLogger` callbacks.
+
+        Args:
+            callback: the callback to add.
+            parent_list: the list to add the callback to.
+            dedupe_by_identity: if True, CustomLogger instances are deduped by
+                object identity instead of the class-level key. Required for
+                per-instance stateful loggers (router strategy selectors) where
+                two live instances of the same class must coexist.
         """
         # Check max callbacks limit first
         if not self._check_callback_list_size(parent_list):
@@ -273,6 +318,7 @@ class LoggingCallbackManager:
             self._add_custom_logger_to_list(
                 custom_logger=callback,
                 parent_list=parent_list,
+                dedupe_by_identity=dedupe_by_identity,
             )
 
         elif callable(callback):
@@ -298,10 +344,38 @@ class LoggingCallbackManager:
         self,
         custom_logger: CustomLogger,
         parent_list: list[CustomLogger | Callable[..., object] | str],
+        dedupe_by_identity: bool = False,
     ):
         """
         Add a custom logger to a list, if another instance of the same custom logger exists in the list, do not add it again.
+
+        Args:
+            custom_logger: the logger to add.
+            parent_list: the list to add the logger to.
+            dedupe_by_identity: if True, dedupe by object identity instead of
+                the class-level key. Required for per-instance stateful loggers
+                (router strategy selectors) where two live instances of the same
+                class must coexist.
         """
+        # Per-instance loggers are deduped by identity: their class-level key
+        # does not distinguish two live instances, and silently dropping the
+        # second one leaves the newest Router with an unregistered callback
+        # (see issue #44575). Once a logger is registered by identity, every
+        # later list it is promoted into (e.g. `function_setup` copying
+        # `litellm.callbacks` into the success/failure event lists) must keep
+        # that mode, or the second instance is dropped again there.
+        if dedupe_by_identity or any(existing is custom_logger for existing in _identity_deduped_loggers):
+            _identity_deduped_loggers.add(custom_logger)
+            if not any(existing is custom_logger for existing in parent_list):
+                parent_list.append(custom_logger)
+            else:
+                verbose_logger.debug(
+                    "Custom logger instance %s already exists in %s, not adding again..",
+                    custom_logger,
+                    parent_list,
+                )
+            return
+
         # Check if an instance of the same class already exists in the list
         custom_logger_key: Final = self._get_custom_logger_key(custom_logger)
         custom_logger_type_name: Final = type(custom_logger).__name__
@@ -376,6 +450,35 @@ class LoggingCallbackManager:
             litellm._async_failure_callback,
         ):
             self.remove_callback_from_list_by_object(callback_list, obj, require_self=require_self)
+
+    def remove_callbacks_by_id(self, selector_ids: Set[int]) -> None:
+        """
+        Remove every callback whose object identity is in ``selector_ids`` from
+        each callback list it may have been promoted into.
+
+        Router strategy selectors are registered by identity (see
+        ``add_litellm_callback(..., dedupe_by_identity=True)``), so discarding a
+        Router must drop them by ``id()`` rather than by class key.
+        """
+        for callback_list in (
+            litellm.callbacks,
+            litellm.input_callback,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # internal callback list promoted into by `function_setup`
+            litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # internal callback list promoted into by `function_setup`
+        ):
+            self._remove_callbacks_by_id_in_place(callback_list, selector_ids)
+
+    def _remove_callbacks_by_id_in_place(
+        self,
+        callback_list: Sequence[CustomLogger | Callable[..., object] | str],
+        selector_ids: Set[int],
+    ) -> None:
+        if not isinstance(callback_list, list):  # immutable sequence -> nothing to filter
+            return
+        for callback in [c for c in callback_list if id(c) in selector_ids]:
+            callback_list.remove(callback)
 
     def get_active_additional_logging_utils_from_custom_logger(
         self,
