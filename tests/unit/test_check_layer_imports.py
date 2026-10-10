@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_layer_imports import main
+from scripts.check_layer_imports import git_base_allowlist, main
 
 
 def build_tree(root: Path, files: dict[str, str], allowlist: str = "") -> None:
@@ -194,3 +194,24 @@ def test_missing_base_allowlist_skips_growth_check(
     )
 
     assert run_check(tmp_path, monkeypatch, capsys, None) == (0, "")
+
+
+def test_base_allowlist_is_read_at_the_merge_base_not_the_branch_tip() -> None:
+    allowlist = "scripts/layer_imports_allowlist.txt"
+    outputs = {
+        ("merge-base", "origin/main", "HEAD"): "forkpoint\n",
+        ("ls-tree", "--name-only", "forkpoint", "--", allowlist): f"{allowlist}\n",
+        ("show", f"forkpoint:{allowlist}"): "L3 module litellm/types/foo.py litellm.router\n",
+        ("ls-tree", "--name-only", "origin/main", "--", allowlist): f"{allowlist}\n",
+        ("show", f"origin/main:{allowlist}"): "",
+    }
+
+    assert git_base_allowlist("origin/main", lambda args: outputs.get(tuple(args), "")) == frozenset(
+        {"L3 module litellm/types/foo.py litellm.router"}
+    )
+
+
+def test_base_without_an_allowlist_skips_the_growth_check() -> None:
+    outputs = {("merge-base", "origin/main", "HEAD"): "forkpoint\n"}
+
+    assert git_base_allowlist("origin/main", lambda args: outputs.get(tuple(args), "")) is None

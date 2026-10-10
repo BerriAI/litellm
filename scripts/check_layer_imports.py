@@ -1,6 +1,5 @@
 import argparse
 import ast
-import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -8,6 +7,8 @@ from itertools import chain, product
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal
+
+from lint_base_counts import REPO_GIT, Git, resolve_base_point
 
 PACKAGE_ROOT: Final = Path("litellm")
 ALLOWLIST: Final = Path("scripts/layer_imports_allowlist.txt")
@@ -172,11 +173,10 @@ def report(
     return new + stale + added
 
 
-def git_base_allowlist(ref: str) -> frozenset[str] | None:
-    shown: Final = subprocess.run(
-        ["git", "show", f"{ref}:{ALLOWLIST.as_posix()}"], capture_output=True, text=True, check=False
-    )
-    return parse_allowlist(shown.stdout) if shown.returncode == 0 else None
+def git_base_allowlist(ref: str, git: Git = REPO_GIT) -> frozenset[str] | None:
+    base_point: Final = resolve_base_point(ref, git)
+    tracked: Final = git(["ls-tree", "--name-only", base_point, "--", ALLOWLIST.as_posix()]).strip()
+    return parse_allowlist(git(["show", f"{base_point}:{ALLOWLIST.as_posix()}"])) if tracked else None
 
 
 class Arguments(argparse.Namespace):
@@ -189,7 +189,7 @@ def main(
 ) -> int:
     parser: Final = argparse.ArgumentParser(description="Check SDK/proxy layer import rules")
     parser.add_argument(
-        "--base", help="Also reject allowlist entries missing from the allowlist at this ref (CI passes the merge base)"
+        "--base", help="Also reject allowlist entries missing from the allowlist at the merge base with this ref"
     )
     args: Final = parser.parse_args(argv, namespace=Arguments())
     paths: Final = tuple(sorted(PACKAGE_ROOT.rglob("*.py")))
