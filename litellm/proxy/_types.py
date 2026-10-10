@@ -33,6 +33,7 @@ from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_arize_otlp_protocol_value,
+    validate_capture_message_content_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -79,6 +80,7 @@ from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterC
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VAR,
     AzureSpillover,
     CallTypes,
     CostBreakdown,
@@ -2202,7 +2204,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
-        valid_keys: Final = set(StandardCallbackDynamicParams.__annotations__.keys())
+        valid_keys: Final = {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR}
         for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
@@ -2214,6 +2216,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_span_scope_value(callback_vars[key])
             if key == "arize_otlp_protocol":
                 validate_arize_otlp_protocol_value(callback_vars[key])
+            if key == CAPTURE_MESSAGE_CONTENT_VAR:
+                validate_capture_message_content_value(callback_vars[key])
         return values
 
 
