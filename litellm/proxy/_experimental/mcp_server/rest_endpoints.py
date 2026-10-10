@@ -229,6 +229,7 @@ if MCP_AVAILABLE:
     from litellm.llms.litellm_proxy.skills.skill_search import (
         DEFAULT_SKILL_SEARCH_TOP_K,
     )
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
@@ -411,6 +412,7 @@ if MCP_AVAILABLE:
                 raw_headers=virtual_raw_headers,
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
+                incoming_bearer_token=MCPRequestHandler.get_incoming_bearer_token(request.headers),
             )
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
@@ -1344,6 +1346,7 @@ if MCP_AVAILABLE:
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
+                    incoming_bearer_token=MCPRequestHandler.get_incoming_bearer_token(request.headers),
                 )
                 result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
             except Exception as e:
