@@ -1783,6 +1783,8 @@ class Router:
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
+    _cost_based_sync_fallback_warned: bool = False
+
     def _get_request_routing_strategy_override(self, request_kwargs: dict | None) -> str | None:
         """
         Reads a per-request `routing_strategy` override (forwarded by the proxy
@@ -2011,9 +2013,6 @@ class Router:
         if selector is None:
             return None
 
-        # `cost-based-routing` is intentionally omitted —
-        # `LowestCostLoggingHandler` only implements
-        # `async_get_available_deployments`
         match strategy:
             case "least-busy":
                 return selector.get_available_deployments(
@@ -2034,6 +2033,36 @@ class Router:
                     messages=messages,
                     input=input,
                     request_kwargs=request_kwargs,
+                )
+            case "cost-based-routing":
+                # `LowestCostLoggingHandler` only implements
+                # `async_get_available_deployments`, so there is no cost-aware
+                # sync selector. Returning None makes the caller raise a
+                # `RouterRateLimitError` with nothing in cooldown, so fall back
+                # to the same weighted healthy pick `simple-shuffle` uses.
+                if not healthy_deployments:
+                    return None
+                if not Router._cost_based_sync_fallback_warned:
+                    Router._cost_based_sync_fallback_warned = True
+                    verbose_router_logger.warning(
+                        "routing_strategy='cost-based-routing' has no sync selector; sync calls fall "
+                        "back to a weighted healthy deployment. Use async methods for cost-aware selection."
+                    )
+                # `healthy_deployments`/`request_kwargs` flow in untyped from
+                # the shared sync path; align them to `simple_shuffle`'s
+                # declared interface so no unknown types leak past the
+                # type-check gate. At runtime they are always the deployment
+                # list and the kwargs mapping, exactly what the async path
+                # passes to the same helper.
+                return simple_shuffle(
+                    resolve_model_alias=self.get_model_from_alias,
+                    healthy_deployments=cast(  # cast-ok: sync path passes deployments untyped; runtime shape matches simple_shuffle's declared interface
+                        Sequence[Mapping[str, object]], healthy_deployments
+                    ),
+                    model=model,
+                    request_kwargs=cast(  # cast-ok: sync path passes kwargs untyped; runtime shape matches simple_shuffle's declared interface
+                        "Mapping[str, object] | None", request_kwargs
+                    ),
                 )
             case _:
                 return None
