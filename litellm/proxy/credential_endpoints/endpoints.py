@@ -3,6 +3,7 @@ CRUD endpoints for storing reusable credentials.
 """
 
 import time
+import unicodedata
 from collections.abc import Mapping
 from datetime import datetime
 from typing import (
@@ -57,6 +58,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -79,6 +81,7 @@ router: Final = APIRouter()
 _CREDENTIAL_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _GITHUB_COPILOT_PROVIDER: Final = "github_copilot"
 _DISPLAY_NAME_MAX_LENGTH: Final = 255
+_DISPLAY_NAME_FORBIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
 
 
 def _reject_non_admin_wif_fields(
@@ -208,7 +211,26 @@ def _normalized_display_name(display_name: str | None) -> str | None:
             code=status.HTTP_400_BAD_REQUEST,
             param="display_name",
         )
+    if any(unicodedata.category(character) in _DISPLAY_NAME_FORBIDDEN_CATEGORIES for character in trimmed):
+        raise ProxyException(
+            message="display_name cannot contain control, formatting, or line separator characters.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="display_name",
+        )
     return trimmed
+
+
+def _reject_config_defined_name(credential_name: str) -> None:
+    in_memory: Final = CredentialAccessor.find_credential(credential_name)
+    if in_memory is None or in_memory.source != "config":
+        return
+    raise ProxyException(
+        message=f"Credential '{credential_name}' is defined in config. Edit config.yaml to change it.",
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_409_CONFLICT,
+        param="credential_name",
+    )
 
 
 def _not_found_unless_config_defined(credential_name: str, not_found_detail: str) -> HTTPException | ProxyException:
@@ -300,6 +322,7 @@ async def create_credential(
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )
+        _reject_config_defined_name(credential.credential_name)
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
             display_name=_normalized_display_name(credential.display_name),
@@ -894,7 +917,7 @@ async def update_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        credentials_repository: Final = CredentialsRepository(prisma_client)
+        credentials_repository: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
         db_credential: Final = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")

@@ -7,6 +7,7 @@ import { CredentialItem, credentialCreateCall, credentialUpdateCall } from "@/co
 import { toast } from "@/lib/toast";
 
 import CredentialsPanel from "./CredentialsPanel";
+import type { CredentialSubmission } from "./credential_form_helpers";
 
 const mockUseAuthorized = vi.fn();
 const mockUseCredentials = vi.fn();
@@ -39,20 +40,23 @@ vi.mock("./CredentialModal", () => ({
   }: {
     mode: "add" | "edit";
     open: boolean;
-    onSubmit: (values: Record<string, unknown>, valuesToDelete?: readonly string[]) => void;
+    onSubmit: (submission: CredentialSubmission, valuesToDelete?: readonly string[]) => void;
   }) {
     if (!open) {
       return null;
     }
-    const values =
+    const values: CredentialSubmission =
       mode === "edit"
         ? {
             credential_name: "openai-key",
             custom_llm_provider: "openai",
-            api_key: "sk-1****2345",
-            api_base: "https://proxy.e2e.example.com/v1",
+            credential_values: {
+              api_key: "sk-1****2345",
+              api_base: "https://proxy.e2e.example.com/v1",
+              credential_name: "other-credential",
+            },
           }
-        : { credential_name: "new-cred", custom_llm_provider: "openai" };
+        : { credential_name: "new-cred", custom_llm_provider: "openai", credential_values: {} };
     return (
       <>
         <button data-testid={`credential-modal-${mode}-submit`} onClick={() => onSubmit(values)}>
@@ -61,7 +65,17 @@ vi.mock("./CredentialModal", () => ({
         <button
           data-testid={`credential-modal-${mode}-switch-to-federation`}
           onClick={() =>
-            onSubmit({ ...values, api_key: undefined, anthropic_federation_rule_id: "fdrl_new" }, ["api_key"])
+            onSubmit(
+              {
+                ...values,
+                credential_values: {
+                  ...values.credential_values,
+                  api_key: undefined,
+                  anthropic_federation_rule_id: "fdrl_new",
+                },
+              },
+              ["api_key"],
+            )
           }
         >
           switch {mode} to federation
@@ -173,7 +187,9 @@ describe("CredentialsPanel", () => {
     const user = userEvent.setup();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
-    vi.mocked(credentialCreateCall).mockRejectedValueOnce(new Error("network down"));
+    vi.mocked(credentialCreateCall).mockRejectedValueOnce(
+      new Error("Credential 'new-cred' is defined in config. Edit config.yaml to change it."),
+    );
 
     renderPanel();
 
@@ -181,7 +197,9 @@ describe("CredentialsPanel", () => {
     await user.click(screen.getByTestId("credential-modal-add-submit"));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Failed to add credential");
+      expect(toast.error).toHaveBeenCalledWith(
+        "Credential 'new-cred' is defined in config. Edit config.yaml to change it.",
+      );
     });
     // The modal stays open so the user can retry, and no success toast fired.
     expect(screen.getByTestId("credential-modal-add-submit")).toBeInTheDocument();
@@ -205,7 +223,11 @@ describe("CredentialsPanel", () => {
     });
     const [, updatedName, payload] = vi.mocked(credentialUpdateCall).mock.calls[0];
     expect(updatedName).toBe("openai-key");
-    expect(payload.credential_values).toEqual({ api_base: "https://proxy.e2e.example.com/v1" });
+    expect(payload.credential_name).toBe("openai-key");
+    expect(payload.credential_values).toEqual({
+      api_base: "https://proxy.e2e.example.com/v1",
+      credential_name: "other-credential",
+    });
   });
 
   it("sends the values to delete with the update and omits the field when there are none", async () => {
@@ -225,6 +247,7 @@ describe("CredentialsPanel", () => {
     const [, , federatedPayload] = vi.mocked(credentialUpdateCall).mock.calls[0];
     expect(federatedPayload.credential_values).toEqual({
       api_base: "https://proxy.e2e.example.com/v1",
+      credential_name: "other-credential",
       anthropic_federation_rule_id: "fdrl_new",
     });
     expect(federatedPayload.credential_values_to_delete).toEqual(["api_key"]);

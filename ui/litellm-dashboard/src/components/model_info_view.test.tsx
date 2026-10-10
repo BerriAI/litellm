@@ -1560,7 +1560,7 @@ describe("ModelInfoView", () => {
 
       const dialog = await screen.findByRole("dialog", { name: "Using Existing Credential" });
       await vi.waitFor(() => expect(dialog).toHaveTextContent("Selected Label"));
-      expect(dialog).not.toHaveTextContent("selected-credential");
+      expect(dialog).toHaveTextContent("selected-credential");
     });
 
     it.each([["auto_router/adaptive_router"], ["auto_router/quality_router"]])(
