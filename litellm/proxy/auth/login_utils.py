@@ -336,20 +336,21 @@ async def _sign_in(
         )
 
         if os.getenv("DATABASE_URL") is not None:
+            session_key_data: Final[Mapping[str, object]] = {
+                "user_role": LitellmUserRoles.PROXY_ADMIN,
+                "duration": LITELLM_UI_SESSION_DURATION,
+                "key_max_budget": litellm.max_ui_session_budget,
+                "models": [],
+                "aliases": {},
+                "config": {},
+                "spend": 0,
+                "user_id": key_user_id,
+                "team_id": "litellm-dashboard",
+            }
             response = await generate_key_helper_fn(
                 llm_router=None,
                 request_type="key",
-                **{
-                    "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": LITELLM_UI_SESSION_DURATION,
-                    "key_max_budget": litellm.max_ui_session_budget,
-                    "models": [],
-                    "aliases": {},
-                    "config": {},
-                    "spend": 0,
-                    "user_id": key_user_id,
-                    "team_id": "litellm-dashboard",
-                },
+                **session_key_data,
             )
         else:
             raise ProxyException(
