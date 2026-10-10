@@ -319,19 +319,15 @@ def test_hf_model_name_becomes_the_body_model(monkeypatch):
 
 
 @pytest.mark.parametrize("model", ["sagemaker_chat/my-endpoint", "sagemaker_nova/my-endpoint"])
-def test_body_carries_no_aws_credentials_or_routing_params(monkeypatch: pytest.MonkeyPatch, model: str):
+def test_body_carries_no_aws_credentials(monkeypatch: pytest.MonkeyPatch, model: str):
     client = _invoke_sagemaker_chat(
         monkeypatch,
         model=model,
         aws_session_token="test-session-token",
-        model_id="my-inference-component",
-        sagemaker_base_url="https://my-private-endpoint.example.com/invocations",
         top_k=5,
     )
 
     assert [key for key in client.request_body if key.startswith("aws_")] == []
-    assert "model_id" not in client.request_body
-    assert "sagemaker_base_url" not in client.request_body
     assert client.request_body["top_k"] == 5
     assert client.request_body["messages"] == [{"role": "user", "content": "hi"}]
     assert "Credential=AKIATESTTESTTESTTEST/" in client.request_headers["Authorization"]

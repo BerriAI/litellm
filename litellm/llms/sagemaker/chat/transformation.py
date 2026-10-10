@@ -38,13 +38,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-_ROUTING_PARAMS: Final = frozenset({"model_id", "sagemaker_base_url"})
-
-
-def _is_container_param(key: str) -> bool:
-    return not key.startswith("aws_") and key not in _ROUTING_PARAMS
-
-
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
     def __init__(self, **kwargs):
         OpenAIGPTConfig.__init__(self, **kwargs)
@@ -83,7 +76,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
-        container_request: Final = {key: value for key, value in request.items() if _is_container_param(key)}
+        container_request: Final = {key: value for key, value in request.items() if not key.startswith("aws_")}
         served_model_name: Final = litellm_params.get("hf_model_name")
         if not isinstance(served_model_name, str):
             return container_request
