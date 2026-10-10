@@ -4703,7 +4703,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
+         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_decisions_post"];
         delete?: never;
         options?: never;
@@ -15837,7 +15848,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_systemone_post"];
         delete?: never;
         options?: never;
@@ -17246,6 +17268,9 @@ export interface paths {
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
+         *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
+         *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -19643,7 +19668,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
+         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_v1_decisions_post"];
         delete?: never;
         options?: never;
@@ -21988,7 +22024,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_v1_systemone_post"];
         delete?: never;
         options?: never;
@@ -28639,6 +28686,24 @@ export interface components {
              */
             role: "user" | "assistant";
         };
+        /** ChoiceAnswer */
+        ChoiceAnswer: {
+            /** Choice */
+            choice: string;
+            /** Confidence */
+            confidence: number;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "choice";
+        } & {
+            [key: string]: unknown;
+        };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
             /** Content */
@@ -31004,6 +31069,33 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** DecisionsResponse */
+        DecisionsResponse: {
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"];
+            };
+            /** Model */
+            model?: string | null;
+            usage?: components["schemas"]["DecisionsUsage"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DecisionsUsage */
+        DecisionsUsage: {
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * DefaultInternalUserParams
@@ -38831,6 +38923,18 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** NoulAnswer */
+        NoulAnswer: {
+            /** Noul */
+            noul: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "noul";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * OAuth2SecurityScheme
          * @description Defines a security scheme using OAuth 2.0.
@@ -38868,6 +38972,129 @@ export interface components {
             password?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** OpenAIChoiceAnswer */
+        OpenAIChoiceAnswer: {
+            /** Choice */
+            choice: string | boolean;
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIChoiceProbability"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "choice";
+        };
+        /** OpenAIChoiceProbability */
+        OpenAIChoiceProbability: {
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: string | boolean;
+        };
+        /** OpenAIDecisionInputTokensDetails */
+        OpenAIDecisionInputTokensDetails: {
+            /**
+             * Cache Write Tokens
+             * @default 0
+             */
+            cache_write_tokens: number;
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+        };
+        /** OpenAIDecisionOutputTokensDetails */
+        OpenAIDecisionOutputTokensDetails: {
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
+        };
+        /** OpenAIDecisionResponse */
+        OpenAIDecisionResponse: {
+            /** Answers */
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            /** Model */
+            model: string;
+            usage: components["schemas"]["OpenAIDecisionUsage"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** OpenAIDecisionUsage */
+        OpenAIDecisionUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /**
+             * @default {
+             *       "cache_write_tokens": 0,
+             *       "cached_tokens": 0
+             *     }
+             */
+            input_tokens_details: components["schemas"]["OpenAIDecisionInputTokensDetails"];
+            /** Output Tokens */
+            output_tokens: number;
+            /**
+             * @default {
+             *       "reasoning_tokens": 0
+             *     }
+             */
+            output_tokens_details: components["schemas"]["OpenAIDecisionOutputTokensDetails"];
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** OpenAIPredicateAnswer */
+        OpenAIPredicateAnswer: {
+            /** Name */
+            name: string | null;
+            /** Probability */
+            probability: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "predicate";
+        };
+        /** OpenAIRefusalAnswer */
+        OpenAIRefusalAnswer: {
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "refusal";
+        };
+        /** OpenAIScoreAnswer */
+        OpenAIScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIScoreProbability"][];
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        };
+        /** OpenAIScoreProbability */
+        OpenAIScoreProbability: {
+            /** Label */
+            label: string;
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: number;
         };
         /**
          * OpenIdConnectSecurityScheme
@@ -43982,6 +44209,30 @@ export interface components {
              * @default 300
              */
             window_seconds: number;
+        };
+        /** ScoreAnswer */
+        ScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Legend */
+            legend: {
+                [key: string]: string | {
+                    [key: string]: unknown;
+                } | unknown[];
+            };
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * Screenshot
@@ -56553,7 +56804,179 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -56561,7 +56984,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -70670,7 +71093,132 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -70678,7 +71226,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
@@ -75837,7 +76385,179 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -75845,7 +76565,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -79010,7 +79730,132 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -79018,7 +79863,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
