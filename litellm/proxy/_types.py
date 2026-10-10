@@ -61,6 +61,7 @@ from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.proxy.auth.user_api_key_auth import is_jwt
 from litellm.types.proxy.carried_budget_state import (
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -3486,9 +3487,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             normalized = normalized[7:]
         if normalized.startswith("sk-"):
             return hash_token(normalized)
-        from litellm.proxy.auth.handle_jwt import JWTHandler
-
-        if JWTHandler.is_jwt(token=normalized):
+        if is_jwt(token=normalized):
             return f"hashed-jwt-{hash_token(token=normalized)}"
         return normalized
 
