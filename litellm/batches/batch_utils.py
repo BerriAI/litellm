@@ -8,7 +8,10 @@ from typing import Any, Final, Literal, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
-from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    get_web_search_requests_from_usage,
+    parse_prompt_tokens_details,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
 from litellm.llms.vertex_ai.batches.transformation import (
@@ -16,7 +19,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
     native_vertex_batch_row_stats,
 )
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import ModelInfo, Usage
+from litellm.types.utils import ModelInfo, ServerToolUse, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
@@ -32,6 +35,7 @@ class BatchCostUsageResult:
     failed_requests: int
     prompt_cost: float = 0.0
     completion_cost: float = 0.0
+    tool_cost: float = 0.0
 
 
 _COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
@@ -183,6 +187,8 @@ class _BatchOutputLineStats:
     cache_creation_tokens: int
     reasoning_tokens: int
     model: str | None
+    tool_cost: float = 0.0
+    web_search_requests: int = 0
 
 
 def _classify_output_line_stats(
@@ -256,7 +262,27 @@ def _compute_output_line_stats(
         cache_creation_tokens=prompt_details["cache_creation_tokens"],
         reasoning_tokens=(completion_details.reasoning_tokens if completion_details else None) or 0,
         model=response_model,
+        tool_cost=_batch_web_search_cost(usage, custom_llm_provider, response_model or model_name or "", model_info),
+        web_search_requests=get_web_search_requests_from_usage(usage) or 0,
     )
+
+
+def _batch_web_search_cost(
+    usage: Usage,
+    custom_llm_provider: str,
+    model: str,
+    model_info: ModelInfo | None,
+) -> float:
+    if custom_llm_provider != "anthropic" or not get_web_search_requests_from_usage(usage):
+        return 0.0
+    from litellm.llms.anthropic.cost_calculation import get_cost_for_anthropic_web_search
+
+    try:
+        shared_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # unmapped custom deployments can still supply their own rates
+        return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
+    resolved_info: Final[ModelInfo] = {**shared_info, **model_info} if model_info is not None else shared_info
+    return get_cost_for_anthropic_web_search(model_info=resolved_info, usage=usage)
 
 
 def _ocr_usage_info_from_response_body(response_body: Mapping[str, object]) -> OCRUsageInfo | None:
@@ -319,17 +345,23 @@ def _aggregate_batch_cost_usage_models(
         )
         if tokens > 0
     }
+    web_search_requests: Final = sum(stats.web_search_requests for stats in line_stats)
+    server_tool_params: Final = (
+        {"server_tool_use": ServerToolUse(web_search_requests=web_search_requests)} if web_search_requests else {}
+    )
     batch_usage: Final = Usage(
         total_tokens=sum(stats.total_tokens for stats in line_stats),
         prompt_tokens=sum(stats.prompt_tokens for stats in line_stats),
         completion_tokens=sum(stats.completion_tokens for stats in line_stats),
         reasoning_tokens=sum(stats.reasoning_tokens for stats in line_stats),
         **cache_token_params,
+        **server_tool_params,
     )
     batch_models: Final = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
     total_prompt_cost: Final = sum((stats.prompt_cost for stats in line_stats), 0.0)
     total_completion_cost: Final = sum((stats.completion_cost for stats in line_stats), 0.0)
-    total_cost: Final = total_prompt_cost + total_completion_cost
+    total_tool_cost: Final = sum((stats.tool_cost for stats in line_stats), 0.0)
+    total_cost: Final = total_prompt_cost + total_completion_cost + total_tool_cost
     verbose_logger.debug(
         "batch output aggregate: cost=%s usage=%s models=%s successful=%d failed=%d",
         total_cost,
@@ -346,6 +378,7 @@ def _aggregate_batch_cost_usage_models(
         failed_requests=failed_requests,
         prompt_cost=total_prompt_cost,
         completion_cost=total_completion_cost,
+        tool_cost=total_tool_cost,
     )
 
 

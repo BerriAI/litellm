@@ -3333,3 +3333,52 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
         assert mock_batch._hidden_params["batch_successful_requests"] == 8
         assert mock_batch._hidden_params["batch_failed_requests"] == 0
         assert mock_batch.usage == expected_usage
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "five_min,one_hour,searches,hour_rate,expected_prompt,expected_tools",
+    [
+        (0, 0, 0, 10.0, 100.0, 0.0),
+        (10, 0, 0, 10.0, 130.0, 0.0),
+        (0, 10, 0, 10.0, 150.0, 0.0),
+        (4, 6, 3, 10.0, 142.0, 21.0),
+        (0, 10, 0, 0.0, 100.0, 0.0),
+        (0, 10, 0, None, 130.0, 0.0),
+    ],
+)
+async def test_anthropic_batch_cache_ttl_and_search_costs(
+    five_min: int,
+    one_hour: int,
+    searches: int,
+    hour_rate: float | None,
+    expected_prompt: float,
+    expected_tools: float,
+) -> None:
+    from typing import Final
+
+    rates: Final[ModelInfo] = {
+        "input_cost_per_token": 2.0,
+        "output_cost_per_token": 4.0,
+        "input_cost_per_token_batches": 1.0,
+        "output_cost_per_token_batches": 2.0,
+        "cache_creation_input_token_cost_batches": 3.0,
+        "cache_creation_input_token_cost_above_1hr": hour_rate,
+        "search_context_cost_per_query": {"search_context_size_medium": 7.0},
+    }
+    row: Final = {"custom_id": "batch-cost", "result": {"type": "succeeded", "message": {
+        "model": "claude-opus-5-5",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "cache_creation_input_tokens": five_min + one_hour,
+            "cache_creation": {"ephemeral_5m_input_tokens": five_min, "ephemeral_1h_input_tokens": one_hour},
+            "server_tool_use": {"web_search_requests": searches},
+        },
+    }}}
+    result: Final = await calculate_batch_cost_and_usage([row], "anthropic", model_info=rates)
+    assert result.prompt_cost == pytest.approx(expected_prompt)
+    assert result.completion_cost == pytest.approx(20.0)
+    assert result.tool_cost == pytest.approx(expected_tools)
+    assert result.cost == pytest.approx(expected_prompt + 20.0 + expected_tools)
+    assert (bu.get_web_search_requests_from_usage(result.usage) or 0) == searches
