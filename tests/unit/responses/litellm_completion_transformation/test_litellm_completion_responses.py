@@ -3945,8 +3945,10 @@ class TestEnsureOutputItemContentPartAdded:
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
         iterator._cached_item_id = None
-        iterator._cached_reasoning_item_id = None
-        iterator._reasoning_active = False
+        iterator._reasoning_runs = ()
+        iterator._active_reasoning = None
+        iterator._accumulated_reasoning_content_parts = []
+        iterator._active_thinking_keys = frozenset()
         iterator._pending_response_events = []
         iterator._pending_tool_events = []
         iterator._tool_output_index_by_call_id = {}
@@ -3956,7 +3958,6 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._ambiguous_tool_call_indexes = set()
         iterator._next_output_index = 0
         iterator._message_output_index = None
-        iterator._reasoning_output_index = None
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
         iterator.responses_api_request = {}
