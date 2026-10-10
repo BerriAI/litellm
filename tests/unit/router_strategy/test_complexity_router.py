@@ -41,7 +41,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
-from litellm.router import as_output_cap
+from litellm.router import as_output_cap, stamped_client_ceiling
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -17139,6 +17139,27 @@ class TestMaxTokensFromTierModel:
     )
     def test_a_client_cap_is_read_as_an_integer_or_ignored(self, value, expected):
         assert as_output_cap(value) == expected
+
+    @pytest.mark.parametrize(
+        "request_kwargs, expected",
+        [
+            ({"max_tokens": 8192}, None),
+            ({"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {}}}, {}),
+            ({"litellm_metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_tokens": "2000"}}}, {"max_tokens": 2000}),
+            (
+                {"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_output_tokens": 5, "api_key": "x", "max_tokens": True}}},
+                {"max_output_tokens": 5},
+            ),
+            ({"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: "not-a-dict"}}, None),
+        ],
+        ids=["no-stamp", "empty-stamp", "litellm-metadata-bucket", "only-integer-carriers", "malformed-stamp"],
+    )
+    def test_the_stamp_reads_back_only_the_callers_integer_carriers(
+        self, request_kwargs: dict[str, object], expected: dict[str, int] | None
+    ):
+        stamped = stamped_client_ceiling(request_kwargs)
+
+        assert (None if stamped is None else dict(stamped)) == expected
 
     def test_restoring_the_callers_ceiling_reads_the_stamp_and_replaces_every_carrier(self):
         stamped: dict = {"max_output_tokens": 500, "metadata": {"_client_output_ceiling": {"max_tokens": 8192}}}
