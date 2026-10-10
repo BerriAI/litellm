@@ -27280,10 +27280,15 @@ export interface components {
              */
             location?: string | null;
             /**
-             * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
@@ -37489,10 +37494,15 @@ export interface components {
              */
             location?: string | null;
             /**
-             * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API

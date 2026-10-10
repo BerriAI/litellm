@@ -223,6 +223,7 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
+    logging_only_continue_on_input_failure: bool
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -305,6 +306,7 @@ class CustomGuardrail(CustomLogger):
         stream_scope_arg: Final[object] = cast(object, kwargs.pop("stream_scope", None))  # cast-ok: config
         self.apply_stream_scope(stream_scope_arg)
         self.logging_only_scope = None
+        self.logging_only_continue_on_input_failure = False
         if timeout is not None:
             self.timeout = timeout
 
@@ -1064,7 +1066,7 @@ class CustomGuardrail(CustomLogger):
         except Exception as e:
             if self.logging_only_scope == "output":
                 return None
-            if self.logging_only_scope == "both":
+            if self.logging_only_continue_on_input_failure:
                 verbose_logger.warning(
                     "Guardrail %s: logging_only request copy failed, skipping request scan: %s",
                     self.guardrail_name,
@@ -1092,7 +1094,7 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         if self.logging_only_scope != "output" and scratch_fields is not None:
-            if self.logging_only_scope == "both":
+            if self.logging_only_continue_on_input_failure:
                 try:
                     await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
