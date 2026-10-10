@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,8 +17,11 @@ from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -903,37 +906,75 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
     )
 
 
-@pytest.mark.asyncio
-async def test_non_transcription_completed_event_still_triggers_response_create():
-    """
-    Regression guard: a normal (non-transcription) session with no guardrails must
-    keep triggering response.create on a completed transcription event.
-    """
-    client_ws = MagicMock()
-    client_ws.send_text = AsyncMock()
+class _PassthroughRealtimeConfig(BaseRealtimeConfig):
+    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+        return headers
 
-    completed = json.dumps(
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "transcript": "hi",
-            "item_id": "item_1",
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        return api_base or ""
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> Sequence[str | bytes]:
+        return (message,)
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        return {
+            "response": [json.loads(message)],
+            "current_output_item_id": realtime_response_transform_input["current_output_item_id"],
+            "current_response_id": realtime_response_transform_input["current_response_id"],
+            "current_delta_chunks": realtime_response_transform_input["current_delta_chunks"],
+            "current_conversation_id": realtime_response_transform_input["current_conversation_id"],
+            "current_item_chunks": realtime_response_transform_input["current_item_chunks"],
+            "current_delta_type": realtime_response_transform_input["current_delta_type"],
+            "session_configuration_request": realtime_response_transform_input["session_configuration_request"],
         }
-    ).encode()
 
-    backend_ws = MagicMock()
-    backend_ws.recv = AsyncMock(side_effect=[completed, ConnectionClosed(None, None)])
-    backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.success_handler = MagicMock()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_provider_config", [False, True], ids=["raw", "provider_config"])
+@pytest.mark.parametrize(
+    "event_hook,expected_response_creates",
+    [
+        (None, 0),
+        (GuardrailEventHooks.pre_call, 0),
+        (GuardrailEventHooks.post_call, 0),
+        (GuardrailEventHooks.realtime_input_transcription, 1),
+    ],
+    ids=["no_guardrail", "pre_call", "post_call", "realtime_input_transcription"],
+)
+async def test_transcript_triggers_response_create_only_when_a_transcript_guardrail_owns_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    through_provider_config: bool,
+    event_hook: GuardrailEventHooks | None,
+    expected_response_creates: int,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail(event_hook)] if event_hook else [])
+    completed: Final = _make_transcript_event("what are the opening hours tomorrow")
+    backend_ws: Final = MagicMock(
+        recv=AsyncMock(side_effect=[completed, ConnectionClosed(None, None)]),
+        send=AsyncMock(),
+    )
+    client_ws: Final = MagicMock(send_text=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        MagicMock(async_success_handler=AsyncMock()),
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
+    )
 
-    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    assert streaming._is_transcription_session is False
-    sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
-    assert any(e.get("type") == "response.create" for e in sent_to_backend)
+    assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [
+        {"type": "response.create"}
+    ] * expected_response_creates
+    assert [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list] == [json.loads(completed)]
 
 
 def test_client_session_update_does_not_mark_transcription_session():
@@ -2865,10 +2906,10 @@ async def test_deferred_setup_clear_drops_appends_when_buffered():
     assert streaming._pending_messages_until_setup == [new_audio]
 
 
-def _transcription_guardrail():
-    """A minimal real CustomGuardrail registered for the realtime transcript hook."""
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
+def _transcription_guardrail(
+    event_hook: GuardrailEventHooks = GuardrailEventHooks.realtime_input_transcription,
+) -> CustomGuardrail:
+    """A minimal real CustomGuardrail registered for one realtime event hook."""
 
     class _TranscriptionGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -2876,7 +2917,7 @@ def _transcription_guardrail():
 
     return _TranscriptionGuardrail(
         guardrail_name="test_transcription_guard",
-        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        event_hook=event_hook,
         default_on=True,
     )
 
