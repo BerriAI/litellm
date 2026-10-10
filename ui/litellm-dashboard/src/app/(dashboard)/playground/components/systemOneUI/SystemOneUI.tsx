@@ -4,6 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
@@ -17,6 +18,7 @@ import type { DecisionEndpoint, PlaygroundRequest } from "./lib/schemas";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
 import ResponseView from "./ResponseView";
+import SystemOneForm from "./SystemOneForm";
 import { validateSystemOnePayload } from "./lib/validatePayload";
 import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
 
@@ -24,6 +26,8 @@ interface SystemOneUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
 }
+
+type EditorView = "form" | "json";
 
 interface SystemOneSendVariables {
   payload: PlaygroundRequest;
@@ -52,6 +56,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const endpoint: DecisionEndpoint =
     chosenEndpoint ?? (decisionModels.length > 0 ? "/v1/systemone" : "/typesafe/v1/systemone");
   const [drafts, setDrafts] = useState<Partial<Record<DecisionEndpoint, string>>>({});
+  const [view, setView] = useState<EditorView>("form");
   const examplePayload =
     endpoint === "/v1/systemone"
       ? JSON.stringify(decisionsExample(decisionModels[0] ?? PLACEHOLDER_DECISION_MODEL), null, 2)
@@ -137,11 +142,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           >
             <SelectTrigger className="w-80" aria-label="Decision endpoint">
               <SelectValue>
-                {endpoint === "/v1/systemone" ? "System One · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
+                {endpoint === "/v1/systemone" ? "Decisions · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="/v1/systemone">System One · /v1/systemone</SelectItem>
+              <SelectItem value="/v1/systemone">Decisions · /v1/systemone</SelectItem>
               <SelectItem value="/typesafe/v1/systemone">TypeSafe · /typesafe/v1/systemone</SelectItem>
             </SelectContent>
           </Select>
@@ -206,10 +211,12 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               <RotateCcw />
               Reset example
             </Button>
-            <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
-              <Code />
-              Format JSON
-            </Button>
+            {view === "json" && (
+              <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
+                <Code />
+                Format JSON
+              </Button>
+            )}
             {isLoading && (
               <Button variant="outline" onClick={clearRequestState}>
                 Cancel request
@@ -224,7 +231,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         <Alert role="note" aria-label="Decision endpoint notice">
           <Info />
           <AlertTitle>
-            {endpoint === "/v1/systemone" ? "Decision models · System One" : "TypeSafe Jev · System One"}
+            {endpoint === "/v1/systemone" ? "Decision models · /v1/systemone" : "TypeSafe Jev · /typesafe/v1/systemone"}
           </AlertTitle>
           <AlertDescription>
             {endpoint === "/v1/systemone"
@@ -242,10 +249,30 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       </section>
 
       <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="System One request editor">
-          <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
+        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="Decisions request editor">
+          <Tabs
+            value={view}
+            onValueChange={(value) => (value === "form" || value === "json") && setView(value)}
+            className="min-h-0 flex-1"
+          >
+            <TabsList aria-label="Request editor view">
+              <TabsTrigger value="form">Form</TabsTrigger>
+              <TabsTrigger value="json">JSON</TabsTrigger>
+            </TabsList>
+            <TabsContent value="form" className="flex min-h-0 flex-col">
+              <SystemOneForm
+                value={rawPayload}
+                onChange={handlePayloadChange}
+                validation={validation}
+                onOpenJson={() => setView("json")}
+              />
+            </TabsContent>
+            <TabsContent value="json" className="flex min-h-0 flex-col">
+              <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
+            </TabsContent>
+          </Tabs>
         </section>
-        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="System One results">
+        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
           <ResponseView
             response={systemOne.data?.response}
             fallbackModel={validation.payload?.model}

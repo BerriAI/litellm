@@ -24,6 +24,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     litellm_logging_obj_from_kwargs,
     local_model_name,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -564,7 +565,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # Maintainability: when adding a new Anthropic-only request param to
         # ``AnthropicMessagesRequestOptionalParams``, also extend
         # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
-        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | {"anthropic_messages"}
+        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | CONVERTED_STREAM_KEYS | {"anthropic_messages"}
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():
