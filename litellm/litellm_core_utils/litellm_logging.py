@@ -6707,6 +6707,18 @@ def get_standard_logging_object_payload(
             # failure payloads stay None like every response type that carries its own _hidden_params
             timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
+        if status == "success" and clean_hidden_params["litellm_model_name"] is None and "model" in kwargs:
+            # /v1/messages dict results and the bridge stream wrappers cannot carry
+            # _hidden_params; backfill the deployment model from the call details (the
+            # same value update_response_metadata writes on the object path) so
+            # deployment TPM/RPM accounting keys match the pre-call check (#45702)
+            backfill_model: Final[str | None] = (
+                cast(  # cast-ok: kwargs model is the deployment model string for this call
+                    str | None, kwargs["model"]
+                )
+            )
+            if isinstance(backfill_model, str) and backfill_model:
+                clean_hidden_params["litellm_model_name"] = backfill_model
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
