@@ -253,6 +253,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
+    sanitize_for_log,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
@@ -2601,7 +2602,7 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                json.dumps(list(self.data.keys())),
+                sanitize_for_log(list(self.data.keys())),
             )
         else:
             verbose_proxy_logger.debug(
