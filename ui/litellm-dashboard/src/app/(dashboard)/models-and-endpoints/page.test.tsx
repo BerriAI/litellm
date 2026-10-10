@@ -156,6 +156,7 @@ describe("ModelsAndEndpointsPage", () => {
       "Deployed Models",
       "Add Model",
       "Auto-Routers Beta",
+      "ADEPT Routers",
       "LLM Credentials",
       "Pass-Through Endpoints",
       "Health Status",

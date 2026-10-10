@@ -207,6 +207,17 @@ class SpecializedRouterOptions:
     adaptive_router_default_model: str | None = None
     quality_router_config: Mapping[str, object] | None = None
     quality_router_default_model: str | None = None
+    adept_router_default_model: str | None = None
+    adept_router_tag_prefix: str | None = None
+    adept_router_seed_config: Sequence[Mapping[str, object]] | None = None
+    adept_router_conversations_threshold: int | None = None
+    adept_router_trainer_url: str | None = None
+    adept_router_pg_host: str | None = None
+    adept_router_pg_port: int | None = None
+    adept_router_pg_database: str | None = None
+    adept_router_pg_user: str | None = None
+    adept_router_pg_password: str | None = None
+    adept_router_pg_ssl_mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
