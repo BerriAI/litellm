@@ -1055,6 +1055,19 @@ async def test_a_pipelined_management_write_without_a_ttl_expires_in_redis_like_
 
 
 @pytest.mark.asyncio
+async def test_a_pipelined_write_without_a_ttl_uses_the_configured_default_redis_ttl():
+    """Regression for #43187: the pipelined Redis SET was written with default_in_memory_ttl, so a
+    configured default_redis_ttl never reached it."""
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=5, default_redis_ttl=3600)
+    with request_redis_batch_scope() as request:
+        await cache.async_set_cache_pre_call("k1", {"v": 1}, None)
+        await request.flush_all()
+    assert [(c[0], c[1], c[3]) for c in client.pipelines[0].commands] == [("SET", "k1", 3600)]
+
+
+@pytest.mark.asyncio
 async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_cost_no_read():
     client = FakeClient(replies)
     redis_cache = FakeRedisCache(client)

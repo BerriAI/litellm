@@ -150,13 +150,23 @@ class DualCache(BaseCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
+            # ``kwargs`` is this call's own dict, so injecting a ttl into it is safe. What must not
+            # happen is one tier's injected ttl reaching the other, so note whether the caller
+            # supplied one before either tier writes back.
+            ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                if not ttl_given and self.default_in_memory_ttl is not None:
                     kwargs["ttl"] = self.default_in_memory_ttl
 
                 self.in_memory_cache.set_cache(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
+                if not ttl_given:
+                    redis_ttl = self.default_redis_ttl
+                    if redis_ttl is None:
+                        redis_ttl = self.default_in_memory_ttl
+                    if redis_ttl is not None:
+                        kwargs["ttl"] = redis_ttl
                 self.redis_cache.set_cache(key, value, **kwargs)
         except Exception as e:
             print_verbose(e)
@@ -505,12 +515,19 @@ class DualCache(BaseCache):
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
         try:
+            ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                if not ttl_given and self.default_in_memory_ttl is not None:
                     kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
+                if not ttl_given:
+                    redis_ttl = self.default_redis_ttl
+                    if redis_ttl is None:
+                        redis_ttl = self.default_in_memory_ttl
+                    if redis_ttl is not None:
+                        kwargs["ttl"] = redis_ttl
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
             log_redis_failure(
@@ -537,7 +554,10 @@ class DualCache(BaseCache):
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
         if self.in_memory_cache is not None:
             await self.in_memory_cache.async_set_cache(key, value, ttl=effective_ttl)
-        return batch.set(key, value, effective_ttl)
+        redis_ttl = self.default_redis_ttl if ttl is None else ttl
+        if redis_ttl is None:
+            redis_ttl = effective_ttl
+        return batch.set(key, value, redis_ttl)
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(
@@ -548,12 +568,19 @@ class DualCache(BaseCache):
         """
         print_verbose(f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}")
         try:
+            ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                if not ttl_given and self.default_in_memory_ttl is not None:
                     kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
+                if not ttl_given:
+                    redis_ttl = self.default_redis_ttl
+                    if redis_ttl is None:
+                        redis_ttl = self.default_in_memory_ttl
+                    if redis_ttl is not None:
+                        kwargs["ttl"] = redis_ttl
                 await self.redis_cache.async_set_cache_pipeline(
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )

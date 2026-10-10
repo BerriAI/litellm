@@ -191,3 +191,27 @@ class TestRedisAuthCacheFlag:
             ps._attach_redis_usage_cache(fake_redis, enable_redis_auth_cache=False)
             assert limiter_cache.redis_cache is fake_redis
             assert ps.user_api_key_cache.redis_cache is None
+
+def test_auth_cache_redis_tier_keeps_in_memory_ttl_when_default_redis_ttl_is_set(monkeypatch):
+    """
+    #43187: user_api_key_cache mirrors its in-memory TTL on Redis. A global
+    default_redis_ttl, from litellm_settings or cache_params, must not override
+    that when Redis is attached.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    monkeypatch.setattr(litellm, "default_redis_ttl", 3600)
+    auth_cache = UserApiKeyCache(default_in_memory_ttl=60)
+    with (
+        patch.object(ps, "user_api_key_cache", auth_cache),
+        patch.object(ps, "spend_counter_cache", DualCache()),
+        patch.object(ps, "cli_sso_session_cache", DualCache()),
+        patch.object(ps, "litellm_config_cache", SimpleNamespace(redis_cache=None)),
+    ):
+        ps._attach_redis_usage_cache(_FakeRedisCache(), enable_redis_auth_cache=True)
+
+    assert auth_cache.redis_cache is not None
+    assert auth_cache.default_redis_ttl == 60
+    assert auth_cache.key_object_cache.default_redis_ttl == 60

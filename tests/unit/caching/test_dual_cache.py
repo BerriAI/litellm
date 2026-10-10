@@ -1022,3 +1022,82 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+async def _write_without_a_ttl(dual_cache: DualCache, write_path: str) -> None:
+    """One of the three write paths, called the way a caller that passes no ``ttl`` calls it."""
+    if write_path == "set_cache":
+        dual_cache.set_cache("ttl_key", "v")
+    elif write_path == "async_set_cache":
+        await dual_cache.async_set_cache("ttl_key", "v")
+    else:
+        await dual_cache.async_set_cache_pipeline([("ttl_key", "v")])
+
+
+async def _write_with_a_ttl(dual_cache: DualCache, write_path: str, ttl: float) -> None:
+    """The same three paths with an explicit ``ttl``, which must reach both tiers unchanged."""
+    if write_path == "set_cache":
+        dual_cache.set_cache("ttl_key", "v", ttl=ttl)
+    elif write_path == "async_set_cache":
+        await dual_cache.async_set_cache("ttl_key", "v", ttl=ttl)
+    else:
+        await dual_cache.async_set_cache_pipeline([("ttl_key", "v")], ttl=ttl)
+
+
+def _ttl_recording_redis() -> MagicMock:
+    """A Redis tier that records what it was written with, whichever of the two writes it uses."""
+    mock_redis = MagicMock()
+    mock_redis.async_set_cache = AsyncMock()
+    mock_redis.async_set_cache_pipeline = AsyncMock()
+    return mock_redis
+
+
+def _written_redis_ttl(mock_redis: MagicMock, write_path: str) -> object:
+    """The ttl the recording Redis tier was written with, on whichever of its writes that path uses."""
+    return getattr(mock_redis, write_path).call_args.kwargs["ttl"]
+
+
+async def _tier_ttls(
+    write_path: str, ttl: float | None
+) -> tuple[object, float]:
+    """Write one key through one path and report the Redis ttl it was written with, plus the
+    in-memory expiry. ``ttl=None`` means the caller supplied no ``ttl`` at all."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = _ttl_recording_redis()
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+        default_redis_ttl=3600,
+    )
+    if ttl is None:
+        await _write_without_a_ttl(dual_cache, write_path)
+    else:
+        await _write_with_a_ttl(dual_cache, write_path, ttl)
+    return _written_redis_ttl(mock_redis, write_path), in_memory_cache.ttl_dict["ttl_key"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write_path", ["set_cache", "async_set_cache", "async_set_cache_pipeline"])
+async def test_dual_cache_writes_the_redis_tier_with_the_configured_default_redis_ttl(write_path: str):
+    """
+    Regression for #43187: the Redis tier was written with default_in_memory_ttl, so a configured
+    default_redis_ttl never took effect. The in-memory tier still takes its own default.
+    """
+    before = time.time()
+    written, expiry = await _tier_ttls(write_path, None)
+    after = time.time()
+
+    assert written == 3600
+    assert before + 60 <= expiry <= after + 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write_path", ["set_cache", "async_set_cache", "async_set_cache_pipeline"])
+async def test_dual_cache_gives_an_explicit_ttl_to_both_tiers_unchanged(write_path: str):
+    """An explicit ``ttl`` still overrides both tier defaults rather than being replaced by them."""
+    before = time.time()
+    written, expiry = await _tier_ttls(write_path, 99.0)
+    after = time.time()
+
+    assert written == 99.0
+    assert before + 99 <= expiry <= after + 99

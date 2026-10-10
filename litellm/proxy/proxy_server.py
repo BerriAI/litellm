@@ -5118,10 +5118,13 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
-        user_api_key_cache.attach_redis_cache(
-            redis_cache,
-            default_redis_ttl=litellm.default_redis_ttl,
-        )
+        # The auth cache mirrors its own in-memory TTL on the Redis tier (see
+        # UserApiKeyCache.__init__ and #43187). Do not pass the global
+        # default_redis_ttl here: that would override the auth cache's shorter
+        # TTL whenever default_redis_ttl is set before Redis is attached.
+        # Operators who want a longer auth-cache TTL should set
+        # general_settings.user_api_key_cache_ttl.
+        user_api_key_cache.attach_redis_cache(redis_cache)
         verbose_proxy_logger.info(
             "enable_redis_auth_cache=True: attached Redis to "
             "user_api_key_cache — virtual-key lookups are now "
