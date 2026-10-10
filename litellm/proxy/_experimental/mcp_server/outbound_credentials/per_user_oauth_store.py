@@ -72,6 +72,7 @@ async def _persist_credential(
     expires_in: int | None,
     scopes: tuple[str, ...] | None,
     identity_binding_proof: str | None = None,
+    cimd_client_id: str | None = None,
 ) -> None:
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
@@ -90,6 +91,7 @@ async def _persist_credential(
         scopes=list(scopes) if scopes else None,
         skip_byok_guard=True,
         identity_binding_proof=identity_binding_proof,
+        **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
     )
 
 

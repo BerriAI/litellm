@@ -10,7 +10,7 @@ worker thread, off any event loop — and caches it for the process lifetime.
 """
 
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from opentelemetry.sdk.trace import ReadableSpan
@@ -117,7 +117,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
-def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:
+def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:
     # Own a short-lived client rather than ``_get_httpx_client()``: that returns
     # a process-wide cached ``HTTPHandler`` whose connection pool is shared by
     # every caller, so closing it here would break concurrent/subsequent

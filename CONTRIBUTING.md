@@ -98,7 +98,7 @@ Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litel
 
 The `tests/unit/` directory follows the same structure as `litellm/`:
 
-- `litellm/proxy/caching_routes.py` → `tests/test_litellm/proxy/test_caching_routes.py`
+- `litellm/proxy/caching_routes.py` → `tests/unit/proxy/test_caching_routes.py`
 - `litellm/utils.py` → `tests/unit/test_utils.py`
 
 ### Example Test
@@ -136,7 +136,7 @@ If you're running broader test suites, proxy tests, or anything that touches Pos
 make install-test-deps
 ```
 
-This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary`, `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
 
 ### Running Linting and Formatting Checks
 

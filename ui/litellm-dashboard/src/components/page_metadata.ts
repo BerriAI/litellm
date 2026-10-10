@@ -22,6 +22,7 @@ export const pageDescriptions: Record<string, string> = {
   "cost-optimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
   "model-insights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
   logs: "Access request and response logs",
+  lens: "Review agent activity and investigate patterns with supporting evidence",
   "guardrails-monitor": "Monitor guardrail performance and view logs",
   users: "Manage internal user accounts and permissions",
   teams: "Create and manage teams for access control",

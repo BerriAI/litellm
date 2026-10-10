@@ -23,9 +23,11 @@ import pytest
 
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatMessage, LiteLLMParamsBody, ModelInfoBody, ModelNewBody
 from reliability_support import (
+    CACHING_MODEL,
     REAL_KEY,
     REAL_MODEL,
     cached_system_turn,
@@ -42,6 +44,15 @@ FOLLOW_UPS = 3
 
 class TestReliabilityPromptCachingAffinity:
     @pytest.mark.covers("reliability.cache.prompt_caching_model_select.returns_cached")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.ANTHROPIC, Provider.OPENAI),
+            models=(CACHING_MODEL, REAL_MODEL),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cached_conversation_stays_on_deployment_holding_its_cache(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:

@@ -419,7 +419,7 @@ def test_ocr_result_routes_the_relay_to_per_page_ocr_costing():
     assert isinstance(result, OCRResponse)
     assert logging_obj.call_type == "aocr"
     assert per_page > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_page)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_page)
 
 
 def test_ocr_binding_receives_the_endpoint_without_the_model_segment():
@@ -504,7 +504,7 @@ def test_foundry_embeddings_relay_is_costed_per_input_token():
     assert isinstance(result, EmbeddingResponse)
     assert logging_obj.call_type == "aembedding"
     assert per_token > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(1200 * per_token)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(1200 * per_token)
 
 
 def test_cohere_rerank_relay_is_costed_per_search_unit():
@@ -516,7 +516,7 @@ def test_cohere_rerank_relay_is_costed_per_search_unit():
     assert isinstance(result, RerankResponse)
     assert logging_obj.call_type == "arerank"
     assert per_query > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_query)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_query)
 
 
 def test_image_generation_relay_is_costed_per_image():
@@ -528,7 +528,7 @@ def test_image_generation_relay_is_costed_per_image():
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
     assert per_image > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(per_image)
 
 
 def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
@@ -539,7 +539,7 @@ def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
 
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(per_image)
 
 
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():
@@ -598,7 +598,7 @@ def test_streaming_responses_chunks_through_a_router_relay_are_costed_like_azure
     assert response is not None
     assert response.response.usage.output_tokens == 100
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=response.response) == pytest.approx(
+    assert logging_obj.response_cost_calculator(result=response.response) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 

@@ -8,9 +8,12 @@ from litellm-regression-tests/tests/test_inference_endpoints.py.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
 from e2e_http import assert_client_error
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from openai.types import ImagesResponse
@@ -19,6 +22,9 @@ from pydantic import BaseModel
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
+
+OPENAI_IMAGE_BACKEND: Final = "openai/gpt-image-1-mini"
+BEDROCK_IMAGE_BACKEND: Final = "bedrock/amazon.nova-canvas-v1:0"
 
 
 class _OptionalImageBody(BaseModel):
@@ -47,12 +53,21 @@ def _register_openai_image(proxy: ProxyClient, resources: ResourceManager) -> tu
         proxy,
         resources,
         "e2e-image",
-        LiteLLMParamsBody(model="openai/gpt-image-1-mini", api_key="os.environ/OPENAI_API_KEY"),
+        LiteLLMParamsBody(model=OPENAI_IMAGE_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
     )
 
 
 class TestImageGeneration:
     @pytest.mark.covers("llm.images_generations.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_image_generation_returns_image(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -61,6 +76,15 @@ class TestImageGeneration:
         _assert_image_returned(images)
 
     @pytest.mark.covers("llm.images_generations.bedrock.basic.nonstream.works", exercised_on=["images_generations"])
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_image_generation_returns_image(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -69,7 +93,7 @@ class TestImageGeneration:
             resources,
             "e2e-bedrock-image",
             LiteLLMParamsBody(
-                model="bedrock/amazon.nova-canvas-v1:0",
+                model=BEDROCK_IMAGE_BACKEND,
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",
@@ -80,6 +104,12 @@ class TestImageGeneration:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/images/generations 500s (aimage_generation TypeError) on missing prompt instead of 400")
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+        )
+    )
     def test_missing_prompt_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_openai_image(proxy, resources)
         result = proxy.transport.send(
@@ -90,6 +120,15 @@ class TestImageGeneration:
         assert_client_error(result, "images missing prompt")
 
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_empty_prompt_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_openai_image(proxy, resources)
         result = proxy.transport.send(
@@ -100,6 +139,15 @@ class TestImageGeneration:
         assert_client_error(result, "images empty prompt")
 
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invalid_size_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_openai_image(proxy, resources)
         result = proxy.transport.send(
@@ -110,6 +158,15 @@ class TestImageGeneration:
         assert_client_error(result, "images invalid size")
 
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invalid_n_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register_openai_image(proxy, resources)
         result = proxy.transport.send(

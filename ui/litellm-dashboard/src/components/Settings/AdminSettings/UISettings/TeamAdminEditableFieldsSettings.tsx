@@ -1,7 +1,9 @@
 "use client";
 
+import { CircleHelp } from "lucide-react";
+import { Fragment, type ReactNode } from "react";
 import { Controller } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
@@ -9,19 +11,43 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   parseSupportedTeamAdminEditableFields,
   parseTeamAdminEditableFields,
+  TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
   teamAdminFieldLabel,
+  type TeamAdminSettingsField,
 } from "@/components/team/teamAdminEditAccess";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/cva.config";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 
 const editableFieldsSchema = z.object({ team_admin_editable_team_fields: z.array(z.string()) });
 
 type SaveEditableFields = ReturnType<typeof useUpdateUISettings>["mutate"];
+
+const MAX_BUDGET_FIELD: TeamAdminSettingsField = "max_budget";
+
+const RAISE_MAX_BUDGET_HELP_LABEL = "About raising the team's max budget";
+const RAISE_MAX_BUDGET_TOOLTIP =
+  "Lets team admins raise the budget too, capped by the organization's budget when the team has one. Only proxy admins can remove it.";
+const RAISE_MAX_BUDGET_DOCS_URL =
+  "https://docs.litellm.ai/docs/proxy/access_control#choosing-what-team-admins-can-edit";
+
+const toggleEditableField = (
+  supportedFields: readonly string[],
+  draft: readonly string[],
+  name: string,
+  checked: boolean,
+): string[] => {
+  const selected = supportedFields.filter((item) => (item === name ? checked : draft.includes(item)));
+  return selected.includes(MAX_BUDGET_FIELD)
+    ? selected
+    : selected.filter((item) => item !== TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION);
+};
 
 export default function TeamAdminEditableFieldsSettings() {
   const { accessToken } = useAuthorized();
@@ -100,33 +126,42 @@ function TeamAdminEditableFieldsForm({
     );
   }
 
+  const raiseMaxBudgetSupported = supportedFields.includes(TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION);
+  const listedFields = supportedFields.filter((name) => name !== TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION);
+
   return (
     <form onSubmit={(event) => void submit(event)} className="space-y-4">
       <Controller
         control={form.control}
         name="team_admin_editable_team_fields"
-        render={({ field }) => (
-          <div className="space-y-2">
-            {supportedFields.map((name) => {
-              const checkboxId = `team-admin-editable-${name}`;
-              return (
-                <label key={name} htmlFor={checkboxId} className="flex cursor-pointer items-center gap-2">
-                  <Checkbox
-                    id={checkboxId}
+        render={({ field }) => {
+          const toggle = (name: string) => (checked: boolean) =>
+            field.onChange(toggleEditableField(supportedFields, field.value, name, checked));
+          return (
+            <div className="space-y-2">
+              {listedFields.map((name) => (
+                <Fragment key={name}>
+                  <EditableFieldCheckbox
+                    name={name}
                     checked={field.value.includes(name)}
                     disabled={isPending}
-                    onCheckedChange={(checked) =>
-                      field.onChange(
-                        supportedFields.filter((item) => (item === name ? checked : field.value.includes(item))),
-                      )
-                    }
+                    onCheckedChange={toggle(name)}
                   />
-                  <span className="text-sm text-foreground">{teamAdminFieldLabel(name)}</span>
-                </label>
-              );
-            })}
-          </div>
-        )}
+                  {name === MAX_BUDGET_FIELD && raiseMaxBudgetSupported && (
+                    <EditableFieldCheckbox
+                      name={TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION}
+                      checked={field.value.includes(TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION)}
+                      disabled={isPending || !field.value.includes(MAX_BUDGET_FIELD)}
+                      onCheckedChange={toggle(TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION)}
+                      className="ml-6"
+                      help={<RaiseMaxBudgetHelp />}
+                    />
+                  )}
+                </Fragment>
+              ))}
+            </div>
+          );
+        }}
       />
       <div className="flex justify-end">
         <Button type="submit" disabled={isPending || !form.formState.isDirty}>
@@ -134,5 +169,58 @@ function TeamAdminEditableFieldsForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+interface EditableFieldCheckboxProps {
+  name: string;
+  checked: boolean;
+  disabled: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  className?: string;
+  help?: ReactNode;
+}
+
+function EditableFieldCheckbox({
+  name,
+  checked,
+  disabled,
+  onCheckedChange,
+  className,
+  help,
+}: EditableFieldCheckboxProps) {
+  const checkboxId = `team-admin-editable-${name}`;
+  return (
+    <div className={cn("flex items-center gap-2", className)}>
+      <label htmlFor={checkboxId} className="flex cursor-pointer items-center gap-2">
+        <Checkbox id={checkboxId} checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} />
+        <span className="text-sm text-foreground">{teamAdminFieldLabel(name)}</span>
+      </label>
+      {help}
+    </div>
+  );
+}
+
+function RaiseMaxBudgetHelp() {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          type="button"
+          aria-label={RAISE_MAX_BUDGET_HELP_LABEL}
+          className="inline-flex cursor-help items-center rounded-sm text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <CircleHelp className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent>
+          <span>
+            {RAISE_MAX_BUDGET_TOOLTIP}{" "}
+            <a href={RAISE_MAX_BUDGET_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
+              Learn more
+            </a>
+          </span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

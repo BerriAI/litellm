@@ -6,14 +6,28 @@ import time
 import types
 import unittest
 from typing import Final, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    StandardLoggingHiddenParams,
+    StandardLoggingMetadata,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 
 # Import LangfuseUsageDetails directly from the module where it's defined
@@ -1399,13 +1413,12 @@ def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import weakref
 
     from litellm.caching.llm_caching_handler import LLMClientCache
-
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     logger = _build_langfuse_logger(monkeypatch)
 
-    cached_handler = _get_httpx_client()
+    cached_handler = get_httpx_client()
     handler_ref = weakref.ref(cached_handler)
 
     assert logger.langfuse_client is cached_handler.client
@@ -2198,6 +2211,58 @@ def test_log_event_returns_the_v2_dict_shape_for_the_alerting_trace_id_cache():
     assert returned["generation_id"]
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected_source"),
+    [
+        ({}, None),
+        ({"trace_id": "my-unique-trace-id"}, "my-unique-trace-id"),
+        ({"existing_trace_id": "my-unique-existing-trace-id"}, "my-unique-existing-trace-id"),
+        (
+            {"trace_id": "my-unique-trace-id", "existing_trace_id": "my-unique-existing-trace-id"},
+            "my-unique-existing-trace-id",
+        ),
+    ],
+)
+def test_logging_get_trace_id_reports_the_langfuse_trace_that_won_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, str],
+    expected_source: str | None,
+) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger, exporter = _steering_logger()
+    monkeypatch.setattr(litellm_logging, "langFuseLogger", logger)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    call_id: Final = f"trace-precedence-{len(metadata)}-{expected_source}"
+    logging_obj: Final = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        litellm_call_id=call_id,
+        start_time=datetime.datetime.now(),
+        function_id="trace-precedence",
+    )
+
+    litellm.completion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "trace precedence"}],
+        mock_response="ok",
+        litellm_logging_obj=logging_obj,
+        metadata=dict(metadata),
+    )
+    deadline: Final = time.monotonic() + 5
+    while logging_obj.get_trace_id(service_name="langfuse") is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    expected_trace_id: Final = resolve_trace_id(expected_source or logging_obj.litellm_trace_id)
+    assert logging_obj.get_trace_id(service_name="langfuse") == expected_trace_id
+    assert _span_trace_id(_exported_span(logger, exporter)) == expected_trace_id
+
+
 def test_parse_langfuse_debug_only_enables_on_true_strings():
     """v4 treats any truthy value as debug=on, so the raw env string "false" would enable debug."""
     assert langfuse_module.parse_langfuse_debug("true") is True
@@ -2469,3 +2534,288 @@ def test_returned_generation_id_names_the_exported_observation():
 
     span = _exported_span(logger, exporter)
     assert returned["generation_id"] == format(span.context.span_id, "016x")
+
+
+def create_standard_logging_payload() -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id="test_id",
+        call_type="completion",
+        response_cost=0.1,
+        response_cost_failure_debug_info=None,
+        status="success",
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=1234567890.5,
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5-mini", model_map_value=None),
+        model="gpt-5-mini",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_org_id=None,
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response={"choices": [{"message": {"content": "Hi there!"}}]},
+        error_str=None,
+        model_parameters={"stream": True},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.1",
+            additional_headers=None,
+        ),
+    )
+
+
+@pytest.fixture
+def global_langfuse_logger() -> LangFuseLogger:
+    with respx.mock(assert_all_called=False) as router:
+        router.route().mock(side_effect=httpx.ConnectError("langfuse is unreachable"))
+        return LangFuseLogger(
+            langfuse_public_key="global_public_key",
+            langfuse_secret="global_secret",
+            langfuse_host="https://global.langfuse.com",
+        )
+
+
+def test_get_langfuse_tags(global_langfuse_logger):
+    mock_payload = create_standard_logging_payload()
+    mock_payload["request_tags"] = ["tag1", "tag2", "test_tag"]
+
+    result = global_langfuse_logger._get_langfuse_tags(mock_payload)
+    assert result == ["tag1", "tag2", "test_tag"]
+
+    mock_payload["request_tags"] = None
+    result = global_langfuse_logger._get_langfuse_tags(mock_payload)
+    assert result == []
+
+    mock_payload["request_tags"] = []
+    result = global_langfuse_logger._get_langfuse_tags(mock_payload)
+    assert result == []
+
+
+def test_get_chat_content_for_langfuse():
+    mock_response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="Hello world"))])
+
+    result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
+    assert result["content"] == "Hello world"
+    assert result["role"] == "assistant"
+
+    mock_response = ModelResponse(choices=[])
+    result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
+    assert result is None
+
+
+def test_get_text_completion_content_for_langfuse():
+    mock_response = TextCompletionResponse(choices=[TextChoices(text="Hello world")])
+    result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
+    assert result == "Hello world"
+
+    mock_response = TextCompletionResponse(choices=[])
+    result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
+    assert result is None
+
+    mock_response = TextCompletionResponse()
+    result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
+    assert result is None
+
+
+def test_apply_masking_function_with_string():
+    import re
+
+    def mask_credit_cards(data):
+        if isinstance(data, str):
+            return re.sub(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b", "[CARD]", data)
+        return data
+
+    input_str = "My card is 4532-1234-5678-9012"
+    result = LangFuseLogger._apply_masking_function(input_str, mask_credit_cards)
+    assert result == "My card is [CARD]"
+    assert "4532" not in result
+
+    input_str = "Hello world"
+    result = LangFuseLogger._apply_masking_function(input_str, mask_credit_cards)
+    assert result == "Hello world"
+
+
+def test_apply_masking_function_with_dict():
+    import re
+
+    def mask_emails(data):
+        if isinstance(data, str):
+            return re.sub(r"[\w\.-]+@[\w\.-]+", "[EMAIL]", data)
+        return data
+
+    input_dict = {"messages": [{"role": "user", "content": "My email is test@example.com"}]}
+    result = LangFuseLogger._apply_masking_function(input_dict, mask_emails)
+    assert result["messages"][0]["content"] == "My email is [EMAIL]"
+    assert "test@example.com" not in str(result)
+
+
+def test_apply_masking_function_with_none():
+    def dummy_mask(data):
+        return data
+
+    result = LangFuseLogger._apply_masking_function(None, dummy_mask)
+    assert result is None
+
+
+def test_apply_masking_function_with_list():
+    import re
+
+    def mask_ssn(data):
+        if isinstance(data, str):
+            return re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", data)
+        return data
+
+    input_list = ["SSN: 123-45-6789", "No sensitive data here"]
+    result = LangFuseLogger._apply_masking_function(input_list, mask_ssn)
+    assert result[0] == "SSN: [SSN]"
+    assert result[1] == "No sensitive data here"
+
+
+def test_langfuse_v2_uses_standard_logging_model_parameters():
+    standard_logging_object = create_standard_logging_payload()
+    standard_logging_object["model_parameters"] = {"temperature": 0.5, "stream": True}
+
+    optional_params_with_secrets = {
+        "temperature": 0.5,
+        "api_key": "sk-secret-key-12345",
+        "secret_fields": {"raw_headers": {"Authorization": "Bearer sk-secret"}},
+    }
+
+    sanitized = standard_logging_object.get("model_parameters", optional_params_with_secrets)
+    assert "api_key" not in sanitized
+    assert "secret_fields" not in sanitized
+    assert sanitized["temperature"] == 0.5
+
+    from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+
+    fallback_sanitized: Final = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
+    assert "api_key" not in fallback_sanitized
+    assert "secret_fields" not in fallback_sanitized
+    assert fallback_sanitized["temperature"] == 0.5
+
+
+def _assert_langfuse_prompt_fields(prompt: str | list[dict[str, str]]) -> None:
+    from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
+
+    generation_params: Final = {"model": "gpt-4o"}
+    clean_metadata: Final = {
+        "prompt": {
+            "name": "support-answer",
+            "version": 9,
+            "config": {"temperature": 0.2},
+            "labels": ["latest"],
+            "tags": ["support"],
+            "prompt": prompt,
+        }
+    }
+    result: Final = _add_prompt_to_generation_params(
+        generation_params=generation_params,
+        clean_metadata=clean_metadata,
+        prompt_management_metadata=None,
+        langfuse_client=Mock(),
+    )
+    prompt_client: Final = result["prompt"]
+    assert prompt_client.name == "support-answer"
+    assert prompt_client.version == 9
+    expected_prompt: Final = (
+        [{"type": "message", **message} for message in prompt] if isinstance(prompt, list) else prompt
+    )
+    assert prompt_client.prompt == expected_prompt
+    assert prompt_client.config == {"temperature": 0.2}
+
+
+def test_langfuse_prompt_type():
+    _assert_langfuse_prompt_fields("Hello {{name}}")
+    _assert_langfuse_prompt_fields(
+        [{"role": "system", "content": "You are concise"}, {"role": "user", "content": "{{question}}"}]
+    )
+
+
+def test_langfuse_logging_metadata():
+    from litellm.integrations.langfuse.langfuse import log_requester_metadata
+
+    metadata: Final = {"key": "value", "requester_metadata": {"key": "value"}}
+    assert log_requester_metadata(clean_metadata=metadata) == {"requester_metadata": {"key": "value"}}
+
+
+def test_langfuse_logging_tool_calling():
+    logger, exporter = _steering_logger()
+    timestamp: Final = datetime.datetime(2025, 1, 1)
+    tool_calls: Final = [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+        }
+    ]
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "weather"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}]
+        ),
+        start_time=timestamp,
+        end_time=timestamp,
+    )
+    span = _exported_span(logger, exporter)
+
+    assert json.loads(span.attributes["langfuse.observation.output"]) == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": tool_calls,
+        "function_call": None,
+        "provider_specific_fields": None,
+    }
+
+
+def test_langfuse_logging_without_request_response(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _steering_logger()
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": _LANGFUSE_REDACTED}}]
+        ),
+    )
+    span = _exported_span(logger, exporter)
+
+    assert json.loads(span.attributes["langfuse.observation.input"]) == {
+        "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}]
+    }
+    assert json.loads(span.attributes["langfuse.observation.output"]) == {
+        "role": "assistant",
+        "content": _LANGFUSE_REDACTED,
+        "function_call": None,
+        "tool_calls": None,
+        "provider_specific_fields": None,
+    }

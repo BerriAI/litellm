@@ -220,6 +220,7 @@ class NomaV2Guardrail(CustomGuardrail):
             url=endpoint,
             headers=headers,
             json=sanitized_payload,
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response: status_code=%s body=%s",

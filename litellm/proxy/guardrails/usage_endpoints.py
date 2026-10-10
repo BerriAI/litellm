@@ -28,6 +28,7 @@ from litellm.repositories.table_repositories import (
     SpendLogGuardrailIndexRepository,
     SpendLogsRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -248,7 +249,7 @@ class _DailyPassBlocked(TypedDict):
     blocked: int
 
 
-class UsageOverviewRow(BaseModel):
+class UsageOverviewRow(LiteLLMBaseModel):
     id: str
     name: str
     type: str
@@ -268,7 +269,7 @@ class UsageOverviewRow(BaseModel):
     )
 
 
-class UsageOverviewResponse(BaseModel):
+class UsageOverviewResponse(LiteLLMBaseModel):
     rows: list[UsageOverviewRow]
     chart: list[UsageChartPoint]  # [{ date, passed, blocked }]
     totalRequests: int
@@ -291,13 +292,13 @@ _EMPTY_OVERVIEW: Final = UsageOverviewResponse(
 )
 
 
-class UsageUnitsDailyPoint(BaseModel):
+class UsageUnitsDailyPoint(LiteLLMBaseModel):
     date: str
     units: Mapping[str, int]
     cost: float | None
 
 
-class UsageDetailResponse(BaseModel):
+class UsageDetailResponse(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     type: str
@@ -323,7 +324,7 @@ class UsageDetailResponse(BaseModel):
     untracked_usage_units_by_key: Mapping[str, Mapping[str, int]]
 
 
-class UsageLogEntry(BaseModel):
+class UsageLogEntry(LiteLLMBaseModel):
     id: str
     timestamp: str
     action: str  # blocked | passed | flagged | not_run
@@ -335,7 +336,7 @@ class UsageLogEntry(BaseModel):
     reason: str | None
 
 
-class UsageLogsResponse(BaseModel):
+class UsageLogsResponse(LiteLLMBaseModel):
     logs: list[UsageLogEntry]
     total: int
     page: int

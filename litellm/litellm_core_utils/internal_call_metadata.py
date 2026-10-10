@@ -112,16 +112,16 @@ def sanitize_user_api_key_auth(auth: object) -> object:
     """Copy of the auth object with its budget reservation removed; the cost callback
     falls back to reading the reservation from inside the auth object."""
     if isinstance(auth, dict):
-        return {k: v for k, v in auth.items() if k != "budget_reservation"}  # mutable-ok: SDK metadata value
+        return {k: v for k, v in auth.items() if k != "budget_reservation"}
     reservation: Final[object] = getattr(auth, "budget_reservation", None)
     model_copy: Final[object] = getattr(auth, "model_copy", None)
     if reservation is not None and callable(model_copy):
-        return model_copy(update={"budget_reservation": None})  # mutable-ok: pydantic update payload
+        return model_copy(update={"budget_reservation": None})
     return auth
 
 
 def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
-    return {  # mutable-ok: SDK metadata kwarg
+    return {
         k: sanitize_user_api_key_auth(v) if k == _USER_API_KEY_AUTH_KEY else v
         for k, v in parent_metadata.items()
         if k not in BUDGET_RESERVATION_METADATA_KEYS
@@ -138,10 +138,8 @@ def forwarded_internal_call_metadata(
     parent's full context still describes the call being made.
     """
     if not parent_metadata:
-        return {}  # mutable-ok: SDK metadata kwarg
-    return _sanitized(parent_metadata) | {  # mutable-ok: SDK metadata kwarg
-        INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin
-    }
+        return {}
+    return _sanitized(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
 
 
 def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
@@ -167,4 +165,4 @@ def sanitized_forwardable_call_metadata(
     must not inherit per-request state such as its routing decision or logging payload.
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
-    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}  # mutable-ok: SDK metadata kwarg
+    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}

@@ -9,7 +9,9 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import BatchResult, RedisBatch, active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -19,6 +21,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
+SPEND_COUNTERS_TARGET: Final = "spend_counters"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +33,13 @@ class PendingSpendIncrement:
 class SpendCounterBatch:
     """Bound counters are read with one MGET on first use; counters bound later join the next MGET.
     ``async_batch_get_cache`` maps a clean miss to ``None`` and drops keys only when Redis failed, so an absent
-    key means "read it yourself" and a present ``None`` is an authoritative miss."""
+    key means "read it yourself" and a present ``None`` is an authoritative miss.
 
-    __slots__ = ("_fetched", "_keys", "_loaded", "_lock", "_open", "_redis_cache")
+    Inside a ``request_redis_batch_scope`` the MGET rides the request's pipeline instead: the batch's flush
+    hook declares whatever is bound but unread, so whoever flushes first (the auth object prefetch, usually)
+    carries the spend counters in the same round trip."""
+
+    __slots__ = ("_fetched", "_inflight", "_keys", "_loaded", "_lock", "_open", "_redis_cache", "_request_batch")
 
     def __init__(self, redis_cache: RedisCache) -> None:
         self._redis_cache: Final = redis_cache
@@ -41,6 +48,10 @@ class SpendCounterBatch:
         self._keys: frozenset[str] = frozenset()
         self._fetched: frozenset[str] = frozenset()
         self._loaded: Mapping[str, float | None] = _NO_VALUES
+        self._inflight: Final[list[BatchResult[Mapping[str, object]]]] = []  # mutable-ok: drained by _load
+        self._request_batch: Final[RedisBatch | None] = active_request_redis_batch(redis_cache)
+        if self._request_batch is not None:
+            self._request_batch.add_flush_hook(self._declare_pending)
 
     @property
     def counter_keys(self) -> frozenset[str]:
@@ -85,6 +96,10 @@ class SpendCounterBatch:
 
     async def _load(self) -> Mapping[str, float | None]:
         async with self._lock:
+            if self._request_batch is not None:
+                self._declare_pending()
+                await self._collect_inflight()
+                return self._loaded
             pending: Final = self._keys - self._fetched
             if pending:
                 self._fetched = self._fetched | pending
@@ -92,11 +107,32 @@ class SpendCounterBatch:
                 self._loaded = MappingProxyType({**fetched, **self._loaded})
             return self._loaded
 
+    def _declare_pending(self) -> None:
+        """Flush hook: put every bound-but-unread counter on the request pipeline that is about to go out."""
+        if self._request_batch is None or not self._open:
+            return
+        pending: Final = self._keys - self._fetched
+        if pending:
+            self._fetched = self._fetched | pending
+            with service_target(SPEND_COUNTERS_TARGET):
+                self._inflight.append(self._request_batch.mget(sorted(pending)))
+
+    async def _collect_inflight(self) -> None:
+        results: Final = tuple(self._inflight)
+        self._inflight.clear()
+        for result in results:
+            try:
+                fetched: Mapping[str, float | None] = _CounterValues.validate_python(await result)
+            except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
+                verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
+                continue
+            self._loaded = MappingProxyType({**fetched, **self._loaded})
+
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:
         try:
-            return _CounterValues.validate_python(
-                await self._redis_cache.async_batch_get_cache(key_list=sorted(keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
-            )
+            with service_target(SPEND_COUNTERS_TARGET):
+                values: Final = await self._redis_cache.async_batch_get_cache(key_list=sorted(keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+            return _CounterValues.validate_python(values)  # pyright: ignore[reportUnknownArgumentType]  # untyped cache API
         except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
             verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
             return _NO_VALUES

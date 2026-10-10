@@ -238,6 +238,7 @@ def test_config_pass_through_route_logs_body_and_strips_query(gateway: Gateway, 
                 "target": f"{wire.url}/upstream?trace=secret-q",
                 "include_subpath": True,
                 "headers": {"Authorization": "Bearer scripted"},
+                "auth": True,
             }
         ]
         path.write_text(yaml.safe_dump(config))

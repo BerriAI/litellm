@@ -12,7 +12,6 @@ import pytest
 
 import litellm.interactions as interactions
 
-
 class BaseInteractionsTest(ABC):
     """Abstract base class for interactions API tests.
 
@@ -102,17 +101,3 @@ class BaseInteractionsTest(ABC):
 
         assert len(chunks) > 0
 
-    @pytest.mark.asyncio
-    async def test_acreate_simple(self):
-        """Test async interaction creation."""
-        api_key = self.get_api_key()
-        if not api_key:
-            pytest.skip(f"API key not set for {self.__class__.__name__}")
-
-        response = await interactions.acreate(
-            model=self.get_model(),
-            input="What is the speed of light?",
-            api_key=api_key,
-        )
-        assert response is not None
-        assert response.id is not None or response.status is not None

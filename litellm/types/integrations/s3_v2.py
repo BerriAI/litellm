@@ -1,7 +1,11 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+S3PartitionGranularity = Literal["day", "hour"]
 
 
-class s3BatchLoggingElement(BaseModel):
+class s3BatchLoggingElement(LiteLLMBaseModel):
     """
     Type of element stored in self.log_queue in S3Logger
     """

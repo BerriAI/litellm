@@ -21,4 +21,4 @@ veil.workspace = true
 rstest.workspace = true
 tempfile = "3"
 tokio.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true

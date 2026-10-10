@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
+from litellm.caching.caching import DualCache, InMemoryCache, RedisCache, response_cache_phase
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -25,7 +25,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 self.async_get_cache
             )  # map the litellm 'get_cache' function to our custom function
 
-    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
@@ -37,7 +37,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> None:
         try:
             """
             Get the user key
@@ -63,17 +63,12 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 - Get the relevant values
                 """
                 if litellm.cache.type is not None and isinstance(litellm.cache.cache, RedisCache):
-                    # Initialize an empty list to store the keys
-                    keys = []
                     self.print_verbose(f"cache_key_name: {cache_key_name}")
-                    # Use the SCAN iterator to fetch keys matching the pattern
-                    keys = await litellm.cache.cache.async_scan_iter(pattern=cache_key_name, count=100)
-                    # If you need the truly "last" based on time or another criteria,
-                    # ensure your key naming or storage strategy allows this determination
-                    # Here you would sort or filter the keys as needed based on your strategy
-                    self.print_verbose(f"redis keys: {keys}")
-                    if len(keys) > 0:
-                        key_value_dict = await litellm.cache.cache.async_batch_get_cache(key_list=keys)
+                    with response_cache_phase("get"):
+                        keys = await litellm.cache.cache.async_scan_iter(pattern=cache_key_name, count=100)
+                        self.print_verbose(f"redis keys: {keys}")
+                        if len(keys) > 0:
+                            key_value_dict = await litellm.cache.cache.async_batch_get_cache(key_list=keys)
 
             ## Add to cache
             if len(key_value_dict.items()) > 0:
@@ -88,7 +83,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
-    async def async_get_cache(self, *args, **kwargs):
+    async def async_get_cache(self, *args, **kwargs) -> object | None:
         """
         - Check if the cache key is in-memory
 
@@ -111,9 +106,13 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 cached_result = self.in_memory_cache.get_cache(cache_key, *args, **kwargs)
                 if cached_result is None:
-                    cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)
+                    with response_cache_phase("get"):
+                        cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)
                     if cached_result is not None:
                         await self.in_memory_cache.async_set_cache(cache_key, cached_result, ttl=60)
-                return litellm.cache._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                return litellm.cache.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             return None
+
+
+PROXY_BatchRedisRequests: Final = _PROXY_BatchRedisRequests

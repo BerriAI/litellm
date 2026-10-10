@@ -55,6 +55,8 @@ LlmRoute = Literal[
     "cohere",
     "gemini",
     "hosted_vllm",
+    "ollama",
+    "ollama_chat",
     "openai",
     "sail",
     "together_ai",

@@ -69,7 +69,7 @@ def test_ocr_relay_is_costed_per_page(model: str, native_path: str, body: object
     assert result.usage_info.pages_processed == pages
     assert logging_obj.call_type == "aocr"
     assert per_page is not None and per_page > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(pages * per_page)  # pyright: ignore[reportPrivateUsage]  # the per-page cost path is what the relay routes into
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(pages * per_page)
 
 
 @pytest.mark.parametrize(

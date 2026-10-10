@@ -61,12 +61,12 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         visited: Final = self.node_contents_visit(node)
         budget_check: Final = ast.Call(
             func=ast.Name(id="_budget_ok_", ctx=ast.Load()),
-            args=[],  # mutable-ok: ast accepts list fields only
-            keywords=[],  # mutable-ok: ast accepts list fields only
+            args=[],
+            keywords=[],
         )
         test: Final = ast.BoolOp(
             op=ast.And(),
-            values=[budget_check, visited.test],  # mutable-ok: ast accepts list fields only
+            values=[budget_check, visited.test],
         )
         copy_locations(test, visited.test)
         bounded: Final = ast.While(test=test, body=visited.body, orelse=visited.orelse)

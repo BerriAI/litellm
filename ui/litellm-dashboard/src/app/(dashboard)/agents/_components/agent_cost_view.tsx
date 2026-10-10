@@ -8,11 +8,7 @@ interface AgentCostViewProps {
 const AgentCostView: React.FC<AgentCostViewProps> = ({ agent }) => {
   const params = agent.litellm_params;
 
-  if (
-    params?.cost_per_query === undefined &&
-    params?.input_cost_per_token === undefined &&
-    params?.output_cost_per_token === undefined
-  ) {
+  if (params?.cost_per_query == null && params?.input_cost_per_token == null && params?.output_cost_per_token == null) {
     return null;
   }
 
@@ -22,7 +18,7 @@ const AgentCostView: React.FC<AgentCostViewProps> = ({ agent }) => {
       ["Input Cost Per Token", params.input_cost_per_token],
       ["Output Cost Per Token", params.output_cost_per_token],
     ] as const
-  ).filter(([, value]) => value !== undefined);
+  ).filter(([, value]) => value != null);
 
   return (
     <div className="mt-6">

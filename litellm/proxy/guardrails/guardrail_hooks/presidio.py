@@ -16,10 +16,11 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaita
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
-from typing_extensions import NotRequired, ReadOnly
+from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import get_secret
@@ -59,7 +60,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
-from litellm.types.utils import GuardrailStatus, StreamingChoices
+from litellm.types.utils import GuardrailStatus, Message, StreamingChoices
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -68,13 +69,20 @@ from litellm.utils import (
 )
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PresidioAnonymizeItem(TypedDict, total=False):
     entity_type: ReadOnly[str | None]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PresidioAnonymizeResponse(TypedDict):
     text: ReadOnly[str]
     items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
+
+
+_PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None]] = TypeAdapter(
+    _PresidioAnonymizeResponse | None
+)
 
 
 class _JsonResponse(Protocol):
@@ -271,7 +279,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         presidio_analyzer_api_base: str | None = None,
         presidio_anonymizer_api_base: str | None = None,
-    ):
+    ) -> None:
         self.presidio_analyzer_api_base: str | None = presidio_analyzer_api_base or get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
         )
@@ -460,6 +468,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_url,
                     json=analyze_payload,
                     headers={"Accept": "application/json"},
+                    timeout=(
+                        aiohttp.ClientTimeout(total=self.timeout)
+                        if isinstance(self.timeout, (int, float))
+                        else aiohttp.client.DEFAULT_TIMEOUT
+                    ),
                 ) as response:
                     # Validate HTTP status
                     if response.status >= 400:
@@ -745,6 +758,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 anonymize_url,
                 json=anonymize_payload,
                 headers={"Accept": "application/json"},
+                timeout=(
+                    aiohttp.ClientTimeout(total=self.timeout)
+                    if isinstance(self.timeout, (int, float))
+                    else aiohttp.client.DEFAULT_TIMEOUT
+                ),
             ) as response:
                 if response.status >= 400:
                     error_body = await response.text()
@@ -759,7 +777,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     raise Exception(
                         f"Presidio anonymizer returned non-JSON Content-Type '{content_type}'; body: '{error_body[:200]}'"
                     )
-                return await response.json()
+                return _PRESIDIO_ANONYMIZE_ADAPTER.validate_python(await response.json())
 
     def _finalize_presidio_anonymize_simple(
         self,
@@ -904,7 +922,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
-    ):
+    ) -> None:
         """
         Raise an exception if blocked entities are detected
         """
@@ -1004,7 +1022,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> dict[str, object]:
         """
         - Check if request turned off pii
             - Check if user allowed to turn off pii (key permissions -> 'allow_pii_controls')
@@ -1194,10 +1212,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: ModelResponse | EmbeddingResponse | ImageResponse,
-    ):
+    ) -> dict[str, JsonValue] | ModelResponse | EmbeddingResponse | ImageResponse:
         """
         Output parse the response object to replace the masked tokens with user sent values
         """
@@ -1321,7 +1339,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
 
         for choice in response.choices:
-            message = getattr(choice, "message", None)
+            message: Message | None = getattr(choice, "message", None)
             if message is None:
                 continue
 
@@ -1492,7 +1510,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
-        rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
+        rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:
@@ -1528,7 +1546,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         and delta.get("type") == "text_delta"
                         and isinstance(delta.get("text"), str)
                     ):
-                        unmasked = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(delta["text"], pii_tokens)
+                        unmasked = OPTIONAL_PresidioPIIMasking._unmask_pii_text(delta["text"], pii_tokens)
                         if unmasked != delta["text"]:
                             event["delta"]["text"] = unmasked
                             line = "data: " + json.dumps(event, ensure_ascii=False)
@@ -1540,7 +1558,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def _unmask_responses_api_completed_chunk(self, chunk: object, pii_tokens: dict[str, str]) -> None:
         """
-        Unmask PII tokens in-place for a ``response.completed`` Responses API event.
+        Unmask PII tokens in-place for a ``response.completed`` / ``response.incomplete`` Responses API event.
 
         The chunk carries a ``response`` attribute (ResponsesAPIResponse) whose
         ``output`` list holds message items.  Each item has a ``content`` list of
@@ -1600,7 +1618,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             yield buffered_chunk
                         remaining_chunks = []
                     chunk_type = getattr(chunk, "type", None)
-                    if chunk_type == "response.completed" and pii_tokens:
+                    if chunk_type in ("response.completed", "response.incomplete") and pii_tokens:
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
                     saw_non_chat_chunk = True
                     yield chunk
@@ -1689,7 +1707,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return None
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement) -> None:
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -1753,3 +1771,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_analyze_chunk_size_bytes = self._coerce_analyze_chunk_size(
                 litellm_params.presidio_analyze_chunk_size_bytes
             )
+
+
+OPTIONAL_PresidioPIIMasking = _OPTIONAL_PresidioPIIMasking

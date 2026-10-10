@@ -580,3 +580,86 @@ class TestOpenRouterImageGenerationTransformation:
         assert isinstance(error, OpenRouterException)
         assert "Test error" in str(error)
         assert error.status_code == 400
+
+
+def _transform_generation_response(payload: object) -> ImageResponse:
+    return OpenRouterImageGenerationConfig().transform_image_generation_response(
+        model="google/gemini-2.5-flash-image",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(data=[]),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"choices": []},
+        {"choices": ""},
+        {"choices": {}},
+        {"choices": [{}]},
+        {"choices": [{"message": {}}]},
+        {"choices": [{"message": {"images": ""}}]},
+        {"choices": [{"message": {"images": [{}]}}]},
+        {"choices": [{"message": {"images": [{"image_url": {}}]}}]},
+        {"choices": [{"message": {"images": [{"image_url": {"url": None}}]}}]},
+        {"choices": [{"message": {"images": [{"image_url": {"url": ""}}]}}]},
+        {"choices": [{"message": {"images": [{"image_url": {"url": 0}}]}}]},
+    ],
+)
+def test_transform_image_generation_response_without_usable_image_url_has_no_images(
+    payload: dict[str, object],
+):
+    assert _transform_generation_response(payload).data == []
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("data:image/png;base64,aGVsbG8=", ("aGVsbG8=", None)),
+        ("data:image/png;base64,a,b", ("a,b", None)),
+        ("data:no-comma", (None, None)),
+        ("https://example.com/a.png", (None, "https://example.com/a.png")),
+    ],
+)
+def test_transform_image_generation_response_maps_one_image_url(
+    url: str, expected: tuple[str | None, str | None]
+):
+    response = _transform_generation_response(
+        {"choices": [{"message": {"images": [{"image_url": {"url": url}}]}}]}
+    )
+
+    assert [(image.b64_json, image.url) for image in response.data] == [expected]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"choices": 7},
+        {"choices": ["not an object"]},
+        {"choices": [{"message": "not an object"}]},
+        {"choices": [{"message": {"images": 7}}]},
+        {"choices": [{"message": {"images": ["not an object"]}}]},
+        {"choices": [{"message": {"images": [{"image_url": "not an object"}]}}]},
+        {"choices": [{"message": {"images": [{"image_url": {"url": ["a"]}}]}}]},
+        {"choices": [{"message": {"images": [{"image_url": {"url": 7}}]}}]},
+    ],
+)
+def test_transform_image_generation_response_wraps_malformed_payloads_without_echoing_them(
+    payload: object,
+):
+    with pytest.raises(OpenRouterException) as exc_info:
+        _transform_generation_response(payload)
+
+    message = str(exc_info.value)
+    assert message.startswith(
+        "Error transforming OpenRouter image generation response: "
+    )
+    assert "input_value" not in message
+    assert exc_info.value.status_code == 500

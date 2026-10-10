@@ -65,6 +65,26 @@ class BaseLLMException(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
+_NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
+
+
+def with_attribution_headers(
+    attribution_headers: Mapping[str, str],
+    headers: dict[str, str] | None,  # mutable-ok: returned as-is when there is nothing to add
+) -> dict[str, str] | None:  # mutable-ok: becomes the request's outbound headers
+    """
+    `headers` plus any attribution header the caller didn't already set (names
+    compared case-insensitively). Builds a new dict; `headers` is never mutated.
+    """
+    if not attribution_headers:
+        return headers
+    caller_names: Final = {name.lower() for name in headers or {}}
+    return {
+        **{name: value for name, value in attribution_headers.items() if name.lower() not in caller_names},
+        **(headers or {}),
+    }
+
+
 class BaseConfig(ABC):
     def __init__(self):
         pass
@@ -88,6 +108,15 @@ class BaseConfig(ABC):
             and v is not None
             and not callable(v)  # Filter out any callable objects including mocks
         }
+
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        """
+        Headers that tell the provider a request came through LiteLLM.
+
+        Sent by default on every request; a caller header with the same name
+        (any casing) wins. Override in a provider config to opt in.
+        """
+        return _NO_ATTRIBUTION_HEADERS
 
     def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         return type_to_response_format_param(response_format=response_format)
@@ -145,6 +174,13 @@ class BaseConfig(ABC):
                 *tools,
             ]
         return optional_params
+
+    def add_tools_to_optional_params(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        tools: list[ChatCompletionToolParam],  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._add_tools_to_optional_params(optional_params, tools)
 
     def translate_developer_role_to_system_role(
         self,
@@ -395,6 +431,7 @@ class BaseConfig(ABC):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -412,6 +449,7 @@ class BaseConfig(ABC):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 

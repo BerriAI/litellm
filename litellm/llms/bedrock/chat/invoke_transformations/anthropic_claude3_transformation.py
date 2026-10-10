@@ -29,6 +29,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -85,6 +86,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         from litellm.utils import supports_native_structured_output
 
         original_model: Final = model
+        requested_thinking: Final = non_default_params.get("thinking")
+        requested_display_updates: Final = self.is_thinking_display_updates_used(requested_thinking)
         if "response_format" in non_default_params and not supports_native_structured_output(
             model=model, custom_llm_provider="bedrock"
         ):
@@ -114,6 +117,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
             model=original_model, optional_params=optional_params, custom_llm_provider="bedrock"
         )
+        translated_thinking: Final = optional_params.get("thinking")
+        if (
+            requested_display_updates
+            and isinstance(translated_thinking, dict)
+            and translated_thinking.get("type") == "adaptive"
+        ):
+            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
+            optional_params["thinking"] = thinking_with_display
 
         # The stub model hides the original model from the parent's forced-tool-use backstop
         response_format_tool_choice: Final = optional_params.get("tool_choice")
@@ -170,6 +181,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             messages=messages,
             optional_params=optional_params,
             headers=headers,
+            thinking=_anthropic_request.get("thinking"),
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -250,11 +262,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict,
+        thinking: AnthropicThinkingParam | None,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
         tool_search_used: Final = self.is_tool_search_used(tools)
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
+        is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
+        is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
         user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         beta_set: Final = set(user_beta_set)
@@ -266,6 +281,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="bedrock",
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
+            is_thinking_display_updates_used=is_thinking_display_updates_used,
         )
         beta_set.update(auto_betas)
 

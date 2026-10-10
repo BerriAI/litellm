@@ -1,7 +1,5 @@
-mod execution;
 mod machine;
 
-pub(crate) use execution::{run_async, run_async_value, run_sync, run_sync_value};
 pub(crate) use machine::LoggedMachine;
 
 use litellm_host_python::Pythonized;

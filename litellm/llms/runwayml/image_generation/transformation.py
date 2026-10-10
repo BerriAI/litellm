@@ -220,9 +220,9 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         Returns:
             Final response with completed task
         """
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         start_time: Final = time.time()
 
         # Build task status URL
