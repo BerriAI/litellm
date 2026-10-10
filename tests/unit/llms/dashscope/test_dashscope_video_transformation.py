@@ -6,6 +6,7 @@ import base64
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock
 
@@ -43,6 +44,12 @@ def _mock_response(payload: dict, status_code: int = 200) -> Mock:
     mock_response.status_code = status_code
     mock_response.headers = httpx.Headers()
     return mock_response
+
+
+def _write_png(tmp_path: Path) -> Path:
+    path: Final = tmp_path / "first.png"
+    path.write_bytes(PNG_BYTES)
+    return path
 
 
 def _create(params: dict, model: str = "wan3.0-video", prompt: str = "a cat on a roof"):
@@ -95,6 +102,29 @@ class TestDashScopeVideoCreateRequest:
 
 
 class TestDashScopeVideoInputReference:
+    @pytest.mark.parametrize(
+        "make_reference",
+        [
+            lambda tmp_path: ("first.png", PNG_BYTES, "image/png"),
+            lambda tmp_path: ("first.png", io.BytesIO(PNG_BYTES)),
+            lambda tmp_path: _write_png(tmp_path),
+        ],
+        ids=["filename-bytes-content-type", "filename-file", "path"],
+    )
+    def test_file_tuple_and_path_references_are_encoded(self, make_reference, tmp_path):
+        """Regression: tuples and paths are valid FileTypes but raised before reaching DashScope."""
+        data, _, _ = _create({"input_reference": make_reference(tmp_path)})
+
+        url = data["input"]["media"][0]["url"]
+        assert url.startswith("data:image/png;base64,")
+        assert base64.b64decode(url.split(",", 1)[1]) == PNG_BYTES
+
+    def test_string_inside_a_file_tuple_is_not_read_as_a_path(self, tmp_path):
+        path = _write_png(tmp_path)
+
+        with pytest.raises(ValueError, match="input_reference must be"):
+            _create({"input_reference": ("first.png", str(path))})
+
     def test_wan3_file_reference_becomes_first_frame_media_data_uri(self):
         """Wan 3.0 takes references as typed media entries; a file must arrive
         base64-encoded as a data URI rather than as an unusable file object."""
@@ -105,25 +135,6 @@ class TestDashScopeVideoInputReference:
         assert media[0]["type"] == "first_frame"
         assert media[0]["url"].startswith("data:image/png;base64,")
         assert base64.b64decode(media[0]["url"].split(",", 1)[1]) == PNG_BYTES
-
-    @pytest.mark.parametrize(
-        "shape",
-        ["filename_bytes_content_type_tuple", "filename_file_tuple", "pathlib_path"],
-    )
-    def test_every_sdk_file_shape_becomes_a_data_uri(self, tmp_path, shape):
-        image_path = tmp_path / "first.png"
-        image_path.write_bytes(PNG_BYTES)
-        references: Final = {
-            "filename_bytes_content_type_tuple": ("first.png", PNG_BYTES, "image/png"),
-            "filename_file_tuple": ("first.png", io.BytesIO(PNG_BYTES)),
-            "pathlib_path": image_path,
-        }
-
-        data, _, _ = _create({"input_reference": references[shape]})
-
-        url = data["input"]["media"][0]["url"]
-        assert url.startswith("data:image/png;base64,")
-        assert base64.b64decode(url.split(",", 1)[1]) == PNG_BYTES
 
     def test_wan3_url_reference_is_passed_through_unencoded(self):
         data, _, _ = _create({"input_reference": "https://x/first.png"})

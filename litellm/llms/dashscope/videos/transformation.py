@@ -85,6 +85,7 @@ _EMPTY_PARAMS: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig cont
 
 _TASK_RESPONSE_ADAPTER: Final = TypeAdapter(_TaskResponse)
 _PARAMETERS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 _STATUS_MAP: Final = MappingProxyType(
     {
@@ -217,20 +218,11 @@ def _duration_param(seconds: object) -> int | None:
 
 
 def _read_all_bytes(file_obj: object) -> bytes:
-    match file_obj:
-        case (
-            (str() | None, object() as file_content)
-            | (str() | None, object() as file_content, object())
-            | (str() | None, object() as file_content, object(), object())
-        ):
-            return _read_all_bytes(file_content)
-        case PurePath():
-            return Path(file_obj).read_bytes()
-        case _:
-            return _read_file_content(file_obj)
-
-
-def _read_file_content(file_obj: object) -> bytes:
+    if isinstance(file_obj, tuple):
+        file_tuple: Final = _FILE_TUPLE_ADAPTER.validate_python(file_obj)
+        return _read_all_bytes(file_tuple[1] if len(file_tuple) >= 2 else None)
+    if isinstance(file_obj, PurePath):
+        return Path(file_obj).read_bytes()
     if isinstance(file_obj, (BytesIO, BufferedReader)):
         current_position: Final = file_obj.tell()
         file_obj.seek(0)
@@ -246,14 +238,15 @@ def _read_file_content(file_obj: object) -> bytes:
         data: Final = read()
         if isinstance(data, bytes):
             return data
-    raise ValueError("input_reference must be a URL string, bytes, or a file object")
+    raise ValueError("input_reference must be a URL string, bytes, a path, a file object, or a file tuple")
 
 
 def _image_url(image: object) -> str:
     if isinstance(image, str):
         return image
-    content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-    encoded: Final = base64.b64encode(_read_all_bytes(image)).decode("utf-8")
+    content: Final = _read_all_bytes(image)
+    content_type: Final = ImageEditRequestUtils.get_image_content_type(content)
+    encoded: Final = base64.b64encode(content).decode("utf-8")
     return f"data:{content_type};base64,{encoded}"
 
 
