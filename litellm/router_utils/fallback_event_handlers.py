@@ -247,6 +247,15 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+def _matches_provider_wildcard_key(model_group: str, fallback_key: str) -> bool:
+    provider, separator, rest = fallback_key.partition("/")
+    if separator != "/" or rest != "*" or not provider or "*" in provider:
+        return False
+    if model_group.startswith(f"{provider}/"):
+        return True
+    return "/" not in model_group and inferred_provider(model_group) == provider
+
+
 def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
     if "/" in model_group or not any(key.endswith(f"/{model_group}") for key in fallback_keys):
         return None
@@ -548,9 +557,11 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     - exact match
     - stripped model group match
     - provider-prefixed model group match
+    - provider wildcard match (e.g. "openai/*")
     - generic fallback
     """
     generic_fallback_idx: int | None = None
+    provider_wildcard_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
     fallback_model_group: list[str] | None = None
     fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
@@ -564,20 +575,25 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
                 break
             elif fallback_key == prefixed_model_group or _check_stripped_model_group(
                 model_group=model_group, fallback_key=fallback_key
-            ):  # check generic fallback
+            ):
                 stripped_model_fallback = item[fallback_key]
+            elif isinstance(fallback_key, str) and _matches_provider_wildcard_key(
+                model_group=model_group, fallback_key=fallback_key
+            ):
+                provider_wildcard_fallback_idx = idx
             elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx
         elif isinstance(item, str):
             fallback_model_group = [item]
-    ## if none, check for generic fallback
-    if fallback_model_group is None:
-        if stripped_model_fallback is not None:
-            fallback_model_group = stripped_model_fallback
-        elif generic_fallback_idx is not None:
-            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-
-    return fallback_model_group, generic_fallback_idx
+    if fallback_model_group is not None:
+        return fallback_model_group, generic_fallback_idx
+    if stripped_model_fallback is not None:
+        return stripped_model_fallback, generic_fallback_idx
+    if provider_wildcard_fallback_idx is not None:
+        return next(iter(fallbacks[provider_wildcard_fallback_idx].values())), generic_fallback_idx
+    if generic_fallback_idx is not None:
+        return fallbacks[generic_fallback_idx]["*"], generic_fallback_idx
+    return None, None
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")

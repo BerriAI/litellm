@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, Pencil } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { toModelProviders } from "./providerWildcards";
 import { toast } from "@/lib/toast";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
@@ -56,6 +57,8 @@ export default function EditFallbacks({
     [modelGroups],
   );
 
+  const modelProviders = useMemo(() => toModelProviders(modelGroups), [modelGroups]);
+
   const handleSave = async () => {
     const primaryModel = group.primaryModel;
     if (!primaryModel) {
@@ -84,6 +87,7 @@ export default function EditFallbacks({
         group={group}
         onChange={setGroup}
         availableModels={availableModels}
+        modelProviders={modelProviders}
         maxFallbacks={maxFallbacks}
         disablePrimaryModel
       />

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { toast } from "@/lib/toast";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { toModelProviders } from "./providerWildcards";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
@@ -126,6 +127,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
           groups={groups}
           onGroupsChange={setGroups}
           availableModels={availableModels}
+          modelProviders={toModelProviders(modelInfo)}
           maxFallbacks={10}
           maxGroups={5}
         />
