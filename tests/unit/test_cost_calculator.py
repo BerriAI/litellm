@@ -1,3 +1,4 @@
+import json
 import asyncio
 import datetime
 import time
@@ -17,7 +18,6 @@ from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsa
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.types.llms.openai import OpenAIModerationResponse
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
@@ -39,7 +39,6 @@ from unittest.mock import MagicMock, patch
 class ResponseCostCapture(CustomLogger):
     def __init__(self) -> None:
         self.success_cost: float | None = None
-        self.success_called = False
         self.success_event: Final = threading.Event()
         self.failure_cost: float | None = None
 
@@ -48,7 +47,6 @@ class ResponseCostCapture(CustomLogger):
     ) -> None:
         response_cost: Final = kwargs.get("response_cost")
         self.success_cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
-        self.success_called = True
         self.success_event.set()
 
     def log_failure_event(
@@ -61,7 +59,6 @@ class ResponseCostCapture(CustomLogger):
     ) -> None:
         response_cost: Final = kwargs.get("response_cost")
         self.success_cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
-        self.success_called = True
         self.success_event.set()
 
     async def async_log_failure_event(
@@ -7963,49 +7960,100 @@ def test_cost_calculator_with_custom_pricing():
     assert resp._hidden_params["response_cost"] > 0
 
 
-@pytest.mark.parametrize("async_mode", [False, True])
-@pytest.mark.asyncio
-@respx.mock
-async def test_custom_pricing_matches_response_usage(async_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def isolated_pricing_registry(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    input_rate: Final = 0.0000008
-    output_rate: Final = 0.0000032
-    response_data: Final = {
+    monkeypatch.setattr(litellm, "open_ai_chat_completion_models", set(litellm.open_ai_chat_completion_models))
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+
+
+_CUSTOM_PRICING_MODEL: Final = "migration-custom-pricing-chat"
+_CUSTOM_PRICING_RATES: Final = MappingProxyType(
+    {"input_cost_per_token": 0.0000008, "output_cost_per_token": 0.0000032}
+)
+_CUSTOM_PRICING_EXPECTED_COST: Final = 7 * 0.0000008 + 4 * 0.0000032
+
+
+def _custom_pricing_chunk(choices: list[dict[str, object]], usage: dict[str, int] | None = None) -> str:
+    chunk: Final = {
         "id": "chatcmpl-custom-pricing",
-        "object": "chat.completion",
+        "object": "chat.completion.chunk",
         "created": 1,
-        "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "I am ready to help."},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11},
+        "model": _CUSTOM_PRICING_MODEL,
+        "choices": choices,
+        **({"usage": usage} if usage is not None else {}),
     }
-    route = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
-    )
-    request: Final = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "How are you?"}],
-        "api_key": "sk-test",
-        "input_cost_per_token": input_rate,
-        "output_cost_per_token": output_rate,
-    }
-    response: Final = (
-        await litellm.acompletion(**request)
-        if async_mode
-        else litellm.completion(**request)
-    )
-    expected_cost: Final = (
-        response.usage.prompt_tokens * input_rate
-        + response.usage.completion_tokens * output_rate
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def _custom_pricing_upstream(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content).get("stream") is True:
+        body: Final = "".join(
+            (
+                _custom_pricing_chunk(
+                    [{"index": 0, "delta": {"role": "assistant", "content": "I am ready to help."}, "finish_reason": None}]
+                ),
+                _custom_pricing_chunk([{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+                _custom_pricing_chunk([], {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11}),
+                "data: [DONE]\n\n",
+            )
+        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-custom-pricing",
+            "object": "chat.completion",
+            "created": 1,
+            "model": _CUSTOM_PRICING_MODEL,
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "I am ready to help."}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11},
+        },
     )
 
-    assert route.called
-    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("isolated_pricing_registry")
+@respx.mock
+async def test_custom_pricing_matches_response_usage(async_mode: bool) -> None:
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    request: Final = {
+        "model": f"openai/{_CUSTOM_PRICING_MODEL}",
+        "messages": [{"role": "user", "content": "How are you?"}],
+        "api_key": "sk-test",
+        **_CUSTOM_PRICING_RATES,
+    }
+
+    response: Final = await litellm.acompletion(**request) if async_mode else litellm.completion(**request)
+
+    assert len(route.calls) == 1
+    assert response._hidden_params["response_cost"] == pytest.approx(_CUSTOM_PRICING_EXPECTED_COST)
+
+
+@pytest.mark.usefixtures("isolated_pricing_registry")
+@respx.mock
+def test_streamed_custom_pricing_cost_matches_non_streamed_cost() -> None:
+    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    request: Final = {
+        "model": f"openai/{_CUSTOM_PRICING_MODEL}",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "api_key": "sk-test",
+        **_CUSTOM_PRICING_RATES,
+    }
+
+    non_streamed: Final = litellm.completion(**request)
+    rebuilt: Final = litellm.stream_chunk_builder(
+        list(litellm.completion(**request, stream=True, stream_options={"include_usage": True})),
+        messages=request["messages"],
+    )
+    streamed_cost: Final = completion_cost(rebuilt, custom_cost_per_token=_CUSTOM_PRICING_RATES)
+
+    assert rebuilt.choices[0].message.content == non_streamed.choices[0].message.content == "I am ready to help."
+    assert non_streamed._hidden_params["response_cost"] == pytest.approx(_CUSTOM_PRICING_EXPECTED_COST)
+    assert streamed_cost == pytest.approx(non_streamed._hidden_params["response_cost"])
 
 
 @pytest.mark.parametrize(
@@ -8035,19 +8083,63 @@ def test_custom_cost_uses_test_owned_rates_across_providers(model: str, provider
     assert cost == pytest.approx(0.034)
 
 
-def test_azure_embedding_cost_uses_test_owned_rate() -> None:
-    response: Final = EmbeddingResponse(
-        model="text-embedding-3-large",
-        data=[{"embedding": [0.1]}],
-        usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+@respx.mock
+def test_fireworks_completion_cost_uses_registered_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model: Final = "fireworks_ai/accounts/fireworks/models/migration-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "litellm_provider": "fireworks_ai", "mode": "chat"},
     )
-    rates: Final = MappingProxyType({"input_cost_per_token": 0.002, "output_cost_per_token": 0.0})
+    respx.post("https://api.fireworks.ai/inference/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-fireworks",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "accounts/fireworks/models/migration-model",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Going great"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+            },
+        )
+    )
 
-    cost: Final = completion_cost(
-        completion_response=response,
-        model="azure/text-embedding-3-large",
-        custom_llm_provider="azure",
-        custom_cost_per_token=rates,
+    response: Final = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "Hey, how's it going?"}], api_key="fw-test"
+    )
+
+    assert completion_cost(completion_response=response) == pytest.approx(0.018)
+
+
+def test_azure_embedding_cost_uses_registered_base_model_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/migration-embedding-model",
+        {
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "azure",
+            "mode": "embedding",
+        },
+    )
+
+    cost: Final = response_cost_calculator(
+        response_object=EmbeddingResponse(
+            model="text-embedding-3-small",
+            data=[{"embedding": [1, 2, 3]}],
+            usage=Usage(prompt_tokens=10, completion_tokens=10),
+        ),
+        model="text-embedding-3-small",
+        custom_llm_provider=None,
+        base_model="azure/migration-embedding-model",
+        call_type="aembedding",
+        optional_params={},
+        custom_pricing=False,
+        prompt="Hello, world!",
     )
 
     assert cost == pytest.approx(0.02)
@@ -8112,24 +8204,19 @@ def test_azure_tts_cost_uses_test_owned_character_rate(monkeypatch: pytest.Monke
 
 def test_moderation_cost_uses_test_owned_token_rate() -> None:
     prompt: Final = "moderation input"
-    response: Final = OpenAIModerationResponse(
-        id="modr-migration",
-        model="gpt-6-sol",
-        results=[],
-    )
     rates: Final = MappingProxyType(
         {"input_cost_per_token": 0.001, "output_cost_per_token": 0.0}
     )
 
     cost: Final = completion_cost(
         completion_response=None,
-        model="gpt-6-sol",
+        model="omni-moderation-latest",
         custom_llm_provider="openai",
         call_type="moderation",
         prompt=prompt,
         custom_cost_per_token=rates,
     )
-    expected_cost: Final = litellm.token_counter(model="gpt-6-sol", text=prompt) * 0.001
+    expected_cost: Final = litellm.token_counter(model="omni-moderation-latest", text=prompt) * 0.001
 
     assert cost == pytest.approx(expected_cost)
 
@@ -8156,14 +8243,12 @@ def test_vertex_predictive_cost_uses_test_owned_token_rate() -> None:
 
 @pytest.mark.parametrize("async_mode", [False, True])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("isolated_pricing_registry")
 @respx.mock
 async def test_custom_pricing_cost_reaches_success_callback(
     async_mode: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     model: Final = "migration-callback-pricing-model"
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
     litellm.register_model(
         {
             model: {
@@ -8212,7 +8297,6 @@ async def test_custom_pricing_cost_reaches_success_callback(
     assert await asyncio.to_thread(callback.success_event.wait, 10.0)
     assert len(route.calls) == 1
     assert response.choices[0].message.content == "response"
-    assert callback.success_called
     assert callback.success_cost == pytest.approx(0.018)
 
 
@@ -8257,7 +8341,7 @@ def model_item():
         "litellm_params": {
             "model": "openai/my-fake-model",
             "api_key": "my-fake-key",
-            "api_base": "https://exampleopenaiendpoint.example.invalid/",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
         },
         "model_info": {},
     }

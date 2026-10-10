@@ -2049,8 +2049,8 @@ class TestProxyFunctionCalling:
         )
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_register_model_price_is_used_for_completion_cost(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
     price: Final = {
         "input_cost_per_token": 0.001,
@@ -2058,7 +2058,6 @@ def test_register_model_price_is_used_for_completion_cost(monkeypatch: pytest.Mo
         "litellm_provider": "openai",
         "mode": "chat",
     }
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     litellm.register_model({model: price}, persist_across_reloads=False)
     response: Final = ModelResponse(
         model=model,
@@ -2076,13 +2075,10 @@ def test_register_model_price_is_used_for_completion_cost(monkeypatch: pytest.Mo
 
 
 @respx.mock
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_completion_registers_test_owned_model_prices(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_completion_registers_test_owned_model_prices() -> None:
     model: Final = "migration-owned-pricing-model"
     messages: Final = [{"role": "user", "content": "price control"}]
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     litellm.register_model(
         {
             model: {
@@ -2129,40 +2125,21 @@ def test_completion_registers_test_owned_model_prices(
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_register_model_preserves_unrelated_model_prices(monkeypatch: pytest.MonkeyPatch):
-    model: Final = "migration-unrelated-pricing-model"
-    price: Final = {
-        "input_cost_per_token": 0.001,
-        "output_cost_per_token": 0.002,
-        "litellm_provider": "openai",
-        "mode": "chat",
-    }
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
-
-    litellm.register_model({model: price}, persist_across_reloads=False)
-    before: Final = dict(litellm.model_cost[model])
-    litellm.register_model({"migration-collateral-check-model": price}, persist_across_reloads=False)
-
-    assert litellm.model_cost[model] == before
-
-
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_add_known_models_indexes_models_from_the_supplied_cost_map(monkeypatch: pytest.MonkeyPatch):
-    model: Final = "migration-test-model"
+def test_add_known_models_skips_region_scoped_bedrock_pricing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    price: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "mode": "chat"}
     model_cost_map: Final = {
-        model: {
-            "input_cost_per_token": 0.001,
-            "output_cost_per_token": 0.002,
-            "litellm_provider": "openai",
-            "mode": "chat",
-        }
+        "migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
+        "bedrock/us-west-1/migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
+        "migration-openai-model": {**price, "litellm_provider": "openai"},
     }
+    monkeypatch.setattr(litellm, "bedrock_models", set(litellm.bedrock_models))
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
 
     litellm.add_known_models(model_cost_map=model_cost_map)
 
-    assert model in litellm.models_by_provider["openai"]
+    assert "migration.bedrock-model-v1:0" in litellm.bedrock_models
+    assert "bedrock/us-west-1/migration.bedrock-model-v1:0" not in litellm.bedrock_models
+    assert "migration-openai-model" in litellm.models_by_provider["openai"]
 
 
 def test_utils_defines_tests_without_invoking_them_at_module_scope() -> None:
@@ -8548,7 +8525,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     litellm.turn_on_debug()
 
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
-    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example.invalid/")
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
 

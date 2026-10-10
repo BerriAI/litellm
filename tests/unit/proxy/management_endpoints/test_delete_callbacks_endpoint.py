@@ -23,7 +23,7 @@ class MockPrismaClient:
             "environment_variables": {
                 "LANGFUSE_PUBLIC_KEY": "any-public-key",
                 "LANGFUSE_SECRET_KEY": "any-secret-key",
-                "LANGFUSE_HOST": "https://langfuse.example.invalid",
+                "LANGFUSE_HOST": "https://exampleopenaiendpoint-production-c715.up.railway.app",
             },
         }
 

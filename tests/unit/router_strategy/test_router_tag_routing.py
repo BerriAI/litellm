@@ -35,7 +35,7 @@ async def test_router_free_paid_tier():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["free"],
                 },
                 "model_info": {"id": "very-cheap-model"},
@@ -44,7 +44,7 @@ async def test_router_free_paid_tier():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -92,7 +92,7 @@ async def test_router_free_paid_tier_embeddings():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["free"],
                     "mock_response": ["1", "2", "3"],
                 },
@@ -102,7 +102,7 @@ async def test_router_free_paid_tier_embeddings():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid"],
                     "mock_response": ["1", "2", "3"],
                 },
@@ -112,7 +112,7 @@ async def test_router_free_paid_tier_embeddings():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default"],
                     "mock_response": ["1", "2", "3"],
                 },
@@ -162,7 +162,7 @@ async def test_default_tagged_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default"],
                 },
                 "model_info": {"id": "default-model"},
@@ -171,7 +171,7 @@ async def test_default_tagged_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                 },
                 "model_info": {"id": "default-model-2"},
             },
@@ -179,7 +179,7 @@ async def test_default_tagged_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -239,7 +239,7 @@ async def test_error_from_tag_routing():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                 },
                 "model_info": {"id": "default-model"},
             },
@@ -247,7 +247,7 @@ async def test_error_from_tag_routing():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                 },
                 "model_info": {"id": "default-model-2"},
             },
@@ -255,7 +255,7 @@ async def test_error_from_tag_routing():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -347,7 +347,7 @@ async def test_router_free_paid_tier_with_responses_api():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["free"],
                 },
                 "model_info": {"id": "very-cheap-model"},
@@ -356,7 +356,7 @@ async def test_router_free_paid_tier_with_responses_api():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -526,7 +526,7 @@ async def test_negation_excludes_matching_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "model:claude-sonnet-4-6"],
                 },
                 "model_info": {"id": "anthropic-model"},
@@ -535,7 +535,7 @@ async def test_negation_excludes_matching_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai", "model:gpt-4o"],
                 },
                 "model_info": {"id": "openai-model"},
@@ -562,7 +562,7 @@ async def test_negation_multiple_tags_exclude_multiple_providers():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-model"},
@@ -571,7 +571,7 @@ async def test_negation_multiple_tags_exclude_multiple_providers():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai"],
                 },
                 "model_info": {"id": "openai-model"},
@@ -580,7 +580,7 @@ async def test_negation_multiple_tags_exclude_multiple_providers():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:vertex"],
                 },
                 "model_info": {"id": "vertex-model"},
@@ -607,7 +607,7 @@ async def test_negation_with_positive_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid", "provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-paid"},
@@ -616,7 +616,7 @@ async def test_negation_with_positive_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid", "provider:openai"],
                 },
                 "model_info": {"id": "openai-paid"},
@@ -625,7 +625,7 @@ async def test_negation_with_positive_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["free", "provider:openai"],
                 },
                 "model_info": {"id": "openai-free"},
@@ -653,7 +653,7 @@ async def test_negation_all_excluded_raises():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-model"},
@@ -684,7 +684,7 @@ async def test_negation_ban_only_cannot_escape_default_pool():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default"],
                 },
                 "model_info": {"id": "default-model"},
@@ -693,7 +693,7 @@ async def test_negation_ban_only_cannot_escape_default_pool():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "paid-model"},
@@ -728,7 +728,7 @@ async def test_negation_ban_only_respects_default_pool():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default"],
                 },
                 "model_info": {"id": "default-model"},
@@ -737,7 +737,7 @@ async def test_negation_ban_only_respects_default_pool():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "paid-model"},
@@ -766,7 +766,7 @@ async def test_negation_untagged_deployment_kept():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-model"},
@@ -775,7 +775,7 @@ async def test_negation_untagged_deployment_kept():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                 },
                 "model_info": {"id": "untagged-model"},
             },
@@ -801,7 +801,7 @@ async def test_negation_literal_only_no_partial_match():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic-haiku"],
                 },
                 "model_info": {"id": "anthropic-haiku-model"},
@@ -810,7 +810,7 @@ async def test_negation_literal_only_no_partial_match():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai"],
                 },
                 "model_info": {"id": "openai-model"},
@@ -843,7 +843,7 @@ async def test_negation_regex_pattern_treated_as_literal():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-model"},
@@ -852,7 +852,7 @@ async def test_negation_regex_pattern_treated_as_literal():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai"],
                 },
                 "model_info": {"id": "openai-model"},
@@ -877,7 +877,7 @@ async def test_positive_tags_unchanged_by_negation():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["free"],
                 },
                 "model_info": {"id": "free-model"},
@@ -886,7 +886,7 @@ async def test_positive_tags_unchanged_by_negation():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "paid-model"},
@@ -914,7 +914,7 @@ async def test_negation_skips_banned_group_and_uses_fallback():
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-primary"},
@@ -923,7 +923,7 @@ async def test_negation_skips_banned_group_and_uses_fallback():
                 "model_name": "fallback",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai"],
                 },
                 "model_info": {"id": "openai-fallback"},
@@ -951,7 +951,7 @@ async def test_negation_exhausts_entire_fallback_chain():
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-primary"},
@@ -960,7 +960,7 @@ async def test_negation_exhausts_entire_fallback_chain():
                 "model_name": "fallback",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-fallback"},
@@ -993,7 +993,7 @@ async def test_tag_regex_survives_when_negation_removes_other_deployment():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tag_regex": ["^User-Agent: claude-code\\/"],
                 },
                 "model_info": {"id": "claude-code-deployment"},
@@ -1002,7 +1002,7 @@ async def test_tag_regex_survives_when_negation_removes_other_deployment():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-deployment"},
@@ -1033,7 +1033,7 @@ async def test_negation_removes_tag_regex_deployment_falls_to_ban_only():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tag_regex": ["^User-Agent: claude-code\\/"],
                     "tags": ["group:claude"],
                 },
@@ -1043,7 +1043,7 @@ async def test_negation_removes_tag_regex_deployment_falls_to_ban_only():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai"],
                 },
                 "model_info": {"id": "openai-deployment"},
@@ -1079,7 +1079,7 @@ async def test_request_level_enable_tag_filtering_applies_when_global_off():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "team-a-deployment"},
@@ -1088,7 +1088,7 @@ async def test_request_level_enable_tag_filtering_applies_when_global_off():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamB"],
                 },
                 "model_info": {"id": "team-b-deployment"},
@@ -1132,7 +1132,7 @@ async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "team-a-deployment"},
@@ -1141,7 +1141,7 @@ async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamB"],
                 },
                 "model_info": {"id": "team-b-deployment"},
@@ -1232,7 +1232,7 @@ async def test_chain_enable_tag_filtering_true_overrides_router_level_false():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "team-a-deployment", "enable_tag_filtering": True},
@@ -1241,7 +1241,7 @@ async def test_chain_enable_tag_filtering_true_overrides_router_level_false():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamB"],
                 },
                 "model_info": {"id": "team-b-deployment", "enable_tag_filtering": True},
@@ -1271,7 +1271,7 @@ async def test_chain_enable_tag_filtering_false_overrides_router_level_true():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "team-a-deployment", "enable_tag_filtering": False},
@@ -1280,7 +1280,7 @@ async def test_chain_enable_tag_filtering_false_overrides_router_level_true():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamB"],
                 },
                 "model_info": {"id": "team-b-deployment", "enable_tag_filtering": False},
@@ -1306,7 +1306,7 @@ async def test_request_level_enable_tag_filtering_still_wins_over_chain_level_fa
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "team-a-deployment", "enable_tag_filtering": False},
@@ -1315,7 +1315,7 @@ async def test_request_level_enable_tag_filtering_still_wins_over_chain_level_fa
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamB"],
                 },
                 "model_info": {"id": "team-b-deployment", "enable_tag_filtering": False},
@@ -1509,7 +1509,7 @@ async def test_required_and_matches_deployment_with_all_tags():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:anthropic"],
                 },
                 "model_info": {"id": "high-reasoning-anthropic"},
@@ -1518,7 +1518,7 @@ async def test_required_and_matches_deployment_with_all_tags():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:openai"],
                 },
                 "model_info": {"id": "high-reasoning-openai"},
@@ -1545,7 +1545,7 @@ async def test_required_and_excludes_deployment_missing_one_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:anthropic"],
                 },
                 "model_info": {"id": "high-reasoning-anthropic"},
@@ -1554,7 +1554,7 @@ async def test_required_and_excludes_deployment_missing_one_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low", "provider:anthropic"],
                 },
                 "model_info": {"id": "low-reasoning-anthropic"},
@@ -1584,7 +1584,7 @@ async def test_required_and_composes_with_negation():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:anthropic"],
                 },
                 "model_info": {"id": "high-reasoning-anthropic"},
@@ -1593,7 +1593,7 @@ async def test_required_and_composes_with_negation():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:openai"],
                 },
                 "model_info": {"id": "high-reasoning-openai"},
@@ -1622,7 +1622,7 @@ async def test_required_and_combines_with_positive_or_preference():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:anthropic"],
                 },
                 "model_info": {"id": "high-reasoning-anthropic"},
@@ -1631,7 +1631,7 @@ async def test_required_and_combines_with_positive_or_preference():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:vertex"],
                 },
                 "model_info": {"id": "high-reasoning-vertex"},
@@ -1640,7 +1640,7 @@ async def test_required_and_combines_with_positive_or_preference():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low", "provider:anthropic"],
                 },
                 "model_info": {"id": "low-reasoning-anthropic"},
@@ -1667,7 +1667,7 @@ async def test_required_and_single_tag_matches_trivially():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high"],
                 },
                 "model_info": {"id": "high-reasoning"},
@@ -1676,7 +1676,7 @@ async def test_required_and_single_tag_matches_trivially():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low"],
                 },
                 "model_info": {"id": "low-reasoning"},
@@ -1705,7 +1705,7 @@ async def test_required_and_unmatched_raises_by_default():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low"],
                 },
                 "model_info": {"id": "low-reasoning"},
@@ -1738,7 +1738,7 @@ async def test_required_and_combined_with_positive_unmatched_raises_by_default()
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low", "provider:anthropic"],
                 },
                 "model_info": {"id": "low-reasoning-anthropic"},
@@ -1771,7 +1771,7 @@ async def test_allow_fail_open_required_and_unmatched_falls_back_to_default_pool
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "reasoning_type:low"],
                 },
                 "model_info": {"id": "default-model", "allow_fail_open": True},
@@ -1803,7 +1803,7 @@ async def test_allow_fail_open_negation_eliminates_everything_includes_banned_de
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-model", "allow_fail_open": True},
@@ -1830,7 +1830,7 @@ async def test_allow_fail_open_prefers_default_tagged_deployment_on_fallback():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic"],
                 },
                 "model_info": {"id": "anthropic-model", "allow_fail_open": True},
@@ -1839,7 +1839,7 @@ async def test_allow_fail_open_prefers_default_tagged_deployment_on_fallback():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "default"],
                 },
                 "model_info": {"id": "anthropic-default-model", "allow_fail_open": True},
@@ -1869,7 +1869,7 @@ async def test_allow_fail_open_per_hop_across_fallback_chain():
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low"],
                 },
                 "model_info": {"id": "primary-low-reasoning"},
@@ -1878,7 +1878,7 @@ async def test_allow_fail_open_per_hop_across_fallback_chain():
                 "model_name": "fallback",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "reasoning_type:low"],
                 },
                 "model_info": {"id": "fallback-model", "allow_fail_open": True},
@@ -1913,7 +1913,7 @@ async def test_allow_fail_open_resolves_locally_without_triggering_external_fall
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high"],
                 },
                 "model_info": {"id": "primary-high-reasoning"},
@@ -1922,7 +1922,7 @@ async def test_allow_fail_open_resolves_locally_without_triggering_external_fall
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "reasoning_type:low"],
                 },
                 "model_info": {"id": "primary-default", "allow_fail_open": True},
@@ -1931,7 +1931,7 @@ async def test_allow_fail_open_resolves_locally_without_triggering_external_fall
                 "model_name": "fallback",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["region:eu"],
                 },
                 "model_info": {"id": "fallback-should-never-be-used"},
@@ -1962,7 +1962,7 @@ async def test_negation_combined_with_positive_unmatched_raises_by_default():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "paid"],
                 },
                 "model_info": {"id": "anthropic-paid"},
@@ -1992,7 +1992,7 @@ async def test_negation_combined_with_positive_unmatched_falls_open_when_allowed
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "paid", "default"],
                 },
                 "model_info": {"id": "anthropic-paid", "allow_fail_open": True},
@@ -2027,7 +2027,7 @@ async def test_required_and_only_returns_every_matching_deployment_despite_regex
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high"],
                     "tag_regex": ["^User-Agent: claude-code\\/"],
                 },
@@ -2037,7 +2037,7 @@ async def test_required_and_only_returns_every_matching_deployment_despite_regex
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high"],
                 },
                 "model_info": {"id": "high-reasoning-no-regex"},
@@ -2070,7 +2070,7 @@ async def test_required_and_only_excludes_regex_deployment_missing_the_required_
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low"],
                     "tag_regex": ["^User-Agent: claude-code\\/"],
                 },
@@ -2080,7 +2080,7 @@ async def test_required_and_only_excludes_regex_deployment_missing_the_required_
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high"],
                 },
                 "model_info": {"id": "high-reasoning-no-regex"},
@@ -2111,7 +2111,7 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_raises_by_def
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:anthropic"],
                 },
                 "model_info": {"id": "high-reasoning-anthropic"},
@@ -2120,7 +2120,7 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_raises_by_def
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "reasoning_type:low"],
                 },
                 "model_info": {"id": "default-fallback"},
@@ -2157,7 +2157,7 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_falls_open_wh
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high", "provider:anthropic"],
                 },
                 "model_info": {"id": "high-reasoning-anthropic", "allow_fail_open": True},
@@ -2166,7 +2166,7 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_falls_open_wh
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "reasoning_type:low"],
                 },
                 "model_info": {"id": "default-fallback", "allow_fail_open": True},
@@ -2204,7 +2204,7 @@ async def test_allow_fail_open_denied_when_request_includes_unknown_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "region:us-east"],
                 },
                 "model_info": {"id": "anthropic-deployment"},
@@ -2213,7 +2213,7 @@ async def test_allow_fail_open_denied_when_request_includes_unknown_tag():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "provider:openai"],
                 },
                 "model_info": {"id": "openai-default", "allow_fail_open": True},
@@ -2246,7 +2246,7 @@ async def test_allow_fail_open_still_fires_when_every_requested_tag_is_known():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "region:us-east"],
                 },
                 "model_info": {"id": "anthropic-deployment", "allow_fail_open": True},
@@ -2255,7 +2255,7 @@ async def test_allow_fail_open_still_fires_when_every_requested_tag_is_known():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:eu", "region:eu"],
                 },
                 "model_info": {"id": "eu-deployment", "allow_fail_open": True},
@@ -2264,7 +2264,7 @@ async def test_allow_fail_open_still_fires_when_every_requested_tag_is_known():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "provider:openai"],
                 },
                 "model_info": {"id": "openai-default", "allow_fail_open": True},
@@ -2300,7 +2300,7 @@ async def test_required_and_exhausts_primary_group_falls_through_to_fallback_gro
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:low"],
                 },
                 "model_info": {"id": "primary-low-reasoning"},
@@ -2309,7 +2309,7 @@ async def test_required_and_exhausts_primary_group_falls_through_to_fallback_gro
                 "model_name": "fallback",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["reasoning_type:high"],
                 },
                 "model_info": {"id": "fallback-high-reasoning"},
@@ -2346,7 +2346,7 @@ async def test_required_and_negation_and_allow_fail_open_combine_across_three_mo
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "reasoning_type:high"],
                 },
                 "model_info": {"id": "primary-anthropic"},
@@ -2355,7 +2355,7 @@ async def test_required_and_negation_and_allow_fail_open_combine_across_three_mo
                 "model_name": "secondary",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai", "reasoning_type:low"],
                 },
                 "model_info": {"id": "secondary-openai"},
@@ -2364,7 +2364,7 @@ async def test_required_and_negation_and_allow_fail_open_combine_across_three_mo
                 "model_name": "tertiary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "reasoning_type:high", "region:eu"],
                 },
                 "model_info": {"id": "tertiary-anthropic-high-reasoning"},
@@ -2373,7 +2373,7 @@ async def test_required_and_negation_and_allow_fail_open_combine_across_three_mo
                 "model_name": "tertiary",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "provider:openai", "reasoning_type:low"],
                 },
                 "model_info": {"id": "tertiary-default", "allow_fail_open": True},
@@ -2408,7 +2408,7 @@ async def test_unknown_tag_denial_is_scoped_per_hop_not_leaked_across_fallback_g
                 "model_name": "primary",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["region:us-east"],
                 },
                 "model_info": {"id": "primary-us-east", "allow_fail_open": True},
@@ -2417,7 +2417,7 @@ async def test_unknown_tag_denial_is_scoped_per_hop_not_leaked_across_fallback_g
                 "model_name": "fallback",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "provider:openai"],
                 },
                 "model_info": {"id": "fallback-default", "allow_fail_open": True},
@@ -2448,7 +2448,7 @@ async def test_required_and_only_finds_compliant_non_default_deployment_over_non
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:anthropic", "region:us-east"],
                 },
                 "model_info": {"id": "anthropic-us-east"},
@@ -2457,7 +2457,7 @@ async def test_required_and_only_finds_compliant_non_default_deployment_over_non
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "provider:openai"],
                 },
                 "model_info": {"id": "openai-default", "allow_fail_open": True},
@@ -2487,7 +2487,7 @@ def _quality_high_cost_low_router():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "quality:high"],
                 },
                 "model_info": {"id": "quality-high-1"},
@@ -2496,7 +2496,7 @@ def _quality_high_cost_low_router():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "quality:high"],
                 },
                 "model_info": {"id": "quality-high-2"},
@@ -2505,7 +2505,7 @@ def _quality_high_cost_low_router():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "cost:low"],
                 },
                 "model_info": {"id": "cost-low-1"},
@@ -2514,7 +2514,7 @@ def _quality_high_cost_low_router():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["default", "cost:low"],
                 },
                 "model_info": {"id": "cost-low-2"},
@@ -2688,7 +2688,7 @@ def _eu_region_router():
                 "model_name": "chat",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["region:eu"],
                 },
                 "model_info": {"id": "eu-1", "allow_fail_open": True},
@@ -2697,7 +2697,7 @@ def _eu_region_router():
                 "model_name": "chat",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["region:us", "default"],
                 },
                 "model_info": {"id": "us-default", "allow_fail_open": True},
