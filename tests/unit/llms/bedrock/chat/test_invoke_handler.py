@@ -8,9 +8,11 @@ import struct
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from urllib.parse import quote
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import AmazonInvokeConfig
@@ -23,6 +25,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
     make_call,
     make_sync_call,
 )
+from litellm.llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import AmazonLlamaConfig
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
@@ -32,6 +35,100 @@ from tests.unit.llms.bedrock.slow_upstream import (
     slow_upstream_async_client,
     slow_upstream_sync_client,
 )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_mistral_custom_prompt_template_uses_role_wrappers(respx_mock: respx.Router) -> None:
+    request: Final = AmazonInvokeConfig().transform_request(
+        model="mistral.OpenOrca",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        optional_params={},
+        litellm_params={
+            "custom_prompt_dict": {
+                "mistral.OpenOrca": {
+                    "roles": {
+                        "user": {
+                            "pre_message": "<|im_start|>user\n",
+                            "post_message": "<|im_end|>",
+                        }
+                    }
+                }
+            }
+        },
+        headers={},
+    )
+
+    assert request["prompt"] == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+    route: Final = respx_mock.post(re.compile(r"https://[^/]+/model/mistral\.OpenOrca/invoke")).mock(
+        return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]})
+    )
+    response: Final = litellm.completion(
+        model="bedrock/mistral.OpenOrca",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        roles={
+            "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
+            "assistant": {"pre_message": "<|im_start|>assistant\n", "post_message": "<|im_end|>"},
+            "user": {"pre_message": "<|im_start|>user\n", "post_message": "<|im_end|>"},
+        },
+        bos_token="<s>",
+        eos_token="<|im_end|>",
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body["prompt"] == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+    assert response.choices[0].message.content == "ok"
+
+
+def test_bedrock_imported_llama_model_sends_prompt_and_max_generation_length() -> None:
+    model: Final = "llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n"
+    config: Final = AmazonLlamaConfig()
+    messages: Final = [{"role": "user", "content": "Tell me a joke"}]
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 100},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request: Final = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={
+            "custom_prompt_dict": {
+                model: {
+                    "roles": {
+                        "user": {
+                            "pre_message": "",
+                            "post_message": "",
+                        }
+                    }
+                }
+            }
+        },
+        headers={},
+    )
+    url: Final = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model=model,
+        optional_params={
+            "aws_access_key_id": "AKIAUNITTESTKEY",
+            "aws_secret_access_key": "unit-test-secret",
+            "aws_region_name": "us-east-1",
+        },
+        litellm_params={},
+        stream=False,
+    )
+
+    assert request == {"prompt": "Tell me a joke", "max_gen_len": 100}
+    assert url == (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+    )
 
 
 @pytest.fixture
@@ -46,6 +143,301 @@ def test_transform_thinking_blocks_with_redacted_content():
     assert len(transformed_thinking_blocks) == 1
     assert transformed_thinking_blocks[0]["type"] == "redacted_thinking"
     assert transformed_thinking_blocks[0]["data"] == "This is a redacted content"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/mistral.mistral-large-2407-v1:0",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_completion_credentials_sign_converse_request(model: str, respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/[^/]+/converse")
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "signed"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "sign this request"}],
+        aws_access_key_id="AKIAUNITTESTKEY",
+        aws_secret_access_key="unit-test-secret",
+        aws_session_token="unit-test-session",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    sent: Final = route.calls[0].request
+
+    assert response.choices[0].message.content == "signed"
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAUNITTESTKEY/")
+    assert sent.headers["x-amz-date"]
+    assert sent.headers["x-amz-security-token"] == "unit-test-session"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_llama_imported_model_transforms_prompt_and_encodes_arn(respx_mock: respx.Router) -> None:
+    expected_url: Final = (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        max_tokens=100,
+        aws_access_key_id="AKIALLAMAKEY",
+        aws_secret_access_key="llama-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert response.choices[0].message.content == "Here's a joke..."
+    assert str(route.calls[0].request.url) == expected_url
+    assert request_body == {"prompt": "Tell me a joke", "max_gen_len": 100}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_converse_like_proxy_uses_bearer_api_key(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post("https://some-api-url/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        api_key="Token",
+        api_base="https://some-api-url/models",
+        client=HTTPHandler(),
+    )
+    request: Final = route.calls[0].request
+
+    assert str(request.url) == "https://some-api-url/models"
+    assert request.headers["authorization"] == "Bearer Token"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_external_client_credentials_and_region_sign_request(respx_mock: respx.Router) -> None:
+    import boto3
+
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/[^/]+/converse")
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "signed"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    bedrock_client: Final = boto3.client(
+        "bedrock-runtime",
+        region_name="us-east-1",
+        aws_access_key_id="AKIAEXTERNALKEY",
+        aws_secret_access_key="external-client-secret",
+        aws_session_token="external-client-session",
+    )
+    response: Final = litellm.completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "use the external client"}],
+        aws_bedrock_client=bedrock_client,
+        client=HTTPHandler(),
+    )
+    sent: Final = route.calls[0].request
+
+    assert response.choices[0].message.content == "signed"
+    assert "Credential=AKIAEXTERNALKEY/" in sent.headers["authorization"]
+    assert sent.headers["x-amz-security-token"] == "external-client-session"
+    assert sent.url.host == "bedrock-runtime.us-east-1.amazonaws.com"
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "arn:aws:bedrock:us-west-2:000000000000:provisioned-model/profile-id",
+        "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/profile-id",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_model_id_selects_ptu_and_application_profile_routes(model_id: str, respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com/model/.+/converse")
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "profile"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "select the supplied model id"}],
+        model_id=model_id,
+        aws_access_key_id="AKIAPROFILEKEY",
+        aws_secret_access_key="profile-secret",
+        client=HTTPHandler(),
+    )
+    region: Final = model_id.split(":")[3]
+
+    assert route.calls[0].request.url.host == f"bedrock-runtime.{region}.amazonaws.com"
+    assert route.calls[0].request.url.raw_path.decode() == f"/model/{quote(model_id, safe='')}/converse"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_application_profile_model_and_parameter_use_same_route(respx_mock: respx.Router) -> None:
+    application_profile_arn: Final = (
+        "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/profile-id"
+    )
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.eu-central-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aeu-central-1%3A000000000000%3Aapplication-inference-profile%2Fprofile-id/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "profile"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    messages: Final = [{"role": "user", "content": "select the application profile"}]
+    model_args: Final = {
+        "messages": messages,
+        "aws_access_key_id": "AKIAPROFILEKEY",
+        "aws_secret_access_key": "profile-secret",
+        "client": HTTPHandler(),
+    }
+    litellm.completion(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        model_id=application_profile_arn,
+        **model_args,
+    )
+    litellm.completion(
+        model=f"bedrock/converse/{application_profile_arn}",
+        **model_args,
+    )
+
+    assert route.call_count == 2
+    assert route.calls[0].request.url == route.calls[1].request.url
+
+
+@pytest.mark.asyncio
+async def test_bedrock_completion_forwards_custom_headers() -> None:
+    requests: Final[list[httpx.Request]] = []
+    api_base: Final = "https://bedrock-gateway.test/bedrock-runtime/us-west-2"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return (
+            httpx.Response(
+                200,
+                json={
+                    "output": {"message": {"role": "assistant", "content": [{"text": "converse"}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                },
+                request=request,
+            )
+            if request.url.path.endswith("/converse")
+            else httpx.Response(
+                200,
+                json={
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "invoke"}],
+                    "model": "claude-3-sonnet",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+                request=request,
+            )
+        )
+
+    extra_headers: Final = {"test": "hello world", "Authorization": "my-test-key"}
+    request_args: Final = {
+        "messages": [{"role": "user", "content": "forward the custom header"}],
+        "api_base": api_base,
+        "extra_headers": extra_headers,
+        "aws_access_key_id": "AKIAHEADERKEY",
+        "aws_secret_access_key": "header-secret",
+        "aws_region_name": "us-west-2",
+        "client": AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    }
+    converse_response: Final = await litellm.acompletion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        **request_args,
+    )
+    invoke_response: Final = await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        **request_args,
+    )
+    converse_request: Final = requests[0]
+    invoke_request: Final = requests[1]
+
+    assert converse_response.choices[0].message.content == "converse"
+    assert invoke_response.choices[0].message.content == "invoke"
+    assert str(converse_request.url) == f"{api_base}/model/anthropic.claude-3-sonnet-20240229-v1%3A0/converse"
+    assert converse_request.headers["test"] == "hello world"
+    assert converse_request.headers["authorization"] == "my-test-key"
+    assert invoke_request.url.host == "bedrock-gateway.test"
+    assert invoke_request.url.path.endswith("/invoke")
+    assert invoke_request.headers["test"] == "hello world"
+    assert invoke_request.headers["authorization"] == "my-test-key"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_cross_region_inference_uses_runtime_region(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "routed"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/us.meta.llama3-3-70b-instruct-v1:0",
+        messages=[{"role": "user", "content": "route to the cross-region model"}],
+        aws_access_key_id="AKIACROSSREGIONKEY",
+        aws_secret_access_key="cross-region-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "routed"
+    assert route.calls[0].request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
 
 
 def test_transform_tool_calls_index():
@@ -1431,6 +1823,7 @@ def test_filter_headers_for_aws_signature():
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
     failure = ModuleNotFoundError("missing dependency", name=missing)

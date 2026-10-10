@@ -1,11 +1,14 @@
+import base64
 import copy
 import json
 import os
+import re
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import ModelResponse, completion
@@ -16,7 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock
 from litellm.types.llms.openai import AllMessageValues
 
@@ -331,6 +334,250 @@ def test_transform_system_message():
     assert out_messages[0]["role"] == "user"
     assert out_messages[1]["role"] == "assistant"
     assert system_blocks == []
+
+
+@pytest.mark.parametrize(
+    ("system", "expected_system"),
+    [
+        ("You are an AI", [{"text": "You are an AI"}]),
+        ([{"type": "text", "text": "You are an AI"}], [{"text": "You are an AI"}]),
+        ("", []),
+    ],
+)
+def test_bedrock_system_prompt_variants_keep_continue_message(
+    system: str | list[dict[str, str]], expected_system: list[dict[str, str]]
+) -> None:
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "assistant", "content": "hey, how's it going?"},
+        ],
+        optional_params={"maxTokens": 100, "temperature": 0.3},
+        litellm_params={"user_continue_message": {"role": "user", "content": "Be a good bot!"}},
+        headers={},
+    )
+
+    assert request.get("system", []) == expected_system
+    assert request["messages"] == [
+        {"role": "user", "content": [{"text": "Be a good bot!"}]},
+        {"role": "assistant", "content": [{"text": "hey, how's it going?"}]},
+        {"role": "user", "content": [{"text": "Be a good bot!"}]},
+    ]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_json_schema_description_is_sent_in_request(respx_mock: respx.Router) -> None:
+    description: Final = "Find the meaning inside a poem"
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "What is the meaning of this poem?"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "meaning_reasoning",
+                "description": description,
+                "schema": {
+                    "type": "object",
+                    "properties": {"meaning": {"type": "string"}},
+                },
+            },
+        },
+        aws_access_key_id="AKIADESCRIPTIONKEY",
+        aws_secret_access_key="description-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body["toolConfig"]["tools"][0]["toolSpec"]["description"] == description
+
+
+def test_bedrock_empty_text_block_is_removed_from_converse_request() -> None:
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "text", "text": "Hey, how's it going?"},
+                ],
+            }
+        ],
+        optional_params={"maxTokens": 10},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": [{"text": "Hey, how's it going?"}]}]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_max_completion_tokens_become_converse_max_tokens() -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            request=request,
+        )
+
+    await litellm.acompletion(
+        model="bedrock/converse/mistral.mistral-large-2407-v1:0",
+        messages=[{"role": "user", "content": "Hello!"}],
+        max_completion_tokens=10,
+        aws_access_key_id="AKIAMAXTOKENKEY",
+        aws_secret_access_key="max-token-secret",
+        aws_region_name="us-west-2",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+    request: Final = requests[0]
+    request_body: Final = json.loads(request.content)
+
+    assert request.url.path.endswith("/converse")
+    assert request_body["inferenceConfig"] == {"maxTokens": 10}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_mapped_nova_model_sends_converse_request(
+    local_model_cost_map: None, respx_mock: respx.Router
+) -> None:
+    litellm.add_known_models()
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "converse"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        aws_access_key_id="AKIAMAPPEDMODELKEY",
+        aws_secret_access_key="mapped-model-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "converse"
+    assert route.calls[0].request.url.raw_path == b"/model/us.amazon.nova-pro-v1%3A0/converse"
+
+
+@pytest.mark.parametrize("parameter", ["top_k", "topK"])
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        aws_access_key_id="AKIANOVATOPKKEY",
+        aws_secret_access_key="nova-top-k-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+        **{parameter: 10},
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_provisioned_throughput_model_id_is_used_in_converse_url(respx_mock: respx.Router) -> None:
+    model_id: Final = "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
+    expected_url: Final = (
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        model_id=model_id,
+        aws_access_key_id="AKIAPTUMODELKEY",
+        aws_secret_access_key="ptu-model-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert str(route.calls[0].request.url) == expected_url
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_application_profile_model_id_is_used_in_converse_url(respx_mock: respx.Router) -> None:
+    model_id: Final = "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0"
+    expected_url: Final = (
+        "https://bedrock-runtime.eu-central-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aeu-central-1%3A000000000000%3Aapplication-inference-profile%2Fa0a0a0a0a0a0/converse"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Hello!"}],
+        model_id=model_id,
+        aws_access_key_id="AKIAAPPPROFILEKEY",
+        aws_secret_access_key="app-profile-secret",
+        aws_region_name="eu-central-1",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert str(route.calls[0].request.url) == expected_url
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -9558,3 +9805,265 @@ def test_bedrock_nova_web_search_options_ignored_for_non_nova():
     system_tool2 = result2.get("systemTool")
     assert system_tool2 is not None
     assert system_tool2["name"] == "nova_grounding"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.amazon.nova-pro-v1:0",
+        "bedrock/us.amazon.nova-pro-v1:0",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_nova_model_selects_converse_route(model: str, respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse")
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "converse"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "select Converse"}],
+        aws_access_key_id="AKIANOVAROUTEKEY",
+        aws_secret_access_key="nova-route-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "converse"
+    assert route.calls[0].request.url.raw_path == b"/model/us.amazon.nova-pro-v1%3A0/converse"
+
+
+def test_cross_region_bedrock_model_cost_falls_back_to_base_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    model_cost_map: Final = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    region_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {model_name: value for model_name, value in model_cost_map.items() if model_name != region_model},
+    )
+    model: Final = f"bedrock/{region_model}"
+    info: Final = litellm.get_model_info(model=model)
+    cost: Final = litellm.completion_cost(model=model, prompt="synthetic prompt", completion="synthetic completion")
+    base_cost: Final = litellm.completion_cost(
+        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        prompt="synthetic prompt",
+        completion="synthetic completion",
+    )
+    base_info: Final = litellm.get_model_info(
+        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+    assert info["input_cost_per_token"] == base_info["input_cost_per_token"]
+    assert cost == pytest.approx(base_cost)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_nova_web_search_options_add_grounding_tool_to_request(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse")
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "grounded"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Find current launch details"}],
+        web_search_options={},
+        aws_access_key_id="AKIAGROUNDINGKEY",
+        aws_secret_access_key="grounding-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    request: Final = json.loads(route.calls[0].request.content)
+
+    assert response.choices[0].message.content == "grounded"
+    assert request["toolConfig"]["tools"] == [{"systemTool": {"name": "nova_grounding"}}]
+    assert request["messages"] == [{"role": "user", "content": [{"text": "Find current launch details"}]}]
+
+
+def test_bedrock_nova_grounding_and_function_tool_share_request() -> None:
+    config: Final = AmazonConverseConfig()
+    model: Final = "amazon.nova-pro-v1:0"
+    tools: Final = [_ARTIFACT_DATA_OPENAI_TOOL]
+    mapped_params: Final = config.map_openai_params(
+        non_default_params={"tools": tools, "web_search_options": {}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Search and use the artifact tool"}],
+        optional_params=mapped_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["toolConfig"]["tools"] == [
+        {
+            "toolSpec": {
+                "name": "ArtifactData",
+                "description": "Read a shared database",
+                "inputSchema": {"json": _ARTIFACT_DATA_INPUT_SCHEMA},
+            }
+        },
+        {"systemTool": {"name": "nova_grounding"}},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", (False, True))
+async def test_bedrock_nova_grounding_request_transformation(async_mode: bool) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "Found a result"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 2, "outputTokens": 3, "totalTokens": 5},
+            },
+            request=request,
+        )
+
+    request_args: Final = {
+        "model": "bedrock/amazon.nova-pro-v1:0",
+        "messages": [{"role": "user", "content": "Find current launch details"}],
+        "web_search_options": {},
+        "aws_access_key_id": "AKIAEXAMPLEKEY",
+        "aws_secret_access_key": "example-secret-key",
+        "aws_region_name": "us-west-2",
+    }
+    transport: Final = httpx.MockTransport(respond)
+    response: Final = (
+        await litellm.acompletion(**request_args, client=AsyncHTTPHandler(transport=transport))
+        if async_mode
+        else litellm.completion(**request_args, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+    request: Final = requests[0]
+    request_body: Final = json.loads(request.content)
+
+    assert request.url.path.endswith("/converse")
+    assert response.choices[0].message.content == "Found a result"
+    assert request_body["toolConfig"]["tools"] == [{"systemTool": {"name": "nova_grounding"}}]
+    assert request_body["messages"][0]["content"] == [{"text": "Find current launch details"}]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_converse_drops_empty_stop_sequence(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(re.compile(r"https://[^/]+/.*/converse(?:\?.*)?")).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "Continue"}],
+        stop="",
+        max_tokens=10,
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert response.choices[0].message.content == "ok"
+    assert request_body["inferenceConfig"] == {"maxTokens": 10}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: respx.Router) -> None:
+    image_bytes: Final = b"synthetic-image-content"
+    image_route: Final = respx_mock.get("https://1.1.1.1/image.png").mock(
+        return_value=httpx.Response(200, content=image_bytes, headers={"content-type": "image/png"})
+    )
+    bedrock_route: Final = respx_mock.post(
+        re.compile(r"https://[^/]+/.*/converse(?:\?.*)?")
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "a synthetic image"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 2, "totalTokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/amazon.nova-pro-v1:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {"type": "image_url", "image_url": {"url": "https://1.1.1.1/image.png"}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAIMAGEKEY",
+        aws_secret_access_key="image-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(bedrock_route.calls[0].request.content)
+
+    assert response.choices[0].message.content == "a synthetic image"
+    assert image_route.called
+    assert request_body["messages"][0]["content"][1]["image"]["format"] == "png"
+    assert request_body["messages"][0]["content"][1]["image"]["source"]["bytes"] == base64.b64encode(
+        image_bytes
+    ).decode()
+
+
+def test_bedrock_thinking_in_assistant_message_keeps_reasoning_block() -> None:
+    config: Final = AmazonConverseConfig()
+    request: Final = config._transform_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Plan the synthetic task", "signature": "synthetic-signature"},
+                    {"type": "text", "text": "The answer is ready"},
+                ],
+            },
+            {"role": "user", "content": "Continue"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["role"] == "assistant"
+    assert request["messages"][0]["content"][0]["reasoningContent"]["reasoningText"] == {
+        "text": "Plan the synthetic task",
+        "signature": "synthetic-signature",
+    }
+    assert request["messages"][0]["content"][1] == {"text": "The answer is ready"}

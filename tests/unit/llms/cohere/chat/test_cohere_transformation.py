@@ -1,3 +1,4 @@
+import datetime
 import json
 from collections.abc import Callable, Iterator
 from typing import Final
@@ -9,6 +10,7 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
@@ -16,6 +18,18 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 COHERE_V1_CHAT_URL: Final = "https://api.cohere.ai/v1/chat"
 COHERE_V2_CHAT_URL: Final = "https://api.cohere.com/v2/chat"
+
+
+def _cohere_logging_obj(messages: list[object]) -> Logging:
+    return Logging(
+        model="command-r-plus",
+        messages=messages,
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="cohere-test-call",
+        function_id="cohere-test-function",
+    )
 
 
 @pytest.fixture
@@ -117,7 +131,7 @@ def test_cohere_v1_response_parses_citations_tool_calls_and_billed_units() -> No
         model="command-r-plus",
         raw_response=raw_response,
         model_response=model_response,
-        logging_obj=MagicMock(),
+        logging_obj=_cohere_logging_obj([]),
         request_data={},
         messages=[],
         optional_params={},
@@ -172,7 +186,7 @@ def test_cohere_v2_response_parses_annotations_and_tool_calls() -> None:
         model="command-r-plus",
         raw_response=raw_response,
         model_response=model_response,
-        logging_obj=MagicMock(),
+        logging_obj=_cohere_logging_obj([]),
         request_data={},
         messages=[],
         optional_params={},

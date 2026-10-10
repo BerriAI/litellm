@@ -1,10 +1,23 @@
+import datetime
 from typing import Final
-from unittest.mock import MagicMock
 
 import httpx
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
+
+
+def _cohere_embedding_logging_obj() -> Logging:
+    return Logging(
+        model="embed-v4.0",
+        messages=["first", "second"],
+        stream=False,
+        call_type="embedding",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="cohere-embedding-test-call",
+        function_id="cohere-embedding-test-function",
+    )
 
 
 def test_cohere_embed_v4_request_maps_input_options() -> None:
@@ -49,8 +62,6 @@ def test_cohere_embed_v4_request_routes_base64_images() -> None:
 
 def test_cohere_embed_v4_response_parses_multiple_embeddings() -> None:
     config: Final = CohereEmbeddingConfig()
-    logging_obj: Final = MagicMock()
-    logging_obj.model_call_details = {"input": ["first", "second"]}
     model_response: Final = EmbeddingResponse()
     raw_response: Final = httpx.Response(
         200,
@@ -67,7 +78,7 @@ def test_cohere_embed_v4_response_parses_multiple_embeddings() -> None:
         model="embed-v4.0",
         raw_response=raw_response,
         model_response=model_response,
-        logging_obj=logging_obj,
+        logging_obj=_cohere_embedding_logging_obj(),
         api_key="test-api-key",
         request_data={"texts": ["first", "second"]},
         optional_params={"embedding_types": ["float", "int8"]},
