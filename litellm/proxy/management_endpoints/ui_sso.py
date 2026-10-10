@@ -89,7 +89,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, forget_missing_user, get_user_object
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
@@ -135,6 +135,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -2677,6 +2678,48 @@ async def insert_sso_user(
     return response
 
 
+def _is_duplicate_user_error(error: BaseException | None) -> bool:
+    if error is None:
+        return False
+    if isinstance(error, ProxyException) and error.code == str(status.HTTP_409_CONFLICT):
+        return True
+    if isinstance(error, HTTPException) and error.status_code == status.HTTP_409_CONFLICT:
+        return True
+    if is_unique_violation(error):
+        return True
+    return _is_duplicate_user_error(error.__cause__ or error.__context__)
+
+
+async def _concurrently_inserted_sso_user(
+    error: Exception,
+    user_defined_values: SSOUserDefinedValues | None,
+    prisma_client: PrismaClient,
+) -> LiteLLM_UserTable | None:
+    if user_defined_values is None or not _is_duplicate_user_error(error):
+        return None
+    user_id: Final = user_defined_values["user_id"]
+    existing: Final = await UserRepository(prisma_client, use_writer=True).find_by_id(user_id)
+    if existing is None or existing.sso_user_id != user_id:
+        return None
+    forget_missing_user(user_id)
+    return existing
+
+
+async def _insert_sso_user_or_adopt_concurrent_insert(
+    insert: Callable[[], Awaitable[NewUserResponse]],
+    user_defined_values: SSOUserDefinedValues | None,
+    prisma_client: PrismaClient,
+) -> NewUserResponse | LiteLLM_UserTable:
+    try:
+        return await insert()
+    except Exception as error:
+        concurrent: Final = await _concurrently_inserted_sso_user(error, user_defined_values, prisma_client)
+        if concurrent is None:
+            raise
+        verbose_proxy_logger.info("SSO user %s was inserted by a concurrent login, using that row", concurrent.user_id)
+        return concurrent
+
+
 @router.get(
     "/sso/get/ui_settings",
     tags=["experimental"],
@@ -3307,10 +3350,10 @@ class SSOAuthenticationHandler:
                 )
             else:
                 verbose_proxy_logger.info("user not in DB, inserting user into LiteLLM DB")
-                # user not in DB, insert User into LiteLLM DB
-                user_info = await insert_sso_user(
-                    result_openid=result,
+                user_info = await _insert_sso_user_or_adopt_concurrent_insert(
+                    insert=lambda: insert_sso_user(result_openid=result, user_defined_values=user_defined_values),
                     user_defined_values=user_defined_values,
+                    prisma_client=prisma_client,
                 )
             return user_info
         except Exception as e:
