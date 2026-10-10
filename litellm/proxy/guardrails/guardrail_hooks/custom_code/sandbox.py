@@ -16,7 +16,7 @@ restriction intact.
 
 import ast
 import operator
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
 from types import CodeType
 from typing import Final
 
@@ -31,6 +31,7 @@ from RestrictedPython.Eval import default_guarded_getitem
 from RestrictedPython.Guards import (
     full_write_guard,
     guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
     safer_getattr,
 )
 from RestrictedPython.transformer import copy_locations
@@ -46,8 +47,15 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
     has the same ``_fields`` as ``FunctionDef`` and the same security
     semantics, so we delegate to ``visit_FunctionDef`` — name check, argument
     check, print-scope wrapping, and any future additions to that method are
-    inherited automatically. ``AsyncFor``/``AsyncWith``/``Await`` delegate to
-    ``node_contents_visit`` so their children still get transformed.
+    inherited automatically. ``AsyncWith`` gets the same treatment for the same
+    reason: ``node_contents_visit`` only recurses into children, so routing it
+    there left ``async with x as (a, b)`` without the unpack guard that
+    ``with x as (a, b)`` gets. ``AsyncFor`` likewise delegates to ``visit_For``,
+    which is what wraps the loop iterator in ``_getiter_``; the wrapper names it
+    inserts are then swapped for async-capable ones, since ``budgeted_iter`` and
+    ``_iter_unpack_sequence_`` are plain generators that ``async for`` cannot
+    consume. ``Await`` has no synchronous counterpart and only wraps an
+    expression, so it stays on ``node_contents_visit``.
 
     ``visit_While`` rewrites ``while test:`` to ``while _budget_ok_() and test:``
     so a loop that never yields is still stopped at the execution deadline;
@@ -74,13 +82,69 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return bounded
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
-        return self.node_contents_visit(node)
+        transformed: Final = self.visit_For(node)
+        _use_async_iter_guards(transformed)
+        return transformed
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
-        return self.node_contents_visit(node)
+        return self.visit_With(node)
 
     def visit_Await(self, node: ast.Await) -> ast.AST:
         return self.node_contents_visit(node)
+
+
+_GETITER_NAME: Final = "_getiter_"
+_ASYNC_GETITER_NAME: Final = "_agetiter_"
+_ITER_UNPACK_NAME: Final = "_iter_unpack_sequence_"
+_ASYNC_ITER_UNPACK_NAME: Final = "_aiter_unpack_sequence_"
+
+
+def _use_async_iter_guards(node: ast.AST) -> None:
+    """Swap the iterator wrapper ``visit_For`` inserted for its async twin.
+
+    ``visit_For`` rewrites ``for x in y`` into ``for x in _getiter_(y)`` and
+    ``for a, b in y`` into
+    ``for (a, b) in _iter_unpack_sequence_(y, spec, _getiter_)``. Both wrappers
+    are synchronous generators, which ``async for`` cannot consume, so the
+    async form needs the async-generator equivalents under their own names.
+    Only the wrapper name changes: the guarding each one performs is the same.
+    """
+    iter_node: Final = getattr(node, "iter", None)
+    if not (isinstance(iter_node, ast.Call) and isinstance(iter_node.func, ast.Name)):
+        return
+    if iter_node.func.id == _ITER_UNPACK_NAME:
+        iter_node.func.id = _ASYNC_ITER_UNPACK_NAME
+    elif iter_node.func.id == _GETITER_NAME:
+        iter_node.func.id = _ASYNC_GETITER_NAME
+
+
+async def _agetiter_(iterable: AsyncIterable[object]) -> AsyncIterator[object]:
+    """``budgeted_iter`` for ``async for``: the same per-item budget check.
+
+    Bound to the name ``_use_async_iter_guards`` substitutes, so an ``async for``
+    that never yields is still stopped at the execution deadline, exactly as a
+    ``for`` loop is.
+    """
+    async for item in iterable:
+        budget_ok()
+        yield item
+
+
+async def _aiter_unpack_sequence_(
+    it: AsyncIterable[object],
+    spec: object,
+    getiter: Callable[[object], object],
+) -> AsyncIterator[object]:
+    """``guarded_iter_unpack_sequence`` for ``async for`` targets.
+
+    Same contract as the RestrictedPython helper -- budget the iteration, then
+    guard each element's sequence unpacking -- over an async iterator. Unpacking
+    an element is synchronous, so the ``_getiter_`` handed in is the synchronous
+    one and is passed through untouched.
+    """
+    async for ob in it:
+        budget_ok()
+        yield guarded_unpack_sequence(ob, spec, getiter)
 
 
 _INPLACE_OPS: Final[Mapping[str, Callable[[object, object], object]]] = {
@@ -137,6 +201,14 @@ def build_sandbox_globals() -> dict[str, object]:
         "_getitem_": default_guarded_getitem,
         "_getiter_": budgeted_iter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        # RestrictedPython emits _unpack_sequence_ for every tuple-unpacking
+        # target that is not a for-loop target -- ``a, b = pair``,
+        # ``a, *rest = seq``, ``with x as (a, b)`` -- and, like _inplacevar_,
+        # ships no default. Without it those statements compile and then raise
+        # NameError the first time the guardrail runs.
+        "_unpack_sequence_": guarded_unpack_sequence,
+        _ASYNC_GETITER_NAME: _agetiter_,
+        _ASYNC_ITER_UNPACK_NAME: _aiter_unpack_sequence_,
         "_write_": full_write_guard,
         "_inplacevar_": _inplacevar_,
         "_budget_ok_": budget_ok,
