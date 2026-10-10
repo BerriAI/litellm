@@ -43907,6 +43907,9 @@
         },
         "ChatCompletionToolMessage": {
           "properties": {
+            "cache_control": {
+              "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
             "content": {
               "anyOf": [
                 {

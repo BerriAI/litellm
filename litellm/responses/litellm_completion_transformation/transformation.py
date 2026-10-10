@@ -52,6 +52,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionCachedContent,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -1468,14 +1469,23 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [
-                GenericChatCompletionMessage(
-                    role=_input_item_role(input_item),
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
+            msg = GenericChatCompletionMessage(
+                role=input_item.get("role") or "user",
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            input_item_cache_control = input_item.get("cache_control")
+            if input_item_cache_control:
+                msg["cache_control"] = cast(  # cast-ok: Responses input uses the shared cache-control shape
+                    "ChatCompletionCachedContent", input_item_cache_control
                 )
-            ]
+                # Also set on the last content block for providers (Anthropic, Bedrock) that read cache_control there.
+                if isinstance(msg["content"], list) and len(msg["content"]) > 0:
+                    last_element = msg["content"][-1]
+                    if isinstance(last_element, dict) and "cache_control" not in last_element:
+                        last_element["cache_control"] = input_item_cache_control
+            return [msg]
 
     @staticmethod
     def _reasoning_text_from_content(input_item: Mapping[str, object]) -> str | None:
@@ -1670,6 +1680,11 @@ class LiteLLMCompletionResponsesConfig:
             content=_normalize_function_call_output_to_tool_content(tool_call_output.get("output")),
             tool_call_id=str(call_id),
         )
+        output_cache_control = tool_call_output.get("cache_control")
+        if output_cache_control:
+            tool_output_message["cache_control"] = cast(  # cast-ok: Responses input uses the shared cache-control shape
+                "ChatCompletionCachedContent", output_cache_control
+            )
 
         _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(
             key=tool_call_output.get("call_id") or "",
@@ -1766,6 +1781,13 @@ class LiteLLMCompletionResponsesConfig:
             role="assistant",
             content=None,  # Function calls don't have content
         )
+        function_call_cache_control = function_call.get("cache_control")
+        if function_call_cache_control:
+            chat_completion_response_message["cache_control"] = (
+                cast(  # cast-ok: Responses input uses the shared cache-control shape
+                    "ChatCompletionCachedContent", function_call_cache_control
+                )
+            )
 
         return [chat_completion_response_message]
 
