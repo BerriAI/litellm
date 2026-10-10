@@ -1121,6 +1121,15 @@ def _validate_plain_model(
     sdk_teams: Final = tuple(team for team, target in targets if target.via == "sdk")
     if not sdk_teams:
         return
+    from litellm.secret_managers.main import get_secret_str, secret_manager_would_be_consulted
+
+    _, provider, _, _ = litellm.get_llm_provider(model=model)
+    if provider == "openai" and not (litellm.openai_key or litellm.api_key or get_secret_str("OPENAI_API_KEY")):
+        if not secret_manager_would_be_consulted("OPENAI_API_KEY"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} '{model}' requires OPENAI_API_KEY for direct SDK calls" + _for_teams(sdk_teams),
+            )
     if not _sdk_model_is_missing_anthropic_credentials(model):
         return
     raise HTTPException(
@@ -1130,6 +1139,65 @@ def _validate_plain_model(
             "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN" + _for_teams(sdk_teams)
         ),
     )
+
+
+class _ShadowSemanticRoute(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    name: str
+
+
+_SHADOW_SEMANTIC_ROUTES: Final = TypeAdapter(tuple[_ShadowSemanticRoute, ...])
+
+
+def _shadow_dependency_error(llm_router: "Router", model: str, team_id: str | None) -> str | None:
+    pending: Final[list[tuple[str, str, frozenset[str]]]] = [(model, "model", frozenset())]
+    while pending:
+        name, role, ancestors = pending.pop()
+        if name in ancestors:
+            return f"{role} routing cycle at '{name}'"
+        if not (deployments := llm_router.get_model_list(model_name=name, team_id=team_id)):
+            return f"{role} model '{name}' matches no deployment on this proxy"
+        for deployment in deployments:
+            if (failure := _shadow_deployment_error(deployment["litellm_params"])) is not None:
+                return f"{role} {failure}"
+            for dependency in strategy_router_dependencies(deployment["litellm_params"]):
+                if dependency.role != "evaluation":
+                    pending.append((dependency.model_name, dependency.role, ancestors | {name}))
+            for tagged in llm_router.auto_routers.get(deployment["model_name"], ()):
+                for route in _SHADOW_SEMANTIC_ROUTES.validate_python(tagged.strategy.loaded_routes):
+                    pending.append((route.name, "route", ancestors | {name}))
+    return None
+
+
+def _shadow_deployment_error(params: Mapping[str, object]) -> str | None:
+    model: Final = str(params.get("model") or "")
+    if model.startswith("azure_ai/") and not params.get("api_base"):
+        from litellm.secret_managers.main import get_secret_str, secret_manager_would_be_consulted
+
+        if not get_secret_str("AZURE_AI_API_BASE") and not secret_manager_would_be_consulted("AZURE_AI_API_BASE"):
+            return f"model '{model}' requires api_base or AZURE_AI_API_BASE"
+    return None
+
+
+def _validate_shadow_dependencies(
+    llm_router: "Router", data: StartShadowEvalRequest, team_ids: Sequence[str | None]
+) -> None:
+    for team_id in team_ids:
+        for name in data.router_names:
+            if (failure := _shadow_dependency_error(llm_router, name, team_id)) is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"router '{name}': {failure}" + _for_teams((team_id,)),
+                )
+        for name in (data.judge_model, *((data.baseline_model,) if data.baseline_model else ())):
+            if (
+                plain_failure := (
+                    _shadow_dependency_error(llm_router, name, team_id)
+                    if judge_target(llm_router, name, team_id).via == "router"
+                    else _shadow_deployment_error({"model": name})
+                )
+            ) is not None:
+                raise HTTPException(status_code=400, detail=f"model '{name}': {plain_failure}" + _for_teams((team_id,)))
 
 
 def _for_teams(team_ids: Sequence[str | None]) -> str:
@@ -1339,7 +1407,7 @@ _ATTEMPT_COUNTS_SQL: Final = """
 SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0)::float AS spend
 FROM "LiteLLM_ShadowEvalAttempt" a
 JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
-WHERE a.job_id = ANY($1::text[]) AND (j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
+WHERE a.job_id = ANY($1::text[]) AND (j.failure_reason IS NOT NULL OR j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
 GROUP BY a.job_id
 """
 
@@ -1464,6 +1532,7 @@ class _LegRow(LiteLLMBaseModel):
     ends_at: datetime
     stopped_at: datetime | None = None
     stopped_by: str | None = None
+    failure_reason: str | None = None
 
     @property
     def arm_router_names(self) -> tuple[str, ...]:
@@ -1491,7 +1560,7 @@ async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_Leg
     max_budget, so the derived status flips to completed exactly when sampling actually
     ends. A stamped leg's figures freeze at its stopped_at: in-flight attempts that land
     after the stamp are excluded, so they can never reclassify a leg that was stopped
-    under budget as budget-spent."""
+    under budget as budget-spent. Failed legs keep late costs because failure is latched."""
     if not legs:
         return MappingProxyType({})
     rows: Final = _ATTEMPT_COUNT_ROWS.validate_python(
@@ -1517,6 +1586,7 @@ def _group_response(
                 max_turns=leg.max_turns,
                 max_budget=leg.max_budget,
                 stopped_at=leg.stopped_at,
+                failure_reason=leg.failure_reason,
                 attempt_count=stats.attempt_count if (stats := attempt_counts.get(leg.id)) else 0,
                 spend=round(stats.spend, 6) if stats else 0.0,
             )
@@ -1769,6 +1839,8 @@ async def start_shadow_eval(
         _validate_plain_model(llm_router, data.baseline_model, "baseline_model", team_ids)
     _validate_judge_is_not_a_candidate(llm_router, data, team_ids)
     _validate_model_scope(llm_router, data.models)
+    if llm_router is not None:
+        _validate_shadow_dependencies(llm_router, data, team_ids)
 
     requested_targets: Final[tuple[tuple[ShadowEvalTargetType, str], ...]] = (
         *(("key", key) for key in data.api_key_ids),

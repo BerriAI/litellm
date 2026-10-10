@@ -324,7 +324,7 @@ class AutoRouterBenchmarksResponse(LiteLLMBaseModel):
     )
 
 
-ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
+ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped", "failed", "degraded"]
 
 ShadowEvalDirection: TypeAlias = Literal["forward", "reverse"]
 
@@ -634,6 +634,7 @@ class ShadowEvalJobTargetResponse(LiteLLMBaseModel):
     """One target a job shadows (a key, team, or user), with its own budget and stop state."""
 
     target_type: ShadowEvalTargetType = Field(description="What kind of entity this entry scopes")
+    failure_reason: str | None = Field(default=None, description="Why repeated evaluation failures stopped this target")
     target_id: str = Field(description="The hashed virtual key, team id, or user id whose traffic this entry scopes")
     max_turns: int = Field(
         description=(
@@ -661,7 +662,7 @@ class ShadowEvalJobTargetResponse(LiteLLMBaseModel):
         description=(
             "This target's sampled attempts so far, judged and errored alike, the same count the sampler "
             "budgets against max_turns; populated on list and detail responses. Frozen at stopped_at "
-            "once the target is stamped, so in-flight attempts landing after a stop never reclassify it"
+            "once the target is stamped, except failed targets retain late attempts and their incurred costs"
         ),
     )
     spend: float | None = Field(
@@ -749,13 +750,16 @@ class ShadowEvalJobResponse(LiteLLMBaseModel):
     @computed_field
     @property
     def status(self) -> ShadowEvalStatus:
-        """Three recorded facts, no history-guessing: a stop is stopped_by (the migration
-        backfills it for every job that displayed stopped when the column arrived, so the
-        pre-column population is closed), completion is the window passing or every target
-        spending its budget, and anything else is running. The all-targets-stamped fallback
-        covers only stops written by pre-column pods during a rolling deploy."""
+        """Failed targets remain failed; a job with other active targets is degraded.
+        Operator stops take precedence, and budgets and duration still complete healthy jobs."""
         if self.stopped_by is not None:
             return "stopped"
+        if any(target.failure_reason is not None for target in self.targets):
+            active: Final = any(target.stopped_at is None and not target.budget_spent for target in self.targets)
+            window_open: Final = datetime.now(timezone.utc) < (
+                self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
+            )
+            return "degraded" if active and window_open else "failed"
         if datetime.now(timezone.utc) >= (
             self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
         ):

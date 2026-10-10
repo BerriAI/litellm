@@ -74,6 +74,10 @@ def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
         ]
     )
     prisma.db.litellm_shadowevalattempt.create = AsyncMock()
+    prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=object())
+    prisma.db.tx.return_value.__aenter__ = AsyncMock(return_value=prisma.db)
+    prisma.db.tx.return_value.__aexit__ = AsyncMock(return_value=False)
+    prisma.db.execute_raw = AsyncMock(return_value=1)
     return prisma
 
 
@@ -316,6 +320,58 @@ async def _drain(logger: ShadowEvalLogger, target: int = 0):
             return
         await asyncio.sleep(0.01)
     raise AssertionError("shadow tasks never drained")
+
+
+@pytest.mark.asyncio
+async def test_failure_admission_uses_current_writer_stop_state():
+    prisma = _prisma()
+    prisma.db.litellm_shadowevaljob.find_first.return_value = None
+    router = _router()
+    logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+    await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+    await _drain(logger)
+    assert router.acompletion.call_count == 0
+    assert logger._test_funnel == [("job-1", "withheld")]
+
+
+@pytest.mark.asyncio
+async def test_failure_admission_db_error_withholds_then_recovers():
+    prisma = _prisma()
+    prisma.db.litellm_shadowevaljob.find_first.side_effect = [RuntimeError("database unavailable"), object()]
+    router = _router()
+    logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+    await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+    await _drain(logger)
+    assert router.acompletion.call_count == 0
+    await logger.async_log_success_event(_success_kwargs(request_id="second"), RESPONSE, None, None)
+    await _drain(logger)
+    assert router.acompletion.call_count == 2
+    assert prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["outcome"] in ("real", "shadow")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_component", ("judge", "shadow:my-router", None))
+async def test_failure_state_tracks_the_component_and_incurred_costs(failed_component):
+    prisma = _prisma()
+    router = _router(
+        shadow_text="" if failed_component == "shadow:my-router" else "shadow answer",
+        judge_json="invalid json" if failed_component == "judge" else '{"preference":"A","confidence":0.9}',
+        classifier_cost=0.02,
+    )
+    logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+    await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+    await _drain(logger)
+    row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+    state = prisma.db.execute_raw.call_args.args
+    assert state[1] == "job-1"
+    assert state[2] == (failed_component or "judge")
+    assert state[3] == "shadow:my-router"
+    assert state[4] is (failed_component != "shadow:my-router")
+    assert state[5] is (failed_component is not None)
+    assert state[6] == 5
+    assert row["shadow_classifier_cost"] == 0.02
+    assert sum(logger._test_counter.values()) == pytest.approx(0.02)
+    assert (row["outcome"] == "error") is (failed_component is not None)
 
 
 @pytest.mark.asyncio

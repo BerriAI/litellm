@@ -44156,14 +44156,11 @@ export interface components {
             shadow_percentage: number;
             /**
              * Status
-             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
-             *     backfills it for every job that displayed stopped when the column arrived, so the
-             *     pre-column population is closed), completion is the window passing or every target
-             *     spending its budget, and anything else is running. The all-targets-stamped fallback
-             *     covers only stops written by pre-column pods during a rolling deploy.
+             * @description Failed targets remain failed; a job with other active targets is degraded.
+             *     Operator stops take precedence, and budgets and duration still complete healthy jobs.
              * @enum {string}
              */
-            readonly status: "running" | "completed" | "stopped";
+            readonly status: "running" | "completed" | "stopped" | "failed" | "degraded";
             /**
              * Stopped By
              * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
@@ -44182,9 +44179,14 @@ export interface components {
         ShadowEvalJobTargetResponse: {
             /**
              * Attempt Count
-             * @description This target's sampled attempts so far, judged and errored alike, the same count the sampler budgets against max_turns; populated on list and detail responses. Frozen at stopped_at once the target is stamped, so in-flight attempts landing after a stop never reclassify it
+             * @description This target's sampled attempts so far, judged and errored alike, the same count the sampler budgets against max_turns; populated on list and detail responses. Frozen at stopped_at once the target is stamped, except failed targets retain late attempts and their incurred costs
              */
             attempt_count?: number | null;
+            /**
+             * Failure Reason
+             * @description Why repeated evaluation failures stopped this target
+             */
+            failure_reason?: string | null;
             /**
              * Key Name
              * @description Masked display name (sk-...) for key targets, resolved at read time; None for teams and users

@@ -1847,6 +1847,8 @@ model LiteLLM_ShadowEvalJob {
   ends_at           DateTime
   stopped_at        DateTime?
   stopped_by        String?  // operator who stopped it early; null when it ended on its own
+  failure_counts    Json     @default("{}")
+  failure_reason    String?
 
   @@index([group_id])
   @@index([target_type, target_id])

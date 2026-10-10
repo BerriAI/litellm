@@ -1495,6 +1495,109 @@ def _shadow_router() -> Router:
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ("tier", "default", "classifier", "azure"))
+async def test_shadow_start_rejects_unusable_dependencies_before_creating_job(monkeypatch, role):
+    import litellm.proxy.proxy_server as proxy_server
+
+    params = _complexity_router_deployment("broken", {"SIMPLE": "cheap"}, "cheap", "cheap")
+    config = params["litellm_params"]["complexity_router_config"]
+    if role == "tier":
+        config["tiers"] = {"SIMPLE": "missing-tier"}
+    elif role == "default":
+        params["litellm_params"]["complexity_router_default_model"] = "missing-default"
+    elif role == "classifier":
+        config["classifier_llm_config"] = {"model": "missing-classifier"}
+    else:
+        config["tiers"] = {"SIMPLE": "broken-azure"}
+    configured = Router(model_list=[
+        {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
+        {"model_name": "judge", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}},
+        {"model_name": "broken-azure", "litellm_params": {"model": "azure_ai/gpt-5.4-nano", "api_key": "fake"}},
+        params,
+    ])
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", configured)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(router_name="broken", judge_model="judge"), ADMIN)
+    assert exc.value.status_code == 400
+    assert "api_base" in exc.value.detail if role == "azure" else f"missing-{role}" in exc.value.detail
+    assert prisma.db.litellm_shadowevaljob.create_many.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_name", ("missing-semantic-route", "cheap"))
+async def test_shadow_start_validates_team_scoped_semantic_dependencies(monkeypatch, route_name):
+    import json
+    import litellm.proxy.proxy_server as proxy_server
+
+    configured = Router(model_list=[
+        {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
+        {"model_name": "judge", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}},
+        {"model_name": "embedding", "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake"}},
+        {
+            "model_name": "model_name_team-a_semantic",
+            "model_info": {"team_id": "team-a", "team_public_model_name": "semantic"},
+            "litellm_params": {
+                "model": "auto_router/semantic",
+                "auto_router_default_model": "cheap",
+                "auto_router_embedding_model": "embedding",
+                "auto_router_config": json.dumps({"routes": [{"name": route_name, "utterances": ["hello"]}]}),
+            },
+        },
+        _complexity_router_deployment("outer", {"SIMPLE": "semantic"}, "cheap", "cheap"),
+    ])
+    prisma = _shadow_prisma(key_teams={"key-hash": "team-a"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", configured)
+    if route_name == "cheap":
+        response = await start_shadow_eval(_start_request(router_name="outer", judge_model="judge"), ADMIN)
+        assert response.status == "running"
+    else:
+        with pytest.raises(HTTPException, match="missing-semantic-route") as error:
+            await start_shadow_eval(_start_request(router_name="outer", judge_model="judge"), ADMIN)
+        assert error.value.status_code == 400
+        assert prisma.db.litellm_shadowevaljob.create_many.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_shadow_start_rejects_missing_direct_openai_key(monkeypatch):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    with pytest.raises(HTTPException, match="OPENAI_API_KEY") as exc:
+        await start_shadow_eval(_start_request(judge_model="openai/gpt-4o"), ADMIN)
+    assert exc.value.status_code == 400
+    assert prisma.db.litellm_shadowevaljob.create_many.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_shadow_start_preserves_wildcard_judge_and_inactive_classifier(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    params = _complexity_router_deployment("my-router", {"SIMPLE": "cheap"}, "cheap", "missing-classifier")
+    params["litellm_params"]["complexity_router_config"]["classifier_type"] = "heuristic"
+    configured = Router(model_list=[
+        {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
+        {"model_name": "gpt-*", "litellm_params": {"model": "openai/gpt-*", "api_key": "fake"}},
+        params,
+    ])
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", configured)
+    response = await start_shadow_eval(_start_request(judge_model="gpt-4o"), ADMIN)
+    assert response.status == "running"
+    assert prisma.db.litellm_shadowevaljob.create_many.await_count == 1
+
+
 def _leg_record(**overrides: object) -> MagicMock:
     """Spec'd like a real prisma row: only the table's columns exist as attributes. One
     row is one key's leg of a job; legs sharing group_id are one job."""
@@ -2125,6 +2228,7 @@ async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot
     import litellm.proxy.proxy_server as proxy_server
 
     _configure_anthropic_sdk_judge(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "local-test-only")
     legs = [_leg_record(group_id="job-fwd")]
     prisma = _shadow_prisma(legs=legs)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -3631,7 +3735,17 @@ async def test_start_shadow_eval_sees_a_collision_hidden_behind_the_second_teams
     """
     import litellm.proxy.proxy_server as proxy_server
 
-    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    routed: Final = _shadow_router()
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    routed.add_deployment(
+        Deployment(
+            model_name="model_name_team-a_fallback",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", api_key="fake"),
+            model_info=ModelInfo(team_id="team-a", team_public_model_name="b-tier"),
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", routed)
 
     monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma(key_teams={"key-hash": "team-a"}))
     accepted = await start_shadow_eval(_start_request(router_name="b-team-router", judge_model="house-sonnet"), ADMIN)
