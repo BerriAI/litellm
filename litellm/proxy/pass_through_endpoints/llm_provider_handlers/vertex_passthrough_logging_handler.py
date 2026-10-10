@@ -198,7 +198,9 @@ class VertexPassthroughLoggingHandler:
                 "kwargs": kwargs,
             }
 
-        elif VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "generateContent") or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamGenerateContent"):
+        elif VertexPassthroughLoggingHandler._matches_vertex_method(
+            url_route, "generateContent"
+        ) or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamGenerateContent"):
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm: Final = litellm.VertexGeminiConfig()
@@ -230,7 +232,9 @@ class VertexPassthroughLoggingHandler:
                 "kwargs": kwargs,
             }
 
-        elif VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "embedContent") or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "batchEmbedContents"):
+        elif VertexPassthroughLoggingHandler._matches_vertex_method(
+            url_route, "embedContent"
+        ) or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "batchEmbedContents"):
             return VertexPassthroughLoggingHandler._handle_embed_content_response(
                 httpx_response=httpx_response,
                 logging_obj=logging_obj,
@@ -245,7 +249,9 @@ class VertexPassthroughLoggingHandler:
                 url_route=url_route,
                 kwargs=kwargs,
             )
-        elif VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "rawPredict") or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamRawPredict"):
+        elif VertexPassthroughLoggingHandler._matches_vertex_method(
+            url_route, "rawPredict"
+        ) or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamRawPredict"):
             from litellm.llms.vertex_ai.vertex_ai_partner_models import (
                 get_vertex_ai_partner_model_config,
             )
@@ -636,7 +642,9 @@ class VertexPassthroughLoggingHandler:
         url_route: str,
     ) -> ModelResponse | TextCompletionResponse | None:
         parsed_chunks = []
-        if VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "generateContent") or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamGenerateContent"):
+        if VertexPassthroughLoggingHandler._matches_vertex_method(
+            url_route, "generateContent"
+        ) or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamGenerateContent"):
             vertex_iterator: Any = VertexModelResponseIterator(
                 streaming_response=None,
                 sync_stream=False,
@@ -644,7 +652,9 @@ class VertexPassthroughLoggingHandler:
             )
             chunk_parsing_logic: Callable[..., ModelResponseStream | None] = vertex_iterator._common_chunk_parsing_logic
             parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
-        elif VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "rawPredict") or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamRawPredict"):
+        elif VertexPassthroughLoggingHandler._matches_vertex_method(
+            url_route, "rawPredict"
+        ) or VertexPassthroughLoggingHandler._matches_vertex_method(url_route, "streamRawPredict"):
             from litellm.llms.anthropic.chat.handler import ModelResponseIterator
             from litellm.llms.base_llm.base_model_iterator import (
                 BaseModelResponseIterator,
