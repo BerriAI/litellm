@@ -7,14 +7,14 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from tests.integration._support.database import read_rows, scratch_database
-
 
 @pytest.fixture(scope="session", autouse=True)
 def worker_database() -> Iterator[None]:
     if not os.environ.get("PYTEST_XDIST_WORKER") or "DATABASE_URL" not in os.environ:
         yield
         return
+    from tests.integration._support.database import read_rows, scratch_database
+
     admin_url: Final = os.environ["DATABASE_URL"]
     with scratch_database() as database, pytest.MonkeyPatch.context() as environment:
         environment.setenv("DATABASE_URL", database)
