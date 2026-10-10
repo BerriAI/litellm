@@ -371,6 +371,21 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
     assert excinfo.value.status_code == 429
 
 
+@pytest.mark.parametrize("provider", ["deepinfra", "openai", "together_ai"])
+def test_openai_compatible_401_typed_invalid_request_maps_to_authentication(provider: str) -> None:
+    original_exception = OpenAIError(
+        status_code=401,
+        message='{"error":{"message":"Invalid API-key provided.","type":"invalid_request_error","code":"invalid_api_key"}}',
+        headers={},
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(model="test-model", original_exception=original_exception, custom_llm_provider=provider)
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.llm_provider == provider
+
+
 @pytest.mark.parametrize(
     "error_message",
     [
