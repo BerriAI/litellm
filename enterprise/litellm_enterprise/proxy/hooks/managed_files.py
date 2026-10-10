@@ -1162,7 +1162,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         return False
 
-    async def check_file_ids_access(self, file_ids: List[str], user_api_key_dict: UserAPIKeyAuth) -> None:
+    async def check_file_ids_access(self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth) -> None:
         """
         Check if the user has access to a list of file IDs.
         Only checks managed (unified) file IDs.
@@ -1269,6 +1269,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
+                await self.check_file_ids_access((input_file_id,), user_api_key_dict)
                 model_file_id_mapping = await self.get_model_file_id_mapping(
                     [input_file_id], user_api_key_dict.parent_otel_span
                 )
@@ -1315,11 +1316,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             elif retrieve_object_id and accessor_key == "batch_id":
                 await self.enforce_batch_object_access(retrieve_object_id, user_api_key_dict)
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
-            input_file_id = cast(Optional[str], data.get("training_file"))
-            if input_file_id:
-                model_file_id_mapping = await self.get_model_file_id_mapping(
-                    [input_file_id], user_api_key_dict.parent_otel_span
-                )
+            fine_tuning_file_ids: Final = tuple(
+                file_id
+                for file_id in (data.get("training_file"), data.get("validation_file"))
+                if isinstance(file_id, str) and file_id
+            )
+            await self.check_file_ids_access(fine_tuning_file_ids, user_api_key_dict)
 
         return data
 
