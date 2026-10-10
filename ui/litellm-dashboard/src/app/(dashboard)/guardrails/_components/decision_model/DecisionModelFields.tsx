@@ -182,7 +182,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               >
                 <X className="size-4" />
               </button>
-              <div className="pr-8">
+              <div>
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">Name</span>
                 <Input
                   aria-label={`Question ${position} name`}
