@@ -86,6 +86,90 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/responses",
+    litellm_request={
+        "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+        "max_output_tokens": 64,
+        "instructions": "You are a terse assistant.",
+        "input": "Say hello.",
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/model/us.anthropic.claude-haiku-5-5/converse",
+    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
+    expected_provider_request={
+        "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
+        "inferenceConfig": {"maxTokens": 64},
+        "system": [{"text": "You are a terse assistant."}],
+    },
+    mock_provider_response={
+        "metrics": {"latencyMs": 954},
+        "output": {"message": {"content": [{"text": "Hello."}], "role": "assistant"}},
+        "stopReason": "end_turn",
+        "usage": {
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+            "inputTokens": 23,
+            "outputTokens": 6,
+            "serverToolUsage": {},
+            "totalTokens": 29,
+        },
+    },
+    expected_litellm_response={
+        "id": ANY,
+        "created_at": ANY,
+        "error": None,
+        "incomplete_details": None,
+        "instructions": "You are a terse assistant.",
+        "metadata": {},
+        "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": ANY,
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
+                "phase": None,
+            }
+        ],
+        "parallel_tool_calls": False,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": 64,
+        "previous_response_id": None,
+        "reasoning": None,
+        "status": "completed",
+        "text": {},
+        "truncation": None,
+        "usage": {
+            "input_tokens": 23,
+            "input_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "cached_tokens_details": None,
+                "image_tokens": None,
+                "text_tokens": 23,
+                "video_tokens": None,
+                "cache_write_tokens": 0,
+            },
+            "output_tokens": 6,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 0, "text_tokens": 6},
+            "total_tokens": 29,
+            "cost": None,
+        },
+        "user": None,
+        "store": None,
+    },
+)
+
+
 CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/responses",
