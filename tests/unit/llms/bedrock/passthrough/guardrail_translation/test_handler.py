@@ -870,6 +870,113 @@ class TestDeAnonymizeConverseStream:
         ]
         assert "".join(texts) == "John Doe works at Acme Corp"
 
+    @staticmethod
+    def _deltas_by_block(result: bytes, field: str) -> dict[int, str]:
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        blocks: dict[int, str] = {}
+        for msg in buf:
+            if msg.headers.get(":event-type") != "contentBlockDelta":
+                continue
+            payload = json.loads(msg.payload)
+            delta = payload["delta"]
+            value = delta["toolUse"]["input"] if field == "toolUse" else delta[field]
+            blocks[payload["contentBlockIndex"]] = blocks.get(payload["contentBlockIndex"], "") + value
+        return blocks
+
+    @pytest.mark.asyncio
+    async def test_text_blocks_are_guardrailed_separately(self):
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Card: 4111 1111 1111 1111."}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Thanks for sailing with us!"}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+
+        async def mock_hook(data, user_api_key_dict, response):
+            assert [block["text"] for block in response["output"]["message"]["content"]] == [
+                "Card: 4111 1111 1111 1111.",
+                "Thanks for sailing with us!",
+            ]
+            return {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "Card: <CREDIT_CARD>."}, {"text": "Thanks for sailing with us!"}],
+                    }
+                },
+                "stopReason": "end_turn",
+            }
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        assert self._deltas_by_block(result, "text") == {0: "Card: <CREDIT_CARD>.", 1: "Thanks for sailing with us!"}
+
+    @pytest.mark.asyncio
+    async def test_parallel_tool_use_inputs_stay_in_their_own_block(self):
+        import json
+
+        first_input = '{"ship":"IC","cardNumber":"4111 1111 1111 1111"}'
+        second_input = '{"ship":"Icon of the Seas"}'
+        stream_bytes = (
+            _build_event_stream_frame(
+                "contentBlockStart",
+                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_a", "name": "book_cruise"}}},
+            )
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": first_input}}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
+            + _build_event_stream_frame(
+                "contentBlockStart",
+                {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tooluse_b", "name": "ship_info"}}},
+            )
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": second_input}}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
+            + _build_event_stream_frame("messageStop", {"stopReason": "tool_use"})
+        )
+
+        async def mock_hook(data, user_api_key_dict, response):
+            return {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"text": first_input.replace("4111 1111 1111 1111", "<CREDIT_CARD>")},
+                            {"text": second_input},
+                        ],
+                    }
+                },
+                "stopReason": "tool_use",
+            }
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream_bytes,
+            proxy_logging_obj=self._make_proxy_logging(mock_hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        inputs = self._deltas_by_block(result, "toolUse")
+        assert json.loads(inputs[0]) == {"ship": "IC", "cardNumber": "<CREDIT_CARD>"}
+        assert json.loads(inputs[1]) == {"ship": "Icon of the Seas"}
+
     @pytest.mark.asyncio
     async def test_tokens_split_across_chunks_reassembled(self):
         import json
