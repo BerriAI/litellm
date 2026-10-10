@@ -2256,6 +2256,20 @@ async def test_update_settings_changed_routing_strategy_args_flushes_replaced_se
                 pass
 
 
+def _reset_global_callback_lists(monkeypatch) -> None:
+    """Every global callback list, so a Router built here does not see selectors
+    promoted by an earlier test (monkeypatch would not restore those)."""
+    for name in (
+        "callbacks",
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+
+
 def test_two_routers_same_latency_strategy_both_register_selectors(monkeypatch):
     """
     Two Routers with `latency-based-routing` in one process must both see their
@@ -2264,8 +2278,7 @@ def test_two_routers_same_latency_strategy_both_register_selectors(monkeypatch):
     dedup silently dropped the second Router's selector and its latency cache
     never got populated (issue #44575).
     """
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
+    _reset_global_callback_lists(monkeypatch)
 
     first = _build_router(routing_strategy="latency-based-routing")
     second = _build_router(routing_strategy="latency-based-routing")
@@ -2279,19 +2292,102 @@ def test_two_routers_same_latency_strategy_both_register_selectors(monkeypatch):
         "second Router's latency selector was dropped by the callback dedup"
     )
 
-    # Each selector feeds its own Router's cache: an event delivered through
-    # the global callback list must land in the emitting router's cache.
-    kwargs = {
-        "litellm_params": {
-            "metadata": {"model_group": "filtered-model"},
-            "model_info": {"id": "deploy-1"},
-        }
-    }
-    start_time = datetime.datetime.now()
-    for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger):
-            callback.log_success_event(kwargs, None, start_time, start_time + datetime.timedelta(seconds=0.5))
 
+def test_second_latency_router_receives_events_through_the_normal_logging_path(monkeypatch):
+    """
+    Registering both selectors in `litellm.callbacks` is not enough: the normal
+    request path (`function_setup`) copies those callbacks into the success and
+    failure event lists, and that copy used to dedupe by class key and drop the
+    second Router's selector again. Drive `function_setup` and the success
+    dispatch here instead of calling the selectors directly (issue #44575).
+    """
+    _reset_global_callback_lists(monkeypatch)
+
+    first = _build_router(routing_strategy="latency-based-routing")
+    second = _build_router(routing_strategy="latency-based-routing")
+    second_selector = second.lowestlatency_logger
+
+    start_time = datetime.datetime(2026, 1, 1)
+    logging_obj, _ = function_setup(
+        "completion",
+        Rules(),
+        start_time,
+        litellm_call_id=str(uuid.uuid4()),
+        messages=[{"role": "user", "content": "hi"}],
+        model="filtered-model",
+        metadata={"model_group": "filtered-model"},
+        model_info={"id": "deploy-1"},
+    )
+
+    # The promotion into the event lists is where the second instance used to be
+    # dropped, which the `litellm.callbacks` assertion above cannot see.
+    assert any(cb is second_selector for cb in litellm.success_callback), (
+        "function_setup dropped the second Router's selector from the success event list"
+    )
+    assert any(cb is second_selector for cb in litellm.failure_callback)
+    assert any(cb is second_selector for cb in litellm._async_success_callback)
+
+    logging_obj.success_handler(
+        result=None,
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=0.5),
+    )
 
     assert first.cache.get_cache("filtered-model_map") is not None
     assert second.cache.get_cache("filtered-model_map") is not None
+
+
+def test_discard_unregisters_only_the_discarded_routers_selectors(monkeypatch):
+    """
+    A discarded Router must take its identity-registered selectors (default,
+    group and override) out of every global callback list, or a per-request
+    `user_config` Router leaks a selector per request until MAX_CALLBACKS blocks
+    every later guardrail registration. A second, still-live Router keeps working.
+    """
+    _reset_global_callback_lists(monkeypatch)
+
+    first = _build_router(
+        routing_strategy="latency-based-routing",
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "latency-based-routing",
+            }
+        ],
+    )
+    second = _build_router(routing_strategy="latency-based-routing")
+    discarded_selectors = [
+        first.lowestlatency_logger,
+        first._group_selectors["fast"]["latency-based-routing"],
+    ]
+    live_selector = second.lowestlatency_logger
+
+    start_time = datetime.datetime(2026, 1, 1)
+    logging_obj, _ = function_setup(
+        "completion",
+        Rules(),
+        start_time,
+        litellm_call_id=str(uuid.uuid4()),
+        messages=[{"role": "user", "content": "hi"}],
+        model="filtered-model",
+        metadata={"model_group": "filtered-model"},
+        model_info={"id": "deploy-1"},
+    )
+    assert all(any(cb is selector for cb in litellm.success_callback) for selector in discarded_selectors)
+
+    first.discard()
+
+    for selector in discarded_selectors:
+        assert _selector_is_not_global(selector), "discard left a selector in a global callback list"
+    assert any(cb is live_selector for cb in litellm.callbacks)
+    assert any(cb is live_selector for cb in litellm.success_callback)
+
+    # The live Router still receives success events through the normal path.
+    logging_obj.success_handler(
+        result=None,
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=0.5),
+    )
+    assert second.cache.get_cache("filtered-model_map") is not None
+

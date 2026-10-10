@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
+from weakref import WeakSet
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +16,14 @@ else:
     _custom_logger_compatible_callbacks_literal = str
 
 _generic_api_logger_cache: Final[dict[str, GenericAPILogger]] = {}
+
+# CustomLoggers registered with `dedupe_by_identity=True` (router strategy
+# selectors) keep identity-based membership when another code path re-adds them
+# to a different list. `function_setup` copies `litellm.callbacks` into the
+# success/failure event lists, and the class-key dedup there would otherwise
+# drop a second live instance again, leaving the newest Router's cache empty
+# (issue #44575). Weakly held so a discarded logger does not leak.
+_identity_deduped_loggers: Final[WeakSet[CustomLogger]] = WeakSet()
 
 
 class LoggingCallbackManager:
@@ -351,8 +360,12 @@ class LoggingCallbackManager:
         # Per-instance loggers are deduped by identity: their class-level key
         # does not distinguish two live instances, and silently dropping the
         # second one leaves the newest Router with an unregistered callback
-        # (see issue #44575).
-        if dedupe_by_identity:
+        # (see issue #44575). Once a logger is registered by identity, every
+        # later list it is promoted into (e.g. `function_setup` copying
+        # `litellm.callbacks` into the success/failure event lists) must keep
+        # that mode, or the second instance is dropped again there.
+        if dedupe_by_identity or any(existing is custom_logger for existing in _identity_deduped_loggers):
+            _identity_deduped_loggers.add(custom_logger)
             if not any(existing is custom_logger for existing in parent_list):
                 parent_list.append(custom_logger)
             else:

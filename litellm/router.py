@@ -1403,6 +1403,20 @@ class Router:
         # Stop contributing to cost-map rebuilds straight away rather than waiting
         # for this router to be collected.
         _live_routers.discard(self)
+        # Drop the per-instance strategy selectors this router registered. They
+        # are registered by identity, so class-key dedup no longer implicitly
+        # caps them at one per class: without this a discarded router (e.g. the
+        # throwaway `user_config` Router built per request) leaks its selectors
+        # into every callback list for the life of the process (issue #44575).
+        self._unregister_router_selectors(
+            [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
+            + list(getattr(self, "_override_selectors", {}).values())
+            + [
+                selector
+                for selectors in getattr(self, "_group_selectors", {}).values()
+                for selector in selectors.values()
+            ]
+        )
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
@@ -1539,8 +1553,11 @@ class Router:
         """
         Drop router-owned strategy selectors from litellm's global callback
         lists by identity. Used before re-init (`routing_strategy_init` /
-        `_init_routing_groups`) so repeated `update_settings` calls don't
-        accumulate dead selectors that keep receiving callback events.
+        `_init_routing_groups`) and on `discard`, so repeated `update_settings`
+        calls (or discarded routers) don't accumulate dead selectors that keep
+        receiving callback events. Covers the success/failure event lists too:
+        `function_setup` promotes general callbacks into them, and the
+        per-instance selectors are no longer capped at one per class.
         """
         for selector in selectors:
             if isinstance(selector, BaseRoutingStrategy):
@@ -1552,6 +1569,14 @@ class Router:
             litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
         if isinstance(litellm.input_callback, list):
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
+        if isinstance(litellm.success_callback, list):
+            litellm.success_callback = [c for c in litellm.success_callback if id(c) not in selector_ids]
+        if isinstance(litellm.failure_callback, list):
+            litellm.failure_callback = [c for c in litellm.failure_callback if id(c) not in selector_ids]
+        if isinstance(litellm._async_success_callback, list):
+            litellm._async_success_callback = [c for c in litellm._async_success_callback if id(c) not in selector_ids]
+        if isinstance(litellm._async_failure_callback, list):
+            litellm._async_failure_callback = [c for c in litellm._async_failure_callback if id(c) not in selector_ids]
 
     def _apply_updated_routing_strategy_args(self) -> None:
         """
