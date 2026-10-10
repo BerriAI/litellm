@@ -13,6 +13,7 @@ from typing import Final, Literal, Protocol, TypeAlias, TypedDict, cast, overloa
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -31,6 +32,7 @@ OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
 _MAX_YAML_INT_LENGTH: Final = 1024
+_OPENAPI_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -217,13 +219,12 @@ def _parse_openapi_spec(text: str) -> _OpenAPISpec:
                 return super().compose_node(parent, index)
 
             def flatten_mapping(self, node: MappingNode) -> None:
-                node_values: Final = cast(tuple[tuple[Node, Node], ...], node.value)
-                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node_values):
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node.value):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
 
             def construct_yaml_int(self, node: ScalarNode) -> int:
-                node_value: Final = cast(str, node.value)
+                node_value: Final = str(node.value)
                 if len(node_value) > _MAX_YAML_INT_LENGTH:
                     raise yaml.YAMLError("YAML integer is too long")
                 return super().construct_yaml_int(node)
@@ -233,14 +234,17 @@ def _parse_openapi_spec(text: str) -> _OpenAPISpec:
             _NoMergeSafeLoader.construct_yaml_int,
         )
 
-        parsed_yaml: Final[object] = yaml.load(text, Loader=_NoMergeSafeLoader)
-        if not isinstance(parsed_yaml, dict):
-            raise TypeError("OpenAPI spec must be a JSON or YAML object")
-        return cast(_OpenAPISpec, parsed_yaml)
+        return _validate_openapi_mapping(yaml.load(text, Loader=_NoMergeSafeLoader))
 
-    if not isinstance(parsed_json, dict):
-        raise TypeError("OpenAPI spec must be a JSON or YAML object")
-    return cast(_OpenAPISpec, parsed_json)
+    return _validate_openapi_mapping(parsed_json)
+
+
+def _validate_openapi_mapping(value: object) -> _OpenAPISpec:
+    try:
+        validated: Final = _OPENAPI_MAPPING_ADAPTER.validate_python(value)
+    except ValueError as exc:
+        raise TypeError("OpenAPI spec must be a JSON or YAML object") from exc
+    return cast(_OpenAPISpec, validated)
 
 
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> _OpenAPISpec:
