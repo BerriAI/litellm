@@ -104,8 +104,8 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
-        return f"{resolved_api_base}/v1beta/interactions"
+        resolved_api_base: Final = GeminiModelInfo.get_api_base_with_version(api_base)
+        return f"{resolved_api_base}/interactions"
 
     def transform_audio_transcription_request(
         self,

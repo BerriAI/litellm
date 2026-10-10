@@ -67,7 +67,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         return "v1beta"
 
     def _base_url(self, api_base: str | None) -> str:
-        return f"{GeminiModelInfo.get_api_base(api_base)}/{self.api_version}"
+        return GeminiModelInfo.get_api_base_with_version(api_base, api_version=self.api_version)
 
     # ------------------------------------------------------------------ #
     # Shared helpers                                                       #
