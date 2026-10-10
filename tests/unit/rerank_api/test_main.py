@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -10,10 +9,7 @@ import respx
 
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.rerank import RerankResponse
 
 MARKER_QUERY = "MARKER_QUERY_do_not_log_at_info"
 MARKER_DOC = "MARKER_DOC_sensitive_customer_text"
@@ -541,46 +537,22 @@ def test_cohere_rerank_custom_api_base_selects_versioned_route(
 
 
 @pytest.mark.asyncio
-async def test_cohere_rerank_success_callback_receives_cost() -> None:
-    class CostCallback(CustomLogger):
-        def __init__(self) -> None:
-            self.response_cost: float | None = None
-            self.result_index: int | None = None
-            super().__init__()
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_rerank_success_response_includes_cost(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+    client: Final = AsyncHTTPHandler(transport=RespxAsyncTransport(respx_mock))
 
-        async def async_log_success_event(
-            self,
-            kwargs: dict[str, object],
-            response_obj: RerankResponse,
-            start_time: datetime,
-            end_time: datetime,
-        ) -> None:
-            response_cost: Final = kwargs["response_cost"]
-            assert isinstance(response_cost, (int, float))
-            self.response_cost = float(response_cost)
-            self.result_index = response_obj.results[0]["index"]
-
-    callback: Final = CostCallback()
-    logging_obj: Final = Logging(
+    response: Final = await litellm.arerank(
         model="cohere/rerank-v4.0-pro",
-        messages=[],
-        stream=False,
-        call_type="rerank",
-        start_time=datetime(2025, 1, 1),
-        litellm_call_id="rerank-test-call",
-        function_id="rerank-test-function",
-        dynamic_async_success_callbacks=[callback],
-        kwargs={"custom_llm_provider": "cohere"},
+        query="hello",
+        documents=["hello", "world"],
+        top_n=2,
+        api_key="test-api-key",
+        client=client,
     )
-    response: Final = RerankResponse.model_validate(COHERE_RERANK_RESPONSE)
-    logging_obj.model_call_details["response_cost"] = 0.01
+    await client.client.aclose()
 
-    await logging_obj.async_success_handler(
-        result=response,
-        start_time=datetime(2025, 1, 1),
-        end_time=datetime(2025, 1, 1),
-    )
-
-    assert callback.response_cost is not None
-    assert callback.response_cost > 0
-    assert callback.result_index == 0
+    search_units: Final = COHERE_RERANK_RESPONSE["meta"]["billed_units"]["search_units"]
+    expected_cost: Final = litellm.model_cost["rerank-v4.0-pro"]["input_cost_per_query"] * search_units
+    assert response._hidden_params["response_cost"] == expected_cost

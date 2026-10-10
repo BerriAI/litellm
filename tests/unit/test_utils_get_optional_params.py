@@ -2013,7 +2013,7 @@ def test_get_optional_params_preserves_num_retries_as_max_retries() -> None:
 def test_responses_allowed_openai_params_are_sent(
     respx_mock: respx.MockRouter,
 ) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/responses")
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/responses")
     route.return_value = httpx.Response(
         200,
         json={
@@ -2035,19 +2035,26 @@ def test_responses_allowed_openai_params_are_sent(
         },
     )
 
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.responses(
+            model="perplexity/sonar",
+            input="Hello",
+            store=True,
+            api_key="test-api-key",
+            client=HTTPHandler(),
+        )
+
     litellm.responses(
-        model="openai/gpt-5.6",
+        model="perplexity/sonar",
         input="Hello",
-        max_output_tokens=100,
-        top_logprobs=10,
-        allowed_openai_params=["top_logprobs"],
+        store=True,
+        allowed_openai_params=["store"],
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert request_body["top_logprobs"] == 10
-    assert request_body["max_output_tokens"] == 100
+    assert request_body["store"] is True
 
 
 def test_supports_system_message_merges_system_prompt_into_user_message() -> None:
