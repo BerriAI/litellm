@@ -7310,6 +7310,48 @@ def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
     assert router.get_credential_deployment(model_id=ocr, team_id="team-b").model_info.id == "shared-wildcard"
 
 
+@pytest.mark.parametrize(
+    ("with_catch_all", "requested", "team_id", "expected_ids"),
+    [
+        pytest.param(False, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-when-no-proxy-wide-match"),
+        pytest.param(False, "rwild-chat", "team-b", (), id="another-teams-pattern-never-serves"),
+        pytest.param(False, "rwild-chat", None, (), id="no-team-no-team-pattern"),
+        pytest.param(True, "rwild-chat", "team-r", ("catch-all",), id="proxy-wide-pattern-beats-the-team-pattern"),
+        pytest.param(True, "ptu-chat", "team-r", ("ptu-wildcard",), id="only-the-most-specific-proxy-wide-pattern"),
+    ],
+)
+def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
+    with_catch_all: bool, requested: str, team_id: str | None, expected_ids: tuple[str, ...]
+):
+    catch_all: Final = (
+        ({"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-open"}, "model_info": {"id": "catch-all"}},)
+        if with_catch_all
+        else ()
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "ptu-*",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-ptu"},
+                "model_info": {"id": "ptu-wildcard"},
+            },
+            {
+                "model_name": "team-r-internal",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-team-r"},
+                "model_info": {"id": "team-r-wildcard", "team_id": "team-r", "team_public_model_name": "rwild-*"},
+            },
+            *catch_all,
+        ]
+    )
+
+    served: Final = router.wildcard_route_deployments(requested, team_id)
+    early: Final = router._try_early_resolve_deployments_for_model_not_in_names(model=requested, request_team_id=team_id)
+    early_deployments: Final = early[1] if early is not None and isinstance(early[1], list) else []
+
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
+    assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
