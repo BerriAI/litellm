@@ -733,6 +733,139 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert response.model == _STRANDS_RESPONSE["model"]
 
 
+_VLLM_RESPONSE: Final[Mapping[str, object]] = {
+    "id": "systemone-4af3d2c1",
+    "object": "structured_decision",
+    "created": 1760012345,
+    "model": "Qwen/Qwen3-0.6B",
+    "answers": {
+        "is_defect": {
+            "type": "choice",
+            "choice": "yes",
+            "confidence": 0.91,
+            "probabilities": {"yes": 0.91, "no": 0.09},
+        }
+    },
+    "usage": {"input_tokens": 154, "output_tokens": 2},
+    "diagnostics": {"engine": "vllm", "logprobs_mode": "raw_logprobs"},
+}
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_requires_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+
+    with pytest.raises(litellm.BadRequestError, match="api_base is required"):
+        await litellm.adecisions(
+            model="hosted_vllm/Qwen/Qwen3-0.6B",
+            state="review",
+            questions={"is_defect": {"type": "choice", "criteria": {"yes": None, "no": None}}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_without_key_sends_no_authorization_and_preserves_response_extras(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_VLLM_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        state="The package arrived broken.",
+        questions={"is_defect": {"type": "choice", "criteria": {"yes": None, "no": None}}},
+        api_base="http://vllm.local:8000",
+    )
+
+    assert route.called
+    assert "authorization" not in respx_mock.calls[0].request.headers
+    assert response.model_extra["id"] == _VLLM_RESPONSE["id"]
+    assert response.model_extra["object"] == _VLLM_RESPONSE["object"]
+    assert response.model_extra["diagnostics"] == _VLLM_RESPONSE["diagnostics"]
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_uses_key_and_base_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://vllm.local:8000/v1")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "vllm-key")
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_VLLM_RESPONSE)
+
+    await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        state="The package arrived broken.",
+        questions={"is_defect": {"type": "choice", "criteria": {"yes": None, "no": None}}},
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer vllm-key"
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_api_base_with_v1_suffix_posts_to_v1_systemone(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_VLLM_RESPONSE)
+
+    await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        state="The package arrived broken.",
+        questions={"is_defect": {"type": "choice", "criteria": {"yes": None, "no": None}}},
+        api_base="http://vllm.local:8000/v1",
+    )
+
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_choice_question_goes_out_as_a_jev_choice_with_the_served_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    route: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(json=_VLLM_RESPONSE)
+
+    await litellm.adecisions(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        state="The package arrived broken.",
+        questions={
+            "is_defect": {
+                "type": "choice",
+                "instructions": "Is this a defect?",
+                "criteria": {"yes": "defective", "no": "intact"},
+            }
+        },
+        api_base="http://vllm.local:8000",
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "Qwen/Qwen3-0.6B",
+        "state": "The package arrived broken.",
+        "questions": {
+            "is_defect": {
+                "type": "choice",
+                "instructions": "Is this a defect?",
+                "criteria": {"yes": "defective", "no": "intact"},
+            }
+        },
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("api_base", "url"),

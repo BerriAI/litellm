@@ -285,6 +285,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
 
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
+PLACEHOLDER_API_KEY: Final = "fake-api-key"
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
