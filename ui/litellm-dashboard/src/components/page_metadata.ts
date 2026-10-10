@@ -5,6 +5,7 @@
 
 // Page descriptions for UI Settings configuration
 export const pageDescriptions: Record<string, string> = {
+  discover: "What's new in LiteLLM and models you can route to",
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
   models: "Configure and manage LLM models and endpoints",

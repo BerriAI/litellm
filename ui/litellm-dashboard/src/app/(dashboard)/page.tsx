@@ -1,6 +1,6 @@
 "use client";
 
-import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
+import DiscoverPage from "@/components/discover/DiscoverPage";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { proxyBaseUrl } from "@/components/networking";
 import { useAuth } from "@/contexts/AuthContext";
@@ -89,7 +89,7 @@ function CreateKeyPageContent() {
     return <LoadingScreen />;
   }
 
-  return <ApiKeysDashboard />;
+  return <DiscoverPage />;
 }
 
 export default function CreateKeyPage() {

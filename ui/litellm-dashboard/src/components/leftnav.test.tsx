@@ -247,6 +247,7 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     const topLevelLabels = [
+      "Discover",
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
@@ -660,10 +661,11 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
   });
 
-  it("marks Virtual Keys active at the dashboard root", () => {
+  it("marks Discover active at the dashboard root", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Discover" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
@@ -681,6 +683,7 @@ describe("Sidebar (leftnav)", () => {
 
     const expectHref = (label: string, href: string) =>
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
+    expectHref("Discover", "/ui/discover");
     expectHref("Virtual Keys", "/ui/api-keys");
     expectHref("Playground", "/ui/playground");
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
@@ -745,8 +748,12 @@ describe("getBreadcrumb", () => {
     expect(getBreadcrumb("/ui/old-usage")).toEqual({ section: "Developer Tools", title: "Old Usage" });
   });
 
-  it("titles the dashboard root as Virtual Keys", () => {
-    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+  it("titles the dashboard root as Discover", () => {
+    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Discover" });
+  });
+
+  it("titles the Discover route", () => {
+    expect(getBreadcrumb("/ui/discover")).toEqual({ section: "AI Gateway", title: "Discover" });
   });
 
   it("resolves a nested child route to its parent section", () => {
