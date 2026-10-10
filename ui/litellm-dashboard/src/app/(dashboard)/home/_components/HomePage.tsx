@@ -53,7 +53,6 @@ export default function HomePage() {
                 <Sparkles className="size-4 text-muted-foreground" />
                 What&apos;s new in LiteLLM?
               </h2>
-              <p className="text-sm text-muted-foreground">New models, endpoints and pricing changes</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
               {WHATS_NEW_ITEMS.map((item) => {
