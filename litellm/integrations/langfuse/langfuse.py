@@ -134,11 +134,11 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
             value = usage_dict.get(decision_name)
         return value if isinstance(value, int) else 0
     value = cast(  # cast-ok: decisions models expose fields via attributes
-        Any, getattr(usage_obj, standard_name, None)
+        object, getattr(usage_obj, standard_name, None)
     )
     if value is None and decision_name is not None:
         value = cast(  # cast-ok: decisions models expose fields via attributes
-            Any, getattr(usage_obj, decision_name, None)
+            object, getattr(usage_obj, decision_name, None)
         )
     return value if isinstance(value, int) else 0
 
