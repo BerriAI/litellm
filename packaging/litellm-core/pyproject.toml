@@ -13,7 +13,7 @@ dependencies = [
     "fastuuid>=0.14.0,<1.0",
     "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
-    "openai>=2.20.0,<3.0.0",
+    "openai>=2.20.0,<4.0.0",
     "python-dateutil>=2.8.2,<3.0",
     "python-dotenv>=1.0.0,<2.0",
     "pyyaml>=6.0.3,<7.0",
@@ -57,7 +57,6 @@ include = [
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
-    "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
     "litellm/proxy/_experimental/out",

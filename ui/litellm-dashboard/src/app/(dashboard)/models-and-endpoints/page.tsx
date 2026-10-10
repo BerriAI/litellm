@@ -9,7 +9,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { autoRouterCreationScope, canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
-import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
+import DecisionModelsBanner from "@/components/molecules/DecisionModelsBanner";
 import ModelInfoView from "@/components/model_info_view";
 import TeamInfoView from "@/components/team/TeamInfo";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
@@ -178,7 +178,9 @@ export default function ModelsAndEndpointsPage() {
           </div>
         </div>
 
-        <CostOptimizationFeedbackBanner />
+        {!isViewOnly && (
+          <DecisionModelsBanner onAddModel={canCreate && !modelId ? () => setActiveKey("add") : undefined} />
+        )}
 
         {modelId ? (
           <ModelInfoView

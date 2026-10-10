@@ -24,7 +24,7 @@ const invalid = (path: string, message: string): SystemOnePayloadValidation => (
   issues: [{ path, message, severity: "error" }],
 });
 
-function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
+export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
   try {
     return { ok: true, value: JSON.parse(raw) };
   } catch (error: unknown) {
