@@ -118,6 +118,40 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("exchangeLoginCode - storeLoginToken integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls storeLoginToken when exchange response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "sso-jwt" }),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBe("sso-jwt");
+    expect(storeLoginToken).toHaveBeenCalledWith("sso-jwt");
+  });
+
+  it("does not call storeLoginToken when exchange response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBeUndefined();
+    expect(storeLoginToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 
