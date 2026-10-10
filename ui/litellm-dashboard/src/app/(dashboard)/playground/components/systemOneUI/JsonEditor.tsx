@@ -31,7 +31,7 @@ interface JsonEditorProps {
   validation: SystemOnePayloadValidation;
 }
 
-function ValidationStatus({ validation }: { validation: SystemOnePayloadValidation }) {
+export function ValidationStatus({ validation }: { validation: SystemOnePayloadValidation }) {
   const errorCount = validation.issues.filter((issue) => issue.severity === "error").length;
   if (errorCount > 0) {
     return (
@@ -43,7 +43,7 @@ function ValidationStatus({ validation }: { validation: SystemOnePayloadValidati
   return <Badge variant="secondary">Valid payload</Badge>;
 }
 
-function IssueList({ id, validation }: { id: string; validation: SystemOnePayloadValidation }) {
+export function IssueList({ id, validation }: { id: string; validation: SystemOnePayloadValidation }) {
   if (validation.issues.length === 0) {
     return (
       <p id={id} role="status" className="flex items-center gap-1.5 border-t px-3 py-2 text-xs text-muted-foreground">

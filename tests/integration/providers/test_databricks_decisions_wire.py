@@ -216,7 +216,6 @@ def test_an_openai_format_request_at_v1_decisions_reaches_the_ai_decide_route_wi
                 "model": deployment,
                 "input": _OPENAI_INPUT,
                 "questions": [_OPENAI_TIER_QUESTION],
-                "safety_identifier": "end-user-1",
             },
         )
         assert response.status_code == 200, response.text
