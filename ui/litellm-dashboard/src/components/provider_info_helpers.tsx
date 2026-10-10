@@ -43,6 +43,7 @@ import novitaLogo from "../../public/assets/logos/novita.svg";
 import nvidiaNimLogo from "../../public/assets/logos/nvidia_nim.svg";
 import nvidiaTritonLogo from "../../public/assets/logos/nvidia_triton.png";
 import ollamaLogo from "../../public/assets/logos/ollama.svg";
+import onomeoLogo from "../../public/assets/logos/onomeo.svg";
 import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
@@ -146,6 +147,7 @@ export enum Providers {
   NVIDIA_RIVA = "Nvidia Riva",
   Ollama = "Ollama",
   OLLAMA_CHAT = "Ollama Chat",
+  ONOMEO = "onomeo",
   OOBABOOGA = "Oobabooga",
   OpenAI = "OpenAI",
   OPENAI_LIKE = "Openai Like",
@@ -268,6 +270,7 @@ export const provider_map: Record<string, string> = {
   NVIDIA_RIVA: "nvidia_riva",
   Ollama: "ollama",
   OLLAMA_CHAT: "ollama_chat",
+  ONOMEO: "onomeo",
   OOBABOOGA: "oobabooga",
   OpenAI: "openai",
   OPENAI_LIKE: "openai_like",
@@ -380,6 +383,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.NVIDIA_RIVA]: nvidiaNimLogo.src,
   [Providers.Ollama]: ollamaLogo.src,
   [Providers.OLLAMA_CHAT]: ollamaLogo.src,
+  [Providers.ONOMEO]: onomeoLogo.src,
   [Providers.OOBABOOGA]: openaiSmallLogo.src,
   [Providers.OpenAI]: openaiSmallLogo.src,
   [Providers.OPENAI_LIKE]: openaiSmallLogo.src,
@@ -467,6 +471,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.JinaAI]: "jina_ai/",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
+  [Providers.ONOMEO]: "onomeo/deepseek-v4-flash",
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
