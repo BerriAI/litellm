@@ -529,6 +529,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 role="tool",
                                 tool_call_id=content.get("tool_use_id", ""),
                                 content=self._tool_result_content(content.get("content")),
+                                **({"is_error": True} if "is_error" in content and content["is_error"] is True else {}),
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)

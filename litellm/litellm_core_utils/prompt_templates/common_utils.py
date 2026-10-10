@@ -1807,11 +1807,11 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
     )
 
 
-def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+def filter_value_from_dict(dictionary: dict, key: str, *extra_keys: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
 
-    Goes through the nested dict and removes the key if it exists
+    Goes through the nested dict and removes the key (plus any extra keys) if it exists
     """
     from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -1822,14 +1822,14 @@ def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     keys: Final = list(dictionary.keys())
     for k in keys:
         v = dictionary[k]
-        if k == key:
+        if k == key or k in extra_keys:
             del dictionary[k]
         elif isinstance(v, dict):
-            filter_value_from_dict(v, key, depth + 1)
+            filter_value_from_dict(v, key, *extra_keys, depth=depth + 1)
         elif isinstance(v, list):
             for item in v:
                 if isinstance(item, dict):
-                    filter_value_from_dict(item, key, depth + 1)
+                    filter_value_from_dict(item, key, *extra_keys, depth=depth + 1)
     return dictionary
 
 

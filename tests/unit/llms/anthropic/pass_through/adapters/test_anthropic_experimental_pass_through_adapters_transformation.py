@@ -7,7 +7,6 @@ import pytest
 import litellm
 
 
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
@@ -60,10 +59,17 @@ def test_translate_openai_response_to_anthropic_empty_choices() -> None:
     assert result["usage"]["input_tokens"] == 10
 
 
-@pytest.mark.parametrize("text,count,expected_stop", [
-    ("", 1, "compaction"), (None, 1, "compaction"), ("Answer", 1, "max_tokens"),
-    (" ", 1, "max_tokens"), ("", 2, "max_tokens"), ("", 0, "max_tokens"),
-])
+@pytest.mark.parametrize(
+    "text,count,expected_stop",
+    [
+        ("", 1, "compaction"),
+        (None, 1, "compaction"),
+        ("Answer", 1, "max_tokens"),
+        (" ", 1, "max_tokens"),
+        ("", 2, "max_tokens"),
+        ("", 0, "max_tokens"),
+    ],
+)
 def test_native_compaction_response_roundtrip(text: str | None, count: int, expected_stop: str) -> None:
     block: Final = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
     message: Final = Message(content=text, provider_specific_fields={"compaction_blocks": [block] * count})
@@ -172,9 +178,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
                 tool_calls=[
                     ChatCompletionDeltaToolCall(
                         id="call_d581d130-e234-4315-94e8-27e7ff7c4e55",
-                        function=Function(
-                            arguments='{"location": "Boston"}', name="get_weather"
-                        ),
+                        function=Function(arguments='{"location": "Boston"}', name="get_weather"),
                         type="function",
                         index=0,
                     )
@@ -218,9 +222,7 @@ def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_i
                 tool_calls=[
                     ChatCompletionDeltaToolCall(
                         id=combined,
-                        function=Function(
-                            arguments='{"a": 17, "b": 25}', name="add_numbers"
-                        ),
+                        function=Function(arguments='{"a": 17, "b": 25}', name="add_numbers"),
                         type="function",
                         index=0,
                     )
@@ -457,10 +459,7 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert "thinking_blocks" in result[1]
     assert len(result[1]["thinking_blocks"]) == 2
     assert result[1]["thinking_blocks"][0]["type"] == "thinking"
-    assert (
-        result[1]["thinking_blocks"][0]["thinking"]
-        == "I will call the get_weather tool."
-    )
+    assert result[1]["thinking_blocks"][0]["thinking"] == "I will call the get_weather tool."
     assert result[1]["thinking_blocks"][0]["signature"] == "sigsig"
     assert result[1]["thinking_blocks"][1]["type"] == "redacted_thinking"
     assert result[1]["thinking_blocks"][1]["data"] == "REDACTED"
@@ -600,9 +599,7 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
 
     assert tool_message_idx is not None, "Tool message not found"
     assert user_message_idx is not None, "User message not found"
-    assert (
-        tool_message_idx < user_message_idx
-    ), "Tool message should be placed before user message"
+    assert tool_message_idx < user_message_idx, "Tool message should be placed before user message"
 
 
 @pytest.mark.parametrize(
@@ -1068,9 +1065,7 @@ def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lack
 
 
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litellm_proxy():
-    assert "prompt_cache_key" in litellm.get_supported_openai_params(
-        model="xai", custom_llm_provider="litellm_proxy"
-    )
+    assert "prompt_cache_key" in litellm.get_supported_openai_params(model="xai", custom_llm_provider="litellm_proxy")
     openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": CLAUDE_CODE_USER_ID}, "litellm_proxy")
     assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
@@ -1115,7 +1110,8 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
                         id="call_empty_args",
                         type="function",
                         function=Function(
-                            name="test_function", arguments=""  # empty arguments string
+                            name="test_function",
+                            arguments="",  # empty arguments string
                         ),
                     )
                 ],
@@ -1130,9 +1126,7 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0]["type"] == "tool_use"
     assert result[0]["id"] == "call_empty_args"
     assert result[0]["name"] == "test_function"
-    assert (
-        result[0]["input"] == {}
-    ), "Empty function arguments should result in empty dict"
+    assert result[0]["input"] == {}, "Empty function arguments should result in empty dict"
     assert "provider_specific_fields" not in result[0]
 
 
@@ -1256,9 +1250,7 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
                         ChatCompletionAssistantToolCall(
                             id="call_tool_combo",
                             type="function",
-                            function=Function(
-                                name="get_weather", arguments='{"location": "Paris"}'
-                            ),
+                            function=Function(name="get_weather", arguments='{"location": "Paris"}'),
                         )
                     ],
                 ),
@@ -1268,9 +1260,7 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     )
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    anthropic_response = adapter.translate_openai_response_to_anthropic(
-        response=openai_response
-    )
+    anthropic_response = adapter.translate_openai_response_to_anthropic(response=openai_response)
 
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
@@ -1311,9 +1301,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     (
         type_of_content,
         content_block_delta,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(choices=choices)
 
     print("Type of content:", type_of_content)
     print("Content block delta:", content_block_delta)
@@ -1422,9 +1410,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_delta():
     (
         type_of_content,
         content_block_delta,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(choices=choices)
 
     assert type_of_content == "thinking_delta"
     assert content_block_delta["type"] == "thinking_delta"
@@ -1467,9 +1453,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     (
         type_of_content,
         content_block_delta,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(choices=choices)
 
     assert type_of_content == "signature_delta"
     assert content_block_delta["type"] == "signature_delta"
@@ -1573,9 +1557,7 @@ def test_translate_anthropic_messages_to_openai_user_message_with_base64_image()
     # Check image content
     assert result[0]["content"][1]["type"] == "image_url"
     assert "image_url" in result[0]["content"][1]
-    assert result[0]["content"][1]["image_url"]["url"].startswith(
-        "data:image/png;base64,"
-    )
+    assert result[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert (
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
         in result[0]["content"][1]["image_url"]["url"]
@@ -1613,18 +1595,14 @@ def test_translate_anthropic_messages_to_openai_user_message_with_url_image():
     # Check image content
     assert result[0]["content"][1]["type"] == "image_url"
     assert "image_url" in result[0]["content"][1]
-    assert (
-        result[0]["content"][1]["image_url"]["url"] == "https://example.com/forest.jpg"
-    )
+    assert result[0]["content"][1]["image_url"]["url"] == "https://example.com/forest.jpg"
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_base64_image():
     """Test that base64 images in tool results are correctly translated to OpenAI format."""
 
     anthropic_messages = [
-        AnthropicMessagesUserMessageParam(
-            role="user", content=[{"type": "text", "text": "Take a screenshot"}]
-        ),
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Take a screenshot"}]),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
             content=[
@@ -1776,9 +1754,7 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
 
     # Check first image (base64)
     assert result[0]["content"][1]["type"] == "image_url"
-    assert result[0]["content"][1]["image_url"]["url"].startswith(
-        "data:image/png;base64,"
-    )
+    assert result[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
     # Check middle text
     assert result[0]["content"][2]["type"] == "text"
@@ -1786,9 +1762,7 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
 
     # Check second image (URL)
     assert result[0]["content"][3]["type"] == "image_url"
-    assert (
-        result[0]["content"][3]["image_url"]["url"] == "https://example.com/image2.jpg"
-    )
+    assert result[0]["content"][3]["image_url"]["url"] == "https://example.com/image2.jpg"
 
     # Check final text
     assert result[0]["content"][4]["type"] == "text"
@@ -1834,10 +1808,7 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     assert tool_call["id"] == "call_386f67af31f9415781bc35071405"
     assert "function" in tool_call
     assert "provider_specific_fields" in tool_call["function"]
-    assert (
-        tool_call["function"]["provider_specific_fields"]["thought_signature"]
-        == test_signature
-    )
+    assert tool_call["function"]["provider_specific_fields"]["thought_signature"] == test_signature
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_content_items():
@@ -1895,9 +1866,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
     result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
 
     # Count how many tool messages have the same tool_call_id
-    tool_messages = [
-        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
-    ]
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
     tool_call_ids = [msg.get("tool_call_id") for msg in tool_messages]
 
     # The critical assertion: each tool_call_id should appear only ONCE
@@ -1913,12 +1882,8 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_conten
     # The content should be a list with all items combined
     tool_message = tool_messages[0]
     assert tool_message["tool_call_id"] == "toolu_016hYHBkTf4JDF3p22UoYk5C"
-    assert isinstance(
-        tool_message["content"], list
-    ), "Multiple content items should be combined into a list"
-    assert (
-        len(tool_message["content"]) == 3
-    ), f"Expected 3 content items, got {len(tool_message['content'])}"
+    assert isinstance(tool_message["content"], list), "Multiple content items should be combined into a list"
+    assert len(tool_message["content"]) == 3, f"Expected 3 content items, got {len(tool_message['content'])}"
 
     # Verify content types
     assert tool_message["content"][0]["type"] == "text"
@@ -1967,17 +1932,14 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
     adapter = LiteLLMAnthropicMessagesAdapter()
     result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
 
-    tool_messages = [
-        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
-    ]
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
 
     assert len(tool_messages) == 1
     tool_message = tool_messages[0]
 
     # Single item should be a string for backward compatibility
     assert isinstance(tool_message["content"], str), (
-        f"Single content item should be a string for backward compatibility, "
-        f"got {type(tool_message['content'])}"
+        f"Single content item should be a string for backward compatibility, got {type(tool_message['content'])}"
     )
     assert tool_message["content"] == "72°F and sunny"
 
@@ -2081,15 +2043,12 @@ def test_streaming_chunk_with_text_and_empty_tool_calls_returns_text_delta():
 # ============================================================================
 
 # Model constant for cache control tests
-CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = (
-    "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
-)
+CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
 CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
 # Bedrock Application Inference Profile ARN: the string contains neither
 # "anthropic" nor "claude", so the model can only be recognized via its ARN shape
 CACHE_CONTROL_BEDROCK_ARN_MODEL = (
-    "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:"
-    "application-inference-profile/abcdef123456"
+    "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
 )
 
 
@@ -2105,9 +2064,7 @@ def test_should_add_cache_control_for_anthropic_model():
         "vertex_ai/claude-3-sonnet@20240229",
     ]:
         target = {}
-        adapter._add_cache_control_if_applicable(
-            {"cache_control": cache_control}, target, model
-        )
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
         assert "cache_control" in target
         assert target["cache_control"] == cache_control
 
@@ -2122,9 +2079,7 @@ def test_should_not_add_cache_control_for_non_anthropic_model():
         "openai/gpt-4-turbo",
     ]:
         target = {}
-        adapter._add_cache_control_if_applicable(
-            {"cache_control": cache_control}, target, model
-        )
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
         assert "cache_control" not in target
 
 
@@ -2139,9 +2094,7 @@ def test_should_add_cache_control_for_gemini_model():
         "vertex_ai/gemini-2.5-pro",
     ]:
         target = {}
-        adapter._add_cache_control_if_applicable(
-            {"cache_control": cache_control}, target, model
-        )
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
         assert target.get("cache_control") == cache_control
 
 
@@ -2179,9 +2132,7 @@ def test_should_not_add_cache_control_when_none():
         {},
     ]:
         target = {}
-        adapter._add_cache_control_if_applicable(
-            source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
-        )
+        adapter._add_cache_control_if_applicable(source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL)
         assert "cache_control" not in target
 
 
@@ -2192,9 +2143,7 @@ def test_should_not_add_cache_control_when_model_none():
 
     for model in [None, ""]:
         target = {}
-        adapter._add_cache_control_if_applicable(
-            {"cache_control": cache_control}, target, model
-        )
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
         assert "cache_control" not in target
 
 
@@ -2300,12 +2249,7 @@ def test_cache_control_fix_does_not_broaden_claude_detection():
     make is_anthropic_claude_model treat ARN profiles as Claude, which would route
     thinking params through unmodified and break non-Claude Bedrock profiles.
     """
-    assert (
-        LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(
-            CACHE_CONTROL_BEDROCK_ARN_MODEL
-        )
-        is False
-    )
+    assert LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(CACHE_CONTROL_BEDROCK_ARN_MODEL) is False
 
 
 def test_thinking_preserved_for_bedrock_arn_inference_profile():
@@ -2903,9 +2847,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without
     (
         type_of_content,
         content_block_delta,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(choices=choices)
 
     assert type_of_content == "thinking_delta"
     assert content_block_delta["type"] == "thinking_delta"
@@ -2937,9 +2879,7 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     )
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    anthropic_response = adapter.translate_openai_response_to_anthropic(
-        response=openai_response
-    )
+    anthropic_response = adapter.translate_openai_response_to_anthropic(response=openai_response)
 
     anthropic_content = anthropic_response.get("content")
     assert anthropic_content is not None
@@ -2952,9 +2892,7 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
 
     # Second block should be text
     assert anthropic_content[1]["type"] == "text"
-    assert (
-        anthropic_content[1]["text"] == 'There are **3** "r"s in the word strawberry.'
-    )
+    assert anthropic_content[1]["text"] == 'There are **3** "r"s in the word strawberry.'
 
     assert anthropic_response.get("stop_reason") == "end_turn"
 
@@ -3006,9 +2944,7 @@ def test_truncate_tool_name_deterministic():
 def test_truncate_tool_name_avoids_collisions():
     """Similar long names should produce different truncated names."""
     name1 = "process_user_data_with_validation_and_error_handling_for_production_environment"
-    name2 = (
-        "process_user_data_with_validation_and_error_handling_for_staging_environment"
-    )
+    name2 = "process_user_data_with_validation_and_error_handling_for_staging_environment"
 
     result1 = truncate_tool_name(name1)
     result2 = truncate_tool_name(name2)
@@ -3028,9 +2964,7 @@ def test_create_tool_name_mapping_no_long_names():
 
 def test_create_tool_name_mapping_with_long_names():
     """Mapping should contain entries for truncated names."""
-    long_name = (
-        "a_very_long_tool_name_that_exceeds_the_64_character_limit_imposed_by_openai"
-    )
+    long_name = "a_very_long_tool_name_that_exceeds_the_64_character_limit_imposed_by_openai"
     tools = [
         {"name": "short_name"},
         {"name": long_name},
@@ -3055,9 +2989,7 @@ def test_translate_anthropic_tools_with_long_names():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
-        tools=tools, model="gpt-4"
-    )
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=tools, model="gpt-4")
 
     assert len(result) == 1
     # The tool name should be truncated
@@ -3079,9 +3011,7 @@ def test_translate_anthropic_tools_mixed_names():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
-        tools=tools, model="gpt-4"
-    )
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=tools, model="gpt-4")
 
     assert len(result) == 2
     # Short name unchanged
@@ -3095,9 +3025,7 @@ def test_translate_anthropic_tools_mixed_names():
 
 def test_translate_openai_response_restores_tool_names():
     """Tool names in responses should be restored to original."""
-    original_name = (
-        "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
-    )
+    original_name = "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
     truncated_name = truncate_tool_name(original_name)
     tool_name_mapping = {truncated_name: original_name}
 
@@ -3129,9 +3057,7 @@ def test_translate_openai_response_restores_tool_names():
     )
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_openai_response_to_anthropic(
-        response=response, tool_name_mapping=tool_name_mapping
-    )
+    result = adapter.translate_openai_response_to_anthropic(response=response, tool_name_mapping=tool_name_mapping)
 
     # Find the tool_use block in the response
     tool_use_blocks = [c for c in result["content"] if c.get("type") == "tool_use"]
@@ -3552,9 +3478,7 @@ def test_translate_streaming_openai_response_to_anthropic_cache_tokens_with_appl
     assert message_delta["usage"]["output_tokens"] == 50
     assert message_delta["usage"]["cache_read_input_tokens"] == 30
     assert message_delta["usage"]["cache_creation_input_tokens"] == 20
-    assert message_delta["context_management"]["applied_edits"][0]["type"] == (
-        "compact_20260112"
-    )
+    assert message_delta["context_management"]["applied_edits"][0]["type"] == ("compact_20260112")
 
 
 # =====================================================================
@@ -3603,9 +3527,7 @@ def test_translate_anthropic_client_web_search_preserves_schema_and_choice(schem
     translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
 
     assert "web_search_options" not in translated
-    assert translated["tools"] == [
-        {"type": "function", "function": {"name": "web_search", "parameters": schema}}
-    ]
+    assert translated["tools"] == [{"type": "function", "function": {"name": "web_search", "parameters": schema}}]
     assert translated["tool_choice"] == {"type": "function", "function": {"name": "web_search"}}
 
 
@@ -3750,15 +3672,8 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert schema["required"] == ["user"]
         assert schema["properties"]["user"]["additionalProperties"] is False
         assert schema["properties"]["user"]["required"] == ["name", "address"]
-        assert (
-            schema["properties"]["user"]["properties"]["address"][
-                "additionalProperties"
-            ]
-            is False
-        )
-        assert schema["properties"]["user"]["properties"]["address"]["required"] == [
-            "city"
-        ]
+        assert schema["properties"]["user"]["properties"]["address"]["additionalProperties"] is False
+        assert schema["properties"]["user"]["properties"]["address"]["required"] == ["city"]
 
     def test_array_items_object_adds_additional_properties_false(self):
         output_format = {
@@ -3833,19 +3748,9 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert sorted(schema["required"]) == ["age", "email", "name"]
 
     def test_invalid_output_format_returns_none(self):
-        assert (
-            self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
-        )
-        assert (
-            self.adapter.translate_anthropic_output_format_to_openai({"type": "text"})
-            is None
-        )
-        assert (
-            self.adapter.translate_anthropic_output_format_to_openai(
-                {"type": "json_schema"}
-            )
-            is None
-        )
+        assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
+        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
+        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
 
 
 class TestAnthropicStreamWrapperToolArgs:
@@ -4049,9 +3954,7 @@ def test_translate_openai_response_to_anthropic_with_polyfill_compaction_block()
     )
     response = _make_simple_openai_response(text="Hello after compaction.")
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_openai_response_to_anthropic(
-        response=response, polyfill_result=polyfill
-    )
+    result = adapter.translate_openai_response_to_anthropic(response=response, polyfill_result=polyfill)
 
     content = result.get("content")
     assert content is not None
@@ -4083,9 +3986,7 @@ def test_translate_openai_response_to_anthropic_with_polyfill_iterations_usage()
     )
     response = _make_simple_openai_response(prompt_tokens=100, completion_tokens=30)
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_openai_response_to_anthropic(
-        response=response, polyfill_result=polyfill
-    )
+    result = adapter.translate_openai_response_to_anthropic(response=response, polyfill_result=polyfill)
 
     usage = result.get("usage")
     assert usage is not None
@@ -4140,13 +4041,9 @@ def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_an
             {"type": "compaction", "input_tokens": 300, "output_tokens": 75},
         ],
     )
-    response = _make_simple_openai_response(
-        text="After compaction.", prompt_tokens=120, completion_tokens=40
-    )
+    response = _make_simple_openai_response(text="After compaction.", prompt_tokens=120, completion_tokens=40)
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_openai_response_to_anthropic(
-        response=response, polyfill_result=polyfill
-    )
+    result = adapter.translate_openai_response_to_anthropic(response=response, polyfill_result=polyfill)
 
     # compaction block must come first
     content = result.get("content")
@@ -4248,7 +4145,9 @@ def test_translate_anthropic_tools_to_openai_omits_unset_strict():
     assert function["parameters"]["required"] == ["query"]
 
 
-TOOL_RESULT_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+TOOL_RESULT_IMAGE_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 TOOL_RESULT_IMAGE_URL = "https://example.com/screenshot.png"
 
 
@@ -4256,8 +4155,7 @@ def _anthropic_tool_use_turn(*tool_use_ids):
     return AnthopicMessagesAssistantMessageParam(
         role="assistant",
         content=[
-            {"type": "tool_use", "id": tid, "name": "read_file", "input": {"path": "img.png"}}
-            for tid in tool_use_ids
+            {"type": "tool_use", "id": tid, "name": "read_file", "input": {"path": "img.png"}} for tid in tool_use_ids
         ],
     )
 
@@ -4377,9 +4275,7 @@ def test_tool_result_parallel_tool_calls_keep_tool_message_adjacency():
     result = _run_chat_completions_pipeline(
         [
             _anthropic_tool_use_turn("toolu_01", "toolu_02"),
-            _anthropic_tool_result_turn(
-                {"toolu_01": [_base64_image_block()], "toolu_02": [_url_image_block()]}
-            ),
+            _anthropic_tool_result_turn({"toolu_01": [_base64_image_block()], "toolu_02": [_url_image_block()]}),
         ]
     )
 
@@ -4481,10 +4377,7 @@ def test_tool_result_text_and_document_reach_bedrock_converse_tool_result():
     )
 
     tool_results = [
-        block["toolResult"]
-        for message in converse_messages
-        for block in message["content"]
-        if "toolResult" in block
+        block["toolResult"] for message in converse_messages for block in message["content"] if "toolResult" in block
     ]
     assert len(tool_results) == 1
     documents = [part["document"] for part in tool_results[0]["content"] if "document" in part]
@@ -4543,7 +4436,9 @@ def test_translate_anthropic_to_openai_without_prompt_cache_breakpoint_adds_noth
 def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_cache_breakpoint():
     explicit = {"mode": "explicit"}
     result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
-        messages=[{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}],
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
+        ],
         model="gpt-5.6",
     )
     assert result == [
@@ -5143,3 +5038,58 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_translate_anthropic_messages_preserves_tool_result_is_error():
+    messages: Final = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_error",
+                    "is_error": True,
+                    "content": "ToolNotFound: get_weather is not available",
+                },
+            ],
+        ),
+    ]
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=messages)
+
+    tool_messages: Final = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    # the error bit must survive the first hop so downstream provider
+    # translations (e.g. Gemini's functionResponse error) can restore it
+    assert tool_messages[0] == {
+        "role": "tool",
+        "tool_call_id": "toolu_error",
+        "content": "ToolNotFound: get_weather is not available",
+        "is_error": True,
+    }
+
+
+def test_translate_anthropic_messages_omits_is_error_for_plain_tool_results():
+    messages: Final = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_ok",
+                    "content": "Sunny, 75°F",
+                },
+            ],
+        ),
+    ]
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=messages)
+
+    tool_messages: Final = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    # non-error tool results keep their existing shape byte-for-byte
+    assert tool_messages[0] == {
+        "role": "tool",
+        "tool_call_id": "toolu_ok",
+        "content": "Sunny, 75°F",
+    }

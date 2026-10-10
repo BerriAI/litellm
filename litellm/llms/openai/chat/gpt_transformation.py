@@ -410,9 +410,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         from litellm.types.llms.openai import ChatCompletionToolParam
 
         for i, message in enumerate(messages):
+            # is_error: litellm's anthropic adapter carries tool_result.is_error
+            # on the intermediate tool message so error-aware translations can
+            # restore it; real OpenAI has no such field (#44979). Stripped in
+            # the same in-place pass as cache_control.
             messages[i] = cast(
                 AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),
+                filter_value_from_dict(message, "cache_control", "is_error"),
             )
         if tools is not None:
             for i, tool in enumerate(tools):
