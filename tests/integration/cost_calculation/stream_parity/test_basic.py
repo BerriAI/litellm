@@ -18,15 +18,15 @@ from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 from integration.cost_calculation.stream_parity.runner import assert_stream_parity
 
 NATIVE: Final = (
-    openai.GPT_5_6_CHAT_COMPLETIONS_PARITY,
+    openai.GPT_6_1_SOL_CHAT_COMPLETIONS_PARITY,
     anthropic.CLAUDE_OPUS_5_5_MESSAGES_PARITY,
-    openai_responses.GPT_5_3_CODEX_RESPONSES_PARITY,
+    openai_responses.GPT_6_1_SOL_RESPONSES_PARITY,
 )
 BRIDGES: Final = (
     xai.GROK_4_7_MESSAGES_PARITY,
-    openai.GPT_5_6_MESSAGES_PARITY,
+    openai.GPT_6_1_SOL_MESSAGES_PARITY,
     bedrock.CLAUDE_OPUS_5_5_CONVERSE_MESSAGES_PARITY,
-    openai_responses.GPT_5_3_CODEX_CHAT_COMPLETIONS_PARITY,
+    openai_responses.GPT_5_5_PRO_CHAT_COMPLETIONS_PARITY,
     anthropic.CLAUDE_OPUS_5_5_RESPONSES_PARITY,
 )
 CASES: Final = (*NATIVE, *BRIDGES)

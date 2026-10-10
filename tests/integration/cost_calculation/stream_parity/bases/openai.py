@@ -8,8 +8,8 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.bases.openai_responses import (
-    GPT_5_3_CODEX_RESPONSES,
-    GPT_5_3_CODEX_RESPONSES_PARITY_STREAM_RESPONSE,
+    GPT_6_1_SOL_RESPONSES,
+    GPT_6_1_SOL_RESPONSES_PARITY_STREAM_RESPONSE,
 )
 from integration.cost_calculation.stream_parity.case import COVERS, MODEL, REQUEST_ID, StreamParityTestCase, sse_frames
 
@@ -18,13 +18,13 @@ _CHUNK: Final = {
     "id": f"chatcmpl-{REQUEST_ID}",
     "object": "chat.completion.chunk",
     "created": 1,
-    "model": "gpt-5.6",
+    "model": "gpt-6.1-sol",
 }
 
-GPT_5_6_CHAT_COMPLETIONS: Final = CostTrackingTestCase(
-    name="gpt-5.6-chat-parity",
+GPT_6_1_SOL_CHAT_COMPLETIONS: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-chat-parity",
     covers=COVERS,
-    model="gpt-5.6",
+    model="gpt-6.1-sol",
     endpoint="/v1/chat/completions",
     deployment=Deployment(input_cost_per_token=0.001, output_cost_per_token=0.002),
     request={"model": MODEL, "messages": [{"role": "user", "content": "Say hello."}], "cache": {"no-cache": True}},
@@ -34,7 +34,7 @@ GPT_5_6_CHAT_COMPLETIONS: Final = CostTrackingTestCase(
             "id": f"chatcmpl-{REQUEST_ID}",
             "object": "chat.completion",
             "created": 1,
-            "model": "gpt-5.6",
+            "model": "gpt-6.1-sol",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello."}, "finish_reason": "stop"}],
             "usage": _USAGE,
         },
@@ -42,13 +42,13 @@ GPT_5_6_CHAT_COMPLETIONS: Final = CostTrackingTestCase(
     expected=ExactExpected(spend=0.11, input_cost=0.03, output_cost=0.08, prompt_tokens=30, completion_tokens=40),
 )
 
-GPT_5_6_CHAT_COMPLETIONS_PARITY: Final = StreamParityTestCase(
-    plain=GPT_5_6_CHAT_COMPLETIONS,
-    streamed=GPT_5_6_CHAT_COMPLETIONS.model_copy(
+GPT_6_1_SOL_CHAT_COMPLETIONS_PARITY: Final = StreamParityTestCase(
+    plain=GPT_6_1_SOL_CHAT_COMPLETIONS,
+    streamed=GPT_6_1_SOL_CHAT_COMPLETIONS.model_copy(
         update={
-            "name": "gpt-5.6-chat-parity-stream",
+            "name": "gpt-6.1-sol-chat-parity-stream",
             "request": {
-                **GPT_5_6_CHAT_COMPLETIONS.request,
+                **GPT_6_1_SOL_CHAT_COMPLETIONS.request,
                 "stream": True,
                 "stream_options": {"include_usage": True},
             },
@@ -65,10 +65,10 @@ GPT_5_6_CHAT_COMPLETIONS_PARITY: Final = StreamParityTestCase(
     ),
 )
 
-GPT_5_6_MESSAGES: Final = GPT_5_3_CODEX_RESPONSES.model_copy(
+GPT_6_1_SOL_MESSAGES: Final = GPT_6_1_SOL_RESPONSES.model_copy(
     update={
-        "name": "gpt-5.6-messages-parity",
-        "model": "gpt-5.6",
+        "name": "gpt-6.1-sol-messages-parity",
+        "model": "gpt-6.1-sol",
         "endpoint": "/v1/messages",
         "request": {
             "model": MODEL,
@@ -79,13 +79,13 @@ GPT_5_6_MESSAGES: Final = GPT_5_3_CODEX_RESPONSES.model_copy(
     }
 )
 
-GPT_5_6_MESSAGES_PARITY: Final = StreamParityTestCase(
-    plain=GPT_5_6_MESSAGES,
-    streamed=GPT_5_6_MESSAGES.model_copy(
+GPT_6_1_SOL_MESSAGES_PARITY: Final = StreamParityTestCase(
+    plain=GPT_6_1_SOL_MESSAGES,
+    streamed=GPT_6_1_SOL_MESSAGES.model_copy(
         update={
-            "name": "gpt-5.6-messages-parity-stream",
-            "request": {**GPT_5_6_MESSAGES.request, "stream": True},
-            "response": GPT_5_3_CODEX_RESPONSES_PARITY_STREAM_RESPONSE,
+            "name": "gpt-6.1-sol-messages-parity-stream",
+            "request": {**GPT_6_1_SOL_MESSAGES.request, "stream": True},
+            "response": GPT_6_1_SOL_RESPONSES_PARITY_STREAM_RESPONSE,
         }
     ),
 )

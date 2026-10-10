@@ -804,6 +804,17 @@
       "max_input_tokens": 1000000,
       "max_output_tokens": 128000,
       "supports_function_calling": true
+    },
+    "gpt-6.1-sol": {
+      "litellm_provider": "openai",
+      "mode": "chat",
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05,
+      "cache_read_input_token_cost": 1e-07,
+      "max_tokens": 128000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "supports_function_calling": true
     }
   },
   "cases": [
@@ -32277,6 +32288,53 @@
         "spend": 0.0156,
         "input_cost": 0.00736,
         "output_cost": 0.00824,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-6.1-sol-input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-6.1-sol",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello."
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1,
+          "model": "gpt-6.1-sol",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "Hello."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0078,
+        "input_cost": 0.00368,
+        "output_cost": 0.00412,
         "prompt_tokens": 1840,
         "completion_tokens": 412
       }

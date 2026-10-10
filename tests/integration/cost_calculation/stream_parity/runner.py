@@ -14,7 +14,7 @@ from integration.cost_calculation.cost_tracking_case import ExactExpected
 from integration.cost_calculation.stream_parity.bases import openai_responses
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
-FLUSH_CASE: Final = openai_responses.GPT_5_3_CODEX_RESPONSES
+FLUSH_CASE: Final = openai_responses.GPT_6_1_SOL_RESPONSES
 
 
 def flush_spend_logs(scenario: Scenario, gateway: Gateway, key: str) -> str:

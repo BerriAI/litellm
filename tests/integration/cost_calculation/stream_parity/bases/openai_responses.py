@@ -21,15 +21,15 @@ _RESPONSE: Final = {
     "object": "response",
     "created_at": 1,
     "status": "completed",
-    "model": "gpt-5.3-codex",
+    "model": "gpt-6.1-sol",
     "output": [_ITEM],
     "usage": {"input_tokens": 30, "output_tokens": 40, "total_tokens": 70},
 }
 
-GPT_5_3_CODEX_RESPONSES: Final = CostTrackingTestCase(
-    name="gpt-5.3-codex-responses-parity",
+GPT_6_1_SOL_RESPONSES: Final = CostTrackingTestCase(
+    name="gpt-6.1-sol-responses-parity",
     covers=COVERS,
-    model="gpt-5.3-codex",
+    model="gpt-6.1-sol",
     endpoint="/v1/responses",
     deployment=Deployment(input_cost_per_token=0.001, output_cost_per_token=0.002),
     request={"model": MODEL, "input": "Say hello.", "cache": {"no-cache": True}},
@@ -37,7 +37,7 @@ GPT_5_3_CODEX_RESPONSES: Final = CostTrackingTestCase(
     expected=ExactExpected(spend=0.11, input_cost=0.03, output_cost=0.08, prompt_tokens=30, completion_tokens=40),
 )
 
-GPT_5_3_CODEX_RESPONSES_PARITY_STREAM_RESPONSE: Final = SseResponse(
+GPT_6_1_SOL_RESPONSES_PARITY_STREAM_RESPONSE: Final = SseResponse(
     content_type="text/event-stream",
     frames=sse_frames(
         {
@@ -64,20 +64,32 @@ GPT_5_3_CODEX_RESPONSES_PARITY_STREAM_RESPONSE: Final = SseResponse(
     ),
 )
 
-GPT_5_3_CODEX_RESPONSES_PARITY: Final = StreamParityTestCase(
-    plain=GPT_5_3_CODEX_RESPONSES,
-    streamed=GPT_5_3_CODEX_RESPONSES.model_copy(
+GPT_6_1_SOL_RESPONSES_PARITY: Final = StreamParityTestCase(
+    plain=GPT_6_1_SOL_RESPONSES,
+    streamed=GPT_6_1_SOL_RESPONSES.model_copy(
         update={
-            "name": "gpt-5.3-codex-responses-parity-stream",
-            "request": {**GPT_5_3_CODEX_RESPONSES.request, "stream": True},
-            "response": GPT_5_3_CODEX_RESPONSES_PARITY_STREAM_RESPONSE,
+            "name": "gpt-6.1-sol-responses-parity-stream",
+            "request": {**GPT_6_1_SOL_RESPONSES.request, "stream": True},
+            "response": GPT_6_1_SOL_RESPONSES_PARITY_STREAM_RESPONSE,
         }
     ),
 )
 
-GPT_5_3_CODEX_CHAT_COMPLETIONS: Final = GPT_5_3_CODEX_RESPONSES.model_copy(
+_PRO_RESPONSE: Final = {**_RESPONSE, "model": "gpt-5.5-pro"}
+GPT_5_5_PRO_STREAM_RESPONSE: Final = GPT_6_1_SOL_RESPONSES_PARITY_STREAM_RESPONSE.model_copy(
     update={
-        "name": "gpt-5.3-codex-chat-parity",
+        "frames": tuple(
+            frame.replace('"model": "gpt-6.1-sol"', '"model": "gpt-5.5-pro"')
+            for frame in GPT_6_1_SOL_RESPONSES_PARITY_STREAM_RESPONSE.frames
+        )
+    }
+)
+
+GPT_5_5_PRO_CHAT_COMPLETIONS: Final = GPT_6_1_SOL_RESPONSES.model_copy(
+    update={
+        "name": "gpt-5.5-pro-chat-parity",
+        "model": "gpt-5.5-pro",
+        "response": JsonResponse(content_type="application/json", body=_PRO_RESPONSE),
         "endpoint": "/v1/chat/completions",
         "request": {
             "model": MODEL,
@@ -87,17 +99,17 @@ GPT_5_3_CODEX_CHAT_COMPLETIONS: Final = GPT_5_3_CODEX_RESPONSES.model_copy(
     }
 )
 
-GPT_5_3_CODEX_CHAT_COMPLETIONS_PARITY: Final = StreamParityTestCase(
-    plain=GPT_5_3_CODEX_CHAT_COMPLETIONS,
-    streamed=GPT_5_3_CODEX_CHAT_COMPLETIONS.model_copy(
+GPT_5_5_PRO_CHAT_COMPLETIONS_PARITY: Final = StreamParityTestCase(
+    plain=GPT_5_5_PRO_CHAT_COMPLETIONS,
+    streamed=GPT_5_5_PRO_CHAT_COMPLETIONS.model_copy(
         update={
-            "name": "gpt-5.3-codex-chat-parity-stream",
+            "name": "gpt-5.5-pro-chat-parity-stream",
             "request": {
-                **GPT_5_3_CODEX_CHAT_COMPLETIONS.request,
+                **GPT_5_5_PRO_CHAT_COMPLETIONS.request,
                 "stream": True,
                 "stream_options": {"include_usage": True},
             },
-            "response": GPT_5_3_CODEX_RESPONSES_PARITY_STREAM_RESPONSE,
+            "response": GPT_5_5_PRO_STREAM_RESPONSE,
         }
     ),
 )
