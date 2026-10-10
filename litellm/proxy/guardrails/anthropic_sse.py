@@ -45,14 +45,12 @@ def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
 
 
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-        AnthropicPassthroughLoggingHandler,
-    )
+    from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data, split_sse_chunk_into_events
 
     return tuple(
         event_data
-        for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
-        if (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
+        for event in split_sse_chunk_into_events(sse_stream)
+        if (event_data := extract_sse_data(event)) is not None
     )
 
 
@@ -91,9 +89,7 @@ def assemble_anthropic_sse_stream(
     response keep the wire shape they had before this helper was shared. The writes land on a
     freshly built object that is unreachable from caller state until returned.
     """
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-        AnthropicPassthroughLoggingHandler,
-    )
+    from litellm.llms.anthropic.pass_through.stream_assembly import build_complete_streaming_response
 
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
@@ -103,7 +99,7 @@ def assemble_anthropic_sse_stream(
         return None
     model: Final = message_start.get("model") if restore_identity else None
     try:
-        assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only SSE-to-ModelResponse assembler; reimplementing it here would fork the parser
+        assembled: Final = build_complete_streaming_response(
             all_chunks=(sse_stream,),
             litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
             model=model if isinstance(model, str) else "",
