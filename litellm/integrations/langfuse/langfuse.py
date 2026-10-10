@@ -114,16 +114,20 @@ def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
 
     /v1/responses carries ResponseAPIUsage (input_tokens/output_tokens), and an
     assembled /v1/responses stream carries a plain dict of chat usage fields.
-    Any other usage object is returned unchanged.
+    Any other usage object, or a dict whose token counts are not integers, is
+    returned unchanged.
     """
     if isinstance(raw_usage, ResponseAPIUsage):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
     usage_fields: Final = _object_mapping(raw_usage)
-    if usage_fields is not None and (
+    if usage_fields is None or not (
         ResponseAPILoggingUtils.is_response_api_usage(usage_fields) or "prompt_tokens" in usage_fields
     ):
+        return raw_usage
+    try:
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_fields)
-    return raw_usage
+    except ValueError:
+        return raw_usage
 
 
 def _extract_cache_read_input_tokens(usage_obj) -> int:

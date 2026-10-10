@@ -497,6 +497,15 @@ class ResponsesApiResponse(BaseModel):
     usage: ResponsesUsage | None = None
 
 
+class ResponsesStreamEvent(BaseModel):
+    """One `/v1/responses` SSE event; `response.completed` carries the final response."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    response: ResponsesApiResponse | None = None
+
+
 # ---------- anthropic /v1/messages + count_tokens ----------
 
 

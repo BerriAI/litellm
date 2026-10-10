@@ -414,6 +414,21 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "cache_read_input_tokens": 4,
         }
 
+    def test_log_langfuse_v2_malformed_responses_api_usage_still_logs(self):
+        """A usage dict whose token counts fail validation is logged as zero usage, not dropped."""
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[])
+        setattr(response_obj, "usage", {"input_tokens": 16, "output_tokens": None})
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        assert usage_details == {
+            "input": 0,
+            "output": 0,
+            "total": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+
     def _build_standard_logging_payload(self, trace_id: str | None = None):
         payload = {
             "id": "payload-id",
