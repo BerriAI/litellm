@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import asyncio
 from asyncio import AbstractEventLoop, Semaphore
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from time import time
 from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
@@ -21,7 +22,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_target
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall, ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelCheck,
     DecisionModelGuardrailConfigModel,
@@ -57,7 +58,9 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     return checks
 
 
-def _tool_call_text(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> str | None:
+def _tool_call_text(
+    tool_call: ChatCompletionToolCallChunk | ChatCompletionAssistantToolCall | ChatCompletionMessageToolCall,
+) -> str | None:
     if isinstance(tool_call, dict):
         function: Final = tool_call.get("function")
         dict_arguments: Final = function.get("arguments") if function else None
@@ -71,8 +74,15 @@ def _tool_call_text(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessa
     return f"{tool_call.function.name or ''}({arguments})"
 
 
+def _structured_tool_calls(inputs: GenericGuardrailAPIInputs) -> Iterator[ChatCompletionAssistantToolCall]:
+    for message in inputs.get("structured_messages") or ():
+        if "role" in message and message["role"] == "assistant":
+            yield from message.get("tool_calls") or ()
+
+
 def _tool_call_texts(inputs: GenericGuardrailAPIInputs) -> tuple[str, ...]:
-    return tuple(text for text in map(_tool_call_text, inputs.get("tool_calls") or ()) if text is not None)
+    tool_calls: Final = chain(inputs.get("tool_calls") or (), _structured_tool_calls(inputs))
+    return tuple(dict.fromkeys(text for text in map(_tool_call_text, tool_calls) if text is not None))
 
 
 def _chunk_text(text: str, max_chars: int) -> tuple[str, ...]:
