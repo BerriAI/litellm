@@ -118,10 +118,16 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
-    if (selectedAuthType) {
-      onAuthTypeChange?.(selectedAuthType.id);
+    if (!selectedAuthType) {
+      return;
     }
-  }, [onAuthTypeChange, selectedAuthType]);
+    onAuthTypeChange?.(selectedAuthType.id);
+    if (context !== "model" || !selectedAuthType.credentialOnly) {
+      Object.entries(selectedAuthType.fixedValues ?? {}).forEach(([fieldKey, fixedValue]) => {
+        form.setValue(fieldKey, fixedValue);
+      });
+    }
+  }, [context, form, onAuthTypeChange, selectedAuthType]);
   const pickCredentialsFile =
     (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];

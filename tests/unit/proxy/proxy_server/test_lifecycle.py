@@ -883,6 +883,9 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
         "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
     }
+    from litellm.llms.github_copilot.authenticator import _SHARED_LOGIN_ALLOWED
+
+    _SHARED_LOGIN_ALLOWED.set()
     with (
         patch.dict(os.environ, clean_env, clear=True),
         patch.object(ps, "scheduler", scheduler),
@@ -890,6 +893,7 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     ):
         try:
             async with proxy_startup_event(app=None):
+                assert not _SHARED_LOGIN_ALLOWED.is_set()
                 job = scheduler.get_job("refresh_model_info")
         finally:
             if scheduler.running:

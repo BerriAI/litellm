@@ -524,9 +524,7 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
     const user = userEvent.setup();
     const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
 
-    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Shared device login");
-    expect(await screen.findByLabelText("API Key")).toBeInTheDocument();
-    await chooseOption(user, /^Auth Type:/, "Per-user GitHub OAuth");
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
     expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
     fill("Credential Name:", "copilot-per-user");
@@ -542,31 +540,16 @@ describe("CredentialModal with GitHub Copilot auth types", () => {
     );
   });
 
-  it("keeps the shared device login credential free of the per-user auth type", async () => {
-    const user = userEvent.setup();
-    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
-
-    await screen.findByLabelText("API Key");
-    fill("Credential Name:", "copilot-shared");
-    await user.click(screen.getByRole("button", { name: "Add Credential" }));
-
-    expect(onSubmit).toHaveBeenCalledWith(
-      { credential_name: "copilot-shared", custom_llm_provider: "GITHUB_COPILOT" },
-      [],
-    );
-  });
-
-  it("opens a stored per-user credential on its auth type and deletes it when switched to shared", async () => {
+  it("preserves the per-user auth type when editing a stored credential", async () => {
     const user = userEvent.setup();
     const onSubmit = renderModal({ mode: "edit", existingCredential: perUserCopilotCredential });
 
     expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
-    await chooseOption(user, /^Auth Type:/, "Shared device login");
     await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
     const [values, valuesToDelete] = onSubmit.mock.calls[0];
     expect(values).toEqual({ credential_name: "copilot-per-user", custom_llm_provider: "GITHUB_COPILOT" });
-    expect(valuesToDelete).toEqual(["github_copilot_auth_type"]);
+    expect(valuesToDelete).toEqual([]);
   });
 });
 

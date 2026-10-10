@@ -7,6 +7,7 @@ export interface ProviderAuthType {
   readonly fieldKeys: readonly string[];
   readonly requiredFieldKeys: readonly string[];
   readonly fixedValues?: Readonly<Record<string, string>>;
+  readonly hiddenFieldKeys?: readonly string[];
   readonly credentialOnly?: boolean;
 }
 
@@ -18,14 +19,6 @@ export const GITHUB_COPILOT_PER_USER_AUTH_TYPE = "per_user_oauth";
 export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonly ProviderAuthType[]>> = {
   GITHUB_COPILOT: [
     {
-      id: "shared_device_login",
-      label: "Shared device login",
-      description:
-        "One GitHub device login on the proxy host, stored in its token file, is used for every caller of models on this credential.",
-      fieldKeys: ["api_base", "api_key"],
-      requiredFieldKeys: [],
-    },
-    {
       id: GITHUB_COPILOT_PER_USER_AUTH_TYPE,
       label: "Per-user GitHub OAuth",
       credentialOnly: true,
@@ -33,6 +26,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
         "Each LiteLLM user connects their own GitHub account from LLM Credentials, and their requests use their own GitHub Copilot access. Users who have not connected get a 401.",
       fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
       requiredFieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
+      hiddenFieldKeys: ["api_base", "api_key"],
       fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: GITHUB_COPILOT_PER_USER_AUTH_TYPE },
     },
   ],
@@ -88,12 +82,14 @@ export const inferAuthTypeId = (authTypes: readonly ProviderAuthType[], values: 
   "";
 
 export const hiddenAuthFieldKeys = (authTypes: readonly ProviderAuthType[], selectedId: string): readonly string[] => {
-  const selectedFieldKeys = authTypes.find(({ id }) => id === selectedId)?.fieldKeys ?? [];
+  const selectedAuthType = authTypes.find(({ id }) => id === selectedId);
+  const selectedFieldKeys = selectedAuthType?.fieldKeys ?? [];
+  const fieldsToHide = [
+    ...(selectedAuthType?.hiddenFieldKeys ?? []),
+    ...authTypes.filter(({ id }) => id !== selectedId).flatMap(({ fieldKeys }) => fieldKeys),
+  ];
 
-  return authTypes
-    .filter(({ id }) => id !== selectedId)
-    .flatMap(({ fieldKeys }) => fieldKeys)
-    .filter(
-      (fieldKey, index, fieldKeys) => !selectedFieldKeys.includes(fieldKey) && fieldKeys.indexOf(fieldKey) === index,
-    );
+  return fieldsToHide.filter(
+    (fieldKey, index, fieldKeys) => !selectedFieldKeys.includes(fieldKey) && fieldKeys.indexOf(fieldKey) === index,
+  );
 };

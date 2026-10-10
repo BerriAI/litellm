@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 
 from litellm.exceptions import AuthenticationError
+from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.embedding.transformation import (
     GithubCopilotEmbeddingConfig,
 )
@@ -264,8 +265,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
     config = GithubCopilotEmbeddingConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
+    config.authenticator = Authenticator(shared_login_allowed=lambda: False)
 
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
     headers = config.validate_environment(
@@ -276,7 +276,23 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
-    config.authenticator.get_api_key.assert_not_called()
+
+
+def test_shared_authentication_error_is_raised_when_login_is_disabled():
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = Authenticator(shared_login_allowed=lambda: False)
+
+    with pytest.raises(AuthenticationError) as exc_info:
+        config.validate_environment(
+            headers={},
+            model="github_copilot/text-embedding-3-small",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+    assert "GitHub Copilot shared device login is disabled on the LiteLLM proxy" in str(exc_info.value)
+    assert exc_info.value.status_code == 401
 
 
 def test_per_user_session_token_wins_over_caller_authorization():

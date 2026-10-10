@@ -5,6 +5,7 @@ import pytest
 
 
 from litellm.exceptions import AuthenticationError
+from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
@@ -329,9 +330,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
     config = GithubCopilotAnthropicMessagesConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
-    config.authenticator.get_api_base.side_effect = AssertionError("shared authenticator must not run")
+    config.authenticator = Authenticator(shared_login_allowed=lambda: False)
 
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://tenant.githubcopilot.com/")
     headers, api_base = config.validate_anthropic_messages_environment(
@@ -343,7 +342,23 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
     assert api_base == "https://tenant.githubcopilot.com"
-    config.authenticator.get_api_key.assert_not_called()
+
+
+def test_shared_authentication_error_is_raised_when_login_is_disabled():
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = Authenticator(shared_login_allowed=lambda: False)
+
+    with pytest.raises(AuthenticationError) as exc_info:
+        config.validate_anthropic_messages_environment(
+            headers={},
+            model="github_copilot/claude-sonnet-5.5",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+    assert "GitHub Copilot shared device login is disabled on the LiteLLM proxy" in str(exc_info.value)
+    assert exc_info.value.status_code == 401
 
 
 def test_per_user_session_token_wins_over_caller_authorization():
