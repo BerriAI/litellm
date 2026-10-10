@@ -38,7 +38,7 @@ export default function JevClassifierConfig({
       {section !== "advanced" && (
         <>
           <p className="text-sm text-muted-foreground">{providerDescriptions[config.provider ?? "jev"]}</p>
-          <div>
+          <div className="space-y-2">
             <Label htmlFor={`${id}-model`}>Classifier Model</Label>
             {models ? (
               <Select value={config.model} onValueChange={(model) => model && update({ model })}>
@@ -70,7 +70,7 @@ export default function JevClassifierConfig({
       )}
       {section !== "model" && (
         <>
-          <div>
+          <div className="space-y-2">
             <Label htmlFor={`${id}-timeout`}>Classifier Timeout (ms)</Label>
             <Input
               id={`${id}-timeout`}
@@ -90,7 +90,7 @@ export default function JevClassifierConfig({
               })
             }
           />
-          <div>
+          <div className="space-y-2">
             <Label htmlFor={`${id}-instructions`}>Classifier Instructions</Label>
             <AutoRouterAllowanceNote
               feature="tier_or_classifier_prompt"
@@ -108,7 +108,7 @@ export default function JevClassifierConfig({
               </Button>
             )}
             <p className="text-xs text-muted-foreground">
-              Built-in OSS classification is available without a license and uses the shipped tier criteria
+              Built-in decision model classification is available without a license and uses the shipped tier criteria
             </p>
           </div>
         </>

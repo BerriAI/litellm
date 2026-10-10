@@ -194,7 +194,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
-    await userEvent.click(screen.getByRole("radio", { name: "OSS Classifier" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
     expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
     expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Choose models for me" })).not.toBeInTheDocument();
@@ -328,7 +328,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
-    await user.click(screen.getByRole("radio", { name: "OSS Classifier" }));
+    await user.click(screen.getByRole("radio", { name: "Decisions Model" }));
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith(
         "/auto_router/availability",
@@ -355,7 +355,7 @@ describe("AddAutoRouterTab", () => {
     expect(within(screen.getByRole("alert")).getByRole("link", { name: "Talk to our team" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Restore defaults" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.getByRole("radio", { name: "OSS Classifier" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Decisions Model" })).toBeChecked();
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -371,7 +371,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
-    await user.click(screen.getByRole("radio", { name: "OSS Classifier" }));
+    await user.click(screen.getByRole("radio", { name: "Decisions Model" }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     let complete: ((result: unknown) => void) | undefined;
@@ -411,7 +411,7 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent("Complexity");
   });
 
-  it.each(["LLM", "OSS Classifier"])(
+  it.each(["LLM", "Decisions Model"])(
     "keeps %s and the frequency selected before automatic models finish loading",
     async (family) => {
       let complete: ((models: ModelGroup[]) => void) | undefined;
