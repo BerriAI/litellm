@@ -93,6 +93,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     };
     let response = request.send().await.unwrap();
     assert_eq!(response.status().as_u16(), status);
+    assert_eq!(response.headers()["x-litellm-rust"], "true");
     if status == 400 {
         let expected = Error::UnknownModel("unconfigured-model".into());
         assert_eq!(
@@ -286,4 +287,57 @@ async fn ui_routes_are_absent_when_not_mounted(
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 404);
+}
+
+#[rstest]
+#[tokio::test]
+async fn mounted_transport_headers_survive_gateway_middleware(inference: Arc<Gateway>) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let mounted = axum::Router::new().route(
+        "/mcp-header-test",
+        axum::routing::get(|| async {
+            let mut response = axum::response::Response::new(Body::from("mounted"));
+            response
+                .headers_mut()
+                .append("x-provider-trace", "first".parse().unwrap());
+            response
+                .headers_mut()
+                .append("x-provider-trace", "second".parse().unwrap());
+            response
+                .headers_mut()
+                .insert("set-cookie", "gateway-session=owned".parse().unwrap());
+            response
+                .headers_mut()
+                .insert("x-litellm-rust", "false".parse().unwrap());
+            response
+        }),
+    );
+    let response = litellm_gateway::router(inference, &config, None, Some(mounted))
+        .oneshot(
+            Request::get("/mcp-header-test")
+                .header("authorization", "Bearer gateway-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-provider-trace")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(response.headers()["set-cookie"], "gateway-session=owned");
+    assert_eq!(response.headers()["x-litellm-rust"], "true");
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap(),
+        "mounted"
+    );
 }

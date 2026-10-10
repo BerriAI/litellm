@@ -25,7 +25,12 @@ pub struct ResponsesStreamHead {
     pub headers: Vec<(String, String)>,
 }
 
-pub type ResponsesOutput = CallOutput<ResponsesApiResponse, ResponsesStreamHead, Bytes, Error>;
+pub type ResponsesOutput = CallOutput<
+    litellm_http::response::ProviderResponse<ResponsesApiResponse>,
+    ResponsesStreamHead,
+    Bytes,
+    Error,
+>;
 
 pub(super) struct ProviderResponsesRequest {
     pub config: &'static dyn BaseResponsesApiConfig,

@@ -441,3 +441,41 @@ async fn dot_segment_model_ids_are_rejected(#[case] model: &str) {
 
     assert!(error.to_string().contains("dot segment"), "{error}");
 }
+
+#[rstest]
+#[case::direct(false)]
+#[case::polled(true)]
+#[tokio::test]
+async fn provider_headers_come_from_the_completed_operation(#[case] polled: bool) {
+    let upstream = MockServer::start().await;
+    if polled {
+        respond_in_order(
+            &upstream,
+            [accepted(&upstream, json!({})).insert_header("x-provider-trace", "initial")],
+        )
+        .await;
+    }
+    respond_in_order(
+        &upstream,
+        [
+            json_response(json!({"status":"succeeded", "analyzeResult":{"pages":[]}}))
+                .append_header("x-provider-trace", "first")
+                .append_header("x-provider-trace", "second"),
+        ],
+    )
+    .await;
+    let response = ocr_route()
+        .execute(read_request(&upstream.uri(), json!({})), &(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        response
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "x-provider-trace")
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert!(response.pages.is_empty());
+}

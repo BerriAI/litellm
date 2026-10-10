@@ -84,6 +84,8 @@ def amessages(
 
 @final
 class ResponsesWebSocketConnection:
+    @property
+    def response_headers(self) -> list[tuple[str, str]]: ...
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @classmethod
     def connect(

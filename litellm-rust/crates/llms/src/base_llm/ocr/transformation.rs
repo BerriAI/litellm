@@ -187,6 +187,7 @@ pub fn response_format(optional_params: &CallArguments) -> Result<OcrResponseFor
 
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
+    pub headers: Vec<(String, String)>,
     pub data: T,
     pub native: Option<Map<String, Value>>,
     pub text: String,
@@ -231,6 +232,7 @@ pub fn decode_response<T: DeserializeOwned>(
         None
     };
     Ok(DecodedOcrResponse {
+        headers: Vec::new(),
         data,
         native,
         text: String::from_utf8_lossy(bytes).into_owned(),
@@ -356,12 +358,16 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         model: &str,
         raw_response: reqwest::Response,
         context: OcrResponseContext<'_>,
-    ) -> impl Future<Output = Result<LiteLLMOcrResponse, Error>> + Send {
+    ) -> impl Future<
+        Output = Result<litellm_http::response::ProviderResponse<LiteLLMOcrResponse>, Error>,
+    > + Send {
         async move {
+            let headers = litellm_http::request::response_headers(raw_response.headers());
             let bytes =
                 read_response_bytes(raw_response, context.connection.max_response_bytes).await?;
             context.hooks.response_received(&bytes).await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
+                .map(|body| litellm_http::response::ProviderResponse { body, headers })
         }
     }
 

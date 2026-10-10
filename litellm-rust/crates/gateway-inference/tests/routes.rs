@@ -38,10 +38,10 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
         .and(body_partial_json(
             json!({"model": "test-model", "max_tokens": 16}),
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        .respond_with(support::provider_headers(ResponseTemplate::new(200).set_body_json(json!({
             "id": "msg_test", "model": "test-model", "content": [{"type": "text", "text": "hello"}],
             "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
-        })))
+        }))))
         .expect(1)
         .mount(&upstream)
         .await;
@@ -61,6 +61,7 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    support::assert_provider_headers(response.headers());
     assert_eq!(
         support::json(response).await["choices"][0]["message"]["content"],
         "hello"
@@ -299,4 +300,66 @@ async fn deployment_path_errors_take_precedence_over_invalid_json(
         .await
         .unwrap();
     assert_eq!(response.status(), status);
+}
+
+#[rstest]
+#[case::chat("/v1/chat/completions", "anthropic/test-model", json!({"messages":[{"role":"user","content":"hi"}]}))]
+#[case::messages("/v1/messages", "anthropic/test-model", json!({"messages":[{"role":"user","content":"hi"}], "max_tokens":16}))]
+#[case::responses("/v1/responses", "openai/test-model", json!({"input":"hi"}))]
+#[case::ocr("/v1/ocr", "mistral/test-model", json!({"document":{"type":"document_url", "document_url":"data:application/pdf;base64,YWJj"}}))]
+#[case::transcription("/v1/audio/transcriptions", "bedrock/test-model", json!({"audio":{"data":"YWJj", "format":"wav"}, "aws_access_key_id":"test", "aws_secret_access_key":"test", "aws_region_name":"us-east-1"}))]
+#[tokio::test]
+async fn provider_error_headers_reach_every_endpoint(
+    #[case] path: &str,
+    #[case] model: &str,
+    #[case] fields: Value,
+    #[values(401, 429, 500, 529)] status: u16,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(support::provider_headers(
+            ResponseTemplate::new(status)
+                .set_body_json(json!({"message":"provider rejected request"})),
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let body = Value::Object(
+        fields
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .chain([("model".into(), json!("public/model"))])
+            .collect(),
+    );
+    let response = support::post(support::app(model, &upstream.uri()), path, body).await;
+    assert_eq!(response.status().as_u16(), status);
+    support::assert_provider_headers(response.headers());
+    assert_eq!(response.headers()["content-type"], "application/json");
+    assert!(
+        support::json(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("provider rejected request")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn transcription_success_headers_survive_normalization() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(support::provider_headers(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"output":{"message":{"content":[{"text":"hello"}]}}})),
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let response = support::post(support::app("bedrock/test-model", &upstream.uri()), "/v1/audio/transcriptions",
+        json!({"model":"public/model", "audio":{"data":"YWJj", "format":"wav"}, "aws_access_key_id":"test", "aws_secret_access_key":"test", "aws_region_name":"us-east-1"})).await;
+    assert_eq!(response.status(), 200);
+    support::assert_provider_headers(response.headers());
+    assert_eq!(support::json(response).await, json!({"text":"hello"}));
 }

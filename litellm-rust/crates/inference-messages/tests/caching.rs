@@ -81,7 +81,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                     "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
                     "content":[{"type":"text","text":format!("answer {call}")}],
                     "stop_reason":"end_turn", "stop_sequence":null
-                })).unwrap()))
+                })).unwrap()).into())
                 },
             )
             .await

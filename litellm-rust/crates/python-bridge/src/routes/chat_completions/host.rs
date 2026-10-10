@@ -56,7 +56,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
         py: Python<'_>,
         response: <ChatCompletions as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
-        self.0.response(py, &response)
+        self.0.response(py, response)
     }
 
     fn encode_stream_head(

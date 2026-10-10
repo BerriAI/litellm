@@ -180,7 +180,8 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
                     extra: [("status".into(), json!("completed"))]
                         .into_iter()
                         .collect(),
-                })
+                }
+                .into())
             },
         )
         .await
@@ -218,7 +219,8 @@ async fn responses_cache_only_reuses_completed_responses(
                     model: "test".into(),
                     output: Vec::new(),
                     extra: [("status".into(), json!(status))].into_iter().collect(),
-                })
+                }
+                .into())
             },
         )
         .await

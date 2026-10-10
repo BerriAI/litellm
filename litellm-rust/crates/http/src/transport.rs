@@ -1,7 +1,11 @@
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("upstream request failed with status {status}: {body}")]
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+        headers: Vec<(String, String)>,
+    },
     #[error("upstream network error: {0}")]
     Network(String),
     #[error("could not reach the provider: {0}")]

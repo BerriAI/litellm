@@ -1,7 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
 use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
@@ -19,7 +19,9 @@ pub(crate) async fn create(
     headers: HeaderMap,
     body: InferenceBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, &headers, body).await.map(Json)
+    handle(&gateway, &identity, &headers, body)
+        .await
+        .map(crate::response::json)
 }
 
 async fn handle(
@@ -30,7 +32,7 @@ async fn handle(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<Value, Error> {
+) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
     let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
@@ -76,8 +78,8 @@ async fn handle(
         },
     )?;
     let response = gateway.ocr.execute(call, &(), None).await?;
-    match response.provider_native_response {
-        Some(native) => Ok(Value::Object(native)),
-        None => Ok(response.into_json()),
-    }
+    Ok(response.map(|body| match body.provider_native_response {
+        Some(native) => Value::Object(native),
+        None => body.into_json(),
+    }))
 }

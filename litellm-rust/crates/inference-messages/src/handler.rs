@@ -137,11 +137,16 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
+        let headers = litellm_http::request::response_headers(response.headers());
         let text = response.text().await.map_err(network)?;
         log_response_body(&text);
         context.response_received(&text).await?;
-        decode_response(config, &identity.model, &text)
-            .map(|message| MessagesCallResponse::Complete(Box::new(message)))
+        decode_response(config, &identity.model, &text).map(|message| {
+            MessagesCallResponse::Complete(litellm_http::response::ProviderResponse {
+                body: Box::new(message),
+                headers,
+            })
+        })
     }
 }
 
@@ -176,12 +181,14 @@ async fn send(
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
+    let headers = litellm_http::request::response_headers(response.headers());
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
                 body: truncate_error_body(&text),
+                headers,
             })
         }
         Err(error) => network(error),

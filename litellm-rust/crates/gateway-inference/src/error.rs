@@ -75,13 +75,28 @@ impl Error {
         }
     }
 
+    fn headers(&self) -> &[(String, String)] {
+        match self {
+            Self::Route(RouteError::Transport(TransportError::Http { headers, .. }))
+            | Self::Ocr(OcrError::Transport(TransportError::Http { headers, .. }))
+            | Self::Ocr(OcrError::Provider { headers, .. }) => headers,
+            _ => &[],
+        }
+    }
+
+    pub fn messages_response(self, request_id: Option<&str>) -> Response {
+        let mut response = (self.status(), Json(self.body(request_id))).into_response();
+        litellm_http::response::append_provider_headers(response.headers_mut(), self.headers());
+        response
+    }
+
     pub fn openai_response(self) -> Response {
         let status = self.status();
         let message = match &self {
             Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
             _ => self.to_string(),
         };
-        (
+        let mut response = (
             status,
             Json(json!({"error": {
                 "message": message,
@@ -90,7 +105,9 @@ impl Error {
                 "code": status.as_u16(),
             }})),
         )
-            .into_response()
+            .into_response();
+        litellm_http::response::append_provider_headers(response.headers_mut(), self.headers());
+        response
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
@@ -178,6 +195,7 @@ mod tests {
         Error::Route(RouteError::Transport(TransportError::Http {
             status,
             body: body.into(),
+            headers: Vec::new(),
         }))
     }
 

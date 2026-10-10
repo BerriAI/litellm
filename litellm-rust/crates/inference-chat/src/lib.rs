@@ -1,4 +1,5 @@
 use litellm_host::observation::ObservationSender;
+use litellm_http::response::ProviderResponse;
 pub mod route;
 pub mod types;
 pub use litellm_inference::RouteError as Error;
@@ -48,7 +49,7 @@ impl ChatCompletionsRoute {
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
@@ -71,7 +72,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
         let resolved = resolve_request(request)?;
         let snapshot = self
             .secrets
@@ -79,16 +80,18 @@ impl ChatCompletionsRoute {
             .await?;
         let prepared = prepare_provider_request(resolved, snapshot)?;
         litellm_inference::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
-        let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
-            Box::pin(handler::execute(
-                &self.http,
-                &self.auth,
-                prepared,
-                self.cache.clone(),
-                cache_options,
-                interceptors,
-                observers,
-            ));
+        let execute: futures_util::future::BoxFuture<
+            '_,
+            Result<ProviderResponse<ChatCompletionsResponse>, Error>,
+        > = Box::pin(handler::execute(
+            &self.http,
+            &self.auth,
+            prepared,
+            self.cache.clone(),
+            cache_options,
+            interceptors,
+            observers,
+        ));
         execute.await
     }
 }

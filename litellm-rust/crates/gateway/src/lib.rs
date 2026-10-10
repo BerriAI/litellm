@@ -145,7 +145,11 @@ async fn log_request(request: Request, next: Next) -> Response {
     } else {
         request
     };
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "x-litellm-rust",
+        axum::http::HeaderValue::from_static("true"),
+    );
     tracing::info!(
         %request_id,
         %method,

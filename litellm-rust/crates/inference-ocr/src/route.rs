@@ -6,6 +6,7 @@ use litellm_host::{
     protocol::Protocol,
     protocol::Reply,
 };
+use litellm_http::response::ProviderResponse;
 use litellm_llms::base_llm::ocr::error::Error;
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
@@ -25,7 +26,7 @@ pub struct OcrCall {
 pub struct Ocr;
 
 impl Protocol for Ocr {
-    type Response = LiteLLMOcrResponse;
+    type Response = ProviderResponse<LiteLLMOcrResponse>;
     type Error = Error;
     type Request = OcrCall;
     type HostCall = OcrOp;

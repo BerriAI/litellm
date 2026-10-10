@@ -1,7 +1,5 @@
-use crate::execution::{run_async, run_sync};
-use litellm_inference_transcription::{
-    AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
-};
+use crate::execution::{run_async_value, run_sync_value};
+use litellm_inference_transcription::{AudioTranscriptionRoute, types::AudioTranscriptionRequest};
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
@@ -13,12 +11,13 @@ use crate::{
 };
 
 async fn execute(
+    context: litellm_host_python::PythonContext,
     http: Result<litellm_http::Client, litellm_http::Error>,
     secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     audio: Value,
     optional_params: Map<String, Value>,
     options: RouteOptions,
-) -> Result<Value, Error> {
+) -> PyResult<Py<PyAny>> {
     let RouteOptions {
         model,
         api_key,
@@ -27,18 +26,28 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
-        .execute(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
-        .await
+    let response = AudioTranscriptionRoute::new(
+        http.map_err(|error| route_error_to_pyerr(error.into()))?,
+        crate::http::resources().auth.clone(),
+        secrets,
+    )
+    .execute(AudioTranscriptionRequest {
+        model: &model,
+        audio,
+        api_key: api_key.as_deref(),
+        api_base: api_base.as_deref(),
+        custom_llm_provider: custom_llm_provider.as_deref(),
+        extra_headers,
+        optional_params,
+        timeout,
+    })
+    .await
+    .map_err(route_error_to_pyerr)?;
+    litellm_host_python::attach_blocking(context, move |py| {
+        let public = litellm_host_python::to_py(py, &response.body)?;
+        crate::marshal::provider_metadata(py, public, &response.headers)
+    })
+    .await?
 }
 
 #[pyfunction]
@@ -50,10 +59,16 @@ pub(crate) fn transcription(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py
     let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
     let http = crate::http::provider_client(py, &call.kwargs, false)?;
     let secrets = crate::secrets::source(py)?;
-    run_sync(
+    run_sync_value(
         py,
-        execute(http, secrets, audio, optional_params, options),
-        route_error_to_pyerr,
+        execute(
+            litellm_host_python::PythonContext::capture(py)?,
+            http,
+            secrets,
+            audio,
+            optional_params,
+            options,
+        ),
     )
 }
 
@@ -69,9 +84,15 @@ pub(crate) fn atranscription<'py>(
     let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
     let http = crate::http::provider_client(py, &call.kwargs, true)?;
     let secrets = crate::secrets::source(py)?;
-    run_async(
+    run_async_value(
         py,
-        execute(http, secrets, audio, optional_params, options),
-        route_error_to_pyerr,
+        execute(
+            litellm_host_python::PythonContext::capture(py)?,
+            http,
+            secrets,
+            audio,
+            optional_params,
+            options,
+        ),
     )
 }

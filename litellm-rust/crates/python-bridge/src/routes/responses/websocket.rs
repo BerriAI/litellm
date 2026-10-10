@@ -14,6 +14,11 @@ pub(crate) struct ResponsesWebSocketConnection {
 
 #[pymethods]
 impl ResponsesWebSocketConnection {
+    #[getter]
+    fn response_headers(&self) -> Vec<(String, String)> {
+        self.inner.response_headers().to_vec()
+    }
+
     #[classmethod]
     #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
     fn connect<'py>(

@@ -1,7 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::{path::Path, sync::Arc};
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{extract::State, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_inference_transcription::types::AudioTranscriptionRequest;
 use serde_json::{Value, json};
@@ -16,7 +16,9 @@ pub(crate) async fn create(
     identity: AuthenticatedRequest,
     body: InferenceBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body).await.map(Json)
+    handle(&gateway, &identity, body)
+        .await
+        .map(crate::response::json)
 }
 
 async fn handle(
@@ -26,7 +28,7 @@ async fn handle(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<Value, Error> {
+) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let audio = match upload {

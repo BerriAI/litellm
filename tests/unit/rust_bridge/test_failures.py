@@ -52,3 +52,22 @@ def test_kwargs_are_handed_to_the_mapper_as_owned_copies(monkeypatch: pytest.Mon
     assert seen[0]["completion_kwargs"] is not request_kwargs
     assert seen[0]["model"] == "gpt-4o"
     assert seen[0]["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.parametrize("provider", ("github_copilot", "bedrock", "edenai"))
+def test_native_http_failure_preserves_public_identity_and_response_headers(provider: str) -> None:
+    class NativeFailure(Exception):
+        headers: Final = (("Retry-After", "17"), ("x-provider-trace", "first"), ("x-provider-trace", "second"))
+
+    upstream: Final = NativeFailure(429, "rate limited")
+
+    mapped: Final = failures.map_native_failure(upstream, f"{provider}/claude-test", provider, MappingProxyType({}))
+
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert mapped.status_code == upstream.args[0]
+    assert mapped.llm_provider == provider
+    assert mapped.model == "claude-test"
+    assert mapped.response.text == upstream.args[1]
+    assert mapped.response.headers["retry-after"] == upstream.headers[0][1]
+    assert mapped.response.headers.get_list("x-provider-trace") == [value for _, value in upstream.headers[1:]]
+    assert mapped.__context__ is upstream
