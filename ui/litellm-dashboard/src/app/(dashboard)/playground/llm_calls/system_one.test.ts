@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchDecisionModels, makeSystemOneRequest } from "./system_one";
+import { fetchDecisionModels, makeSystemOneRequest, makePlaygroundDecisionRequest } from "./system_one";
+import { openAIDecisionsExample } from "../components/systemOneUI/lib/example";
+import type { OpenAIDecisionsResponse } from "../components/systemOneUI/lib/openAIDecisions";
 import type { SystemOneRequest, SystemOneResponse } from "../components/systemOneUI/lib/schemas";
 
 vi.mock("@/components/networking", () => ({
@@ -102,8 +104,92 @@ describe("makeSystemOneRequest", () => {
     } as Response);
 
     await expect(makeSystemOneRequest(payload, "session-key")).rejects.toThrow(
-      "System One response has an invalid shape.",
+      "/v1/systemone response has an invalid shape.",
     );
+  });
+});
+
+describe("/v1/decisions requests", () => {
+  const mockFetch = vi.fn<typeof fetch>();
+  const request = { endpoint: "/v1/decisions", payload: openAIDecisionsExample("jev-latest") } as const;
+  const response: OpenAIDecisionsResponse = {
+    model: "jev-latest",
+    answers: [
+      { name: "urgent", type: "predicate", probability: 0.9 },
+      {
+        name: "area",
+        type: "choice",
+        choice: true,
+        confidence: 0.8,
+        probabilities: [
+          { value: true, probability: 0.8 },
+          { value: false, probability: 0.2 },
+        ],
+      },
+      {
+        name: "severity",
+        type: "score",
+        score: 0.6,
+        confidence: 0.6,
+        probabilities: [
+          { value: 0, label: "low", probability: 0.4 },
+          { value: 1, label: "high", probability: 0.6 },
+        ],
+      },
+      { name: null, type: "refusal" },
+    ],
+    usage: {
+      input_tokens: 10,
+      output_tokens: 2,
+      total_tokens: 12,
+      input_tokens_details: { cached_tokens: 3 },
+      output_tokens_details: { reasoning_tokens: 1 },
+    },
+    provider_metadata: { id: "native-result" },
+  };
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockResolvedValue({ ok: true, text: async () => JSON.stringify(response) } as Response);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([undefined, "https://custom.example.com/"])(
+    "sends the OpenAI shape unchanged and preserves all answer types (%s)",
+    async (baseUrl) => {
+      const controller = new AbortController();
+      const result = await makePlaygroundDecisionRequest(request, "session-key", baseUrl, {
+        signal: controller.signal,
+      });
+      const expectedRequest = {
+        method: "POST",
+        body: JSON.stringify(request.payload),
+        signal: controller.signal,
+        headers: expect.objectContaining({ Authorization: "Bearer session-key", "Content-Type": "application/json" }),
+      };
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${baseUrl?.replace(/\/$/, "") ?? "https://proxy.example.com"}/v1/decisions`,
+        expect.objectContaining(expectedRequest),
+      );
+      expect(result.response).toEqual(response);
+    },
+  );
+
+  it("rejects a System One response rather than disguising its shape", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify(responseBody) } as Response);
+    await expect(makePlaygroundDecisionRequest(request, "session-key")).rejects.toThrow(
+      "/v1/decisions response has an invalid shape.",
+    );
+  });
+
+  it("surfaces errors from the selected endpoint", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => "Unsupported decision model",
+    } as Response);
+    await expect(makePlaygroundDecisionRequest(request, "session-key")).rejects.toThrow("Unsupported decision model");
   });
 });
 

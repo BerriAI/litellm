@@ -6,11 +6,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
+import type { OpenAIDecisionsResponse } from "./lib/openAIDecisions";
 
 const SCORE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
 interface ResponseViewProps {
-  response?: SystemOneResponse;
+  response?: SystemOneResponse | OpenAIDecisionsResponse;
   fallbackModel?: string;
   latencyMs?: number;
   error?: string;
@@ -168,34 +169,45 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
         </div>
       </CardHeader>
       <CardContent className="grid gap-3">
-        {Object.entries(response.answers).map(([id, answer]) => (
-          <Card key={id} size="sm">
-            <CardHeader>
-              <CardTitle className="font-mono">{id}</CardTitle>
-              <CardAction>
-                <Badge variant="secondary">{answer.type}</Badge>
-              </CardAction>
-            </CardHeader>
-            <CardContent>
-              <AnswerDetails answer={answer} />
-            </CardContent>
-          </Card>
-        ))}
-        <Collapsible open={showRaw} onOpenChange={setShowRaw}>
-          <CollapsibleTrigger
-            render={
-              <Button variant="ghost" size="sm">
-                <ChevronDown className="size-4" />
-                Raw response
-              </Button>
-            }
-          />
-          <CollapsibleContent>
+        {Array.isArray(response.answers) ? (
+          <section aria-label="Decisions response JSON" className="grid gap-2">
+            <h3 className="text-sm font-medium">Response JSON</h3>
             <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
               {JSON.stringify(response, null, 2)}
             </pre>
-          </CollapsibleContent>
-        </Collapsible>
+          </section>
+        ) : (
+          Object.entries(response.answers).map(([id, answer]) => (
+            <Card key={id} size="sm">
+              <CardHeader>
+                <CardTitle className="font-mono">{id}</CardTitle>
+                <CardAction>
+                  <Badge variant="secondary">{answer.type}</Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <AnswerDetails answer={answer} />
+              </CardContent>
+            </Card>
+          ))
+        )}
+        {!Array.isArray(response.answers) && (
+          <Collapsible open={showRaw} onOpenChange={setShowRaw}>
+            <CollapsibleTrigger
+              render={
+                <Button variant="ghost" size="sm">
+                  <ChevronDown className="size-4" />
+                  Raw response
+                </Button>
+              }
+            />
+            <CollapsibleContent>
+              <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
+                {JSON.stringify(response, null, 2)}
+              </pre>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
       </CardContent>
     </Card>
   );
