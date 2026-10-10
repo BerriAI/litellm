@@ -40,7 +40,7 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from e2e_config import unique_marker
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
@@ -65,6 +65,8 @@ VERTEX_CACHE_REJECTION_MARKER: Final = "minimum token count to start explicit ca
 
 
 class CacheChatBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model: str
     messages: list[RichMessage]
     max_tokens: int = 64
@@ -308,6 +310,79 @@ class TestCacheControl:
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()
         _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
+
+    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_prompt_caching_reads_cache_with_version_header(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model: Final = f"e2e-anthropic-cache-version-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=ANTHROPIC_MODEL,
+                api_key="os.environ/ANTHROPIC_API_KEY",
+                extra_headers={"anthropic-version": "2023-06-01"},
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key: Final = resources.key()
+        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
+
+    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_prompt_caching_reports_creation_tokens(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model: Final = f"e2e-anthropic-cache-create-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=ANTHROPIC_MODEL, api_key="os.environ/ANTHROPIC_API_KEY"),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key: Final = resources.key()
+        body: Final = CacheChatBody(
+            model=model,
+            messages=[
+                RichMessage(
+                    role="system",
+                    content=[TextBlock(text=_cacheable_prefix(), cache_control=CacheControl(ttl="1h"))],
+                ),
+                RichMessage(
+                    role="user",
+                    content=[TextBlock(text="Reply with one word.", cache_control=CacheControl(ttl="5m"))],
+                ),
+            ],
+        )
+        response: Final = unwrap(
+            client.proxy.transport.post(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(key),
+                json=body,
+                response_type=ChatResponse,
+            )
+        )
+        assert response.usage and response.usage.cache_creation_input_tokens, (
+            f"{model}: a never-seen prefix marked 1h then 5m reported no cache-creation tokens ({response.usage})"
+        )
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",

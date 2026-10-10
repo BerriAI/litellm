@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -272,3 +273,29 @@ def test_sync_completion_handles_starting_status(mock_get_client, monkeypatch, r
     assert json.loads(mock_client.post.call_args.kwargs["data"])["input"]["prompt"] == (
         "<｜begin▁of▁sentence｜><｜User｜>Hi<｜Assistant｜>"
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "max_tokens_key"),
+    [
+        ("replicate/vicuna-13b", "max_length"),
+        ("replicate/flan-t5-xl", "max_length"),
+        ("meta/codellama-13b", "max_tokens"),
+        ("meta/llama-2-7b", "max_new_tokens"),
+    ],
+)
+def test_map_openai_params_renames_openai_params_to_replicate_inputs(model: str, max_tokens_key: str):
+    mapped: Final = ReplicateConfig().map_openai_params(
+        non_default_params={"stream": True, "max_tokens": 64, "temperature": 0.2, "top_p": 0.9, "stop": ["\n"]},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped == {
+        "stream": True,
+        max_tokens_key: 64,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stop_sequences": ["\n"],
+    }

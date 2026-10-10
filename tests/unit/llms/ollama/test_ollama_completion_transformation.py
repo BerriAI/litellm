@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._uuid import uuid
@@ -886,3 +887,36 @@ def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> N
     data = _transform_image_request(payload, "png")
 
     assert data["images"] == [payload]
+
+
+def test_ollama_vision_model_sends_the_image_beside_the_user_prompt(respx_mock: respx.MockRouter) -> None:
+    image_base64: Final = _image_base64("PNG")
+    route: Final = respx_mock.post("http://ollama.test:11434/api/generate").respond(
+        json={
+            "model": "llama3.2-vision:11b",
+            "response": "A white square",
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="ollama/llama3.2-vision:11b",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Whats in this image?"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                ],
+            }
+        ],
+        api_base="http://ollama.test:11434",
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["model"] == "llama3.2-vision:11b"
+    assert body["images"] == [image_base64]
+    assert body["prompt"] == "### User:\nWhats in this image?\n\n"
+    assert response.choices[0].message.content == "A white square"

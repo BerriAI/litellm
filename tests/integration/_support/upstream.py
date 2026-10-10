@@ -17,7 +17,14 @@ from typing import Final, cast
 
 import httpx
 import uvicorn
-from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
+from _fake_openai_endpoint_server import (
+    chat_completions,
+    completions,
+    embeddings,
+    health,
+    moderations,
+    triton_embeddings,
+)
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -550,6 +557,7 @@ class Provider:
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
+                Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
                 Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),

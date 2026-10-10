@@ -1,7 +1,10 @@
 import asyncio
 import json
+import logging
+from typing import Final
 from unittest.mock import MagicMock, call, patch
 
+import google.auth.exceptions
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -2180,3 +2183,19 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+def test_get_access_token_reraises_malformed_service_account_credentials_without_caching(caplog):
+    vertex_base: Final = VertexBase()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        with pytest.raises(google.auth.exceptions.MalformedError):
+            vertex_base.get_access_token(
+                credentials=json.dumps({"type": "service_account", "project_id": "project-1"}),
+                project_id="project-1",
+            )
+
+    assert vertex_base._credentials_project_mapping == {}
+    assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
+        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
+    ]

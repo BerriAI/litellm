@@ -37,6 +37,8 @@ from e2e_config import (
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
+    SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
+    SAGEMAKER_NOVA_OPT_IN_ENV,
     SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
@@ -75,6 +77,8 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
+        "sagemaker_nova": SAGEMAKER_NOVA_OPT_IN_ENV,
+        "sagemaker_nova2_lite": SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
     }
 )
 
@@ -191,6 +195,16 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
         "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "sagemaker_nova: needs a deployed SageMaker Nova endpoint the proxy's AWS credentials can invoke; "
+        "deselected unless SAGEMAKER_NOVA_ENDPOINT names it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "sagemaker_nova2_lite: needs a deployed SageMaker Nova 2 Lite endpoint the proxy's AWS credentials can invoke; "
+        "deselected unless SAGEMAKER_NOVA2_LITE_ENDPOINT names it",
     )
 
 

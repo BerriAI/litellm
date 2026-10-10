@@ -3972,6 +3972,61 @@ async def test_async_success_handler_prevents_reprocessing_for_pass_through_endp
     )
 
 
+class _StreamSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_contents: list[str | None] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_contents.append(response_obj.choices[0].message.content)
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_logs_a_completed_stream_only_once():
+    recorder: Final = _StreamSuccessRecorder()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="stream-once",
+        function_id="stream-once",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "stream-once", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello again"}, "finish_reason": "stop"}],
+        ),
+        start_time=start,
+        end_time=start,
+    )
+
+    assert recorder.logged_contents == ["Hello there"]
+    assert logging_obj.model_call_details["async_complete_streaming_response"].choices[0].message.content == (
+        "Hello there"
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_streaming_pass_through():
     """

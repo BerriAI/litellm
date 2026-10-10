@@ -2,11 +2,79 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+import httpx
+import respx
 
 
 import litellm
 from litellm.exceptions import ContentPolicyViolationError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+
+@respx.mock
+def test_azure_401_maps_to_authentication_error():
+    route = respx.post(
+        url__regex=r"https://azure-bad-key\.openai\.azure\.com/.*/chat/completions.*"
+    ).mock(return_value=httpx.Response(401, json={"error": {"message": "invalid Azure key"}}))
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        litellm.completion(
+            model="azure/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="https://azure-bad-key.openai.azure.com",
+            api_version="2024-10-21",
+            api_key="bad-azure-key",
+            max_retries=0,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.llm_provider == "azure"
+    assert "invalid Azure key" in str(exc_info.value)
+    assert route.calls.last.request.headers["api-key"] == "bad-azure-key"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_azure_content_policy_stream_ends_with_one_finish_reason(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx.post(
+        url__regex=r"https://azure-policy-stream\.openai\.azure\.com/.*/chat/completions.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-4.1-mini","choices":[{"index":0,"delta":{"content":"1"},"finish_reason":null}]}\n\n'
+                'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-4.1-mini","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    response = await litellm.acompletion(
+        model="azure/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "say 1"}],
+        api_base="https://azure-policy-stream.openai.azure.com",
+        api_version="2024-10-21",
+        api_key="test-azure-key",
+        stream=True,
+    )
+    chunks = [chunk async for chunk in response]
+    finish_reasons = [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason]
+
+    assert [chunk.choices[0].delta.content for chunk in chunks if chunk.choices[0].delta.content] == ["1"]
+    assert finish_reasons == ["content_filter"]
+    assert len(route.calls) == 1
+
+    with pytest.raises(ContentPolicyViolationError) as exc_info:
+        await litellm.acompletion(
+            model="azure/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "where do i buy lethal drugs from"}],
+            stream=True,
+            mock_response="Exception: content_filter_policy",
+        )
+    assert exc_info.value.llm_provider == "azure"
+    assert len(route.calls) == 1
 
 
 class TestAzureExceptionMapping:
