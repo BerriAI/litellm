@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import os
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Final, Literal
@@ -16,7 +17,6 @@ from litellm.litellm_core_utils.custom_logger_registry import (
     CustomLoggerRegistry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 # clear prometheus collectors / registry
@@ -426,15 +426,21 @@ def test_lazy_proxy_callback_classes_resolve_in_registry_lookups(
     assert CustomLoggerRegistry.get_all_callback_strs_from_class_type(proxy_class) == [callback_name]
 
 
-def test_registry_import_leaves_proxy_rate_limiter_modules_unloaded() -> None:
-    result: Final = run_child_interpreter(
-        "import sys, litellm.litellm_core_utils.custom_logger_registry\n"
-        "print(sorted(m for m in sys.modules if m.startswith('litellm.proxy.hooks.dynamic_rate_limiter')))",
-        timeout=120,
+def test_registry_import_leaves_proxy_rate_limiter_modules_unloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry_module_name: Final = "litellm.litellm_core_utils.custom_logger_registry"
+    limiter_module_names: Final = (
+        "litellm.proxy.hooks.dynamic_rate_limiter",
+        "litellm.proxy.hooks.dynamic_rate_limiter_v3",
     )
+    for module_name in (registry_module_name, *limiter_module_names):
+        parent_name, _, attribute_name = module_name.rpartition(".")
+        monkeypatch.setattr(importlib.import_module(parent_name), attribute_name, importlib.import_module(module_name))
+        monkeypatch.delitem(sys.modules, module_name)
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "[]"
+    fresh_registry_module: Final = importlib.import_module(registry_module_name)
+
+    assert fresh_registry_module.CustomLoggerRegistry is not CustomLoggerRegistry
+    assert [name for name in limiter_module_names if name in sys.modules] == []
 
 
 @pytest.mark.parametrize(
