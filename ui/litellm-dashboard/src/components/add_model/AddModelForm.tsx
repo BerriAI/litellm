@@ -28,7 +28,7 @@ import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
 import CredentialModal from "../model_add/CredentialModal";
 import { federatedProviderOf } from "../model_add/credential_federation";
-import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
+import { buildCredential, type CredentialSubmission } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -108,8 +108,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const canCreateFederatedCredential =
     isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
 
-  const handleCreateFederatedCredential = async (values: Record<string, unknown>) => {
-    const credential = buildCredential(values, withoutRestrictedFields(values));
+  const handleCreateFederatedCredential = async (submission: CredentialSubmission) => {
+    const credential = buildCredential(submission, submission.credential_values);
     try {
       await credentialCreateCall(accessToken, credential);
     } catch (error) {
