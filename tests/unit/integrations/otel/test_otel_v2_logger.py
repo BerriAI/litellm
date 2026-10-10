@@ -9,11 +9,13 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 import ast
 import asyncio
 import contextlib
+import contextvars
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -43,7 +45,8 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
@@ -55,6 +58,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_transport_span,
     set_mcp_message_trace_carrier,
     set_mcp_message_transport_span,
+    set_request_destinations,
     set_request_root_span,
 )
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN  # noqa: E402
@@ -617,8 +621,6 @@ def _mcp_payload(**overrides):
 
 
 def _logger_capturing():
-    from litellm.integrations.otel.model.config import CaptureMessageContent
-
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=False,
@@ -682,6 +684,57 @@ def test_mcp_tool_call_captures_io_when_enabled():
     (span,) = exporter.get_finished_spans()
     assert '"Paris"' in span.attributes["gen_ai.tool.call.arguments"]
     assert "21" in span.attributes["gen_ai.tool.call.result"]
+
+
+@pytest.mark.parametrize(
+    ("capture_mode", "captures_content"),
+    [
+        (None, False),
+        (CaptureMessageContent.NO_CONTENT, False),
+        (CaptureMessageContent.SPAN_ONLY, True),
+        (CaptureMessageContent.EVENT_ONLY, False),
+        (CaptureMessageContent.SPAN_AND_EVENT, True),
+    ],
+)
+def test_only_a_request_destination_can_turn_on_llm_payload_content(
+    capture_mode: CaptureMessageContent | None, captures_content: bool
+) -> None:
+    config: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        capture_message_content=CaptureMessageContent.NO_CONTENT,
+    )
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(
+        config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter)
+    )
+    payload: Final = _payload(
+        messages=[{"role": "user", "content": "prompt marker"}],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "answer marker"}}],
+        },
+    )
+    kwargs: Final = {
+        **_kwargs(payload),
+        "standard_callback_dynamic_params": {"capture_message_content": "span_only"},
+    }
+    destination: Final = OtelDestination(
+        endpoint="http://team.local/api/public/otel",
+        headers=MappingProxyType({"Authorization": "Basic dA=="}),
+        callback_name="langfuse_otel",
+        capture_message_content=capture_mode,
+    )
+
+    def emit() -> None:
+        set_request_destinations((destination,))
+        _emit_llm(logger, kwargs)
+
+    contextvars.copy_context().run(emit)
+
+    (span,) = exporter.get_finished_spans()
+    assert ("gen_ai.input.messages" in span.attributes) is captures_content
+    assert ("gen_ai.output.messages" in span.attributes) is captures_content
 
 
 def test_mcp_tool_call_failure_marks_error():

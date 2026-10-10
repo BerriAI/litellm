@@ -187,6 +187,7 @@ def destination_for(
     callback_name: str,
     params: StandardCallbackDynamicParams,
     service_name: str | None = None,
+    capture_message_content: str | None = None,
 ) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
@@ -217,6 +218,7 @@ def destination_for(
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),
+        capture_message_content=capture_message_content,
         success_sampling_rate=success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
     )

@@ -1177,6 +1177,91 @@ async def test_x_litellm_api_key():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "api_key", "custom_litellm_key_header"),
+    [
+        ({"Authorization": "Bearer sk-lit9211-master"}, "Bearer sk-lit9211-master", None),
+        ({"x-litellm-api-key": "Bearer sk-lit9211-master"}, "", "Bearer sk-lit9211-master"),
+        (
+            {"X-Custom-Key": "Bearer sk-lit9211-master", "Authorization": "Bearer sk-wrong"},
+            "Bearer sk-wrong",
+            None,
+        ),
+    ],
+)
+async def test_auth_custom_key_header_precedence_and_fallback(
+    headers: dict[str, str],
+    api_key: str,
+    custom_litellm_key_header: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-lit9211-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Custom-Key"})
+
+    request_headers = [(name.lower().encode(), value.encode()) for name, value in headers.items()]
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "headers": request_headers,
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+    request._url = URL(url="/chat/completions")
+
+    valid_token = await user_api_key_auth(
+        request=request,
+        api_key=api_key,
+        custom_litellm_key_header=custom_litellm_key_header,
+    )
+
+    assert valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_header_value", [b"Bearer sk-wrong", b""])
+async def test_auth_rejects_wrong_or_empty_present_custom_header(
+    custom_header_value: bytes, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-lit9211-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Custom-Key"})
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=None)))
+
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "headers": [
+                (b"x-custom-key", custom_header_value),
+                (b"authorization", b"Bearer sk-lit9211-master"),
+            ],
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer sk-lit9211-master")
+
+    assert exc_info.value.code == "401"
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_from_query_param():
     """Ensure user_api_key_auth reads API key from `key` query parameter."""
     from fastapi import Request
@@ -1900,3 +1985,71 @@ async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other
     proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
     assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
     assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, expect_user_model_budget_check",
+    [
+        ({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, False),
+        ({"jsonrpc": "2.0", "id": 1, "method": "initialize"}, False),
+        ({"jsonrpc": "2.0", "id": 1, "method": "tools/call"}, True),
+    ],
+)
+async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
+    monkeypatch: pytest.MonkeyPatch,
+    request_data: dict[str, object],
+    expect_user_model_budget_check: bool,
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+
+    jwt_response: Final = {
+        "is_proxy_admin": False,
+        "jwt_claims": {},
+        "team_id": None,
+        "team_object": None,
+        "user_id": "jwt-user",
+        "user_email": None,
+        "user_object": LiteLLM_UserTable(
+            user_id="jwt-user",
+            model_max_budget={"gpt-4o": {"budget_limit": 1.0, "time_period": "1d"}},
+        ),
+        "org_id": None,
+        "org_object": None,
+        "end_user_id": None,
+        "end_user_object": None,
+        "token": "fake.jwt.token",
+    }
+    mock_request: Final = MagicMock()
+    mock_request.url.path = "/mcp"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": "Bearer fake.jwt.token"}
+    mock_request.query_params = {}
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
+    litellm.proxy.proxy_server.jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    user_model_budget_check: Final = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder", return_value=jwt_response),
+        patch("litellm.proxy.auth.user_api_key_auth._check_user_model_budget", user_model_budget_check),
+    ):
+        result: Final = await user_api_key_auth_builder(
+            request=mock_request,
+            api_key="Bearer fake.jwt.token",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
+    assert result.user_id == "jwt-user"
+    assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
