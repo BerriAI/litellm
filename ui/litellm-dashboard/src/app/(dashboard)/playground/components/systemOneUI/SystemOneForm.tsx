@@ -27,7 +27,7 @@ import {
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 const QUESTION_TYPES: readonly QuestionType[] = ["choice", "noul", "score"];
-const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "Noul", score: "Score" };
+const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "noul", score: "Score" };
 const TYPE_HELP: Record<QuestionType, string | undefined> = {
   choice: undefined,
   noul: "noul is a yes / no question",
