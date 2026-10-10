@@ -81933,5 +81933,12 @@
         "output_cost_per_token": 7.5e-06,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_video_input": true
+    },
+    "azure_ai/Microsoft-Decision-1": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "azure_ai",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=productName eq 'Microsoft Decision Models'"
     }
 }

@@ -7,6 +7,7 @@ import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
 import AddModelForm from "./AddModelForm";
+import { EMPTY_DECISION_CATALOG } from "@/lib/decisionModels";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
   ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
@@ -172,6 +173,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     showAdvancedSettings: false,
     teams,
     credentials,
+    decisionCatalog: EMPTY_DECISION_CATALOG,
     userRole,
     userId,
   };

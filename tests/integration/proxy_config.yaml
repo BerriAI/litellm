@@ -346,6 +346,13 @@ model_list:
     litellm_params:
       model: strands_decider/strands-decider-2B-hobson-v19
       api_base: http://127.0.0.1:8191
+  - model_name: azure_ai/decision-1
+    litellm_params:
+      model: azure_ai/decision-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+    model_info:
+      base_model: azure_ai/Microsoft-Decision-1
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
