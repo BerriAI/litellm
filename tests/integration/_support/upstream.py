@@ -11,7 +11,6 @@ import zlib
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, cast
 
@@ -25,6 +24,7 @@ from _fake_openai_endpoint_server import (
     moderations,
     triton_embeddings,
 )
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -45,7 +45,6 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
 INTERNAL_FIELDS: Final = frozenset(
     {
         "litellm_params",
@@ -276,8 +275,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        cases_file: Final = JSON_OBJECT.validate_json(CASES_FILE.read_bytes())
-        return JSONResponse(cases_file["cost_map"])
+        return JSONResponse(COST_MAP_ENTRIES)
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(
