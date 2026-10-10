@@ -296,6 +296,7 @@ LLM_CONFIG_NAMES: Final = (
     "AzureOpenAIAssistantsAPIConfig",
     "HerokuChatConfig",
     "CometAPIConfig",
+    "ClinePassConfig",
     "AzureOpenAIConfig",
     "AzureOpenAIGPT5Config",
     "AzureOpenAITextConfig",
@@ -1152,6 +1153,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "HerokuChatConfig": (".llms.heroku.chat.transformation", "HerokuChatConfig"),
     "CometAPIConfig": (".llms.cometapi.chat.transformation", "CometAPIConfig"),
+    "ClinePassConfig": (".llms.clinepass.chat.transformation", "ClinePassConfig"),
     "AzureOpenAIConfig": (".llms.azure.chat.gpt_transformation", "AzureOpenAIConfig"),
     "AzureOpenAIGPT5Config": (
         ".llms.azure.chat.gpt_5_transformation",

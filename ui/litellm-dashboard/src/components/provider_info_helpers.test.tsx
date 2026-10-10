@@ -188,6 +188,7 @@ describe("provider_info_helpers", () => {
         Providers.AUTO_ROUTER,
         Providers.BYTEZ,
         Providers.CLARIFAI,
+        Providers.CLINEPASS,
         Providers.Cognition,
         Providers.COMPACTIFAI,
         Providers.DATAROBOT,

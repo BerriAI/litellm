@@ -546,6 +546,24 @@
         "interactions": true
       }
     },
+    "clinepass": {
+      "display_name": "ClinePass (`clinepass`)",
+      "url": "https://docs.litellm.ai/docs/providers/clinepass",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "cloudflare": {
       "display_name": "Cloudflare AI Workers (`cloudflare`)",
       "url": "https://docs.litellm.ai/docs/providers/cloudflare_workers",

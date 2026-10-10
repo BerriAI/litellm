@@ -614,6 +614,9 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.PerplexityChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "clinepass":
+        cfg: Final = litellm.ClinePassConfig()
+        api_base, dynamic_api_key = cfg.get_openai_compatible_provider_info(api_base, api_key)  # rebind-ok: per branch
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":

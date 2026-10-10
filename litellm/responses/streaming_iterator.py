@@ -2829,9 +2829,10 @@ class ManagedResponsesWebSocketHandler:
 
     def _inject_credentials(self, call_kwargs: dict[str, object], model: str | None = None) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
-        if self.api_key is not None:
+        same_provider: Final = self._same_provider(model)
+        if self.api_key is not None and same_provider:
             call_kwargs["api_key"] = self.api_key
-        if self.api_base is not None:
+        if self.api_base is not None and same_provider:
             call_kwargs["api_base"] = self.api_base
         if self.timeout is not None:
             call_kwargs["timeout"] = self.timeout
@@ -2840,7 +2841,7 @@ class ManagedResponsesWebSocketHandler:
         # (e.g., connection is vertex_ai but event says openai/gpt-4), let litellm
         # re-resolve from the model string. Same-provider model variants (e.g.,
         # vertex_ai/gemini-2.0 -> vertex_ai/gemini-1.5) still inherit the provider.
-        if self.custom_llm_provider is not None and self._same_provider(model):
+        if self.custom_llm_provider is not None and same_provider:
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
@@ -2966,11 +2967,18 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        # A frame that repeats the connection's public alias (model_group) must
-        # reuse the router-resolved self.model; passing the alias raw to
-        # litellm.aresponses fails in get_llm_provider. A genuinely different
-        # provider-prefixed per-frame model is still honored.
         requested_model: Final[str | None] = _optional_str(call_kwargs.pop("model", None))
+        authorized_models: Final = (self.model, self.model_group, f"{self.custom_llm_provider}/{self.model}")
+        if (
+            self.user_api_key_dict is not None
+            and requested_model is not None
+            and requested_model not in authorized_models
+        ):
+            await self._send_error(
+                "Changing models requires a new authorized WebSocket connection",
+                error_type="invalid_request_error",
+            )
+            return
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )

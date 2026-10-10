@@ -2463,6 +2463,47 @@ def _complete_aiohttp_openai(
     )
 
 
+def _complete_http_provider(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    api_base: Final = ctx.api_base
+    api_key: Final = ctx.api_key
+    client: Final = _dispatch_client_http(ctx)
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # ctx.headers is dict[Unknown, Unknown]
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # ctx.messages is list[Unknown]
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # ctx.optional_params is dict[Unknown, Unknown]
+    provider_config: Final = ctx.provider_config
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    response: Final = base_llm_http_handler.completion(  # pyright: ignore[reportUnknownMemberType]  # completion takes untyped dict and list parameters
+        model=model,
+        messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # ctx.messages is list[Unknown]
+        headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # ctx.headers is dict[Unknown, Unknown]
+        model_response=model_response,
+        api_key=api_key,
+        api_base=api_base,
+        acompletion=acompletion,
+        logging_obj=logging,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        shared_session=shared_session,
+        timeout=timeout,  # pyright: ignore[reportArgumentType]  # ctx.timeout is typed wider than the handler parameter
+        client=client,
+        custom_llm_provider=custom_llm_provider,
+        encoding=_get_encoding(),
+        stream=stream,
+        provider_config=provider_config,
+    )
+
+    return response
+
+
 def _complete_cometapi(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -6015,6 +6056,8 @@ def completion(
             response = _complete_aiohttp_openai(_dispatch_ctx)
         elif custom_llm_provider == "cometapi":
             response = _complete_cometapi(_dispatch_ctx)
+        elif custom_llm_provider == "clinepass":
+            response = _complete_http_provider(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
         elif custom_llm_provider == "minimax":
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
@@ -7880,6 +7923,10 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
+    custom_llm_provider: Final[object] = kwargs.get("custom_llm_provider")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # moderation **kwargs is untyped
+    litellm.ClinePassConfig.validate_moderation(
+        model=model, custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    )
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
@@ -7914,6 +7961,7 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
+    litellm.ClinePassConfig.validate_moderation(model=model, custom_llm_provider=custom_llm_provider)
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)

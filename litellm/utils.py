@@ -8619,6 +8619,7 @@ class ProviderConfigManager:
             LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
             LlmProviders.FAL_AI: (litellm.FalAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
+            LlmProviders.CLINEPASS: (litellm.ClinePassConfig, False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
             LlmProviders.AI21: (lambda: litellm.AI21ChatConfig(), False),
@@ -9865,6 +9866,8 @@ class ProviderConfigManager:
         (POST /realtime/client_secrets and POST /realtime/calls).
         """
 
+        if LlmProviders.CLINEPASS == provider:
+            return litellm.ClinePassConfig.get_realtime_http_config(model=model)
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.realtime.http_transformation import (
                 OpenAIRealtimeHTTPConfig,
