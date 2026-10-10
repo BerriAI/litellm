@@ -379,6 +379,7 @@ class LiteLLMCompletionResponsesConfig:
         reasoning_effort: str | None,
         reasoning_summary: str | None,
         api_base: str | None,
+        deployment_mode: str | None,
     ) -> bool:
         """
         Whether ``litellm.completion`` will route this model back onto the Responses API.
@@ -397,6 +398,7 @@ class LiteLLMCompletionResponsesConfig:
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=reasoning_summary,
                 api_base=api_base,
+                deployment_mode=deployment_mode,
             )
         except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
             verbose_logger.debug("responses bridge: reasoning effort mode check failed: %s", e)
@@ -411,6 +413,7 @@ class LiteLLMCompletionResponsesConfig:
         tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None = None,
         web_search_options: OpenAIWebSearchOptions | None = None,
         api_base: str | None = None,
+        deployment_mode: str | None = None,
     ) -> ResponsesReasoningChatForm:
         """
         Split the Responses ``reasoning`` object into the params Chat Completions understands.
@@ -440,6 +443,7 @@ class LiteLLMCompletionResponsesConfig:
             reasoning_effort=effort,
             reasoning_summary=summary,
             api_base=api_base,
+            deployment_mode=deployment_mode,
         )
         return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
 
@@ -456,6 +460,8 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        from litellm.main import router_deployment_mode
+
         (
             tools,
             web_search_options,
@@ -480,6 +486,7 @@ class LiteLLMCompletionResponsesConfig:
             tools=tools,
             web_search_options=web_search_options,
             api_base=kwargs.get("api_base"),
+            deployment_mode=router_deployment_mode(kwargs),
         )
 
         litellm_completion_request: dict = {

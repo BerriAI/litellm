@@ -3281,6 +3281,23 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     return None if is_generalized_model_info(info) else info
 
 
+def mode_register_model_would_merge_into(key: str, provider: object) -> object:
+    """The ``mode`` already on the entry that ``register_model({key: ...})`` merges into.
+
+    Mirrors ``register_model``'s key resolution: a provider-prefixed key such as
+    ``openai/gpt-5.6`` lands on the bare catalog entry ``gpt-5.6``, so reading
+    ``litellm.model_cost[key]`` alone would miss the mode that registration overwrites.
+    """
+    skips_model_info_lookup: Final = provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
+        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    )
+    builtin_model_info: Final = None if skips_model_info_lookup else _get_builtin_model_info_for_registration(key)
+    if builtin_model_info is not None:
+        return builtin_model_info.get("mode")
+    entry: Final = litellm.model_cost.get(key)
+    return entry.get("mode") if isinstance(entry, dict) else None
+
+
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
