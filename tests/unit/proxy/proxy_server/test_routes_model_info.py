@@ -10,7 +10,7 @@ Pins (PR2):
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -214,6 +214,42 @@ def test_v2_model_info_in_openapi_schema():
     assert "get" in schema["paths"]["/v2/model/info"]
 
 
+_MODEL_INFO_V1_ITEM: Final = {"$ref": "#/components/schemas/ModelInfoV1Deployment"}
+
+
+@pytest.mark.parametrize(
+    ("path", "response_schema", "data_schema"),
+    (
+        (
+            "/model/info",
+            "ModelInfoV1Response",
+            {"anyOf": [{"items": _MODEL_INFO_V1_ITEM, "type": "array"}, _MODEL_INFO_V1_ITEM]},
+        ),
+        (
+            "/v1/model/info",
+            "ModelInfoV1Response",
+            {"anyOf": [{"items": _MODEL_INFO_V1_ITEM, "type": "array"}, _MODEL_INFO_V1_ITEM]},
+        ),
+        (
+            "/model_group/info",
+            "ModelGroupInfoResponse",
+            {"items": {"$ref": "#/components/schemas/ModelGroupInfoProxy"}, "type": "array"},
+        ),
+    ),
+)
+def test_model_info_routes_declare_their_response_schema(
+    path: str, response_schema: str, data_schema: Mapping[str, object]
+) -> None:
+    """The OpenAPI document types the 200 body of each model-info route, so a client can generate types."""
+    from litellm.proxy.proxy_server import get_openapi_schema
+
+    schema: Final = get_openapi_schema()
+    declared: Final = schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert declared == {"$ref": f"#/components/schemas/{response_schema}"}
+    data: Final = schema["components"]["schemas"][response_schema]["properties"]["data"]
+    assert {key: value for key, value in data.items() if key != "title"} == data_schema
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/model/info, GET /model/info
 # ---------------------------------------------------------------------------
@@ -262,6 +298,88 @@ def test_v1_model_info_specific_id_happy(client, auth_as, configured_router, pat
             }
         ]
     }
+
+
+@pytest.fixture
+def real_router(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> litellm.Router:
+    """A real Router with a cost-map model, a wildcard and a model the cost map does not know."""
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"id": "known-id"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-test"},
+                "model_info": {"id": "wildcard-id"},
+            },
+            {
+                "model_name": "mystery",
+                "litellm_params": {
+                    "model": "openai/mystery-model",
+                    "api_key": "sk-test",
+                    "api_base": "https://mystery.example/v1",
+                },
+                "model_info": {"id": "unknown-id"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    return router
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_v1_model_info_bodies_validate_against_the_declared_response_model(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    real_router: litellm.Router,
+    path: str,
+) -> None:
+    """The orjson body, which FastAPI never validates, fits the declared schema for a cost-map model, a wildcard
+    expansion and an unknown model, both listed and looked up by id, with credentials gone."""
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import ModelInfoV1Response
+
+    with auth_as():
+        listing: Final = client.get(path)
+        by_id: Final = client.get(path, params={"litellm_model_id": "unknown-id"})
+    assert (listing.status_code, by_id.status_code) == (200, 200), (listing.text, by_id.text)
+    listed: Final = ModelInfoV1Response.model_validate(listing.json()).data
+    assert isinstance(listed, tuple)
+    assert {deployment.model_name for deployment in listed} > {"gpt-4o", "mystery"}
+    assert all("api_key" not in deployment.litellm_params.model_dump() for deployment in listed)
+    looked_up: Final = ModelInfoV1Response.model_validate(by_id.json()).data
+    assert isinstance(looked_up, tuple)
+    assert [deployment.model_name for deployment in looked_up] == ["mystery"]
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_v1_model_info_cli_model_body_is_one_deployment(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    real_router: litellm.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    """Started as ``litellm --model``, the route serves ``data`` as one deployment object, the second shape the
+    schema declares, with an unset non-secret parameter arriving as the string "None"."""
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        ModelInfoV1Deployment,
+        ModelInfoV1Response,
+    )
+
+    monkeypatch.setattr(proxy_server, "user_model", "gpt-4o")
+    with auth_as():
+        response: Final = client.get(path)
+    assert response.status_code == 200, response.text
+    declared: Final = ModelInfoV1Response.model_validate(response.json()).data
+    assert isinstance(declared, ModelInfoV1Deployment)
+    assert (declared.model_name, declared.litellm_params.model) == ("*", "gpt-4o")
+    assert declared.litellm_params.model_dump()["max_retries"] == "None"
 
 
 @pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])

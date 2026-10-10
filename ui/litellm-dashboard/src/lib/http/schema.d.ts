@@ -37662,10 +37662,131 @@ export interface components {
             /** Tpm */
             tpm?: number | null;
         };
+        /**
+         * ModelGroupInfoResponse
+         * @description `{data: [...]}` of `GET /model_group/info`: one `ModelGroupInfoProxy` per model group the caller may see.
+         */
+        ModelGroupInfoResponse: {
+            /** Data */
+            data: components["schemas"]["ModelGroupInfoProxy"][];
+        };
+        /** ModelInfo */
+        "ModelInfo-Output": {
+            /** Access Windows */
+            access_windows?: components["schemas"]["ModelAccessWindow"][] | null;
+            /** Allow Fail Open */
+            allow_fail_open?: boolean | null;
+            /** Base Model */
+            base_model?: string | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Cache Creation Input Token Cost */
+            cache_creation_input_token_cost?: number | null;
+            /** Cache Read Input Token Cost */
+            cache_read_input_token_cost?: number | null;
+            /** Cost Per Ptu Per Hour */
+            cost_per_ptu_per_hour?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Db Model
+             * @default false
+             */
+            db_model: boolean;
+            /** Discoverable */
+            discoverable?: boolean | null;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
+            /** Id */
+            id: string | null;
+            /** Input Cost Per Character */
+            input_cost_per_character?: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
+            /** Internal Router Model */
+            internal_router_model?: boolean | null;
+            /**
+             * Member Auto Router
+             * @default false
+             */
+            member_auto_router: boolean;
+            /** Output Cost Per Character */
+            output_cost_per_character?: number | null;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
+            /** Ptu Count */
+            ptu_count?: number | null;
+            /** Ptu Effective From */
+            ptu_effective_from?: string | null;
+            /** Ptu Effective To */
+            ptu_effective_to?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Public Model Name */
+            team_public_model_name?: string | null;
+            /** Tier */
+            tier?: ("free" | "paid") | null;
+            /** Tiered Pricing */
+            tiered_pricing?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** ModelInfoDelete */
         ModelInfoDelete: {
             /** Id */
             id: string;
+        };
+        /**
+         * ModelInfoV1Deployment
+         * @description One deployment as `GET /model/info` and `GET /v1/model/info` report it.
+         *
+         *     Any further deployment-level key passes through from the router row unchanged.
+         */
+        ModelInfoV1Deployment: {
+            litellm_params: components["schemas"]["ModelInfoV1LiteLLMParams"];
+            /** @description The configured model_info merged with the cost map entry for the model (pricing, token limits, mode, supports_* capabilities, supported_openai_params, litellm_provider, key), the proxy's discovered model info and pricing_overrides. With the proxy database connected, direct_access is added, and access_via_team_ids for an admin or for a key that belongs to a user. */
+            model_info: components["schemas"]["ModelInfo-Output"];
+            /**
+             * Model Name
+             * @description The name requests use for this deployment. A team deployment stored under the proxy's internal `model_name_<team_id>_<uuid>` name reports its team_public_model_name instead.
+             */
+            model_name: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModelInfoV1LiteLLMParams
+         * @description A deployment's litellm_params as `GET /model/info` serves them.
+         *
+         *     Every configured key passes through except credentials: api_key, client_secret, vertex credentials and AWS
+         *     access keys are removed and every other secret-shaped value is masked, except litellm_credential_name. With the
+         *     proxy started from the CLI with `--model`, every unset parameter arrives as the string "None", or as an empty
+         *     string when its name is secret-shaped.
+         */
+        ModelInfoV1LiteLLMParams: {
+            /** Model */
+            model: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModelInfoV1Response
+         * @description `{data: ...}` of `GET /model/info` and `GET /v1/model/info`.
+         *
+         *     `data` is one `ModelInfoV1Deployment` per deployment the caller may see. With the proxy started from the CLI
+         *     with `--model` and no config, `data` is that single deployment as one object instead of a list.
+         */
+        ModelInfoV1Response: {
+            /** Data */
+            data: components["schemas"]["ModelInfoV1Deployment"][] | components["schemas"]["ModelInfoV1Deployment"];
         };
         /** ModelInsightDailyMetric */
         ModelInsightDailyMetric: {
@@ -63466,7 +63587,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ModelInfoV1Response"];
                 };
             };
             /** @description Validation Error */
@@ -63792,7 +63913,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ModelGroupInfoResponse"];
                 };
             };
             /** @description Validation Error */
@@ -78167,7 +78288,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ModelInfoV1Response"];
                 };
             };
             /** @description Validation Error */
