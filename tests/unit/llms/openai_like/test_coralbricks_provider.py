@@ -405,6 +405,46 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
             assert row["supported_endpoints"] == declared
 
 
+def _billed_chat_cost(model_id: str) -> float:
+    with respx.mock() as upstream:
+        upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl_coralbricks",
+                "object": "chat.completion",
+                "created": 1_789_550_000,
+                "model": model_id,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 4400,
+                    "completion_tokens": 20,
+                    "total_tokens": 4420,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 4352,
+                        "cache_write_tokens": 5,
+                        "billable_cache_write_tokens": 5,
+                    },
+                },
+            },
+        )
+        response: Final = litellm.completion(
+            model=f"coralbricks/{model_id}",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="coralbricks-test-key",
+        )
+    return litellm.completion_cost(completion_response=response, model=f"coralbricks/{model_id}")
+
+
+@pytest.mark.parametrize(
+    ("deprecated_slug", "current_slug"),
+    (("glm-5.3-fp4", "glm-5.3-fast"), ("deepseek-v4.1-flash-fast-fp4", "deepseek-v4.1-flash-fast")),
+)
+def test_coralbricks_deprecated_slug_bills_like_its_current_slug(deprecated_slug: str, current_slug: str):
+    current_cost: Final = _billed_chat_cost(current_slug)
+    assert current_cost > 0
+    assert _billed_chat_cost(deprecated_slug) == pytest.approx(current_cost)
+
+
 def test_coralbricks_streaming_chat_cost_includes_cache_write_and_free_cached_read():
     rates: Final = _coralbricks_rates()
     usage_chunk: Final = {
