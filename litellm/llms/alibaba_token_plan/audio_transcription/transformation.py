@@ -19,15 +19,15 @@ from litellm.types.llms.openai import AllMessageValues, OpenAIAudioTranscription
 from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageDurationObject
 
 
-class _TranscriptionOutput(BaseModel):
+class _TranscriptionOutput(BaseModel, frozen=True):
     text: str
 
 
-class _TranscriptionUsage(BaseModel):
+class _TranscriptionUsage(BaseModel, frozen=True):
     duration: float
 
 
-class _TranscriptionResult(BaseModel):
+class _TranscriptionResult(BaseModel, frozen=True):
     output: _TranscriptionOutput
     usage: _TranscriptionUsage | None = None
 

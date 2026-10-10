@@ -7036,9 +7036,7 @@ def validate_environment(
             else:
                 missing_keys.append("WANDB_API_KEY")
         elif custom_llm_provider == "alibaba_token_plan":
-            if os.environ.get("ALIBABA_TOKEN_PLAN_API_KEY"):
-                keys_in_environment = True
-            else:
+            if not os.environ.get("ALIBABA_TOKEN_PLAN_API_KEY"):
                 missing_keys.append("ALIBABA_TOKEN_PLAN_API_KEY")
         elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
             if f"{custom_llm_provider.upper()}_API_KEY" in os.environ or "DASHSCOPE_API_KEY" in os.environ:

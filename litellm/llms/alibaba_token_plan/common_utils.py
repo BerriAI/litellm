@@ -4,6 +4,8 @@ from os import PathLike
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.secret_managers.main import get_secret_str
@@ -14,6 +16,7 @@ IMAGE_PATH: Final = "api/v1/services/aigc/multimodal-generation/generation"
 SPEECH_PATH: Final = "api/v1/services/audio/tts/SpeechSynthesizer"
 REALTIME_PATH: Final = "api-ws/v1/realtime"
 VIDEO_PATH: Final = "api/v1/services/aigc/video-generation/video-synthesis"
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
 
 
 @runtime_checkable
@@ -50,8 +53,15 @@ def validate_headers(
     return {**headers, "Authorization": f"Bearer {require_api_key(api_key)}", "Content-Type": "application/json"}
 
 
+def _image_source(image: object) -> object:
+    if not isinstance(image, tuple):
+        return image
+    items: Final = _OBJECT_TUPLE.validate_python(image)
+    return items[1] if len(items) > 1 else items
+
+
 def image_reference(image: object) -> str:
-    source: Final = image[1] if isinstance(image, tuple) and len(image) > 1 else image
+    source: Final = _image_source(image)
     if isinstance(source, str):
         return source
     data: Final = (

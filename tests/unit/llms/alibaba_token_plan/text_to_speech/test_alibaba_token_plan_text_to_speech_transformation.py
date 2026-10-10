@@ -18,9 +18,10 @@ GATEWAY: Final = "https://gateway.example/token-plan"
 SIGNED_AUDIO_URL: Final = "https://audio.example/speech.wav?OSSAccessKeyId=temporary&Signature=secret-value"
 
 
-class _InjectedAsyncHTTPHandler(AsyncHTTPHandler):
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self.client = client
+def _injected_async_handler(client: httpx.AsyncClient) -> AsyncHTTPHandler:
+    handler: Final = AsyncHTTPHandler()
+    handler.client = client
+    return handler
 
 
 def _use_download_clients(
@@ -30,7 +31,7 @@ def _use_download_clients(
     monkeypatch.setattr(
         http_handler_module,
         "get_async_httpx_client",
-        lambda llm_provider, params=None, shared_session=None: _InjectedAsyncHTTPHandler(async_client),
+        lambda llm_provider, params=None, shared_session=None: _injected_async_handler(async_client),
     )
 
 
@@ -75,7 +76,7 @@ async def test_speech_downloads_the_audio_url_without_provider_credentials(
             _use_download_clients(monkeypatch, sync_download, async_download)
             async with httpx.AsyncClient(transport=transport) as async_client:
                 response: Final = (
-                    await litellm.aspeech(**params, client=_InjectedAsyncHTTPHandler(async_client))
+                    await litellm.aspeech(**params, client=_injected_async_handler(async_client))
                     if use_async
                     else litellm.speech(**params, client=HTTPHandler(client=client))
                 )
@@ -108,7 +109,7 @@ async def test_audio_download_failure_does_not_expose_the_signed_url(
 
                 async def request_speech() -> object:
                     if use_async:
-                        return await litellm.aspeech(**params, client=_InjectedAsyncHTTPHandler(async_client))
+                        return await litellm.aspeech(**params, client=_injected_async_handler(async_client))
                     return litellm.speech(**params, client=HTTPHandler(client=client))
 
                 with pytest.raises(Exception, match="audio download failed") as error:

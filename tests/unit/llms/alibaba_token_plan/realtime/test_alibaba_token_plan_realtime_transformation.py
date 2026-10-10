@@ -297,7 +297,7 @@ async def test_injected_websockets_relay_session_audio_barge_in_and_tool_events(
     assert events[2]["type"] == "input_audio_buffer.speech_started"
     assert events[4]["call_id"] == "call"
     assert events[5]["response"]["status"] == "cancelled"
-    backend.send.assert_awaited_once_with(json.dumps({"type": "response.create"}))
+    backend.send.assert_not_awaited()
 
 
 def test_cumulative_transcription_emits_only_new_confirmed_suffix_per_item() -> None:

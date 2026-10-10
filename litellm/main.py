@@ -8437,7 +8437,7 @@ def speech(
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
     if custom_llm_provider == "alibaba_token_plan":
-        response = base_llm_http_handler.text_to_speech_handler(
+        return base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice if isinstance(voice, str) else None,
@@ -8447,7 +8447,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             litellm_params={**litellm_params_dict, "api_base": api_base},
             logging_obj=logging_obj,
-            timeout=timeout,
+            timeout=http_timeout,
             extra_headers=TypeAdapter(dict[str, object]).validate_python(extra_headers)
             if extra_headers is not None
             else None,
