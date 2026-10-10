@@ -1172,6 +1172,7 @@ def test_i1_a_request_opted_guardrail_with_the_flag_set_true_buffers_without_a_p
     token: Final = _token()
     received: Final = _withheld(rig.stage, _opting_in(rig.rails["I1"]), rig.models["I1"], token)
     assert f"{_provider_text(token)} tail" in received, received
+    assert _scan_count(rig, "I1", token, 1) == 1
 
 
 @pytest.mark.parametrize("row", ("I2", "I3"), ids=("I2-flag-false", "I3-flag-unset"))
@@ -1182,6 +1183,7 @@ def test_i_a_request_opted_guardrail_without_the_flag_set_true_streams_live_with
     stream: Final = _released(rig.stage, _opting_in(rig.rails[row]), rig.models[row], token)
     assert _provider_text(token) in stream.released_while_held, stream
     assert f"{_provider_text(token)} tail" in stream.received, stream
+    assert _scan_count(rig, row, token, 1) == 1
 
 
 def _single_rail_config(

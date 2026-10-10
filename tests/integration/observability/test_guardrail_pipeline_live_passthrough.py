@@ -6,7 +6,8 @@ import socket
 import socketserver
 import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -14,7 +15,7 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import gateway_from_environment, held, object_value
+from integration._support.client import Gateway, eventually, gateway_from_environment, held, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.upstream import aws_event_stream_frame
@@ -179,13 +180,43 @@ def _expected(target: str, token: str) -> bytes:
     return b"".join(chunks)
 
 
-def _upstream(request: Request) -> Reply:
-    if request.target.startswith("/_oauth/token"):
-        return Reply(
-            body=b'{"access_token": "synthetic-vertex-access-token", "expires_in": 3600, "token_type": "Bearer"}'
-        )
-    chunks, content_type = _frames(request.target, _provider_text(_token_of(request.body)))
-    return Reply(chunks=chunks, content_type=content_type)
+class _Gates:
+    def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
+        self.held: Mapping[str, threading.Event] = MappingProxyType({})
+
+    def hold(self, token: str) -> threading.Event:
+        gate: Final = threading.Event()
+        with self._lock:
+            self.held = MappingProxyType({**self.held, token: gate})
+        return gate
+
+
+class _Received:
+    def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
+        self.pieces: tuple[bytes, ...] = ()
+
+    def add(self, piece: bytes) -> None:
+        with self._lock:
+            self.pieces = (*self.pieces, piece)
+
+    @property
+    def content(self) -> bytes:
+        return b"".join(self.pieces)
+
+
+def _replying(gates: _Gates) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        if request.target.startswith("/_oauth/token"):
+            return Reply(
+                body=b'{"access_token": "synthetic-vertex-access-token", "expires_in": 3600, "token_type": "Bearer"}'
+            )
+        token: Final = _token_of(request.body)
+        chunks, content_type = _frames(request.target, _provider_text(token))
+        return Reply(chunks=chunks, content_type=content_type, gate_after_first=gates.held.get(token))
+
+    return reply
 
 
 def _rewrite(request: Request) -> Reply:
@@ -264,6 +295,7 @@ class _PassRig:
     peer: _Log
     rail: str
     models: _Models
+    gates: _Gates
 
 
 def _model_list(models: _Models, upstream: str) -> list[JsonValue]:
@@ -387,10 +419,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_PassRig]:
     rail: Final = f"plive-pt-{suffix}"
     models: Final = _Models(*(f"plive-pt-{kind}-{suffix}" for kind in ("azure", "bedrock", "nim", "vllm", "gigachat")))
     certificate, key = write_self_signed_cert(directory, tuple(TUNNEL_HOSTS))
+    gates: Final = _Gates()
     with (
         gateway_from_environment() as root,
-        wire_server(_upstream) as upstream,
-        wire_server(_upstream, tls=server_context(certificate, key)) as tunneled,
+        wire_server(_replying(gates)) as upstream,
+        wire_server(_replying(gates), tls=server_context(certificate, key)) as tunneled,
         wire_server(_rewrite) as peer,
         _connect_tunnel(int(tunneled.url.rsplit(":", 1)[1])) as tunnel,
     ):
@@ -406,7 +439,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_PassRig]:
             "SSL_CERT_FILE": str(certificate),
         }
         with owned_proxy_process(root, directory, overrides, config=config, workers=2) as owned:
-            yield _PassRig(owned, _Log(upstream), _Log(tunneled), _Log(peer), rail, models)
+            yield _PassRig(owned, _Log(upstream), _Log(tunneled), _Log(peer), rail, models, gates)
 
 
 @dataclass(frozen=True, slots=True)
@@ -544,28 +577,74 @@ ROWS: Final = (
 )
 
 
-def _send(rig: _PassRig, row: str) -> tuple[str, _Route, bytes]:
+@dataclass(frozen=True, slots=True)
+class _Sent:
+    token: str
+    route: _Route
+    released_while_held: bytes
+    content: bytes
+
+
+def _stream(gateway: Gateway, route: _Route, received: _Received) -> int:
+    headers: Final = {"Authorization": f"Bearer {gateway.key}", **route.headers}
+    with gateway.client.stream("POST", route.path, json=dict(route.body), headers=headers) as response:
+        for piece in response.iter_bytes():
+            received.add(piece)
+        return response.status_code
+
+
+def _prepared(rig: _PassRig, row: str) -> tuple[str, _Route]:
     token: Final = f"plive-{uuid.uuid4().hex}-0"
-    gateway: Final = rig.owned.gateway
-    route: Final = _route(row, f"synthetic prompt {token}", rig.models, gateway.key)
-    response: Final = gateway.request("POST", route.path, route.body, headers=route.headers)
+    return token, _route(row, f"synthetic prompt {token}", rig.models, rig.owned.gateway.key)
+
+
+def _assert_reached_the_vendor(rig: _PassRig, row: str, sent: tuple[str, _Route], status: int, body: bytes) -> None:
+    token, route = sent
     log: Final = rig.tunneled if route.tunneled else rig.upstream
     targets: Final = tuple(request.target.split("?", 1)[0] for request in log.matching(token))
-    assert response.status_code == 200, (row, response.status_code, response.text, targets)
+    assert status == 200, (row, status, body, targets)
     assert targets == (route.upstream_target,), targets
-    return token, route, response.content
+
+
+def _send(rig: _PassRig, row: str) -> _Sent:
+    token, route = _prepared(rig, row)
+    first_chunk: Final = _frames(route.upstream_target, _provider_text(token))[0][0]
+    gate: Final = rig.gates.hold(token)
+    received: Final = _Received()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future: Final = pool.submit(_stream, rig.owned.gateway, route, received)
+        try:
+            early: Final = eventually(
+                lambda: received.content,
+                lambda content: content.startswith(first_chunk),
+                seconds=8,
+                return_last_on_timeout=True,
+            )
+        finally:
+            gate.set()
+        status: Final = future.result(timeout=60)
+    _assert_reached_the_vendor(rig, row, (token, route), status, received.content)
+    return _Sent(token, route, early, received.content)
 
 
 @pytest.mark.parametrize("row", ROWS)
-def test_g_a_live_pipeline_leaves_every_pass_through_stream_unscanned_and_byte_identical(
+def test_g_a_live_pipeline_leaves_every_pass_through_stream_live_unscanned_and_byte_identical(
     rig: _PassRig, row: str
 ) -> None:
-    token, route, content = _send(rig, row)
-    assert content == _expected(route.upstream_target, token), (row, content)
-    held(lambda: rig.peer.matching(token), lambda scans: not scans, holding=3)
+    sent: Final = _send(rig, row)
+    first_chunk: Final = _frames(sent.route.upstream_target, _provider_text(sent.token))[0][0]
+    observed: Final = (
+        sent.released_while_held.startswith(first_chunk),
+        sent.content == _expected(sent.route.upstream_target, sent.token),
+    )
+    assert observed == (True, True), (row, sent)
+    held(lambda: rig.peer.matching(sent.token), lambda scans: not scans, holding=3)
 
 
 def test_g9_a_bedrock_router_model_converse_stream_keeps_buffering_for_the_pipeline_rewrite(rig: _PassRig) -> None:
-    token, _route_used, content = _send(rig, "G9-bedrock-router-model")
+    token, route = _prepared(rig, "G9-bedrock-router-model")
+    response: Final = rig.owned.gateway.request("POST", route.path, route.body, headers=route.headers)
+    _assert_reached_the_vendor(rig, "G9-bedrock-router-model", (token, route), response.status_code, response.content)
+    content: Final = response.content
     assert f"{REWRITTEN} {token}".encode() in content and SECRET_WORD.encode() not in content, content
     held(lambda: len(rig.peer.matching(token)), lambda scans: scans == 1, holding=3)
