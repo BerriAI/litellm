@@ -439,19 +439,22 @@ class CustomOpenAPISpec:
         return CustomOpenAPISpec.add_responses_api_request_schema(with_embeddings)
 
 
-def _inlined(node: JsonValue, defs: Mapping[str, JsonValue]) -> JsonValue:
-    if isinstance(node, list):
-        return [_inlined(item, defs) for item in node]
-    if not isinstance(node, dict):
+_MAX_INLINE_DEPTH: Final = 32
+
+
+def _inlined(node: JsonValue, defs: Mapping[str, JsonValue], depth: int = 0) -> JsonValue:
+    if depth >= _MAX_INLINE_DEPTH or not isinstance(node, (list, dict)):
         return node
+    if isinstance(node, list):
+        return [_inlined(item, defs, depth + 1) for item in node]
     ref: Final = node.get("$ref")
     if isinstance(ref, str) and ref.startswith("#/$defs/"):
-        target: Final = _inlined(defs[ref.removeprefix("#/$defs/")], defs)
-        siblings: Final = {key: _inlined(value, defs) for key, value in node.items() if key != "$ref"}
+        target: Final = _inlined(defs[ref.removeprefix("#/$defs/")], defs, depth + 1)
+        siblings: Final = {key: _inlined(value, defs, depth + 1) for key, value in node.items() if key != "$ref"}
         return {**target, **siblings} if isinstance(target, dict) else siblings
     if "propertyName" in node and "mapping" in node:
         return {"propertyName": node["propertyName"]}
-    return {key: _inlined(value, defs) for key, value in node.items() if key != "$defs"}
+    return {key: _inlined(value, defs, depth + 1) for key, value in node.items() if key != "$defs"}
 
 
 def inline_request_body(model_class: type, example: Mapping[str, object]) -> JsonObject:
