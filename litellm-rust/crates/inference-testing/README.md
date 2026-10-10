@@ -27,7 +27,7 @@ LITELLM_LIVE_MESSAGES_VERTEX_AI_MODEL=<claude-model-on-vertex> \
 
 For Vertex AI, set `LITELLM_LIVE_MESSAGES_VERTEX_AI_MODEL` to a Claude model published in the project's location. Credentials, project and location resolve through the production Rust GCP authentication, from `GOOGLE_APPLICATION_CREDENTIALS` or `VERTEXAI_CREDENTIALS`, with `VERTEXAI_PROJECT` and `VERTEXAI_LOCATION`
 
-Vertex AI cases live in `inference-messages/tests/live/vertex_ai.rs`. They cover plain and system messages, text streaming, and complete and streaming tool round trips
+Vertex AI cases live in `inference-messages/tests/live/vertex_ai.rs`. They cover plain and system messages, text streaming, and complete and streaming tool round trips. Tool cases use automatic selection because current Claude models reject forced `tool_choice`. Each case still requires a tool call, checks its arguments, and sends the tool result back
 
 Tool cases require a model that supports forced `tool_choice`, except where a provider's section says otherwise. A provider rejection fails the selected case instead of skipping it
 

@@ -62,7 +62,7 @@ async fn tool_round_trip(route: MessagesRoute, #[case] stream: bool) {
         route,
         PROVIDER,
         stream,
-        json!({"tool_choice": {"type": "tool", "name": "echo"}}),
+        json!({"tool_choice": {"type": "auto"}}),
     )
     .await;
 }
