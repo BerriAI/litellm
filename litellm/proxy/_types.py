@@ -264,27 +264,9 @@ class LitellmTableNames(str, enum.Enum):
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
 
 
-class Litellm_EntityType(enum.Enum):
-    """
-    Enum for types of entities on litellm
-
-    This enum allows specifying the type of entity that is being tracked in the database.
-    """
-
-    KEY = "key"
-    USER = "user"
-    END_USER = "end_user"
-    TEAM = "team"
-    TEAM_MEMBER = "team_member"
-    ORGANIZATION = "organization"
-    ORGANIZATION_MEMBER = "organization_member"
-    PROJECT = "project"
-    TAG = "tag"
-    AGENT = "agent"
-    MODEL_ACCESS_GROUP = "model_access_group"
-
-    # global proxy level entity
-    PROXY = "proxy"
+from litellm.types.integrations.slack_alerting import (
+    Litellm_EntityType as Litellm_EntityType,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 def hash_token(token: str):
@@ -4007,47 +3989,10 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     system: Any | None = None
 
 
-class CallInfo(LiteLLMPydanticObjectBase):
-    """Used for slack budget alerting"""
-
-    spend: float
-    max_budget: float | None = None
-    soft_budget: float | None = None
-    token: str | None = Field(default=None, description="Hashed value of that key")
-    customer_id: str | None = None
-    user_id: str | None = None
-    team_id: str | None = None
-    team_alias: str | None = None
-    organization_id: str | None = None
-    user_email: str | None = None
-    key_alias: str | None = None
-    projected_exceeded_date: str | None = None
-    projected_spend: float | None = None
-    event_group: Litellm_EntityType
-    alert_emails: list[str] | None = Field(
-        default=None,
-        description="Additional email addresses to send alerts to (e.g., from team metadata)",
-    )
-    max_budget_alert_emails: dict[str, list[str]] | None = Field(
-        default=None,
-        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
-    )
-
-
-class WebhookEvent(CallInfo):
-    event: Literal[
-        "budget_crossed",
-        "max_budget_alert",
-        "soft_budget_crossed",
-        "threshold_crossed",
-        "projected_limit_exceeded",
-        "key_created",
-        "key_rotated",
-        "internal_user_created",
-        "spend_tracked",
-    ]
-    event_message: str  # human-readable description of event
-    event_group: Litellm_EntityType
+from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
+from litellm.types.integrations.slack_alerting import (
+    WebhookEvent as WebhookEvent,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class SpecialModelNames(enum.Enum):
@@ -4064,8 +4009,9 @@ class SpecialProxyStrings(enum.Enum):
     default_user_id = "default_user_id"  # global proxy admin
 
 
-class InvitationNew(LiteLLMPydanticObjectBase):
-    user_id: str
+from litellm.types.integrations.slack_alerting import (
+    InvitationNew as InvitationNew,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class InvitationUpdate(LiteLLMPydanticObjectBase):
@@ -4077,16 +4023,9 @@ class InvitationDelete(LiteLLMPydanticObjectBase):
     invitation_id: str
 
 
-class InvitationModel(LiteLLMPydanticObjectBase):
-    id: str
-    user_id: str
-    is_accepted: bool
-    accepted_at: datetime | None
-    expires_at: datetime
-    created_at: datetime
-    created_by: str
-    updated_at: datetime
-    updated_by: str
+from litellm.types.integrations.slack_alerting import (
+    InvitationModel as InvitationModel,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class InvitationClaim(LiteLLMPydanticObjectBase):
@@ -4688,11 +4627,9 @@ class SSOUserDefinedValues(TypedDict):
     budget_duration: str | None
 
 
-class VirtualKeyEvent(LiteLLMPydanticObjectBase):
-    created_by_user_id: str
-    created_by_user_role: str
-    created_by_key_alias: str | None
-    request_kwargs: dict
+from litellm.types.integrations.slack_alerting import (
+    VirtualKeyEvent as VirtualKeyEvent,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):
