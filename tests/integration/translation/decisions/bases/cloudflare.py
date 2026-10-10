@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Final
 
 from integration.translation.case import TranslationTestCase
@@ -177,5 +178,44 @@ CLEF_SYSTEMONE_TEST_CASE: Final = TranslationTestCase(
             },
         },
         "usage": {"input_tokens": 290, "output_tokens": 0},
+    },
+)
+CLEF_IMAGES_TEST_CASE: Final = replace(
+    CLEF_TEST_CASE,
+    scenario="images",
+    litellm_request={
+        **CLEF_TEST_CASE.litellm_request,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Ticket (billing): The export job hangs at 99% and never finishes",
+                    },
+                    {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="},
+                ],
+            }
+        ],
+    },
+    expected_provider_request={
+        **CLEF_TEST_CASE.expected_provider_request,
+        "images": ["data:image/png;base64,iVBORw0KGgo="],
+    },
+)
+CLEF_IMAGES_SYSTEMONE_TEST_CASE: Final = replace(
+    CLEF_SYSTEMONE_TEST_CASE,
+    scenario="images_systemone",
+    litellm_request={
+        **CLEF_SYSTEMONE_TEST_CASE.litellm_request,
+        "images": [
+            "data:image/png;base64,iVBORw0KGgo=",
+            {"content_type": "image/jpeg", "base64": "BB=="},
+        ],
+    },
+    expected_provider_request={
+        **CLEF_SYSTEMONE_TEST_CASE.expected_provider_request,
+        "images": ["data:image/png;base64,iVBORw0KGgo=", "data:image/jpeg;base64,BB=="],
     },
 )

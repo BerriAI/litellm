@@ -28,6 +28,7 @@ from litellm.types.decisions import (
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
+    SystemOneImage,
     UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders
@@ -92,9 +93,12 @@ def _validate_request(
     questions: DecisionsQuestions | None,
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
+    images: Sequence[SystemOneImage | Mapping[str, object]] | None,
 ) -> DecisionsRequestFormat:
     if decision_input is None:
-        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions})
+        return _SYSTEMONE_REQUEST_ADAPTER.validate_python(
+            {"state": state, "questions": questions, **({"images": images} if images is not None else {})}
+        )
     return _OPENAI_REQUEST_ADAPTER.validate_python(
         {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
     )
@@ -147,6 +151,7 @@ def _prepare_call(
     questions: DecisionsQuestions | None,
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
+    images: Sequence[SystemOneImage | Mapping[str, object]] | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -173,6 +178,14 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         )
+    if images is not None and decision_input is not None:
+        raise litellm.BadRequestError(
+            message=(
+                "images is the System One Decisions field, the OpenAI format takes input_image parts inside input"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
     try:
         canonical_model: Final = provider_config.canonical_model(upstream_model)
     except ValueError as error:
@@ -184,6 +197,7 @@ def _prepare_call(
             questions=questions,
             decision_input=decision_input,
             safety_identifier=request_safety_identifier,
+            images=images,
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -314,6 +328,7 @@ async def adecisions(
     extra_headers: Mapping[str, str] | None = None,
     input: OpenAIDecisionInput | None = None,
     safety_identifier: str | None = None,
+    images: Sequence[SystemOneImage | Mapping[str, object]] | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
     call: Final = _prepare_call(
@@ -322,6 +337,7 @@ async def adecisions(
         questions=questions,
         decision_input=input,
         safety_identifier=safety_identifier,
+        images=images,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
@@ -360,6 +376,7 @@ def decisions(
     extra_headers: Mapping[str, str] | None = None,
     input: OpenAIDecisionInput | None = None,
     safety_identifier: str | None = None,
+    images: Sequence[SystemOneImage | Mapping[str, object]] | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
     call: Final = _prepare_call(
@@ -368,6 +385,7 @@ def decisions(
         questions=questions,
         decision_input=input,
         safety_identifier=safety_identifier,
+        images=images,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

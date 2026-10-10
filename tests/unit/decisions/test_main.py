@@ -253,6 +253,50 @@ async def test_router_dispatches_typesafe_decisions_without_api_base(
     assert response.answers["sentiment"].choice == "positive"
 
 
+@pytest.mark.asyncio
+async def test_images_with_openai_input_is_rejected_before_http(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="images is the System One Decisions field"):
+        await litellm.adecisions(
+            model="cloudflare/clef",
+            input="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            images=["data:image/png;base64,AA=="],
+            api_key="caller-key",
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+def test_cloudflare_clef_receives_images_on_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    route: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=_RESPONSE)
+
+    litellm.decisions(
+        model="cloudflare/clef",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        images=[
+            "data:image/png;base64,AA==",
+            {"content_type": "image/jpeg", "base64": "BB=="},
+        ],
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "clef",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": ["data:image/png;base64,AA==", "data:image/jpeg;base64,BB=="],
+    }
+
+
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 

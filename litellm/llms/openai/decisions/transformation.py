@@ -146,7 +146,18 @@ def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
 def _openai_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> str | Sequence[Mapping[str, object]]:
     match decision_input:
         case DecisionsIRState():
-            return decisions_text(decision_input.state)
+            if not decision_input.images:
+                return decisions_text(decision_input.state)
+            return [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        *({"type": "input_image", "image_url": image} for image in decision_input.images),
+                        {"type": "input_text", "text": decisions_text(decision_input.state)},
+                    ],
+                }
+            ]
         case DecisionsIRMessages():
             return [message.model_dump(mode="json", exclude_none=True) for message in decision_input.messages]
         case _:

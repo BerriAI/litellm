@@ -10,7 +10,9 @@ from litellm.llms.base_llm.decisions.transformation import (
     parse_systemone_response,
     systemone_request_to_ir,
 )
+from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
 from litellm.llms.openai.decisions.transformation import openai_request_to_ir
+from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
     DecisionsIRRefusal,
@@ -115,6 +117,99 @@ def test_image_input_is_unsupported_by_systemone_providers() -> None:
     )
 
     assert isinstance(ir_to_systemone_request("jev-latest", ir), UnsupportedDecisionsRequest)
+
+
+def test_images_reach_a_systemone_provider_that_supports_them_in_order() -> None:
+    ir: Final = _openai_ir(
+        {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Is the screen cracked?"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                    ],
+                },
+                {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/jpeg;base64,BB=="}]},
+                {"role": "user", "content": "Order 1234."},
+            ],
+            "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
+        }
+    )
+
+    body: Final = CloudflareDecisionsConfig().transform_decisions_request(
+        model="clef", request=ir, custom_llm_provider="cloudflare"
+    )
+
+    assert body == {
+        "model": "clef",
+        "state": "Is the screen cracked?\n\nOrder 1234.",
+        "questions": {"0": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": ["data:image/png;base64,AA==", "data:image/jpeg;base64,BB=="],
+    }
+
+
+def test_images_are_unsupported_by_a_default_systemone_provider() -> None:
+    ir: Final = _openai_ir(
+        {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Is the screen cracked?"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                    ],
+                }
+            ],
+            "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
+        }
+    )
+
+    body: Final = TypeSafeDecisionsConfig().transform_decisions_request(
+        model="jev-latest", request=ir, custom_llm_provider="typesafe"
+    )
+
+    assert body == UnsupportedDecisionsRequest(reason="image input is not supported by this Decisions provider")
+
+
+def test_systemone_images_normalize_to_data_urls_in_order() -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python(
+            {
+                **_SYSTEMONE_REQUEST,
+                "images": [
+                    "data:image/png;base64,AA==",
+                    {"content_type": "image/jpeg", "base64": "BB=="},
+                ],
+            }
+        )
+    )
+
+    body: Final = ir_to_systemone_request("clef", ir, supports_images=True)
+
+    assert body == {
+        "model": "clef",
+        **_SYSTEMONE_REQUEST,
+        "images": ["data:image/png;base64,AA==", "data:image/jpeg;base64,BB=="],
+    }
+
+
+def test_systemone_images_are_unsupported_by_a_default_systemone_provider() -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "images": ["data:image/png;base64,AA=="]})
+    )
+
+    assert ir_to_systemone_request("jev-latest", ir) == UnsupportedDecisionsRequest(
+        reason="image input is not supported by this Decisions provider"
+    )
+
+
+def test_a_request_without_images_sends_no_images_key() -> None:
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_SYSTEMONE_REQUEST))
+
+    body: Final = ir_to_systemone_request("clef", ir, supports_images=True)
+
+    assert body == {"model": "clef", **_SYSTEMONE_REQUEST}
 
 
 def test_the_largest_openai_request_accepted_translates_to_a_valid_systemone_request() -> None:
