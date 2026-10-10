@@ -24,4 +24,4 @@ function in a full stack is not
 By the domain a user would name: `pricing`, `spend`, `routing`, `mcp`. A file only needs to live in a
 directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no `covers` marker on new
 tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
-fix in the test and not a deletion. Needs no proxy, DB or Redis: `tests/unit`
+fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
