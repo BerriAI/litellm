@@ -19,8 +19,8 @@ from integration._support.wire import Reply, Request, Wire
 from pydantic import JsonValue
 
 PROVIDER: Final = "coralbricks"
-MODEL: Final = "deepseek-v4.1-flash-fast-fp4"
-MODELS: Final = (MODEL, "glm-5.3-fp4")
+MODEL: Final = "deepseek-v4.1-flash-fast"
+MODELS: Final = (MODEL, "glm-5.3-fast")
 API_KEY: Final = "cb_synthetic_integration_key"
 ANSWER: Final = "coral ok"
 NO_CACHE: Final[dict[str, JsonValue]] = {"no-cache": True}

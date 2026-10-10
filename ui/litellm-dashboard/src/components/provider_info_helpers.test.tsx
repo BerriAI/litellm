@@ -340,7 +340,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return a coralbricks/ placeholder for the CoralBricks provider", () => {
-      expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fp4");
+      expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
     });
 
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {

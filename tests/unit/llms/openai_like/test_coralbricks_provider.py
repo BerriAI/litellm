@@ -9,8 +9,8 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
-CORALBRICKS_MODEL: Final = "coralbricks/deepseek-v4.1-flash-fast-fp4"
-CORALBRICKS_MODEL_ID: Final = "deepseek-v4.1-flash-fast-fp4"
+CORALBRICKS_MODEL: Final = "coralbricks/deepseek-v4.1-flash-fast"
+CORALBRICKS_MODEL_ID: Final = "deepseek-v4.1-flash-fast"
 
 
 def test_coralbricks_provider_resolution(monkeypatch: pytest.MonkeyPatch):
@@ -19,13 +19,13 @@ def test_coralbricks_provider_resolution(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("CORALBRICKS_API_KEY", "coralbricks-test-key")
 
     model, provider, api_key, api_base = get_llm_provider(
-        model="coralbricks/glm-5.3-fp4",
+        model="coralbricks/glm-5.3-fast",
         custom_llm_provider=None,
         api_base=None,
         api_key=None,
     )
 
-    assert model == "glm-5.3-fp4"
+    assert model == "glm-5.3-fast"
     assert provider == "coralbricks"
     assert api_key == "coralbricks-test-key"
     assert api_base == "https://inference.coralbricks.ai/v1"
@@ -37,7 +37,7 @@ def test_coralbricks_provider_keeps_explicit_credentials(monkeypatch: pytest.Mon
     monkeypatch.setenv("CORALBRICKS_API_KEY", "coralbricks-env-key")
 
     _, provider, api_key, api_base = get_llm_provider(
-        model="coralbricks/glm-5.3-fp4",
+        model="coralbricks/glm-5.3-fast",
         custom_llm_provider=None,
         api_base="https://coralbricks.internal.example/v1",
         api_key="coralbricks-explicit-key",
@@ -59,7 +59,7 @@ def test_coralbricks_is_available_in_add_model_form():
 
     assert coralbricks["provider"] == "CORALBRICKS"
     assert coralbricks["provider_display_name"] == "CoralBricks"
-    assert coralbricks["default_model_placeholder"] == "coralbricks/glm-5.3-fp4"
+    assert coralbricks["default_model_placeholder"] == "coralbricks/glm-5.3-fast"
     assert {field["key"]: field["required"] for field in coralbricks["credential_fields"]} == {
         "api_base": False,
         "api_key": True,
@@ -396,8 +396,8 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
         Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json",
     )
     for cost_map_path in cost_map_paths:
-        cost_map = json.loads(cost_map_path.read_text())
-        coralbricks_rows = {
+        cost_map: Final = json.loads(cost_map_path.read_text())
+        coralbricks_rows: Final = {
             key: row for key, row in cost_map.items() if key.startswith("coralbricks/")
         }
         assert coralbricks_rows

@@ -454,7 +454,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Bedrock]: "claude-3-opus",
   [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
-  [Providers.CORALBRICKS]: "coralbricks/glm-5.3-fp4",
+  [Providers.CORALBRICKS]: "coralbricks/glm-5.3-fast",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",

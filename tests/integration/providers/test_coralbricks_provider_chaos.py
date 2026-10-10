@@ -266,13 +266,16 @@ def chaos_model() -> str:
 
 
 def chaos_config(wire: Wire, directory: Path, model_name: str) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["model_list"] = [
-        {
-            "model_name": model_name,
-            "litellm_params": {"model": f"{PROVIDER}/{MODEL}", "api_base": f"{wire.url}/v1", "api_key": API_KEY},
-        }
-    ]
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {
+        **base,
+        "model_list": [
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": f"{PROVIDER}/{MODEL}", "api_base": f"{wire.url}/v1", "api_key": API_KEY},
+            }
+        ],
+    }
     path: Final = directory / "coralbricks-chaos.yaml"
     path.write_text(yaml.safe_dump(config))
     return path

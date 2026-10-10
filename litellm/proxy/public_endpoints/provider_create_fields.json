@@ -1041,7 +1041,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "coralbricks/glm-5.3-fp4"
+    "default_model_placeholder": "coralbricks/glm-5.3-fast"
   },
   {
     "provider": "CORTECS",

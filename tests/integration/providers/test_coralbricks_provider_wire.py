@@ -407,7 +407,7 @@ def test_deployment_without_a_key_and_no_env_key_fails_before_the_provider(
 
 @pytest.mark.parametrize(
     "model",
-    (7, ["coralbricks/deepseek-v4.1-flash-fast-fp4"], f"{PROVIDER}/" + "g" * 5120),
+    (7, ["coralbricks/deepseek-v4.1-flash-fast"], f"{PROVIDER}/" + "g" * 5120),
     ids=("int", "list", "5kb"),
 )
 def test_hostile_model_field_is_rejected_without_crashing(gateway: Gateway, model: JsonValue) -> None:

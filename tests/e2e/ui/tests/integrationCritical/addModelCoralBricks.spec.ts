@@ -7,7 +7,7 @@ import { captureRequestBody } from "../../helpers/roundTrip";
 const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
 const headers = { Authorization: `Bearer ${master}` };
 const upstream = (process.env.INTEGRATION_UPSTREAM_URL ?? "http://127.0.0.1:8190").replace(/\/+$/, "");
-const CORALBRICKS_MODEL = "deepseek-v4.1-flash-fast-fp4";
+const CORALBRICKS_MODEL = "deepseek-v4.1-flash-fast";
 const UI_KEY = "cb_ui_integration_key";
 const UPSTREAM_PROMPT_TOKENS = 20;
 const UPSTREAM_COMPLETION_TOKENS = 20;

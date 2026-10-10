@@ -38,12 +38,15 @@ class EnvRig:
 
 
 def env_config(env_wire: Wire, directory: Path) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["model_list"] = [{"model_name": CONFIG_MODEL, "litellm_params": {"model": f"{PROVIDER}/{MODEL}"}}]
-    config["environment_variables"] = {
-        **config.get("environment_variables", {}),
-        "CORALBRICKS_API_KEY": ENV_KEY,
-        "CORALBRICKS_API_BASE": f"{env_wire.url}/v1",
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {
+        **base,
+        "model_list": [{"model_name": CONFIG_MODEL, "litellm_params": {"model": f"{PROVIDER}/{MODEL}"}}],
+        "environment_variables": {
+            **base.get("environment_variables", {}),
+            "CORALBRICKS_API_KEY": ENV_KEY,
+            "CORALBRICKS_API_BASE": f"{env_wire.url}/v1",
+        },
     }
     path: Final = directory / "coralbricks-env.yaml"
     path.write_text(yaml.safe_dump(config))
