@@ -9,6 +9,7 @@ import {
   decisionTestOverall,
   parseDecisionTestResponse,
   prependTestRun,
+  runTestShortcutLabel,
   visibleTestResults,
   type DecisionTestRun,
 } from "./decisionModelQuestion";
@@ -133,6 +134,13 @@ describe("visibleTestResults", () => {
     expect(visible).toEqual([
       { check: draft({ name: "invoice_policy" }), result: { kind: "probability", probability: 0.9 } },
     ]);
+  });
+});
+
+describe("runTestShortcutLabel", () => {
+  it("shows the command key on Mac and Ctrl elsewhere", () => {
+    expect(runTestShortcutLabel("MacIntel Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)")).toBe("⌘+Enter");
+    expect(runTestShortcutLabel("Win32 Mozilla/5.0 (Windows NT 10.0)")).toBe("Ctrl+Enter");
   });
 });
 

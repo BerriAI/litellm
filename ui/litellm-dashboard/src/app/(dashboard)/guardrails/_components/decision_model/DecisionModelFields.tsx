@@ -198,7 +198,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                 key={check.name}
                 className={`border-b border-border px-5 py-3 hover:bg-muted/40 ${enabled ? "bg-accent" : ""}`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <div className="flex flex-1 items-start">
                     <Checkbox
                       className="mr-3 mt-0.5"
@@ -213,7 +213,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       <p className="m-0 mt-0.5 text-xs text-muted-foreground">{check.instructions}</p>
                     </div>
                   </div>
-                  <div className="w-28">
+                  <div className="w-28 shrink-0">
                     <Select
                       items={ACTION_ITEMS}
                       value={check.action}
@@ -237,7 +237,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="w-36 pl-4">
+                  <div className="w-36 shrink-0 pl-4">
                     <ThresholdSlider
                       aria-label={`${check.name} threshold`}
                       value={check.threshold}
@@ -245,7 +245,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       disabled={!enabled}
                     />
                   </div>
-                  <div className="flex w-10 justify-end">
+                  <div className="flex w-10 shrink-0 justify-end">
                     <Button
                       variant="ghost"
                       size="icon"

@@ -114,6 +114,11 @@ export function visibleTestResults(
   });
 }
 
+export function runTestShortcutLabel(platform?: string): string {
+  const hint = platform ?? (typeof navigator === "undefined" ? "" : `${navigator.platform} ${navigator.userAgent}`);
+  return /mac/i.test(hint) ? "⌘+Enter" : "Ctrl+Enter";
+}
+
 export const DECISION_TEST_HISTORY_CAP = 20;
 
 export function prependTestRun(runs: readonly DecisionTestRun[], run: DecisionTestRun): DecisionTestRun[] {

@@ -14,6 +14,7 @@ import {
   enabledDecisionQuestions,
   parseDecisionTestResponse,
   prependTestRun,
+  runTestShortcutLabel,
   visibleTestResults,
   type DecisionTestRun,
 } from "./decisionModelQuestion";
@@ -94,6 +95,7 @@ const DecisionTestSection: React.FC<DecisionTestSectionProps> = ({ accessToken, 
           {running ? "Running…" : "Run test"}
         </Button>
         {!running && disabledReason && <p className="m-0 text-xs text-muted-foreground">{disabledReason}</p>}
+        {!running && !disabledReason && <p className="m-0 text-xs text-muted-foreground">{runTestShortcutLabel()}</p>}
       </div>
       {runs.length > 0 && (
         <>
