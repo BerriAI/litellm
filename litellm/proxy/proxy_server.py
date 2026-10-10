@@ -7658,9 +7658,9 @@ class ProxyConfig:
         config_data: dict | None = None
         search_tools = None
         try:
-            config_data = await (
+            config_data = await (  # rebind-ok: config load is intentionally isolated
                 config_loader() if config_loader is not None else proxy_config.get_config()
-            )  # rebind-ok: config load is intentionally isolated
+            )
             search_tools = self.parse_search_tools(config_data)
         except Exception as e:
             verbose_proxy_logger.warning(
