@@ -1,4 +1,5 @@
 # Duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/tracing/api.py
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, ClassVar, Literal
 
@@ -35,7 +36,7 @@ class BaseApiSpan(LiteLLMBaseModel):
     start_time: str = Field(alias="startTime")
     end_time: str = Field(alias="endTime")
     input: dict | list | str | None = None
-    output: dict | list | str | None = None
+    output: Mapping[str, object] | str | None = None
     error: str | None = None
 
     # llm
