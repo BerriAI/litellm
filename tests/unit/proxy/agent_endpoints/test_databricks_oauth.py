@@ -8,6 +8,7 @@ helper.
 """
 
 import base64
+from typing import Final
 from unittest.mock import MagicMock, create_autospec, patch
 
 import httpx
@@ -17,8 +18,11 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     DatabricksAppOAuthConfig,
     DatabricksAppOAuthTokenCache,
+    has_databricks_oauth,
     parse_databricks_oauth_config,
     resolve_databricks_app_auth_header,
+    resolve_databricks_backend_auth,
+    without_databricks_oauth_params,
 )
 
 
@@ -46,9 +50,7 @@ def _mock_http_handler(access_token="tok-abc", expires_in=3600, post_error=None)
         handler.post.side_effect = post_error
     else:
         response = MagicMock()
-        response.json = MagicMock(
-            return_value={"access_token": access_token, "expires_in": expires_in}
-        )
+        response.json = MagicMock(return_value={"access_token": access_token, "expires_in": expires_in})
         handler.post.return_value = response
     return handler
 
@@ -111,9 +113,7 @@ def test_parse_custom_scope():
     assert config.scope == "custom-scope"
 
 
-@pytest.mark.parametrize(
-    "missing_field", ["client_id", "client_secret", "workspace_url"]
-)
+@pytest.mark.parametrize("missing_field", ["client_id", "client_secret", "workspace_url"])
 def test_parse_raises_on_missing_field(missing_field):
     block = {
         "client_id": "cid",
@@ -128,6 +128,25 @@ def test_parse_raises_on_missing_field(missing_field):
 def test_parse_raises_on_non_mapping_block():
     with pytest.raises(ValueError, match="mapping"):
         parse_databricks_oauth_config({"databricks_oauth": "not-a-dict"})
+
+
+@pytest.mark.parametrize(
+    ("block", "error"),
+    [({}, "missing required field"), ("", "mapping")],
+)
+def test_parse_raises_on_an_empty_nested_block(block, error):
+    params = {"custom_llm_provider": "databricks_agent", "databricks_oauth": block}
+    assert has_databricks_oauth(params)
+    with pytest.raises(ValueError, match=error):
+        parse_databricks_oauth_config(params)
+
+
+@pytest.mark.parametrize("block", [{}, ""])
+@pytest.mark.asyncio
+async def test_an_empty_nested_block_on_a_url_agent_is_ignored_as_before(block):
+    auth: Final = await resolve_databricks_backend_auth({"databricks_oauth": block, "api_key": "hop-key"})
+    assert auth.header is None
+    assert auth.litellm_params == {"api_key": "hop-key"}
 
 
 def test_parse_resolves_os_environ_references(monkeypatch):
@@ -179,9 +198,7 @@ async def test_fetch_token_posts_client_credentials_with_basic_auth():
     }
     # Databricks authenticates the client with HTTP Basic; it must be sent as a
     # header because litellm's AsyncHTTPHandler.post has no ``auth`` parameter.
-    assert call.kwargs["headers"]["Authorization"] == _expected_basic_auth(
-        "cid", "secret"
-    )
+    assert call.kwargs["headers"]["Authorization"] == _expected_basic_auth("cid", "secret")
     assert "auth" not in call.kwargs
 
 
@@ -304,9 +321,7 @@ async def test_http_status_error_raises_value_error():
     request = httpx.Request("POST", _config().token_url)
     error_response = httpx.Response(status_code=401, request=request)
     client = _mock_http_handler(
-        post_error=httpx.HTTPStatusError(
-            "unauthorized", request=request, response=error_response
-        )
+        post_error=httpx.HTTPStatusError("unauthorized", request=request, response=error_response)
     )
 
     with patch(
@@ -494,3 +509,146 @@ async def test_resolve_returns_bearer_header():
         header = await resolve_databricks_app_auth_header(litellm_params)
 
     assert header == {"Authorization": "Bearer resolved-token"}
+
+
+def test_parse_builds_config_from_flat_databricks_agent_fields():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "https://adb-1.azuredatabricks.net/serving-endpoints",
+            "model": "my-agent",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+        }
+    )
+    assert config == DatabricksAppOAuthConfig(
+        client_id="sp-id",
+        client_secret="sp-secret",
+        token_url="https://adb-1.azuredatabricks.net/oidc/v1/token",
+        scope="all-apis",
+    )
+
+
+def test_parse_flat_fields_take_the_workspace_from_an_os_environ_api_base(monkeypatch):
+    monkeypatch.setenv("MY_DBX_HOST", "https://adb-3.azuredatabricks.net/serving-endpoints")
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "os.environ/MY_DBX_HOST",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://adb-3.azuredatabricks.net/oidc/v1/token"
+
+
+def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "https://my-app-1.azure.databricksapps.com/responses",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+            "workspace_url": "https://adb-1.azuredatabricks.net",
+            "scope": "custom-scope",
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://adb-1.azuredatabricks.net/oidc/v1/token"
+    assert config.scope == "custom-scope"
+
+
+def test_parse_flat_fields_of_an_app_without_a_workspace_url_raise_instead_of_using_the_app_host():
+    with pytest.raises(ValueError, match="workspace_url"):
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": "https://my-app-1.azure.databricksapps.com/responses",
+                "client_id": "sp-id",
+                "client_secret": "sp-secret",
+            }
+        )
+
+
+def test_parse_flat_fields_with_only_a_client_id_raise_on_the_missing_secret():
+    with pytest.raises(ValueError, match="client_secret"):
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": "https://adb-1.azuredatabricks.net",
+                "client_id": "sp",
+            }
+        )
+
+
+def test_parse_ignores_flat_client_fields_of_other_providers():
+    assert (
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "azure_ai",
+                "client_id": "entra-id",
+                "client_secret": "entra-secret",
+                "tenant_id": "t",
+            }
+        )
+        is None
+    )
+    assert parse_databricks_oauth_config({"custom_llm_provider": "databricks_agent", "api_key": "pat"}) is None
+
+
+def test_parse_nested_block_wins_over_flat_fields():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "client_id": "flat-id",
+            "client_secret": "flat-secret",
+            "databricks_oauth": {
+                "client_id": "nested-id",
+                "client_secret": "nested-secret",
+                "workspace_url": "https://adb-2.azuredatabricks.net",
+            },
+        }
+    )
+    assert config is not None
+    assert (config.client_id, config.token_url) == ("nested-id", "https://adb-2.azuredatabricks.net/oidc/v1/token")
+
+
+def test_without_oauth_params_drops_every_consumed_key_of_a_databricks_agent():
+    forwarded = without_databricks_oauth_params(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": "https://adb-1.azuredatabricks.net",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+            "workspace_url": "https://adb-1.azuredatabricks.net",
+            "scope": "all-apis",
+            "databricks_oauth": {"client_id": "nested-id", "client_secret": "nested-secret"},
+            "custom_inputs": {"tenant": "t-1"},
+        }
+    )
+    assert forwarded == {
+        "custom_llm_provider": "databricks_agent",
+        "model": "my-agent",
+        "api_base": "https://adb-1.azuredatabricks.net",
+        "custom_inputs": {"tenant": "t-1"},
+    }
+
+
+def test_without_oauth_params_keeps_other_providers_client_credentials():
+    forwarded = without_databricks_oauth_params(
+        {
+            "custom_llm_provider": "azure_ai",
+            "client_id": "entra-id",
+            "client_secret": "entra-secret",
+            "tenant_id": "t",
+            "databricks_oauth": {"client_id": "sp"},
+        }
+    )
+    assert forwarded == {
+        "custom_llm_provider": "azure_ai",
+        "client_id": "entra-id",
+        "client_secret": "entra-secret",
+        "tenant_id": "t",
+    }

@@ -305,6 +305,77 @@
     "litellm_params_template": {
       "custom_llm_provider": "watsonx_orchestrate"
     }
+  },
+  {
+    "agent_type": "databricks_agent",
+    "agent_type_display_name": "Databricks Agent",
+    "description": "Connect to Databricks Agent Platform ResponsesAgents on Model Serving or Databricks Apps",
+    "logo_url": "/ui/assets/logos/databricks.svg",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "Databricks URL",
+        "placeholder": "https://<workspace>.cloud.databricks.com",
+        "tooltip": "The workspace URL for a Model Serving endpoint, or a full URL: https://<workspace>/serving-endpoints/<endpoint>/invocations, https://<workspace>/serving-endpoints/responses, or https://<app>.databricksapps.com/responses",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "model",
+        "label": "Serving endpoint name",
+        "placeholder": "my-agent-endpoint",
+        "tooltip": "The Model Serving endpoint that hosts the agent. Leave empty when the Databricks URL is an endpoint /invocations URL or a Databricks App /responses URL",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "api_key",
+        "label": "Personal access token",
+        "placeholder": null,
+        "tooltip": "A Databricks PAT. Works for Model Serving only; Databricks Apps accept OAuth client credentials only",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_id",
+        "label": "OAuth client ID",
+        "placeholder": null,
+        "tooltip": "Service principal application ID for OAuth M2M (client credentials). Required for Databricks Apps",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_secret",
+        "label": "OAuth client secret",
+        "placeholder": null,
+        "tooltip": "Service principal OAuth secret",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "workspace_url",
+        "label": "Workspace URL (OAuth)",
+        "placeholder": "https://<workspace>.cloud.databricks.com",
+        "tooltip": "The workspace that mints the OAuth token. Defaults to the Databricks URL origin; set it for a Databricks App, whose host is not the workspace",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "databricks_agent"
+    }
   }
 ]
 
