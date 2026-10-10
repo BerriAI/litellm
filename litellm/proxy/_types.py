@@ -31,6 +31,12 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
 from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.types.agents import (
+    AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.agents import (
+    AgentResponse as AgentResponse,  # noqa: PLC0414  # public re-export
+)
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -58,6 +64,18 @@ from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.auth.user_api_key_auth import (
+    is_jwt as is_jwt,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.carried_budget_state import (
+    OrgBudgetSnapshot as OrgBudgetSnapshot,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.carried_budget_state import (
+    TeamBudgetSnapshot as TeamBudgetSnapshot,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.carried_budget_state import (
+    UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
