@@ -1800,6 +1800,23 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
     assert await mcp_per_user_token_cache.get("alice", "srv") is None
 
 
+def test_server_table_row_with_stale_client_assertion_signing_alg_still_validates() -> None:
+    """Rows written before the approved-algorithm allowlist carry values like HS256 in the
+    credentials blob; the stored shape stays lenient so reload_servers_from_database still
+    parses the row and _stored_client_assertion_signing_alg falls back to RS256 instead of
+    the server silently disappearing on upgrade."""
+    row: Final = {
+        "server_id": "srv-stale-alg",
+        "server_name": "stale_alg_server",
+        "url": "https://mcp.example.com",
+        "transport": "http",
+        "credentials": {"client_assertion_signing_alg": "HS256"},
+    }
+    parsed: Final = LiteLLM_MCPServerTable.model_validate(row)
+    assert parsed.credentials is not None
+    assert parsed.credentials["client_assertion_signing_alg"] == "HS256"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("owner", ["native", "legacy"])
 @pytest.mark.parametrize("capability", [None, False])

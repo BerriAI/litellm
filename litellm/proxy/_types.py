@@ -18,6 +18,7 @@ from pydantic import (
     PositiveInt,
     PrivateAttr,
     TypeAdapter,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -58,6 +59,10 @@ from litellm.types.mcp import (
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.auth.jwt_algorithms import (
+    APPROVED_JWT_ALGORITHMS,
+    ApprovedJwtAlgorithm,
+)
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
 )
@@ -1601,6 +1606,19 @@ def _reject_unsupported_per_server_oauth_discovery(values: object, require_auth_
     raise _per_server_oauth_discovery_error()
 
 
+_APPROVED_JWT_ALGORITHM_ADAPTER: Final = TypeAdapter(ApprovedJwtAlgorithm)
+
+
+def _validated_client_assertion_signing_alg(credentials: MCPCredentials | None) -> MCPCredentials | None:
+    if credentials is None or credentials.get("client_assertion_signing_alg") is None:
+        return credentials
+    try:
+        _APPROVED_JWT_ALGORITHM_ADAPTER.validate_python(credentials["client_assertion_signing_alg"])
+    except ValidationError as exc:
+        raise ValueError(f"client_assertion_signing_alg must be one of {', '.join(APPROVED_JWT_ALGORITHMS)}") from exc
+    return credentials
+
+
 def _validate_mcp_transport_fields(values: object) -> None:
     if not isinstance(values, dict):
         return
@@ -1688,6 +1706,11 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
+
+    @field_validator("credentials")
+    @classmethod
+    def check_client_assertion_signing_alg(cls, credentials: MCPCredentials | None) -> MCPCredentials | None:
+        return _validated_client_assertion_signing_alg(credentials)
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "NewMCPServerRequest":
@@ -1782,6 +1805,11 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+
+    @field_validator("credentials")
+    @classmethod
+    def check_client_assertion_signing_alg(cls, credentials: MCPCredentials | None) -> MCPCredentials | None:
+        return _validated_client_assertion_signing_alg(credentials)
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":

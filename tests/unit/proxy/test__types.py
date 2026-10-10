@@ -387,6 +387,38 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
+
+
+def test_mcp_server_requests_reject_non_approved_client_assertion_signing_alg() -> None:
+    """The REST boundary is strict even though the stored blob stays lenient:
+    a write carrying HS256/hs256/"" must 422 naming the field."""
+    from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+    for cls, base in (
+        (NewMCPServerRequest, {"transport": "http", "url": "https://mcp.example.com"}),
+        (UpdateMCPServerRequest, {"server_id": "srv-1", "transport": "http", "url": "https://mcp.example.com"}),
+    ):
+        for alg in ("HS256", "hs256", "", "EdDSA"):
+            with pytest.raises(ValidationError) as exc:
+                cls(**base, credentials={"client_assertion_signing_alg": alg})
+            assert "client_assertion_signing_alg" in str(exc.value), f"{cls.__name__} accepted {alg!r}"
+
+
+def test_mcp_server_requests_accept_approved_client_assertion_signing_alg() -> None:
+    from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+    for alg in ("ES256", "PS384", "RS256", None):
+        request = NewMCPServerRequest(
+            transport="http",
+            url="https://mcp.example.com",
+            credentials={"client_assertion_signing_alg": alg},
+        )
+        assert request.credentials is not None
+        assert request.credentials["client_assertion_signing_alg"] == alg
+    update = UpdateMCPServerRequest(server_id="srv-1")
+    assert update.credentials is None
+
+
 @pytest.mark.parametrize("versions", [[], ["2099-01-01"]])
 def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
     from pydantic import ValidationError
@@ -401,7 +433,12 @@ def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
 def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 
-    payload = {"server_id": "test", "transport": "http", "url": "https://example.com/mcp", "mcp_info": {"protocol_version": revision}}
+    payload = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"protocol_version": revision},
+    }
     for model in (NewMCPServerRequest, UpdateMCPServerRequest):
         with pytest.raises(ValidationError):
             model.model_validate(payload)
@@ -457,7 +494,10 @@ def test_an_enabled_stdio_mcp_server_still_needs_a_command_and_args(monkeypatch,
 def test_an_http_mcp_server_is_unaffected_by_the_stdio_flag(monkeypatch, request_model):
     monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
 
-    assert request_model(server_id="http-1", transport="http", url="https://mcp.example.com").url == "https://mcp.example.com"
+    assert (
+        request_model(server_id="http-1", transport="http", url="https://mcp.example.com").url
+        == "https://mcp.example.com"
+    )
     with pytest.raises(ValidationError, match="url or spec_path is required"):
         request_model(server_id="http-1", transport="http")
 
@@ -470,10 +510,14 @@ def test_a_non_mapping_mcp_server_payload_gets_a_validation_error(request_model)
 
 @pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
 def test_modern_http_upstream_protocol_is_available(request_model):
-    parsed = request_model.model_validate({
-        "server_id": "modern", "transport": "http", "url": "https://example.com/mcp",
-        "mcp_info": {"protocol_version": "2026-07-28"},
-    })
+    parsed = request_model.model_validate(
+        {
+            "server_id": "modern",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"protocol_version": "2026-07-28"},
+        }
+    )
     assert parsed.mcp_info["protocol_version"] == "2026-07-28"
     assert parsed.transport == "http"
 
