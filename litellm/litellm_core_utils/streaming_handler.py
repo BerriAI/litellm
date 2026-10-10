@@ -1859,12 +1859,19 @@ class CustomStreamWrapper:
                             continue
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
+<<<<<<< HEAD
                         usage = calculate_total_usage(chunks=self.chunks)
                         response_hidden_params_for_final_chunk = cast(  # cast-ok: preserve dynamic mapping behavior
                             dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
                         )
                         response_hidden_params_for_final_chunk["usage"] = usage
                         self._last_returned_hidden_params = response_hidden_params_for_final_chunk
+=======
+                        usage = _reported_total_usage(chunks=self.chunks)
+                        if usage is not None:
+                            response._hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = response._hidden_params
+>>>>>>> 23ec09272f (fix(streaming): restore estimates when provider usage is absent)
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -1960,8 +1967,15 @@ class CustomStreamWrapper:
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                     self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
+<<<<<<< HEAD
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk.hidden_params["usage"] = usage
+=======
+                    self._last_returned_hidden_params = processed_chunk._hidden_params
+                    usage = _reported_total_usage(chunks=self.chunks)
+                    if usage is not None:
+                        self._last_returned_hidden_params["usage"] = usage
+>>>>>>> 23ec09272f (fix(streaming): restore estimates when provider usage is absent)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2075,12 +2089,19 @@ class CustomStreamWrapper:
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
+<<<<<<< HEAD
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
                             dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
                         )
                         processed_chunk_hidden_params["usage"] = usage
                         self._last_returned_hidden_params = processed_chunk_hidden_params
+=======
+                        usage = _reported_total_usage(chunks=self.chunks)
+                        if usage is not None:
+                            processed_chunk._hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = processed_chunk._hidden_params
+>>>>>>> 23ec09272f (fix(streaming): restore estimates when provider usage is absent)
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2234,11 +2255,18 @@ class CustomStreamWrapper:
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
                 self.chunks.append(processed_chunk)
             if self.stream_options is None:
+<<<<<<< HEAD
                 usage: Final = calculate_total_usage(chunks=self.chunks)
                 processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
                     dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
                 )
                 processed_chunk_hidden_params["usage"] = usage
+=======
+                self._last_returned_hidden_params = processed_chunk._hidden_params  # pyright: ignore[reportPrivateUsage]  # sync parity
+                usage: Final = _reported_total_usage(chunks=self.chunks)
+                if usage is not None:
+                    self._last_returned_hidden_params["usage"] = usage
+>>>>>>> 23ec09272f (fix(streaming): restore estimates when provider usage is absent)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2468,7 +2496,13 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
+def _reported_total_usage(chunks: Sequence[ModelResponse]) -> Usage | None:
+    if not any("usage" in chunk and chunk["usage"] is not None for chunk in chunks):
+        return None
+    return calculate_total_usage(chunks=chunks)
+
+
+def calculate_total_usage(chunks: Sequence[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,
