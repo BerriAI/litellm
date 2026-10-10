@@ -81,7 +81,12 @@ gcloud secrets versions access latest \
 
 ## Going to TLS
 
-If you picked `allow_plaintext_lb=true` to bootstrap but want HTTPS for real, point a DNS A record at the LB IP, then re-run terraform with `lb_domains` set and `allow_plaintext_lb` removed:
+If you picked `allow_plaintext_lb=true` to bootstrap but want HTTPS for real:
+
+- EXTERNAL_MANAGED: point a DNS A record at the LB IP and set `lb_domains`
+- INTERNAL_MANAGED: set both `lb_domains` and `certificate_manager_certificates`
+
+Then re-run terraform with `allow_plaintext_lb` removed:
 
 ```bash
 terraform apply \
