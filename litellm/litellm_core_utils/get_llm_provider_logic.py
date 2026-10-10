@@ -10,7 +10,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
-from litellm.litellm_core_utils.get_model_cost_map import wait_for_import_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    import_model_cost_map_generation,
+    wait_for_import_model_cost_map,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
@@ -175,12 +178,13 @@ def get_llm_provider(
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
+    generation: Final = import_model_cost_map_generation()
     resolved: Final = _resolve_llm_provider(model, custom_llm_provider, api_base, api_key, litellm_params)
     if resolved is not None:
         return resolved
     retried: Final = (
         _resolve_llm_provider(model, custom_llm_provider, api_base, api_key, litellm_params)
-        if wait_for_import_model_cost_map()
+        if wait_for_import_model_cost_map(since=generation)
         else None
     )
     if retried is not None:

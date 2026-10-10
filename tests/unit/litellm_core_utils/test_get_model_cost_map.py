@@ -920,13 +920,13 @@ class _ReleaseWhenALookupWaits(logging.Handler):
 
     def __init__(self, release: threading.Event):
         super().__init__(level=logging.DEBUG)
-        self.release = release
+        self.fetch_release = release
         self.waited = threading.Event()
 
     def emit(self, record):
         if "waiting for the remote map fetched at import" in record.getMessage():
             self.waited.set()
-            self.release.set()
+            self.fetch_release.set()
 
 
 @pytest.fixture()
@@ -994,6 +994,26 @@ def test_a_lookup_that_misses_both_maps_still_raises_after_waiting(
         _finish_fetch(release)
 
     assert waits.waited.is_set()
+
+
+@pytest.mark.parametrize("remote_status", [200, 404], ids=["adopted", "failed"])
+def test_a_lookup_that_missed_before_the_fetch_settled_retries_only_once_the_remote_map_was_adopted(
+    isolated_litellm_cost_state, monkeypatch, remote_status
+):
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    body = _remote_map_with("zz-remote-only-test") if remote_status == 200 else b""
+    client, started, release = _held_client(httpx.Response(remote_status, content=body))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", module.load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        generation_at_the_miss = module.import_model_cost_map_generation()
+    finally:
+        _finish_fetch(release)
+
+    assert module._PendingImportFetch.fetch is None
+    assert module.wait_for_import_model_cost_map(since=generation_at_the_miss) is (remote_status == 200)
+    assert module.wait_for_import_model_cost_map(since=module.import_model_cost_map_generation()) is False
 
 
 def test_import_load_with_the_local_env_override_starts_no_fetch(monkeypatch):

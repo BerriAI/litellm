@@ -90,7 +90,10 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import wait_for_import_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    import_model_cost_map_generation,
+    wait_for_import_model_cost_map,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
@@ -6037,10 +6040,11 @@ def get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
+    generation: Final = import_model_cost_map_generation()
     try:
         return _model_info_from_cost_map(model, custom_llm_provider, api_base, api_key)
     except ModelNotMappedError:
-        if not wait_for_import_model_cost_map():
+        if not wait_for_import_model_cost_map(since=generation):
             raise
     return _model_info_from_cost_map(model, custom_llm_provider, api_base, api_key)
 

@@ -589,6 +589,7 @@ class _ImportFetch:
 class _PendingImportFetch:
     fetch: _ImportFetch | None = None
     thread: threading.Thread | None = None
+    adoptions: int = 0
 
 
 def _litellm_model_cost_is(expected: Mapping[str, object]) -> bool:
@@ -676,6 +677,7 @@ def _adopt_remote_model_cost_map(
     adopt_model_cost_map(adopted)
     if import_fetch is not None:
         _carry_edits_made_during_adoption(import_fetch, adopted=adopted, carried=edits, finalized=finalized)
+        _PendingImportFetch.adoptions += 1
 
 
 def _retry_remote_fetch_in_background(
@@ -743,25 +745,36 @@ def _resume_import_fetch_after_fork() -> None:
         _start_import_fetch(replace(pending, first_attempt_settled=threading.Event()))
 
 
-def wait_for_import_model_cost_map() -> bool:
+def import_model_cost_map_generation() -> int:
+    """How many times the remote map fetched at import was adopted; read it before a lookup that may miss."""
+    return _PendingImportFetch.adoptions
+
+
+def wait_for_import_model_cost_map(since: int) -> bool:
     """
-    Called by a lookup that missed the cost map while the remote map fetched at import is
-    still in flight. Blocks until that fetch's first attempt settles, at most one fetch
-    timeout, so a model the bundled map lacks resolves the way it did when import waited
-    for the fetch. True means the lookup should be tried once more.
+    Called by a lookup that missed the cost map, with the generation it read before looking up.
+    While the remote map fetched at import is still in flight, blocks until that fetch's first
+    attempt settles, at most one fetch timeout, so a model the bundled map lacks resolves the way
+    it did when import waited for the fetch. True means the remote map was adopted since
+    ``since`` and the lookup should be tried once more.
     """
+    _wait_for_pending_import_fetch()
+    return _PendingImportFetch.adoptions != since
+
+
+def _wait_for_pending_import_fetch() -> None:
     pending: Final = _PendingImportFetch.fetch
     if (
         pending is None
         or not _litellm_import_complete.is_set()
         or threading.current_thread() is _PendingImportFetch.thread
     ):
-        return False
+        return
     if not pending.first_attempt_settled.is_set():
         verbose_logger.debug(
             "LiteLLM: lookup missed the bundled cost map; waiting for the remote map fetched at import"
         )
-    return pending.first_attempt_settled.wait(timeout=pending.timeout)
+    pending.first_attempt_settled.wait(timeout=pending.timeout)
 
 
 if hasattr(os, "register_at_fork"):
