@@ -1,8 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/cva.config";
-import { ROOT_BLOCK_STYLES } from "./lib/rootBlocks";
-import type { SystemOneQuestion, SystemOneRequest } from "./lib/schemas";
+import type { PlaygroundQuestion, PlaygroundRequest } from "./lib/schemas";
 
 function formatState(state: unknown): string {
   if (typeof state === "string") {
@@ -11,14 +9,14 @@ function formatState(state: unknown): string {
   return JSON.stringify(state, null, 2) ?? String(state);
 }
 
-function QuestionCriteria({ question }: { question: SystemOneQuestion }) {
+function QuestionCriteria({ question }: { question: PlaygroundQuestion }) {
   if (question.type === "choice") {
     return (
       <dl className="grid gap-2">
         {Object.entries(question.criteria).map(([label, description]) => (
           <div key={label} className="grid gap-0.5 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
             <dt className="font-mono text-xs font-medium">{label}</dt>
-            <dd className="text-xs text-muted-foreground">{description}</dd>
+            <dd className="text-xs text-muted-foreground">{formatState(description)}</dd>
           </div>
         ))}
       </dl>
@@ -48,14 +46,14 @@ function QuestionCriteria({ question }: { question: SystemOneQuestion }) {
       {question.criteria.map((description, index) => (
         <li key={`${index}-${description}`} className="grid gap-0.5 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
           <span className="font-mono text-xs font-medium">{index}</span>
-          <span className="text-xs text-muted-foreground">{description}</span>
+          <span className="text-xs text-muted-foreground">{formatState(description)}</span>
         </li>
       ))}
     </ol>
   );
 }
 
-export default function QuestionBreakdown({ payload }: { payload?: SystemOneRequest }) {
+export default function QuestionBreakdown({ payload }: { payload?: PlaygroundRequest }) {
   if (!payload) {
     return (
       <Card>
@@ -74,10 +72,7 @@ export default function QuestionBreakdown({ payload }: { payload?: SystemOneRequ
         <CardDescription>Review the state and criteria that will be sent.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 wrap-anywhere">
-        <section
-          aria-labelledby="system-one-state-heading"
-          className={cn("grid gap-2 border-l-2 pl-3", ROOT_BLOCK_STYLES.state.accent)}
-        >
+        <section aria-labelledby="system-one-state-heading" className="grid gap-2">
           <h3 id="system-one-state-heading" className="text-sm font-medium">
             State
           </h3>
@@ -85,7 +80,7 @@ export default function QuestionBreakdown({ payload }: { payload?: SystemOneRequ
             {formatState(payload.state)}
           </pre>
         </section>
-        <div className={cn("grid gap-3 border-l-2 pl-3", ROOT_BLOCK_STYLES.questions.accent)}>
+        <div className="grid gap-3">
           {Object.entries(payload.questions).map(([id, question]) => (
             <section key={id} className="grid gap-3 rounded-md border p-3" aria-labelledby={`question-${id}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -94,7 +89,7 @@ export default function QuestionBreakdown({ payload }: { payload?: SystemOneRequ
                 </h3>
                 <Badge variant="secondary">{question.type}</Badge>
               </div>
-              <p className="text-sm">{question.instructions}</p>
+              {question.instructions != null && <p className="text-sm">{formatState(question.instructions)}</p>}
               <div className="grid gap-2">
                 <h4 className="text-xs font-medium text-muted-foreground">Criteria</h4>
                 <QuestionCriteria question={question} />

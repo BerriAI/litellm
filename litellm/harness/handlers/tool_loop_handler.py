@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.harness.context import SessionContext
@@ -28,6 +28,7 @@ from litellm.llms.tool_loop.harness.transformation import (
     function_tool,
 )
 from litellm.types.completion import ChatCompletionMessageParam
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -52,7 +53,7 @@ _JSON_DECODER: Final = json.JSONDecoder()
 _HISTORY_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
-class _Usage(BaseModel):
+class _Usage(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     prompt_tokens: int | None = None

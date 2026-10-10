@@ -383,7 +383,7 @@ async def list_vector_stores(
 
     try:
         # Get vector stores from database first (source of truth)
-        vector_stores_from_db: Final = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
+        vector_stores_from_db: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
 
         # Build map from database vector stores
         for vector_store in vector_stores_from_db:

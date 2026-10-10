@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.exceptions import AuthenticationError
@@ -8,6 +10,7 @@ from litellm.llms.github_copilot.embedding.transformation import (
     GithubCopilotEmbeddingConfig,
 )
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
+from litellm.types.utils import EmbeddingResponse
 
 
 def test_github_copilot_embedding_config_validate_environment():
@@ -73,9 +76,7 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -201,3 +202,110 @@ def test_github_copilot_embedding_config_transform_response():
     assert len(response.data) == 1
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
     assert response.model == "text-embedding-3-small"
+
+
+def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
+    return GithubCopilotEmbeddingConfig().transform_embedding_response(
+        model="github_copilot/text-embedding-3-small",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=MagicMock(),
+        api_key="test-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+
+def test_transform_embedding_response_keeps_the_openai_envelope():
+    response = _transform(
+        httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 5, "total_tokens": 5},
+                "unknown": "ignored",
+            },
+        )
+    )
+
+    assert response.model_dump() == {
+        "model": "text-embedding-3-small",
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+        "object": "list",
+        "usage": {
+            "completion_tokens": 0,
+            "prompt_tokens": 5,
+            "total_tokens": 5,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+@pytest.mark.parametrize("body", [b"null", b"[]", b"7", b'"leaked payload text"', b'[{"data": "leaked payload text"}]'])
+def test_transform_embedding_response_rejects_a_body_that_is_not_an_object(body: bytes):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(httpx.Response(200, content=body))
+
+    assert "leaked payload text" not in str(exc_info.value)
+
+
+def test_transform_embedding_response_object_without_data_is_an_invalid_response_object():
+    with pytest.raises(Exception, match="Invalid response object"):
+        _transform(httpx.Response(200, json={"model": "text-embedding-3-small"}))
+
+
+def test_validate_environment_uses_per_user_session_and_skips_authenticator():
+    """With a per-user session the Authorization header carries the caller's Copilot token
+    and the shared Authenticator is never consulted."""
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
+
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+    config.authenticator.get_api_key.assert_not_called()
+
+
+def test_per_user_session_token_wins_over_caller_authorization():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={"Authorization": "Bearer caller-token"},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+
+
+def test_get_complete_url_prefers_per_user_session_api_base():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    session = GithubCopilotUserSession(token="t", api_base="https://tenant.githubcopilot.com")
+    url = config.get_complete_url(
+        api_base="https://attacker.example",
+        api_key=None,
+        model="m",
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert url == "https://tenant.githubcopilot.com/embeddings"

@@ -123,18 +123,19 @@ def test_documented_header_and_body_tags_reach_recorded_branch_and_pr_cost(gatew
             ({"tags": tags}, {}),
             ({}, {"x-litellm-tags": ", ".join(tags + tags)}),
         )
-        for payload, headers in examples:
+        for index, (payload, headers) in enumerate(examples):
             response: Final = gateway.request(
                 "POST",
                 "/v1/chat/completions",
                 {
                     "model": model,
-                    "messages": [{"role": "user", "content": "tag attribution"}],
+                    "messages": [{"role": "user", "content": f"tag attribution {index}"}],
                     **payload,
                 },
                 headers=headers,
             )
             assert response.status_code == 200, response.text
+        assert len(upstream.drain()) == 3
         rows: Final = eventually(
             lambda: read_rows(
                 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_tags @> %s::jsonb', (json.dumps(tags),)

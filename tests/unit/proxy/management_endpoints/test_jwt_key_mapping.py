@@ -51,12 +51,12 @@ async def test_jwt_to_virtual_key_mapping_resolution():
 
     # Mock finding a mapping
     mock_mapping = MagicMock()
-    mock_mapping.token = "sk-1234"
+    mock_mapping.token = "sk-9876"
     mock_mapping.is_active = True
     prisma_client.db.litellm_jwtkeymapping.find_first.return_value = mock_mapping
 
     # Mock getting the key object
-    mock_key_obj = UserAPIKeyAuth(token="sk-1234", team_id="team1")
+    mock_key_obj = UserAPIKeyAuth(token="sk-9876", team_id="team1")
 
     user_api_key_cache = DualCache()
 

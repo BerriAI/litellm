@@ -899,7 +899,7 @@ class _FakeDb:
 async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.auth_checks import _check_team_member_budget
-    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+    from litellm.proxy.management_endpoints.common_utils import upsert_budget_and_membership
     from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
     from litellm.proxy.utils import ProxyLogging
 
@@ -922,7 +922,7 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
             default_team_budget_id=default_budget.budget_id,
         )
 
-    await _upsert_budget_and_membership(
+    await upsert_budget_and_membership(
         db,
         team_id=team_id,
         user_id="overridden",

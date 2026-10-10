@@ -1,3 +1,4 @@
+from typing import Final
 import asyncio
 import collections
 import datetime
@@ -8,6 +9,7 @@ import sqlite3
 from datetime import timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import prisma
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -273,9 +275,10 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     UserAPIKeyAuth,
 )
-from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.proxy.management.teams import access as team_access
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.management.teams import authz as team_access
 from litellm.proxy.proxy_server import app
+from litellm.proxy.utils import PrismaClient
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
@@ -3684,8 +3687,8 @@ class TestSpendLogsPayload:
 
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):
-        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
-        # litellm._turn_on_debug()
+        litellm.callbacks = [ProxyDBLogger(message_logging=False)]
+        # litellm.turn_on_debug()
 
         with (
             patch.object(
@@ -7636,6 +7639,115 @@ async def test_calculate_spend_unpriced_model_returns_400():
     assert model in exc_info.value.message
 
 
+@pytest.mark.asyncio
+async def test_spend_calc_model_messages():
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    cost: Final = cost_obj["cost"]
+    assert cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_model_on_router_messages(monkeypatch):
+    temp_llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "special-llama-model",
+                "litellm_params": {
+                    "model": "groq/openai/gpt-oss-20b",
+                },
+            }
+        ]
+    )
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            model="special-llama-model",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    _cost: Final = cost_obj["cost"]
+
+    assert _cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_using_response():
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            completion_response={
+                "id": "chatcmpl-3bc7abcd-f70b-48ab-a16c-dfba0b286c86",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {
+                            "content": "Yooo! What's good?",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": "1677652288",
+                "model": "groq/openai/gpt-oss-20b",
+                "object": "chat.completion",
+                "system_fingerprint": "fp_873a560973",
+                "usage": {
+                    "completion_tokens": 8,
+                    "prompt_tokens": 12,
+                    "total_tokens": 20,
+                },
+            }
+        )
+    )
+
+    cost: Final = cost_obj["cost"]
+    assert cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_model_alias_on_router_messages(monkeypatch):
+    temp_llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+            }
+        ],
+        model_group_alias={
+            "gpt4o": "gpt-4o",
+        },
+    )
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            model="gpt4o",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    _cost: Final = cost_obj["cost"]
+
+    assert _cost > 0.0
+
+
 def _admin_auth() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
 
@@ -7889,3 +8001,61 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
     scope = await resolve_owned_read_scope(auth.user_id, lookup)
     assert scope == OwnedRows("caller")
     assert team_reads == []
+
+
+class _PrismaJournal:
+    def __init__(self) -> None:
+        self.statements: tuple[tuple[str, str], ...] = ()
+
+    def __call__(self, **kwargs: object) -> "_ReadOnlyReplicaPrisma":
+        return _ReadOnlyReplicaPrisma(self, "reader" if "datasource" in kwargs else "writer")
+
+    def record(self, role: str, query: str) -> None:
+        self.statements = (*self.statements, (role, query.strip()))
+
+
+class _ReadOnlyReplicaPrisma:
+    def __init__(self, journal: _PrismaJournal, role: str) -> None:
+        self.journal = journal
+        self.role = role
+
+    def is_connected(self) -> bool:
+        return False
+
+    async def connect(self, timeout: object = None) -> None:
+        return None
+
+    def _run(self, query: str) -> None:
+        self.journal.record(self.role, query)
+        if self.role == "reader" and not query.lstrip().upper().startswith("SELECT"):
+            raise Exception(f"cannot execute {query.split()[0]} in a read-only transaction")
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, str]]:
+        self._run(query)
+        return [{"relname": "MonthlyGlobalSpend", "relkind": "m"}]
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        self._run(query)
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: Final = _PrismaJournal()
+    monkeypatch.setattr(prisma, "Prisma", journal)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://writer@localhost/litellm")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader@localhost/litellm")
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        PrismaClient(database_url="postgresql://writer@localhost/litellm", proxy_logging_obj=ps.proxy_logging_obj),
+    )
+
+    response: Final = await spend_management_endpoints.global_spend_refresh()
+
+    assert response == {"message": "MonthlyGlobalSpend view refreshed", "status": "success"}, journal.statements
+    assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
+        ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
+    ]

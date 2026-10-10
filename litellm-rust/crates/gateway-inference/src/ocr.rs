@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
-use litellm_core::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
 use litellm_llms_types::formats::ocr::OcrDocument;
 use serde_json::Value;

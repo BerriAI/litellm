@@ -13,6 +13,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
+    LiteLLMRoutes,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
@@ -38,6 +39,7 @@ from litellm.proxy.auth.handle_jwt import (
     NoMatchingJWTPublicKeyError,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.types.agents import AgentResponse
 
 
@@ -8225,3 +8227,79 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
     assert result["managed_agent_context"] == context
     if team_claim != "granting-team":
         assert any(call.kwargs.get("check_db_only") is True for call in load_team.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_check_admin_access_names_the_route_and_the_expanded_allow_list_when_denied():
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(admin_allowed_routes=["info_routes", "/custom/admin/route"]),
+    )
+
+    with pytest.raises(Exception, match="Admin not allowed to access this route") as denied:
+        await JWTAuthManager.check_admin_access(
+            jwt_handler=handler,
+            scopes=["litellm_proxy_admin"],
+            route="/key/generate",
+            user_id="admin-user",
+            org_id=None,
+            api_key="jwt-token",
+        )
+
+    assert str(denied.value) == (
+        "Admin not allowed to access this route. Route=/key/generate, "
+        f"Allowed Routes={[*LiteLLMRoutes.info_routes.value, '/custom/admin/route']}"
+    )
+
+
+@pytest.mark.parametrize(
+    "team_allowed_routes, team_metadata",
+    [
+        ((), {"allowed_passthrough_routes": ["/model-host"], "denied_passthrough_routes": ["/model-host/v1"]}),
+        (("/model-host/*",), {"denied_passthrough_routes": ["/model-host/v1/*"]}),
+    ],
+    ids=["team-metadata-allow", "jwt-team-allowed-routes-grant"],
+)
+def test_team_has_passthrough_route_access_denied_route_wins(
+    team_allowed_routes: tuple[str, ...],
+    team_metadata: dict[str, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    team: Final = LiteLLM_TeamTable(team_id="team-a", metadata=team_metadata)
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+        _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+    ):
+        assert not JWTAuthManager._team_has_passthrough_route_access(
+            team_object=team,
+            route="/model-host/v1/extractor/predict",
+            request_method="POST",
+            team_allowed_routes=team_allowed_routes,
+        )
+
+
+@pytest.mark.parametrize(
+    "team_metadata, expected_detail",
+    [
+        (
+            {"allowed_passthrough_routes": ["/model-host"], "denied_passthrough_routes": ["/model-host/v1"]},
+            "Matched `/model-host/v1` in `denied_passthrough_routes`",
+        ),
+        ({}, "Team not allowed to access passthrough route"),
+    ],
+    ids=["team-deny-names-the-entry", "no-grant-keeps-generic-message"],
+)
+def test_team_passthrough_route_denial_names_the_matched_deny_entry(
+    team_metadata: dict[str, list[str]], expected_detail: str
+) -> None:
+    team: Final = LiteLLM_TeamTable(team_id="team-a", metadata=team_metadata)
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager._raise_team_passthrough_route_denial(route="/model-host/v1/predict", team_object=team)
+
+    assert exc_info.value.status_code == 403
+    assert expected_detail in str(exc_info.value.detail)

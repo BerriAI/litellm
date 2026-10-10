@@ -21,6 +21,8 @@ from typing import (
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
+from pydantic import TypeAdapter
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -225,7 +227,7 @@ def post_call(
 
 
 def defers_async_logging(logger: LoggingSurface) -> bool:
-    return bool(getattr(logger, "_defer_async_logging", False))
+    return bool(getattr(logger, "defer_async_logging", False))
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
@@ -337,9 +339,15 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
     return hook(kwargs, error, call_type)
 
 
-def stream_opened(logger: Logging) -> None:
+_STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
+
+
+def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     logger.stream = True
     logger.model_call_details["stream"] = True
+    logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(
+        head.get("additional_headers") or {}
+    )
 
 
 def stream_success(

@@ -655,6 +655,49 @@ class _FakePsycopgConn:
         return _FakeCursor()
 
 
+class TestLensRenamePendingCheck:
+    _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm"
+
+    def test_database_failure_text_reaches_the_raised_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import psycopg
+
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+            raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_lens_rename_pending(connect=refuse)
+        assert "FATAL:  sorry, too many clients already" in str(err.value)
+
+    def test_password_libpq_echoes_is_redacted_from_the_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import psycopg
+
+        password: Final = "p%zzword"
+        database_url: Final = f"postgresql://litellm:{password}@localhost:5432/litellm"
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        with pytest.raises(psycopg.Error) as libpq:
+            psycopg.connect(database_url, connect_timeout=10, autocommit=True)
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_lens_rename_pending()
+        assert password not in str(err.value)
+        assert str(err.value).endswith(str(libpq.value).strip().replace(password, "REDACTED"))
+
+    def test_legacy_tables_keep_their_own_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+        executed: Final[list[tuple[str, tuple[str]]]] = []
+
+        def legacy_tables_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+            return _FakePsycopgConn(executed)
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_lens_rename_pending(connect=legacy_tables_present)
+        assert str(err.value).startswith("Legacy Lens tables exist.")
+        assert executed[0][1] == ("public",)
+
+
 class TestSpendLogsPartitionDetectionSchemaScope:
     """A same-named LiteLLM_SpendLogs in another schema must not trip the
     detector: the catalog lookup has to be scoped to Prisma's target schema."""

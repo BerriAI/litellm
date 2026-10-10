@@ -5,6 +5,7 @@ This test ensures that the proxy starts and serves requests even with a bad lice
 in ci/cd config.yml, we set the license to "bad-license"
 """
 
+import os
 import pytest
 import aiohttp
 from typing import Optional
@@ -36,7 +37,7 @@ async def test_health_and_chat_completion():
         # Make a chat completion call
         url = "http://0.0.0.0:4000/chat/completions"
         headers = {
-            "Authorization": "Bearer sk-1234",
+            "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
             "Content-Type": "application/json",
         }
         data = {

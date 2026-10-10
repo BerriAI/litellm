@@ -40,8 +40,12 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     RESPONSES_AGENTIC_SURFACE,
+    WEBSEARCH_CONVERTED_STREAM_KEY,
+    WEBSEARCH_INTERCEPTION_PREFIX,
+    WEBSEARCH_STREAM_OPTIONS_KEY,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    as_converted_stream,
 )
 from litellm.types.integrations.websearch_interception import (
     AnthropicSearchQuery,
@@ -489,8 +493,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            kwargs["stream"] = False
-            kwargs["_websearch_interception_converted_stream"] = True
+            return as_converted_stream(kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
 
         return kwargs
 
@@ -511,8 +514,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            converted_kwargs["stream"] = False
-            converted_kwargs["_websearch_interception_converted_stream"] = True
+            return as_converted_stream(converted_kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
 
         return converted_kwargs
 
@@ -670,7 +672,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: Converting stream=True to stream=False")
             kwargs["stream"] = False
-            kwargs["_websearch_interception_converted_stream"] = True
+            kwargs[WEBSEARCH_CONVERTED_STREAM_KEY] = True
+            if "stream_options" in kwargs:
+                kwargs[WEBSEARCH_STREAM_OPTIONS_KEY] = kwargs["stream_options"]
+                del kwargs["stream_options"]
 
         return kwargs
 
@@ -1557,8 +1562,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 search_litellm_params = dict[str, object](tool_params)
                 search_provider = tool_params.get("search_provider")
 
-            # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
+                self._authorize_unregistered_search_fallback(kwargs=kwargs)
                 search_provider = "perplexity"
                 verbose_logger.debug(
                     "WebSearchInterception: No search tools configured in router, using default provider '%s'",
@@ -1623,6 +1628,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.error("WebSearchInterception: Search failed for '%s': %s", query, e)
             raise
 
+    def _authorize_unregistered_search_fallback(self, kwargs: Mapping[str, object] | None) -> None:
+        user_api_key_auth: Final = self._get_user_api_key_auth_from_kwargs(kwargs)
+        if user_api_key_auth is None:
+            return
+
+        from litellm.proxy.auth.auth_checks import check_unregistered_search_fallback, typed_general_settings
+        from litellm.proxy.proxy_server import general_settings
+
+        check_unregistered_search_fallback(
+            valid_token=user_api_key_auth, general_settings=typed_general_settings(general_settings)
+        )
+
     async def _authorize_search_tool(
         self,
         search_tool: Mapping[str, object],
@@ -1636,36 +1653,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         if user_api_key_auth is None:
             return
 
-        from litellm.proxy.auth.auth_checks import (
-            can_key_call_search_tool,
-            can_team_call_search_tool,
-            get_team_object,
-        )
+        from litellm.proxy.auth.auth_checks import can_token_call_search_tool
 
-        await can_key_call_search_tool(
-            search_tool_name=search_tool_name,
-            valid_token=user_api_key_auth,
-        )
-
-        team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
-        if team_id:
-            from litellm.proxy.proxy_server import (
-                prisma_client,
-                proxy_logging_obj,
-                user_api_key_cache,
-            )
-
-            team_object: Final = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=getattr(user_api_key_auth, "parent_otel_span", None),
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            await can_team_call_search_tool(
-                search_tool_name=search_tool_name,
-                team_object=team_object,
-            )
+        await can_token_call_search_tool(search_tool_name=search_tool_name, valid_token=user_api_key_auth)
 
     @staticmethod
     def _build_search_request_metadata(

@@ -72,7 +72,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 export PYTHONPATH="$PWD:$PWD/tests:$PWD/tests/e2e"
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/circle_test"
 export REDIS_HOST=127.0.0.1 REDIS_PORT=6379
-export LITELLM_MASTER_KEY=sk-integration-master LITELLM_SALT_KEY=sk-integration-salt
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" LITELLM_SALT_KEY=sk-integration-salt
 export LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True
 export STORE_MODEL_IN_DB=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1
 export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
@@ -193,10 +193,10 @@ fi
 if [ "$suite" = providers ]; then
   INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --tb=short --noconftest -o addopts= \
     --strict-markers --strict-config -p no:pytest-retry -p no:rerunfailures --timeout=30 \
-    tests/e2e/test_provider_edge.py::TestReplayMode::test_content_drift_returns_the_miss_status_naming_both_keys \
-    tests/e2e/test_provider_edge.py::TestReplayMode::test_exhausted_key_returns_the_miss_status \
-    tests/e2e/test_provider_edge.py::TestReplayLeftover::test_partially_consumed_recording_names_the_leftover \
-    tests/e2e/test_provider_edge.py::TestStreamingFidelity::test_replay_of_a_stream_makes_no_provider_connection \
+    tests/e2e_harness/test_provider_edge.py::TestReplayMode::test_content_drift_returns_the_miss_status_naming_both_keys \
+    tests/e2e_harness/test_provider_edge.py::TestReplayMode::test_exhausted_key_returns_the_miss_status \
+    tests/e2e_harness/test_provider_edge.py::TestReplayLeftover::test_partially_consumed_recording_names_the_leftover \
+    tests/e2e_harness/test_provider_edge.py::TestStreamingFidelity::test_replay_of_a_stream_makes_no_provider_connection \
     --junitxml="$results/replay-controls.xml"
 fi
 

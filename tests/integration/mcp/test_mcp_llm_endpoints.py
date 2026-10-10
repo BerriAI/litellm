@@ -934,7 +934,7 @@ def test_identical_nonstream_repeat_is_a_cache_hit_without_new_model_peer_or_hoo
         assert _spend_row(key, repeat.call_id)["cache_hit"] == "True"
 
 
-def test_messages_bridge_hook_keeps_the_base_shape_without_request_local_metadata(hooked: Hooked) -> None:
+def test_messages_bridge_hook_sees_the_definition_the_request_served(hooked: Hooked) -> None:
     with _bridge_rig(hooked, "messages") as rig:
         key: Final = _bridge_key(rig)
         marker: Final = "m" + uuid.uuid4().hex
@@ -943,6 +943,6 @@ def test_messages_bridge_hook_keeps_the_base_shape_without_request_local_metadat
         assert found.status_code == 200, found.text
         blocked: Final = rig.post(key, probe, [rig.mcp("lookup")])
         assert blocked.status_code == 200, blocked.text
-        assert _echoed(JSON_VALUE.validate_json(blocked.content)) == COLD, blocked.text
+        assert _echoed(JSON_VALUE.validate_json(blocked.content)) == _served(LOOKUP), blocked.text
         assert rig.peer_calls() == (("lookup", {"query": marker}),)
         assert rig.hook_messages(marker) == (f"Tool: lookup\nArguments: {dict(query=marker)}",)

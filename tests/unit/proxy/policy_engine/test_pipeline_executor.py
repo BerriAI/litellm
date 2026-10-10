@@ -19,7 +19,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
-from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
+from litellm.proxy.policy_engine.pipeline_executor import (
+    PipelineExecutor,
+    UndeliverableStreamRewrite,
+    pipeline_step_is_detect_only,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
@@ -94,6 +98,20 @@ class AlwaysPassGuardrail(CustomGuardrail):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
         return None
+
+
+class StreamScopedPassGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str, stream_scope: object):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+            stream_scope=stream_scope,
+        )
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
 
 
 class PassthroughBlockGuardrail(CustomGuardrail):
@@ -376,6 +394,46 @@ async def test_block_carries_original_guardrail_exception(monkeypatch):
     assert isinstance(result.original_exception, HTTPException)
     assert result.original_exception.status_code == 400
     assert result.original_exception.detail == "Content policy violation"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_honors_stream_scope(monkeypatch):
+    stream_only = StreamScopedPassGuardrail(guardrail_name="stream-only", stream_scope="streaming")
+    later = AlwaysFailGuardrail(guardrail_name="later-block")
+    monkeypatch.setattr(litellm, "callbacks", [stream_only, later])
+    steps = [
+        PipelineStep(guardrail="stream-only", on_fail="block", on_pass="allow"),
+        PipelineStep(guardrail="later-block", on_fail="block", on_pass="allow"),
+    ]
+
+    skipped = await PipelineExecutor.execute_steps(
+        steps=steps,
+        mode="pre_call",
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="stream-scope",
+    )
+    assert stream_only.calls == 0
+    assert later.calls == 1
+    assert skipped.step_results[0].outcome == "skip"
+    assert skipped.step_results[0].action_taken == "next"
+    assert skipped.terminal_action == "block"
+
+    stream_only.calls = 0
+    later.calls = 0
+    ran = await PipelineExecutor.execute_steps(
+        steps=steps,
+        mode="pre_call",
+        data={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="stream-scope",
+    )
+    assert stream_only.calls == 1
+    assert later.calls == 0
+    assert ran.step_results[0].outcome == "pass"
+    assert ran.terminal_action == "allow"
 
 
 @pytest.mark.asyncio
@@ -1740,3 +1798,24 @@ def test_undeliverable_stream_rewrite_keeps_its_reason_through_a_copy(clone):
     assert copied.reason == "the translation refused it"
     assert str(copied) == str(original)
     assert str(copied).endswith("cannot be written back to the stream: the translation refused it")
+
+
+@pytest.mark.parametrize(
+    ("on_pass", "on_fail", "on_error", "detect_only"),
+    (
+        pytest.param("allow", "next", None, True, id="allow-next"),
+        pytest.param("next", "allow", "next", True, id="next-allow-next"),
+        pytest.param("allow", "next", "allow", True, id="allow-next-allow"),
+        pytest.param("allow", "block", None, False, id="on_fail-block"),
+        pytest.param("allow", "next", "block", False, id="on_error-block"),
+        pytest.param("allow", "modify_response", None, False, id="on_fail-modify_response"),
+        pytest.param("modify_response", "next", None, False, id="on_pass-modify_response"),
+        pytest.param("block", "next", None, False, id="on_pass-block"),
+    ),
+)
+def test_pipeline_step_is_detect_only_when_no_reachable_action_touches_the_response(
+    on_pass: str, on_fail: str, on_error: str | None, detect_only: bool
+) -> None:
+    step = PipelineStep(guardrail="scanner", on_pass=on_pass, on_fail=on_fail, on_error=on_error)
+
+    assert pipeline_step_is_detect_only(step) is detect_only

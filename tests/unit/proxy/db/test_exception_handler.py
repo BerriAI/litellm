@@ -1,12 +1,10 @@
 import asyncio
-import json
 import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
 from prisma.engine.errors import BinaryNotFoundError, EngineConnectionError, EngineRequestError
 from prisma.errors import (
@@ -22,9 +20,7 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
@@ -55,22 +51,12 @@ def test_is_database_infrastructure_error_prisma_connection_errors(prisma_error)
         PrismaError(),
         PrismaError("validation failed on query"),
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        UniqueViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        ForeignKeyViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        MissingRequiredValueError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        ForeignKeyViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        MissingRequiredValueError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        TableNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        RecordNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        TableNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
     ],
 )
 def test_is_database_transport_error_non_connection_prisma_errors(prisma_error):
@@ -82,12 +68,7 @@ def test_is_database_connection_generic_errors():
     """
     Test non-Prisma error cases for database connection checking
     """
-    assert (
-        PrismaDBExceptionHandler.is_database_connection_error(
-            Exception("Regular error")
-        )
-        == False
-    )
+    assert PrismaDBExceptionHandler.is_database_connection_error(Exception("Regular error")) == False
 
     # Test with ProxyException (DB connection)
     db_proxy_exception = ProxyException(
@@ -95,17 +76,11 @@ def test_is_database_connection_generic_errors():
         type=ProxyErrorTypes.no_db_connection,
         param="test-param",
     )
-    assert (
-        PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception)
-        == True
-    )
+    assert PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception) == True
 
     # Test with non-DB error
     regular_exception = Exception("Regular error")
-    assert (
-        PrismaDBExceptionHandler.is_database_connection_error(regular_exception)
-        == False
-    )
+    assert PrismaDBExceptionHandler.is_database_connection_error(regular_exception) == False
 
 
 @pytest.mark.parametrize(
@@ -143,12 +118,7 @@ def test_is_database_service_unavailable_error_prisma_p1001_masquerades_as_datae
             }
         }
     )
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            p1001_as_dataerror
-        )
-        is True
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(p1001_as_dataerror) is True
 
 
 def test_is_prisma_data_error_only_true_for_dataerror():
@@ -196,12 +166,7 @@ def test_is_database_service_unavailable_error_cached_plan_escapes_as_503():
             }
         }
     )
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            cached_plan_error
-        )
-        is True
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(cached_plan_error) is True
 
 
 def test_is_database_service_unavailable_error_prisma_engine_malformed_payload():
@@ -229,10 +194,7 @@ def test_is_database_service_unavailable_error_prisma_engine_malformed_payload()
         prisma_engine_utils.handle_response_errors(None, malformed_payload)
 
     assert "no attribute 'get'" in str(exc_info.value)
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value)
-        is True
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is True
 
 
 def test_is_prisma_engine_internal_error_excludes_application_attributeerror():
@@ -247,23 +209,15 @@ def test_is_prisma_engine_internal_error_excludes_application_attributeerror():
     with pytest.raises(AttributeError) as exc_info:
         application_bug()
 
-    assert (
-        PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc_info.value)
-        is False
-    )
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value)
-        is False
-    )
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc_info.value) is False
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is False
 
 
 def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     """A data-layer ``PrismaError`` (the DB IS reachable and rejected the data)
     must stay 401. These are always raised from prisma internals, so the check
     excludes any ``PrismaError`` by type before inspecting the traceback."""
-    data_layer_error = UniqueViolationError(
-        data={"user_facing_error": {"meta": {"table": "t"}}}
-    )
+    data_layer_error = UniqueViolationError(data={"user_facing_error": {"meta": {"table": "t"}}})
     with pytest.raises(UniqueViolationError) as exc_info:
         raise data_layer_error
     e = exc_info.value
@@ -284,9 +238,7 @@ def test_is_database_service_unavailable_error_excludes_non_infra(error):
     """Data-layer errors (the DB IS reachable and answered) and generic
     non-DB errors must NOT be classified as service-unavailable, otherwise a
     genuine 401 would be masked as a transient 503."""
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is False
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is False
 
 
 def _wrapped_like_get_user_object(original):
@@ -393,22 +345,14 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     monkeypatch.setitem(sys.modules, "asyncpg.exceptions", fake_exceptions)
 
     assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            PostgresConnectionError("connection reset")
-        )
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(PostgresConnectionError("connection reset"))
         is True
     )
     assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            InterfaceError("connection was closed")
-        )
-        is True
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(InterfaceError("connection was closed")) is True
     )
     assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            UniqueViolationError("duplicate key")
-        )
-        is False
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(UniqueViolationError("duplicate key")) is False
     )
 
 
@@ -675,7 +619,10 @@ def test_is_deadlock_error_excludes_non_deadlocks(error):
             "22021",
         ),
         (RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"message": "m"}}}), None),
-        (RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"code": 42, "message": "m"}}}), None),
+        (
+            RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"code": 42, "message": "m"}}}),
+            None,
+        ),
         (prisma_errors.DataError(data={"user_facing_error": {"meta": None}}), None),
         (
             prisma_errors.DataError(
@@ -695,7 +642,9 @@ def test_is_deadlock_error_excludes_non_deadlocks(error):
         (httpx.ReadTimeout("no reply"), None),
     ],
 )
-def test_postgres_sqlstate_reads_the_code_prisma_attached_to_the_failed_statement(error: Exception, sqlstate: str | None):
+def test_postgres_sqlstate_reads_the_code_prisma_attached_to_the_failed_statement(
+    error: Exception, sqlstate: str | None
+):
     """Only a prisma data error carrying Postgres's own error code yields a SQLSTATE, whether in ``meta``
     or, for a batched statement, only in the message; a codeless or malformed payload, an engine-level
     error, and a transport error yield None."""
@@ -905,7 +854,7 @@ def _pool_timeout_error() -> DataError:
         RawQueryError(
             data={
                 "user_facing_error": {
-                    "message": 'Raw query failed. Code: `53300`. Message: `db error: FATAL: sorry, too many clients already`',
+                    "message": "Raw query failed. Code: `53300`. Message: `db error: FATAL: sorry, too many clients already`",
                     "meta": {"code": "53300", "message": "FATAL: sorry, too many clients already"},
                     "error_code": "P2010",
                 }
@@ -945,3 +894,60 @@ def test_capacity_error_is_seen_through_a_wrapping_exception() -> None:
     wrapped: Final = RuntimeError("spend flush failed")
     wrapped.__cause__ = _capacity_error("sorry, too many clients already")
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(wrapped) is True
+
+
+def _lock_timeout_error(
+    message: str = "canceling statement due to lock timeout", code: str | None = "55P03"
+) -> DataError:
+    """The shape prisma raises for a statement Postgres cancelled under ``lock_timeout``."""
+    user_facing: Final[dict[str, object]] = {"is_panic": False, "message": f"Error querying the database: {message}"}
+    if code is not None:
+        user_facing["meta"] = {"code": code, "message": message}
+    return DataError(data={"user_facing_error": user_facing})
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _lock_timeout_error(),
+        _lock_timeout_error(message="Abbruch der Anweisung wegen Zeitüberschreitung beim Warten auf eine Sperre"),
+        _lock_timeout_error(code=None),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": 'Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(PostgresError { code: "55P03", message: "canceling statement due to lock timeout", severity: "ERROR" }) })'
+                }
+            }
+        ),
+    ],
+    ids=["meta_55P03", "meta_55P03_localised_message", "message_only", "batched_statement"],
+)
+def test_is_lock_timeout_error_recognises_a_statement_cancelled_under_lock_timeout(error: DataError) -> None:
+    """SQLSTATE 55P03 means the statement never took its lock, so it never applied
+    and its rows are safe to re-send. It is a wait budget, not a full server, so
+    it stays out of the connection-capacity classification."""
+    assert PrismaDBExceptionHandler.is_lock_timeout_error(error) is True
+    assert PrismaDBExceptionHandler.is_database_capacity_error(error) is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _lock_timeout_error(message="canceling statement due to statement timeout", code="57014"),
+        _lock_timeout_error(message="deadlock detected", code="40P01"),
+        _capacity_error("sorry, too many clients already"),
+        _pool_timeout_error(),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("canceling statement due to lock timeout"),
+    ],
+    ids=[
+        "statement_timeout_57014",
+        "deadlock_40P01",
+        "capacity_53300",
+        "pool_timeout_P2024",
+        "transport",
+        "not_prisma",
+    ],
+)
+def test_is_lock_timeout_error_excludes_other_failures(error: Exception) -> None:
+    assert PrismaDBExceptionHandler.is_lock_timeout_error(error) is False
