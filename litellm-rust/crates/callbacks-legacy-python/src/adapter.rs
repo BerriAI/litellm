@@ -462,12 +462,11 @@ impl LegacyLogging {
             ),
         )?;
         let details = logger.getattr("model_call_details")?;
-        match &facts.cost {
-            Cost::Reported { amount } => {
-                details.set_item("provider_reported_cost", amount.as_f64())?;
-            }
-            Cost::CacheHit | Cost::Deferred => {}
-        }
+        let reported_cost = match &facts.cost {
+            Cost::Reported { amount } => amount.as_f64(),
+            Cost::CacheHit | Cost::Deferred => None,
+        };
+        logger.setattr("_provider_reported_cost", reported_cost)?;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -965,11 +964,13 @@ check = lambda: None
 ";
 
     #[rstest]
-    #[case::reported(Some(0.37))]
-    #[case::free(Some(0.0))]
-    #[case::deferred(None)]
+    #[case::reported(Some(0.37), false)]
+    #[case::free(Some(0.0), false)]
+    #[case::deferred(None, false)]
+    #[case::cached(None, true)]
     fn result_ready_hands_only_a_reported_cost_to_the_spend_logging_record(
         #[case] reported: Option<f64>,
+        #[case] cache_hit: bool,
     ) {
         Python::initialize();
         Python::attach(|py| {
@@ -981,13 +982,20 @@ check = lambda: None
 logger.litellm_params = {}
 logger.optional_params = {}
 logger.model_call_details = {'response_cost': 7.0}
+logger._provider_reported_cost = None
 ",
             );
             let mut logging = LegacyLogging {
                 logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
                 ..legacy_call(py, &locals, false)
             };
-            let source = litellm_host::interceptors::ResultSource::Provider;
+            let source = if cache_hit {
+                litellm_host::interceptors::ResultSource::Cache {
+                    key: "cached-test".into(),
+                }
+            } else {
+                litellm_host::interceptors::ResultSource::Provider
+            };
             let facts = litellm_host::interceptors::ExecutionFacts {
                 provider: litellm_host::interceptors::ProviderIdentity {
                     model: "native-test".into(),
@@ -999,16 +1007,25 @@ logger.model_call_details = {'response_cost': 7.0}
                 ),
                 source,
             };
+            let previous = litellm_host::interceptors::ExecutionFacts {
+                provider: facts.provider.clone(),
+                cost: litellm_host::interceptors::Cost::Reported {
+                    amount: serde_json::Number::from_f64(9.0).unwrap(),
+                },
+                source: litellm_host::interceptors::ResultSource::Provider,
+            };
+            logging.result_ready(py, &previous).unwrap();
             let step = logging.result_ready(py, &facts).unwrap();
             assert!(matches!(step, HookStep::Ready(())));
             locals.set_item("reported", reported).unwrap();
+            locals.set_item("cache_hit", cache_hit).unwrap();
             run(
                 py,
                 &locals,
                 c"
 assert logger.model_call_details['response_cost'] == 7.0, logger.model_call_details
-assert logger.model_call_details.get('provider_reported_cost') == reported, logger.model_call_details
-assert logger.model_call_details['cache_hit'] is False, logger.model_call_details
+assert logger._provider_reported_cost == reported, logger._provider_reported_cost
+assert logger.model_call_details['cache_hit'] is cache_hit, logger.model_call_details
 assert logger.update['custom_llm_provider'] == 'edenai', logger.update
 ",
             );

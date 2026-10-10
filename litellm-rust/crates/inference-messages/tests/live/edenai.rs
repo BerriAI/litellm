@@ -85,7 +85,7 @@ async fn tool_round_trip(route: MessagesRoute, #[case] stream: bool) {
         PROVIDER,
         stream,
         json!({
-            "max_tokens": 512, "tool_choice": {"type": "tool", "name": "echo"}
+            "max_tokens": 512, "tool_choice": {"type": "auto"}
         }),
     )
     .await;
