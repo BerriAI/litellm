@@ -415,7 +415,7 @@ def test_an_arn_deployment_answers_on_every_decisions_route_signed_for_bedrock_a
         row = _spend_row(response.headers["x-litellm-call-id"])
         assert row == {
             "status": "success",
-            "call_type": "adecisions",
+            "call_type": "asystemone",
             "custom_llm_provider": "strands_decider",
             "model_group": _SIGNED,
             "api_base": _invocations_url("audit_signed"),
@@ -694,7 +694,7 @@ async def test_sdk_sync_and_async_calls_reach_the_runtime_signed(
             aws_access_key_id=_ACCESS_KEY,
             aws_secret_access_key=_SECRET_KEY,
         )
-        asynchronous: Final = await litellm.adecisions(
+        asynchronous: Final = await litellm.asystemone(
             model=_MODEL,
             state=_STATE,
             questions=_SDK_QUESTIONS,
@@ -703,7 +703,7 @@ async def test_sdk_sync_and_async_calls_reach_the_runtime_signed(
             aws_secret_access_key=_SECRET_KEY,
         )
         monkeypatch.setenv("STRANDS_DECIDER_API_KEY", _ENV_JWT)
-        bearer: Final = await litellm.adecisions(
+        bearer: Final = await litellm.asystemone(
             model=_MODEL, state=_STATE, questions=_SDK_QUESTIONS, api_base=_arn("audit_sdk_env_key")
         )
     finally:

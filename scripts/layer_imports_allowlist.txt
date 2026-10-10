@@ -18,7 +18,6 @@ L1 function litellm/integrations/azure_storage/azure_storage.py litellm.proxy.pr
 L1 function litellm/integrations/cloudzero/cloudzero.py litellm.proxy.proxy_server
 L1 function litellm/integrations/cloudzero/database.py litellm.proxy.proxy_server
 L1 function litellm/integrations/cloudzero/database.py litellm.proxy.spend_tracking.key_metadata_recovery
-L1 function litellm/integrations/custom_guardrail.py litellm.proxy._types
 L1 function litellm/integrations/custom_guardrail.py litellm.proxy.guardrails.auto_router_compression
 L1 function litellm/integrations/custom_guardrail.py litellm.proxy.guardrails.exception_utils
 L1 function litellm/integrations/custom_guardrail.py litellm.proxy.proxy_server
@@ -47,7 +46,6 @@ L1 function litellm/integrations/prometheus.py litellm.proxy.management_endpoint
 L1 function litellm/integrations/prometheus.py litellm.proxy.proxy_server
 L1 function litellm/integrations/prometheus.py litellm.proxy.utils
 L1 function litellm/integrations/rubrik.py litellm.proxy.litellm_pre_call_utils
-L1 function litellm/integrations/shadow_eval_logger.py litellm.proxy._types
 L1 function litellm/integrations/shadow_eval_logger.py litellm.proxy.auth.auth_checks
 L1 function litellm/integrations/shadow_eval_logger.py litellm.proxy.db.shadow_eval_funnel
 L1 function litellm/integrations/shadow_eval_logger.py litellm.proxy.proxy_server
@@ -57,7 +55,6 @@ L1 function litellm/integrations/websearch_interception/handler.py litellm.proxy
 L1 function litellm/integrations/websearch_interception/handler.py litellm.proxy.litellm_pre_call_utils
 L1 function litellm/integrations/websearch_interception/handler.py litellm.proxy.proxy_server
 L1 function litellm/interactions/background_cost_polling.py litellm.proxy.spend_tracking.budget_reservation
-L1 function litellm/litellm_core_utils/health_check_helpers.py litellm.proxy._types
 L1 function litellm/litellm_core_utils/health_check_helpers.py litellm.proxy.litellm_pre_call_utils
 L1 function litellm/litellm_core_utils/litellm_logging.py litellm.proxy.hooks.autorouter_baseline_cache
 L1 function litellm/litellm_core_utils/litellm_logging.py litellm.proxy.hooks.dynamic_rate_limiter
@@ -114,14 +111,9 @@ L1 function litellm/types/roi_calculator.py litellm.proxy.roi_calculator.analyti
 L1 module litellm/experimental_mcp_client/client.py litellm.proxy._experimental.mcp_server.mcp_debug
 L1 module litellm/experimental_mcp_client/client.py litellm.proxy._experimental.mcp_server.result_conversion
 L1 module litellm/google_genai/streaming_iterator.py litellm.proxy.pass_through_endpoints.success_handler
-L1 module litellm/integrations/SlackAlerting/slack_alerting.py litellm.proxy._types
-L1 module litellm/integrations/prometheus.py litellm.proxy._types
 L1 module litellm/litellm_core_utils/custom_logger_registry.py litellm.proxy.hooks.dynamic_rate_limiter
 L1 module litellm/litellm_core_utils/custom_logger_registry.py litellm.proxy.hooks.dynamic_rate_limiter_v3
 L1 module litellm/llms/anthropic/pass_through/messages/streaming_iterator.py litellm.proxy.pass_through_endpoints.success_handler
-L1 module litellm/llms/base_llm/managed_resources/base_managed_resource.py litellm.proxy._types
-L1 module litellm/llms/base_llm/managed_resources/isolation.py litellm.proxy._types
-L1 module litellm/llms/litellm_proxy/skills/handler.py litellm.proxy._types
 L1 module litellm/llms/litellm_proxy/skills/skill_search.py litellm.proxy.common_utils.semantic_text_index
 L1 module litellm/responses/mcp/litellm_proxy_mcp_handler.py litellm.proxy._experimental.mcp_server.catalog
 L1 module litellm/responses/mcp/litellm_proxy_mcp_handler.py litellm.proxy._experimental.mcp_server.utils
@@ -147,9 +139,6 @@ L2 function litellm/llms/openai/responses/guardrail_translation/handler.py litel
 L2 function litellm/llms/pass_through/guardrail_translation/handler.py litellm.proxy.pass_through_endpoints.jsonpath_extractor
 L2 function litellm/llms/pass_through/guardrail_translation/handler.py litellm.proxy.pass_through_endpoints.passthrough_guardrails
 L2 module litellm/llms/anthropic/pass_through/messages/streaming_iterator.py litellm.proxy.pass_through_endpoints.success_handler
-L2 module litellm/llms/base_llm/managed_resources/base_managed_resource.py litellm.proxy._types
-L2 module litellm/llms/base_llm/managed_resources/isolation.py litellm.proxy._types
-L2 module litellm/llms/litellm_proxy/skills/handler.py litellm.proxy._types
 L2 module litellm/llms/litellm_proxy/skills/skill_search.py litellm.proxy.common_utils.semantic_text_index
 L3 function litellm/types/integrations/prometheus.py litellm
 L3 function litellm/types/roi_calculator.py litellm.proxy.roi_calculator.analytics
