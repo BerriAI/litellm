@@ -87,9 +87,18 @@ async def _set_team_groups(db, team_id, access_group_ids):
     )
 
 
-async def _sync(db, team_id, access_group_ids) -> None:
+def _cache_key(access_group_id: str) -> str:
+    return f"access_group_id:{access_group_id}"
+
+
+async def _sync(db, team_id, access_group_ids) -> frozenset[str]:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
     await _set_team_groups(db, team_id, access_group_ids)
+    for group in GROUPS:
+        user_api_key_cache.set_cache(key=_cache_key(group), value={"access_group_id": group})
     await sync_team_access_group_membership(prisma_client=SimpleNamespace(db=db), team_id=team_id)
+    return frozenset(group for group in GROUPS if user_api_key_cache.get_cache(key=_cache_key(group)) is None)
 
 
 @pytest.mark.asyncio
@@ -99,13 +108,14 @@ async def test_reconcile_attaches_and_detaches_without_touching_other_teams():
     async with _clean_db() as db:
         await _seed(db, {GROUPS[0]: [TEAM, OTHER_TEAM], GROUPS[1]: [TEAM], GROUPS[2]: [OTHER_TEAM]})
 
-        await _sync(db, TEAM, [GROUPS[1], GROUPS[2]])
+        invalidated = await _sync(db, TEAM, [GROUPS[1], GROUPS[2]])
 
         assert await _read(db) == {
             GROUPS[0]: [OTHER_TEAM],
             GROUPS[1]: [TEAM],
             GROUPS[2]: sorted([TEAM, OTHER_TEAM]),
         }
+        assert invalidated == {GROUPS[0], GROUPS[1], GROUPS[2]}
 
 
 @pytest.mark.asyncio
@@ -116,33 +126,14 @@ async def test_reconcile_is_idempotent_so_a_retry_heals_rather_than_duplicates()
     serving a grant the admin already revoked."""
     async with _clean_db() as db:
         await _seed(db, {GROUPS[0]: [], GROUPS[1]: [TEAM], GROUPS[2]: []})
-        from litellm.proxy._types import LiteLLM_AccessGroupTable
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        cached_group: Final = LiteLLM_AccessGroupTable(
-            access_group_id=GROUPS[0],
-            access_group_name=GROUPS[0],
-            assigned_team_ids=[],
-        )
-        await user_api_key_cache.async_set_cache(
-            key=GROUPS[0],
-            value=cached_group,
-            model_type=LiteLLM_AccessGroupTable,
-            ttl=60,
-        )
-        await _sync(db, TEAM, [GROUPS[0], GROUPS[1]])
+        first = await _sync(db, TEAM, [GROUPS[0], GROUPS[1]])
         after_first = await _read(db)
-        assert (
-            await user_api_key_cache.async_get_cache(
-                key=GROUPS[0],
-                model_type=LiteLLM_AccessGroupTable,
-            )
-            is None
-        )
-        await _sync(db, TEAM, [GROUPS[0], GROUPS[1]])
+        second = await _sync(db, TEAM, [GROUPS[0], GROUPS[1]])
 
         assert after_first == {GROUPS[0]: [TEAM], GROUPS[1]: [TEAM], GROUPS[2]: []}
         assert await _read(db) == after_first
+        assert first == {GROUPS[0], GROUPS[1]}
+        assert second == first
 
 
 @pytest.mark.asyncio
@@ -168,9 +159,10 @@ async def test_passing_none_detaches_the_team_from_every_group():
     async with _clean_db() as db:
         await _seed(db, {GROUPS[0]: [TEAM, OTHER_TEAM], GROUPS[1]: [TEAM], GROUPS[2]: [OTHER_TEAM]})
 
-        await _sync(db, TEAM, None)
+        invalidated = await _sync(db, TEAM, None)
 
         assert await _read(db) == {GROUPS[0]: [OTHER_TEAM], GROUPS[1]: [], GROUPS[2]: [OTHER_TEAM]}
+        assert invalidated == {GROUPS[0], GROUPS[1]}
 
 
 @pytest.mark.asyncio
@@ -230,7 +222,8 @@ async def test_a_concurrent_writer_cannot_replay_a_stale_team_row_over_a_newer_o
                     eventually,
                     lambda: read_rows(
                         "SELECT count(*) AS blocked FROM pg_stat_activity "
-                        "WHERE wait_event_type = 'Lock' AND query LIKE '%pg_advisory_xact_lock%'"
+                        "WHERE wait_event_type = 'Lock' AND query LIKE %s",
+                        ("%pg_advisory_xact_lock%",),
                     ),
                     lambda rows: rows[0]["blocked"] == 1,
                     seconds=5,

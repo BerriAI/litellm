@@ -29,18 +29,15 @@ def mock_env_vars(monkeypatch):
 def prisma_client():
     from litellm.proxy.proxy_cli import append_query_params
 
-                                               
     params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
-                                                                    
     prisma_client = PrismaClient(
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
-                                                            
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
@@ -60,19 +57,15 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
 
     litellm.turn_on_debug()
 
-                               
     unique_user_id = str(uuid.uuid4())
     unique_user_email = f"newuser{unique_user_id}@example.com"
 
     try:
-                                  
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
         await litellm.proxy.proxy_server.prisma_client.connect()
 
-                               
         litellm.proxy.proxy_server.master_key = "mock_master_key"
 
-                                                      
         mock_sso_result = MagicMock()
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
@@ -84,7 +77,6 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
             return_value=mock_sso_result
         )
 
-                                      
         mock_request = Request(
             scope={
                 "type": "http",
@@ -97,16 +89,13 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
             }
         )
 
-                                                  
         response = await auth_callback(request=mock_request)
 
-                             
         assert response.status_code == 303
         assert response.headers["location"].startswith(
             f"http://testserver/ui/?login=success"
         )
 
-                                                        
         user = await prisma_client.db.litellm_usertable.find_first(
             where={"user_id": unique_user_id}
         )
@@ -117,7 +106,6 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         assert user.metadata == {"auth_provider": "google"}
 
     finally:
-                                                     
         await prisma_client.db.litellm_usertable.delete(
             where={"user_id": unique_user_id}
         )
@@ -135,22 +123,18 @@ async def test_auth_callback_new_user_with_sso_default(
     """
     from litellm._uuid import uuid
 
-                               
     unique_user_id = str(uuid.uuid4())
     unique_user_email = f"newuser{unique_user_id}@example.com"
 
     try:
-                                  
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
         litellm.default_internal_user_params = {
             "user_role": LitellmUserRoles.INTERNAL_USER.value
         }
         await litellm.proxy.proxy_server.prisma_client.connect()
 
-                               
         litellm.proxy.proxy_server.master_key = "mock_master_key"
 
-                                                      
         mock_sso_result = MagicMock()
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
@@ -159,7 +143,6 @@ async def test_auth_callback_new_user_with_sso_default(
             return_value=mock_sso_result
         )
 
-                                      
         mock_request = Request(
             scope={
                 "type": "http",
@@ -172,16 +155,13 @@ async def test_auth_callback_new_user_with_sso_default(
             }
         )
 
-                                                  
         response = await auth_callback(request=mock_request)
 
-                             
         assert response.status_code == 303
         assert response.headers["location"].startswith(
             f"http://testserver/ui/?login=success"
         )
 
-                                                        
         user = await prisma_client.db.litellm_usertable.find_first(
             where={"user_id": unique_user_id}
         )
@@ -191,7 +171,6 @@ async def test_auth_callback_new_user_with_sso_default(
         assert user.user_role == LitellmUserRoles.INTERNAL_USER
 
     finally:
-                                                     
         await prisma_client.db.litellm_usertable.delete(
             where={"user_id": unique_user_id}
         )

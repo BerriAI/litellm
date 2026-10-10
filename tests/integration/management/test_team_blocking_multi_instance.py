@@ -1,40 +1,40 @@
-from pathlib import Path
 from typing import Final
 
-from tests.integration._support.client import Gateway, object_value, string_value
-from tests.integration._support.process import owned_proxy
+import httpx
+
+from tests.integration._support.client import Gateway, eventually, object_value
+
+_PROMPT: Final = {"messages": [{"role": "user", "content": "team blocking"}]}
 
 
-def test_team_blocking_is_visible_across_proxy_instances(gateway: Gateway, tmp_path: Path) -> None:
-    config: Final = Path("tests/integration/proxy_config.yaml")
-    with owned_proxy(gateway, tmp_path / "first", {}, config=config) as first:
-        with owned_proxy(gateway, tmp_path / "second", {}, config=config) as second:
-            team: Final = string_value(
-                first.post("/team/new", {"team_alias": "multi-instance-blocking"})["team_id"]
-            )
-            try:
-                key: Final = string_value(
-                    first.post("/key/generate", {"team_id": team})["key"]
-                )
-                initial: Final = object_value(
-                    first.get("/team/info", {"team_id": team})["team_info"]
-                )
-                assert initial["blocked"] is False
+def _chat(proxy: Gateway, model: str, key: str) -> httpx.Response:
+    return proxy.request("POST", "/v1/chat/completions", {"model": model, **_PROMPT}, key=key)
 
-                second.post("/team/update", {"team_id": team, "blocked": True})
 
-                updated: Final = object_value(
-                    first.get("/team/info", {"team_id": team})["team_info"]
-                )
-                assert updated["blocked"] is True
+def _rejected(proxy: Gateway, model: str, key: str) -> httpx.Response:
+    return eventually(lambda: _chat(proxy, model, key), lambda response: response.status_code == 401, seconds=70)
 
-                response: Final = first.request(
-                    "POST",
-                    "/v1/chat/completions",
-                    {"model": "unconfigured-model", "messages": [{"role": "user", "content": "blocked"}]},
-                    key=key,
-                )
-                assert response.status_code == 401, response.text
-                assert "blocked" in response.text.lower()
-            finally:
-                second.post("/team/delete", {"team_ids": [team]})
+
+def _blocked_flag(proxy: Gateway, team_id: str) -> object:
+    return object_value(proxy.get("/team/info", {"team_id": team_id})["team_info"])["blocked"]
+
+
+def test_a_team_blocked_on_one_instance_is_rejected_on_both(gateway: Gateway, peer: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team: Final = scenario.team()
+        key: Final = scenario.key(team_id=team)
+        assert _blocked_flag(peer, team) is False
+        allowed: Final = _chat(gateway, model, key)
+        assert allowed.status_code == 200, allowed.text
+
+        peer.post("/team/update", {"team_id": team, "blocked": True})
+
+        assert _blocked_flag(gateway, team) is True
+        assert _blocked_flag(peer, team) is True
+        rejections: Final = tuple(_rejected(proxy, model, key) for proxy in (gateway, peer))
+
+    for rejection in rejections:
+        error: Final = object_value(rejection.json()["error"])
+        assert error["type"] == "auth_error", rejection.text
+        assert f"Team={team} is blocked" in str(error["message"]), rejection.text

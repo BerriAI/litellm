@@ -9,9 +9,11 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
+from tests.integration._support.process import owned_proxy
 
 _SERVICE_URL: Final = "http://127.0.0.1:9414"
+_CONFIG: Final = Path(__file__).with_name("team_metadata_validation_proxy_config.yaml")
 _IMPLS: Final = ("allowlist", "http", "immutable")
 _REQUIRED_MESSAGES: Final = {
     "allowlist": "cost_center is required in team metadata",
@@ -88,6 +90,20 @@ def cost_center_service() -> Iterator[None]:
         if process.poll() is None:
             process.terminate()
         process.wait(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def gateway(cost_center_service: None, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        gateway_from_environment() as rig,
+        owned_proxy(
+            rig,
+            tmp_path_factory.mktemp("team-metadata-validation"),
+            {"TEAM_METADATA_VALIDATION_SERVICE_URL": f"{_SERVICE_URL}/validate"},
+            config=_CONFIG,
+        ) as validated,
+    ):
+        yield validated
 
 
 @pytest.fixture

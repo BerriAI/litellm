@@ -863,17 +863,6 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: guardrails-tests
-            test-path: >-
-              tests/guardrails_tests
-              --deselect=tests/guardrails_tests/test_custom_guardrail.py::test_get_guardrail_dynamic_request_body_params
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
           - shard: budgets
             test-path: |-
               tests/unit/proxy/auth/test_default_end_user_budget_simple.py

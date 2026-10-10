@@ -17,6 +17,10 @@ _MODERATION_RESULT: Final = {
 }
 
 
+def _present(fields: dict[str, object]) -> dict[str, object]:
+    return {name: value for name, value in fields.items() if value is not None}
+
+
 def _moderation_response(request: Request) -> Reply:
     if (request.method, request.target) == ("GET", "/v1/models"):
         return Reply(body=b'{"object":"list","data":[]}')
@@ -41,7 +45,15 @@ def test_moderations_forwards_the_selected_model_and_input(gateway: Gateway) -> 
         )
         assert response.status_code == 200, response.text
         body: Final = response.json()
-        assert body["results"][0]["flagged"] is True
+        assert (body["id"], body["model"]) == (_MODERATION_RESULT["id"], _MODERATION_RESULT["model"])
+        assert [
+            (
+                result["flagged"],
+                _present(result["categories"]),
+                _present(result["category_scores"]),
+            )
+            for result in body["results"]
+        ] == [(True, {"violence": True}, {"violence": 0.99})]
 
         requests: Final = tuple(
             request for request in wire.drain() if request.target == "/v1/moderations"

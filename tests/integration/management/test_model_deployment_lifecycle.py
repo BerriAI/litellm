@@ -7,14 +7,13 @@ from tests.integration._support.wire import Reply, Request, wire_server
 
 
 def _delete_model_if_present(gateway: Gateway, identity: str) -> None:
-    entries: Final = gateway.get("/model/info", {"litellm_model_id": identity})["data"]
-    if isinstance(entries, list) and entries:
+    if gateway.request("GET", "/model/info", params={"litellm_model_id": identity}).status_code == 200:
         gateway.post("/model/delete", {"id": identity})
 
 
 def test_model_deployment_can_be_used_and_deleted(gateway: Gateway) -> None:
-    model: Final = f"migration-model-{uuid.uuid4().hex}"
-    identity: Final = f"migration-model-id-{uuid.uuid4().hex}"
+    model: Final = f"lifecycle-model-{uuid.uuid4().hex}"
+    identity: Final = f"lifecycle-model-id-{uuid.uuid4().hex}"
 
     def upstream(request: Request) -> Reply:
         body: Final = json.loads(request.body)
@@ -65,12 +64,14 @@ def test_model_deployment_can_be_used_and_deleted(gateway: Gateway) -> None:
 
             deleted: Final = gateway.request("POST", "/model/delete", {"id": identity})
             assert deleted.status_code == 200, deleted.text
-            remaining: Final = gateway.get("/model/info", {"litellm_model_id": identity})["data"]
-            assert remaining == []
+            remaining: Final = gateway.request("GET", "/model/info", params={"litellm_model_id": identity})
+            assert remaining.status_code == 400, remaining.text
+            assert f"Model id = {identity} not found" in remaining.text
 
             unavailable: Final = gateway.request(
                 "POST",
                 "/v1/chat/completions",
                 {"model": model, "messages": [{"role": "user", "content": "model lifecycle"}]},
             )
-            assert unavailable.status_code != 200, unavailable.text
+            assert unavailable.status_code == 400, unavailable.text
+            assert f"Invalid model name passed in model={model}" in unavailable.text
