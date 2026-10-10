@@ -304,9 +304,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
         if (modelGroupsResp?.data) {
           setDecisionModelGroups(
-            modelGroupsResp.data.map((m: { model_group: string; providers?: string[] }) => ({
+            modelGroupsResp.data.map((m: { model_group: string; providers?: string[]; mode?: string | null }) => ({
               model_group: m.model_group,
               providers: m.providers ?? [],
+              mode: m.mode ?? null,
             })),
           );
         }

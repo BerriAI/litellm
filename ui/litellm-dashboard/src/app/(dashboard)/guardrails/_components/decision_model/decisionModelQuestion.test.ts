@@ -15,10 +15,10 @@ import {
 } from "./decisionModelQuestion";
 
 const groups = [
-  { model_group: "jev-latest", providers: ["typesafe"] },
-  { model_group: "clef", providers: ["cloudflare"] },
-  { model_group: "gpt-5", providers: ["openai"] },
-  { model_group: "no-provider" },
+  { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+  { model_group: "clef", providers: ["cloudflare"], mode: "evaluation" },
+  { model_group: "gpt-5", providers: ["openai"], mode: "chat" },
+  { model_group: "no-provider", mode: "evaluation" },
 ];
 
 const draft = (overrides: Partial<DecisionModelCheckDraft>): DecisionModelCheckDraft => ({
@@ -35,6 +35,23 @@ describe("decisionProvidersForGroups", () => {
     const providers = decisionProvidersForGroups(["typesafe", "openrouter", "cloudflare"], groups);
 
     expect(providers).toEqual(["typesafe", "cloudflare"]);
+  });
+
+  it("omits a provider whose only groups are chat models", () => {
+    const chatOnly = [
+      { model_group: "gpt-4o-mini", providers: ["openai"], mode: "chat" },
+      { model_group: "gpt-6-luna", providers: ["openai"], mode: "chat" },
+    ];
+
+    expect(decisionProvidersForGroups(["openai"], chatOnly)).toEqual([]);
+    expect(decisionModelsForProvider(chatOnly, "openai")).toEqual([]);
+  });
+
+  it("excludes groups with a null or missing mode", () => {
+    const noMode = [{ model_group: "legacy-eval", providers: ["typesafe"] }, { model_group: "unset-eval", providers: ["typesafe"], mode: null }];
+
+    expect(decisionProvidersForGroups(["typesafe"], noMode)).toEqual([]);
+    expect(decisionModelsForProvider(noMode, "typesafe")).toEqual([]);
   });
 });
 
