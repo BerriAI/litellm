@@ -12,10 +12,10 @@ are denied so an empty user_id can never select an unscoped query.
 
 from typing import Any, Final
 
-from litellm.proxy._types import (
+from litellm.types.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
 )
-from litellm.proxy._types import (
+from litellm.types.proxy.auth.user_api_key_auth import (
     user_api_key_has_admin_view as _user_has_admin_view,
 )
 
@@ -29,7 +29,7 @@ def resolve_resource_owner_id(
     A key with neither a user_id nor a team_id would otherwise stamp
     ``created_by=None`` and be locked out of its own resources, so it owns
     them under its hashed token instead, using the ``key:`` scope prefix
-    already used by ``proxy/common_utils/resource_ownership.py``. ``None``
+    already used by ``litellm_core_utils/resource_ownership.py``. ``None``
     means the caller has no usable identity of its own and must fall back
     to team scoping, or be denied.
     """

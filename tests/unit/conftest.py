@@ -159,6 +159,31 @@ def _run_coroutine_if_needed(result: object) -> None:
         loop.create_task(coroutine)
 
 
+async def _complete_test_logging() -> None:
+    await GLOBAL_LOGGING_WORKER.flush()
+    await GLOBAL_LOGGING_WORKER.stop()
+
+
+def _flush_completed_test_logging() -> None:
+    queue: Final = GLOBAL_LOGGING_WORKER._queue
+    if queue is None or queue._unfinished_tasks == 0:
+        return
+    worker_loop: Final = GLOBAL_LOGGING_WORKER._bound_loop
+    if worker_loop is None or worker_loop.is_closed():
+        _run_coroutine_if_needed(_complete_test_logging())
+        return
+    if worker_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_complete_test_logging(), worker_loop).result()
+        return
+    worker_loop.run_until_complete(_complete_test_logging())
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call() -> Iterator[None]:
+    yield
+    _flush_completed_test_logging()
+
+
 def _close_handler_if_needed(handler: object) -> None:
     close: Final = getattr(handler, "close", None)
     if not callable(close):
@@ -210,7 +235,8 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")
         for name in AMBIENT_AWS_ENV_VARS:
             environment.delenv(name, raising=False)
-        environment.delenv("PROXY_BASE_URL", raising=False)
+        for name in ("PROXY_BASE_URL", "SERVER_ROOT_PATH", "SERVER_ROOT_PATHS", "LITELLM_LOG"):
+            environment.delenv(name, raising=False)
         environment.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
         yield
 
@@ -260,6 +286,8 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
     }
     litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm_router_module._live_routers.clear()
+    litellm_utils_module._runtime_registered_model_cost.clear()
     yield
     for router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(router)
