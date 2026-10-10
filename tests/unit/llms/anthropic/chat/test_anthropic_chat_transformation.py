@@ -1,5 +1,6 @@
 import copy
 import json
+from queue import Queue
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat import ModelResponseIterator
@@ -30,6 +32,7 @@ from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -6802,6 +6805,89 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+def test_transform_parsed_response_preserves_existing_hidden_params():
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    raw_response = MagicMock()
+    raw_response.headers = {"request-id": "req_vertex"}
+    raw_response.status_code = 200
+    completion_response = {
+        "id": "msg_vertex",
+        "model": "claude-sonnet-4-5@20250929",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "content": [{"type": "text", "text": "Hello"}],
+    }
+    model_response = ModelResponse()
+    model_response._hidden_params = {
+        "custom_llm_provider": "vertex_ai",
+        "region_name": "us-east5",
+    }
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+    )
+
+    assert result._hidden_params["custom_llm_provider"] == "vertex_ai"
+    assert result._hidden_params["region_name"] == "us-east5"
+    assert result.choices[0].message.content == "Hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+async def test_anthropic_completion_respects_message_redaction_in_datadog_v1(
+    monkeypatch: pytest.MonkeyPatch, turn_off_message_logging: bool
+) -> None:
+    monkeypatch.setattr(litellm, "datadog_use_v1", True)
+    private_output: Final = "private-claude-output-for-redaction-regression"
+    logged_requests: Final[Queue[httpx.Request]] = Queue()
+
+    def provider_response(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_redaction",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-fable-5-1",
+                "content": [{"type": "text", "text": private_output}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        )
+
+    def datadog_response(request: httpx.Request) -> httpx.Response:
+        logged_requests.put(request)
+        return httpx.Response(202)
+
+    logger: Final = DataDogLogger(dd_api_key="test-key", dd_site="datadoghq.com", allow_env_credentials=False)
+    provider_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(provider_response)))
+    datadog_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(datadog_response)))
+    logger.sync_client = datadog_client
+    try:
+        response: Final = litellm.completion(
+            model="anthropic/claude-fable-5-1",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=provider_client,
+            success_callback=[logger],
+            turn_off_message_logging=turn_off_message_logging,
+        )
+        request: Final = logged_requests.get(timeout=10)
+    finally:
+        provider_client.close()
+        datadog_client.close()
+
+    assert response.choices[0].message.content == private_output
+    assert (private_output in request.content.decode()) is (not turn_off_message_logging)
+    payload: Final = json.loads(json.loads(request.content)["message"])
+    assert payload["usage"]["prompt_tokens"] == 10
+    assert payload["usage"]["completion_tokens"] == 5
 
 
 anthropic_chunk_list: Final = [
