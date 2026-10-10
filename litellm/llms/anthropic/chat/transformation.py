@@ -325,6 +325,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def custom_llm_provider(self) -> str | None:
         return "anthropic"
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if self._resolved_provider != "anthropic":
+            return extra_body
+        thinking: Final = extra_body.get("thinking")
+        return {"thinking": thinking} if thinking is not None else {}
+
     @property
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
@@ -1978,8 +1990,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
-            optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
+        request_optional_params: Final = optional_params.copy()
+        if self.custom_llm_provider == "anthropic":
+            extra_body: Final = request_optional_params.get("extra_body")
+            if isinstance(extra_body, dict) and "thinking" in extra_body and extra_body["thinking"] is not None:
+                request_optional_params["thinking"] = extra_body["thinking"]
+                request_optional_params.pop("extra_body", None)
+
+        if "tools" not in request_optional_params and messages is not None and has_tool_call_blocks(messages):
+            request_optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
@@ -1989,13 +2008,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
-            optional_params.get("thinking") is not None
+            request_optional_params.get("thinking") is not None
             and messages is not None
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
             and not any_assistant_message_has_thinking_blocks(messages)
         ):
             if litellm.modify_params:
-                optional_params.pop("thinking", None)
+                request_optional_params.pop("thinking", None)
                 litellm.verbose_logger.warning(
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
@@ -2003,14 +2022,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
-            optional_params=optional_params,
+            optional_params=request_optional_params,
             drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
             custom_llm_provider=self.custom_llm_provider,
         )
 
         AnthropicModelInfo.maybe_drop_disabled_thinking(
             model=model,
-            optional_params=optional_params,
+            optional_params=request_optional_params,
             custom_llm_provider=self._resolved_provider,
         )
 
@@ -2035,7 +2054,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # See _build_anthropic_tool_name_maps for the collision-handling
         # rules and rationale.
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
-            optional_params=optional_params,
+            optional_params=request_optional_params,
         )
         if _name_forward_map:
             messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
@@ -2049,7 +2068,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
-            optional_params["system"] = anthropic_system_message_list
+            request_optional_params["system"] = anthropic_system_message_list
         conversation: Final = place_mid_conversation_system(
             later_messages,
             supports_mid_conversation_system=supports_mid_conversation_system(
@@ -2070,12 +2089,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )  # don't use verbose_logger.exception, if exception is raised
 
         self.update_headers_with_optional_anthropic_beta(
-            headers=headers, optional_params=optional_params, messages=anthropic_messages
+            headers=headers, optional_params=request_optional_params, messages=anthropic_messages
         )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
-        _all_tools: Final = optional_params.get("tools") or []
+        _all_tools: Final = request_optional_params.get("tools") or []
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
         if not _has_advisor:
             anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
@@ -2084,21 +2103,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _tools: Final = (
             cast(
                 list[AllAnthropicToolsValues | dict] | None,
-                optional_params.get("tools"),
+                request_optional_params.get("tools"),
             )
             or []
         )
         tools: Final = self.add_code_execution_tool(messages=anthropic_messages, tools=_tools)
         if len(tools) > 1:
-            optional_params["tools"] = tools
+            request_optional_params["tools"] = tools
 
         ## Load Config
         config: Final = litellm.AnthropicConfig.get_config(model=model)
         for k, v in config.items():
             if (
-                k not in optional_params
+                k not in request_optional_params
             ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
+                request_optional_params[k] = v
 
         ## Handle user_id in metadata
         _litellm_metadata: Final = litellm_params.get("metadata", None)
@@ -2109,27 +2128,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and _litellm_metadata["user_id"] is not None
             and _valid_user_id(_litellm_metadata["user_id"])
         ):
-            optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
+            request_optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
         ## Ensure metadata only contains user_id (only documented field in Anthropic Messages API)
-        if "metadata" in optional_params and isinstance(optional_params["metadata"], dict):
-            _user_id: Final = optional_params["metadata"].get("user_id")
+        if "metadata" in request_optional_params and isinstance(request_optional_params["metadata"], dict):
+            _user_id: Final = request_optional_params["metadata"].get("user_id")
             if _user_id is not None:
-                optional_params["metadata"] = {"user_id": _user_id}
+                request_optional_params["metadata"] = {"user_id": _user_id}
             else:
-                optional_params.pop("metadata")
+                request_optional_params.pop("metadata")
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
-        optional_params.pop("is_vertex_request", None)
-        optional_params.pop("client_metadata", None)
+        request_optional_params.pop("is_vertex_request", None)
+        request_optional_params.pop("client_metadata", None)
 
         # ``top_k`` is a provider-specific kwarg that bypasses
         # ``map_openai_params``; gate it here, the single boundary shared by
         # the direct Anthropic, Bedrock invoke, Vertex, and Azure paths.
-        top_k: Final = optional_params.pop("top_k", None)
+        top_k: Final = request_optional_params.pop("top_k", None)
         if top_k is not None:
             AnthropicConfig._apply_sampling_param(
-                optional_params=optional_params,
+                optional_params=request_optional_params,
                 model=model,
                 param="top_k",
                 value=top_k,
@@ -2140,10 +2159,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         data: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **optional_params,
+            **request_optional_params,
         }
 
-        self._apply_output_config(data=data, model=model, optional_params=optional_params)
+        self._apply_output_config(data=data, model=model, optional_params=request_optional_params)
 
         return data
 
