@@ -1433,6 +1433,7 @@ from .assistants.main import *
 from .batches.main import *
 from .images.main import *
 from .videos.main import *
+from .voice_clone.main import *
 from .batch_completion.main import *
 from .rerank_api.main import *
 from .messages.dispatch import *
