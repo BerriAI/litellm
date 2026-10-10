@@ -66,8 +66,8 @@ def test_azure_ai_embedding_calls_foundry_models_route():
         api_key="fake-key",
     )
 
-    assert route.called
-    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert route.call_count == 1
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2]]
 
 
 @respx.mock

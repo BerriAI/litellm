@@ -6504,6 +6504,7 @@ def test_completion_deep_infra(drop_params):
         api_key="fake-api-key",
     )
 
+    assert route.call_count == 1
     request_body: Final = json.loads(route.calls.last.request.read())
     assert request_body == {
         "model": model,
@@ -6548,6 +6549,7 @@ def test_completion_deep_infra_mistral():
         api_key="fake-api-key",
     )
 
+    assert route.call_count == 1
     request_body: Final = json.loads(route.calls.last.request.read())
     assert request_body == {
         "model": model,
