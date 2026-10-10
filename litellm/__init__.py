@@ -1687,11 +1687,17 @@ if TYPE_CHECKING:
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
     )
+    from .llms.databricks.decisions.transformation import (
+        DatabricksDecisionsConfig as DatabricksDecisionsConfig,
+    )
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure_ai.decisions.transformation import (
+        AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

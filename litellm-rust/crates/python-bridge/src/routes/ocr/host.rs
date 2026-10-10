@@ -13,7 +13,7 @@ use pyo3::{
 
 use super::{
     errors::to_pyerr as ocr_error_to_pyerr,
-    project::{OcrHostHandles, project_request},
+    project::{OcrHostHandles, SETTINGS_ERROR_MARKER, project_request},
 };
 use crate::{marshal::public_response, routes::RequestView};
 
@@ -69,7 +69,7 @@ impl OcrPythonHost {
     }
 
     fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {
-        if !error.is_instance_of::<PyException>(py) {
+        if !error.is_instance_of::<PyException>(py) || is_settings_error(py, &error) {
             return error;
         }
         let provider = match &self.data {
@@ -86,6 +86,15 @@ impl OcrPythonHost {
             Err(_) => error,
         }
     }
+}
+
+fn is_settings_error(py: Python<'_>, error: &PyErr) -> bool {
+    error
+        .value(py)
+        .getattr_opt(SETTINGS_ERROR_MARKER)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 impl PythonBinding for OcrPythonHost {

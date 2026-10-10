@@ -40,33 +40,23 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
-from litellm.tracing.config import trace_storage_config
+from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
 from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_loads_tracing_url_and_retention_from_yaml(tmp_path, monkeypatch) -> None:
+async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) -> None:
     config_file: Final = tmp_path / "tracing.yaml"
-    config_file.write_text(
-        "model_list: []\ngeneral_settings:\n  tracing:\n    store:\n"
-        "      type: clickhouse\n      url: os.environ/TRACING_TEST_URL\n"
-        "      database: analytics\n      retention_days: 7\n"
-    )
-    monkeypatch.setenv("TRACING_TEST_URL", "http://localhost:8123")
-    monkeypatch.setenv("CLICKHOUSE_URL", "http://unused:8123")
+    config_file.write_text("model_list: []\ngeneral_settings:\n  tracing:\n    store:\n      type: lens\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
-    tracing = trace_storage_config(settings["tracing"])
-    assert (tracing.url, tracing.database, tracing.retention_days) == (
-        "http://localhost:8123",
-        "analytics",
-        7,
-    )
+    assert is_lens_tracing_enabled(settings["tracing"], {}) is True
+
 
 
 @pytest.mark.asyncio
