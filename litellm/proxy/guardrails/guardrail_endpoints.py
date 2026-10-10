@@ -143,14 +143,17 @@ def _get_guardrails_list_response(
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        guardrail_configs.append(
-            GuardrailInfoResponse(
-                guardrail_id=guardrail.get("guardrail_id"),
-                guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=with_tolerated_stream_scope(masked_params),
-                guardrail_info=guardrail.get("guardrail_info"),
-            )
+        guardrail_info_response = GuardrailInfoResponse(
+            guardrail_id=guardrail.get("guardrail_id"),
+            guardrail_name=guardrail.get("guardrail_name"),
+            guardrail_info=guardrail.get("guardrail_info"),
         )
+        guardrail_info_response.litellm_params = parse_tolerant_litellm_params(
+            with_tolerated_stream_scope(masked_params),
+            guardrail_info_response.guardrail_name,
+            params_model=BaseLitellmParams,
+        )
+        guardrail_configs.append(guardrail_info_response)
     return ListGuardrailsResponse(guardrails=guardrail_configs)
 
 
