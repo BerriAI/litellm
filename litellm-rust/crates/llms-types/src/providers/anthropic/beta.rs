@@ -380,12 +380,10 @@ impl fmt::Display for BetaSet {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
+    use super::*;
     use indexmap::IndexMap;
     use rstest::rstest;
-
-    use super::*;
+    use std::collections::BTreeSet;
 
     fn beta_headers_config() -> IndexMap<String, serde_json::Value> {
         serde_json::from_str(include_str!(

@@ -178,10 +178,9 @@ pub struct ChatCompletionChunk {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use strum::VariantArray;
-
-    use super::*;
 
     #[rstest]
     fn reasoning_effort_names_match_the_wire_and_parse_back(
