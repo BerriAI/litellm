@@ -13,6 +13,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
 import type { SystemOneResponse } from "./lib/schemas";
 
+interface ModelGroupInfo {
+  model_group: string;
+  mode: string;
+}
+
+const DECISION_AND_CHAT_MODELS: ModelGroupInfo[] = [
+  { model_group: "gpt-5.5", mode: "chat" },
+  { model_group: "jev-latest", mode: "evaluation" },
+  { model_group: "pplx-decider", mode: "evaluation" },
+];
+
 const responseBody: SystemOneResponse = {
   model: "jev-1.13.0",
   answers: {
@@ -32,6 +43,21 @@ const render = (ui: ReactElement) =>
     </QueryClientProvider>,
   );
 
+const modelGroupInfoResponse = (groups: ModelGroupInfo[]) =>
+  ({ ok: true, status: 200, text: async () => JSON.stringify({ data: groups }) }) as Response;
+
+const EXPIRED_KEY_RESPONSE = {
+  ok: false,
+  status: 401,
+  text: async () =>
+    JSON.stringify({ error: { message: "Authentication Error - Expired Key.", type: "expired_key", code: "401" } }),
+} as Response;
+
+const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/model_group/info");
+
+const lookupAuthHeaders = (calls: Parameters<typeof fetch>[]) =>
+  calls.map(([, init]) => Object.values((init?.headers ?? {}) as Record<string, string>));
+
 const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =>
   ({
     ok: status >= 200 && status < 300,
@@ -41,17 +67,23 @@ const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =
 
 describe("SystemOneUI integration", () => {
   const mockFetch = vi.fn<typeof fetch>();
+  const mockModelLookup = vi.fn<typeof fetch>();
 
   beforeEach(() => {
     sessionStorage.clear();
     mockFetch.mockReset();
-    vi.stubGlobal("fetch", mockFetch);
+    mockModelLookup.mockReset();
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+      isModelLookup(input) ? mockModelLookup(input, init) : mockFetch(input, init),
+    );
     mockFetch.mockResolvedValue(createResponse(responseBody));
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse([]));
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     sessionStorage.clear();
+    document.cookie = "token=; path=/; max-age=0";
   });
 
   it("restores the example after the request is edited", async () => {
@@ -80,11 +112,115 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("note", { name: "Decision endpoint notice" })).toHaveTextContent(
       "omit model to use the proxy's configured default.",
     );
+    expect(screen.getByRole("link", { name: "How to call /v1/decisions and /v1/systemone" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
+    );
     expect(screen.getByRole("link", { name: "Give us feedback on what you want for decision models" })).toHaveAttribute(
       "href",
       "https://github.com/BerriAI/litellm/discussions/44231",
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("opens on /v1/systemone with the first decision model the key can call", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+
+    expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer session-key"])]);
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/systemone$/);
+    expect(mockFetch.mock.calls[0]?.[0]).not.toMatch(/typesafe/);
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      model: "jev-latest",
+      questions: { has_repro_steps: { type: "noul" } },
+    });
+  });
+
+  it("offers only decision models and writes the picked one into the request", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+    const picker = await screen.findByRole("combobox", { name: "Decision model" });
+
+    await user.clear(picker);
+    await user.type(picker, "p");
+    expect(await screen.findByRole("option", { name: "pplx-decider" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "gpt-5.5" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "pplx-decider" }));
+
+    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).toMatchObject({
+      model: "pplx-decider",
+      questions: { has_repro_steps: { type: "noul" } },
+    });
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
+  });
+
+  it("links to Add Model when the key cannot call any decision model", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+
+    expect(await screen.findByRole("link", { name: "Add a decision model" })).toHaveAttribute(
+      "href",
+      "/ui/models-and-endpoints",
+    );
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveAttribute(
+      "placeholder",
+      "No decision models yet",
+    );
+  });
+
+  it("looks up a typed virtual key's decision models once, after typing settles", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+
+    await user.type(screen.getByLabelText("Virtual Key", { exact: true }), "sk-typed-key");
+
+    expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer sk-typed-key"])]);
+  });
+
+  it("keeps the admin signed in when a typed virtual key has expired", async () => {
+    document.cookie = "token=ui-session; path=/";
+    mockModelLookup.mockResolvedValue(EXPIRED_KEY_RESPONSE);
+    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+
+    fireEvent.change(screen.getByLabelText("Virtual Key", { exact: true }), { target: { value: "sk-expired" } });
+
+    await waitFor(() => expect(mockModelLookup).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.cookie).toContain("token=ui-session");
+    expect(screen.getByRole("combobox", { name: "Decision endpoint" })).toHaveTextContent("/typesafe/v1/systemone");
+  });
+
+  it("keeps an edited TypeSafe request in place when decision models load afterwards", async () => {
+    const models = Promise.withResolvers<Response>();
+    mockModelLookup.mockReturnValue(models.promise);
+    render(<SystemOneUI accessToken="session-key" />);
+    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const draft = JSON.stringify({ state: "edited", questions: { q: { type: "noul", instructions: "Yes?" } } });
+    fireEvent.change(editor, { target: { value: draft } });
+
+    await act(async () => {
+      models.resolve(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(editor).toHaveValue(draft);
+    expect(screen.queryByRole("combobox", { name: "Decision model" })).not.toBeInTheDocument();
   });
 
   it("shows invalid JSON and disables Send", async () => {
