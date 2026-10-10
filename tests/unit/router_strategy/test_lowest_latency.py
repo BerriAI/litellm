@@ -8,12 +8,15 @@ import copy
 import json
 import sys
 from datetime import datetime, timedelta
+from typing import Final
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
 
@@ -29,7 +32,7 @@ KWARGS = {
 }
 
 
-def _embedding_response():
+def _embedding_response() -> litellm.EmbeddingResponse:
     return litellm.EmbeddingResponse(
         model="gemini-embedding-001",
         data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
@@ -94,7 +97,7 @@ async def test_async_embedding_latency_is_json_serializable():
     json.dumps({"latency": latencies})
 
 
-def _chat_response(completion_tokens: int):
+def _chat_response(completion_tokens: int) -> litellm.ModelResponse:
     return litellm.ModelResponse(
         model="gpt-4o-mini",
         choices=[
@@ -1187,3 +1190,274 @@ def test_list_order_preserved_after_multiple_trims():
 
     for i, expected in enumerate(expected_remaining):
         assert abs(latency_list[i] - expected) < tolerance, f"At index {i}, expected ~{expected}, got {latency_list[i]}"
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_usage_limits_filter_sync_and_async_logging(async_mode: bool) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    model_group: Final = "usage-limits"
+    deployments: Final = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-4o-mini", "rpm": 1},
+            "model_info": {"id": "rpm-limited"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-4o-mini", "tpm": 1},
+            "model_info": {"id": "tpm-limited"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "rpm": 3,
+                "tpm": 1000,
+            },
+            "model_info": {"id": "available"},
+        },
+    ]
+    response: Final = _chat_response(completion_tokens=4)
+
+    log_kwargs: Final = tuple(
+        {
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": deployment_id},
+            }
+        }
+        for deployment_id in ("rpm-limited", "tpm-limited")
+    )
+    for kwargs in log_kwargs:
+        if async_mode:
+            await handler.async_log_success_event(
+                kwargs=kwargs,
+                response_obj=response,
+                start_time=FROZEN_EPOCH,
+                end_time=FROZEN_EPOCH + 1,
+            )
+        else:
+            handler.log_success_event(
+                kwargs=kwargs,
+                response_obj=response,
+                start_time=FROZEN_EPOCH,
+                end_time=FROZEN_EPOCH + 1,
+            )
+
+    selected: Final = (
+        await handler.async_get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "check"}],
+        )
+        if async_mode
+        else handler.get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "check"}],
+        )
+    )
+    assert selected is not None
+    assert selected["model_info"]["id"] == "available"
+
+    blocked: Final = (
+        await handler.async_get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments[:2],
+            messages=[{"role": "user", "content": "check"}],
+        )
+        if async_mode
+        else handler.get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments[:2],
+            messages=[{"role": "user", "content": "check"}],
+        )
+    )
+    assert blocked is None
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+async def test_router_uses_lowest_latency_deployment() -> None:
+    model_group: Final = "latency-routing"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": _chat_response(completion_tokens=4),
+                },
+                "model_info": {"id": "slow"},
+            },
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": _chat_response(completion_tokens=4),
+                },
+                "model_info": {"id": "fast"},
+            },
+        ],
+        routing_strategy="latency-based-routing",
+        num_retries=0,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "slow"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 10,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "fast"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 1,
+    )
+
+    selected: Final = router.get_available_deployment(model=model_group)
+    response: Final = await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "latency check"}],
+    )
+
+    assert selected["model_info"]["id"] == "fast"
+    assert response._hidden_params["model_id"] == "fast"
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+async def test_router_streaming_uses_lowest_latency_deployment() -> None:
+    model_group: Final = "streaming-latency-routing"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": "Hello world",
+                },
+                "model_info": {"id": "slow"},
+            },
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": "Hello world",
+                },
+                "model_info": {"id": "fast"},
+            },
+        ],
+        routing_strategy="latency-based-routing",
+        num_retries=0,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "slow"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 10,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "fast"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 1,
+    )
+    selected: Final = router.get_available_deployment(model=model_group)
+    response: Final = await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "streaming latency check"}],
+        stream=True,
+    )
+    chunks: Final = tuple([chunk async for chunk in response])
+
+    assert selected["model_info"]["id"] == "fast"
+    assert response._hidden_params["model_id"] == "fast"
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in chunks
+    ) == "Hello world"
+
+
+def test_latency_cache_honors_custom_ttl() -> None:
+    clock: Final = Mock(return_value=100.0)
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    handler: Final = LowestLatencyLoggingHandler(
+        router_cache=cache, routing_args={"ttl": 3}
+    )
+
+    handler.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": "ttl-group"},
+                "model_info": {"id": "deployment"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=100.0,
+        end_time=101.0,
+    )
+
+    latency_key: Final = "ttl-group_map"
+    cached: Final = cache.get_cache(key=latency_key)
+    assert isinstance(cached, dict)
+    assert cached["deployment"]["latency"] == [1.0]
+    assert cache.in_memory_cache.ttl_dict[latency_key] == 103.0
+
+    clock.return_value = 104.0
+    assert cache.get_cache(key=latency_key) is None
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+async def test_router_model_group_usage_increases_by_logged_tokens() -> None:
+    model_group: Final = "usage-group"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "tpm": 100,
+                    "mock_response": _chat_response(completion_tokens=5),
+                },
+                "model_info": {"id": "usage-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "usage check"}],
+    )
+    initial_usage: Final = await router.get_model_group_usage(model_group=model_group)
+    await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "usage check"}],
+    )
+    updated_usage: Final = await router.get_model_group_usage(model_group=model_group)
+
+    assert updated_usage[0] == initial_usage[0] + 15

@@ -1,7 +1,12 @@
+import json
+from typing import Final, cast
+
 import httpx
+import pytest
 import respx
 
 import litellm
+from litellm.types.utils import ModelResponse
 
 msg1 = [{"role": "user", "content": "hi 1"}]
 msg2 = [{"role": "user", "content": "hi 2"}]
@@ -39,3 +44,123 @@ def test_batch_completion_return_exceptions_true(respx_mock: respx.MockRouter):
             litellm.exceptions.InternalServerError,
         ),
     ), f"Expected AuthenticationError or InternalServerError, got {type(res[0])}"
+
+
+def test_batch_completion_returns_one_response_per_message(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-batch",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "batch answer"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    responses: Final[list[ModelResponse]] = cast(
+        list[ModelResponse],
+        litellm.batch_completion(
+            model="openai/gpt-4o-mini",
+            messages=[
+                [{"role": "user", "content": "first prompt"}],
+                [{"role": "user", "content": "second prompt"}],
+            ],
+            api_key="test-key",
+            max_workers=1,
+        ),
+    )
+
+    request_bodies: Final = tuple(json.loads(call.request.content) for call in route.calls)
+    assert route.call_count == 2
+    assert tuple(body["messages"][0]["content"] for body in request_bodies) == (
+        "first prompt",
+        "second prompt",
+    )
+    assert tuple(response.choices[0].message.content for response in responses) == (
+        "batch answer",
+        "batch answer",
+    )
+
+
+def _chat_reply(content: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-deployment",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def test_completion_with_model_list_returns_the_first_deployment_that_succeeds(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    failing: Final = respx_mock.post("https://failing.deployment.test/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+    )
+    healthy: Final = respx_mock.post("https://healthy.deployment.test/v1/chat/completions").mock(
+        return_value=_chat_reply("from the healthy deployment")
+    )
+    other_group: Final = respx_mock.post("https://other-group.deployment.test/v1/chat/completions").mock(
+        return_value=_chat_reply("from another model group")
+    )
+    model_list: Final = [
+        {
+            "model_name": "mistral-7b-instruct",
+            "litellm_params": {
+                "model": "openai/failing-model",
+                "api_base": "https://failing.deployment.test/v1",
+                "api_key": "failing-key",
+            },
+        },
+        {
+            "model_name": "mistral-7b-instruct",
+            "litellm_params": {
+                "model": "openai/healthy-model",
+                "api_base": "https://healthy.deployment.test/v1",
+                "api_key": "healthy-key",
+            },
+        },
+        {
+            "model_name": "another-group",
+            "litellm_params": {
+                "model": "openai/other-model",
+                "api_base": "https://other-group.deployment.test/v1",
+                "api_key": "other-key",
+            },
+        },
+    ]
+
+    response: Final = cast(
+        ModelResponse,
+        litellm.completion(
+            model="mistral-7b-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            model_list=model_list,
+            max_retries=0,
+        ),
+    )
+
+    assert response.choices[0].message.content == "from the healthy deployment"
+    assert (failing.call_count, healthy.call_count, other_group.call_count) == (1, 1, 0)
+    assert json.loads(healthy.calls[0].request.content)["model"] == "healthy-model"
+    assert healthy.calls[0].request.headers["authorization"] == "Bearer healthy-key"

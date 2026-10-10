@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import Final, cast
@@ -5,9 +6,12 @@ from unittest.mock import AsyncMock, patch
 
 import litellm
 import pytest
+import redis.exceptions
 from fastapi.testclient import TestClient
 
 from litellm._service_logger import ServiceLogging
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.prometheus_services import (
     PrometheusServicesLogger,
     ServiceMetrics,
@@ -243,6 +247,34 @@ async def test_service_logger_db_monitoring_failure():
         assert actual_payload.call_type == "query"
         assert actual_payload.is_error is True
         assert actual_payload.error == "Database connection failed"
+
+
+class _RefusingRedis:
+    async def set(self, name: str, value: str, nx: bool, ex: int | None) -> bool:
+        raise redis.exceptions.ConnectionError("connection refused")
+
+
+@pytest.mark.asyncio
+async def test_completion_with_caching_bad_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    service_logger: Final = ServiceLogging(mock_testing=True)
+    service_logger.prometheusServicesLogger.mock_testing = True
+    cache: Final = RedisCache(host="redis.invalid", port=6379, service_logger_obj=service_logger)
+    client_cache.set_cache(key=cache._get_async_client_cache_key(), value=_RefusingRedis())
+
+    await cache.async_set_cache("bad-call-key", "value")
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+    assert service_logger.mock_testing_async_failure_hook >= 1
+    assert (
+        service_logger.prometheusServicesLogger.mock_testing_failure_calls
+        == service_logger.mock_testing_async_failure_hook
+    )
+    assert service_logger.mock_testing_async_success_hook == 0
+    assert service_logger.prometheusServicesLogger.mock_testing_success_calls == 0
 
 
 def test_get_metric_existing():

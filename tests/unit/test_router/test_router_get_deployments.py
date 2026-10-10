@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from typing import Final
+import asyncio
+import os
+import random
+import traceback
+from collections import defaultdict
+from typing import Final, Literal
 
 import pytest
 
 import litellm
 from litellm import Router
-import os
-import traceback
-from collections import defaultdict
 
 
 @pytest.mark.asyncio
@@ -272,3 +274,107 @@ def test_filter_pass_through_deployments():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
+
+
+async def _weighted_async_deployment_ids(router: Router) -> tuple[str, ...]:
+    random.seed(2025)
+    deployments: Final = tuple(
+        [
+            await router.async_get_available_deployment(
+                model="shared", messages=None, request_kwargs={}
+            )
+            for _ in range(1000)
+        ]
+    )
+    return tuple(deployment["model_info"]["id"] for deployment in deployments)
+
+
+@pytest.mark.parametrize(
+    ("metric", "placement", "async_selection"),
+    [
+        pytest.param("rpm", "deployment", False, id="rpm-deployment"),
+        pytest.param("rpm", "deployment", True, id="rpm-async"),
+        pytest.param("rpm", "router", False, id="rpm-router"),
+        pytest.param("tpm", "deployment", False, id="tpm-deployment"),
+        pytest.param("tpm", "router", False, id="tpm-router"),
+    ],
+)
+def test_weighted_selection_router(
+    metric: Literal["rpm", "tpm"],
+    placement: Literal["deployment", "router"],
+    async_selection: bool,
+) -> None:
+    random.seed(2025)
+    low_limit, high_limit = (6, 1440) if metric == "rpm" else (5, 90)
+    low_params: Final = {"model": "openai/low", "api_key": "test-key"} | (
+        {metric: low_limit} if placement == "deployment" else {}
+    )
+    high_params: Final = {"model": "openai/high", "api_key": "test-key"} | (
+        {metric: high_limit} if placement == "deployment" else {}
+    )
+    low_deployment: Final = {
+        "model_name": "shared",
+        "litellm_params": low_params,
+        "model_info": {"id": "low"},
+    } | ({metric: low_limit} if placement == "router" else {})
+    high_deployment: Final = {
+        "model_name": "shared",
+        "litellm_params": high_params,
+        "model_info": {"id": "high"},
+    } | ({metric: high_limit} if placement == "router" else {})
+    router: Final = Router(model_list=[low_deployment, high_deployment])
+    selected_ids: Final = (
+        asyncio.run(_weighted_async_deployment_ids(router))
+        if async_selection
+        else tuple(
+            router.get_available_deployment("shared")["model_info"]["id"]
+            for _ in range(1000)
+        )
+    )
+
+    assert selected_ids.count("high") / len(selected_ids) > 0.89
+
+
+def test_weighted_selection_router_no_rpm_set() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "shared",
+                "litellm_params": {"model": "openai/low", "api_key": "test-key"},
+                "model_info": {"id": "low"},
+            },
+            {
+                "model_name": "shared",
+                "litellm_params": {"model": "openai/high", "api_key": "test-key"},
+                "model_info": {"id": "high"},
+            },
+            {
+                "model_name": "unrelated",
+                "litellm_params": {"model": "openai/unrelated", "api_key": "test-key"},
+                "model_info": {"id": "unrelated"},
+            },
+        ]
+    )
+    selected_ids: Final = tuple(
+        router.get_available_deployment("shared")["model_info"]["id"]
+        for _ in range(100)
+    )
+
+    assert set(selected_ids) == {"low", "high"}
+
+
+def test_model_group_aliases_select_the_target_group() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "target",
+                "litellm_params": {"model": "openai/target", "api_key": "test-key"},
+                "model_info": {"id": "target-deployment"},
+            }
+        ],
+        model_group_alias={"alias": "target"},
+    )
+    deployment: Final = router.get_available_deployment("alias")
+
+    assert deployment["model_name"] == "target"
+    assert deployment["model_info"]["id"] == "target-deployment"

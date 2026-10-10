@@ -29,11 +29,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _MIGRATED_FILES = (
     "tests/llm_translation/test_triton.py",
-    "tests/local_testing/test_router.py",
-    "tests/local_testing/test_router_custom_routing.py",
-    "tests/local_testing/test_router_fallbacks.py",
-    "tests/local_testing/test_secret_detect_hook.py",
-    "tests/local_testing/test_lowest_latency_routing.py",
     "tests/local_testing/test_completion.py",
 )
 
