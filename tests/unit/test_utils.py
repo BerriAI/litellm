@@ -99,6 +99,7 @@ from litellm.utils import (
     async_post_call_success_deployment_hook,
     calculate_max_parallel_requests,
     client,
+    extract_duration_from_srt_or_vtt,
     get_non_default_completion_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
@@ -206,6 +207,33 @@ def test_litellm_proxy_responses_api_config_manager_returns_proxy_config() -> No
 
 
 # Adds the parent directory to the system path
+
+
+@pytest.mark.parametrize(
+    ("subtitle", "expected_duration"),
+    (
+        ("1\n01:01:01,000 --> 01:01:12,500\nHello\n", 3672.5),
+        ("WEBVTT\n\n00:01.500 --> 00:02.000\nHello\n", 2.0),
+        ("WEBVTT\n\n59:59.000 --> 01:00:02.500 align:start\nHello\n", 3602.5),
+        ("WEBVTT\n\n100:00:00.000 --> 100:00:02.000\nHello\n", 360002.0),
+        ("1\n00:00:00,000 --> 00:00:03,000\nThe timecode is 99:00:00.000\n", 3.0),
+        ("WEBVTT\n\n00:00.000 --> 00:05.000\nHello\n\n00:03.000 --> 00:04.000\nWorld\n", 5.0),
+        ("", None),
+        ("The timecode is 00:00:12.500", None),
+    ),
+    ids=(
+        "srt-hours",
+        "vtt-no-hours",
+        "vtt-mixed-hours",
+        "vtt-long-hours",
+        "payload-timecode",
+        "overlap",
+        "empty",
+        "text",
+    ),
+)
+def test_subtitle_duration_uses_the_latest_cue_end_time(subtitle: str, expected_duration: float | None) -> None:
+    assert extract_duration_from_srt_or_vtt(subtitle) == expected_duration
 
 
 def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pytest.MonkeyPatch) -> None:

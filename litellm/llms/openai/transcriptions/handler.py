@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -128,7 +129,15 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
         else:
-            stringified_response = TranscriptionResponse(text=response).model_dump()
+            duration: Final = (
+                extract_duration_from_srt_or_vtt(response)
+                if data.get("response_format") in SUBTITLE_RESPONSE_FORMATS
+                else None
+            )
+            stringified_response = {
+                **TranscriptionResponse(text=response).model_dump(),
+                **({"_audio_transcription_duration": duration} if duration is not None else {}),
+            }
 
         ## LOGGING
         logging_obj.post_call(
