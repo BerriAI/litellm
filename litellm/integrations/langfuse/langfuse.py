@@ -129,11 +129,14 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
     if value is None and isinstance(usage_obj, dict):
         value = usage_obj.get(standard_name)  # rebind-ok: staged fallback lookup
     if value is None and decision_name is not None:
-        value = getattr(usage_obj, decision_name, None)  # rebind-ok: staged fallback lookup
+        if isinstance(usage_obj, dict):
+            value = usage_obj.get(decision_name)  # rebind-ok: staged fallback lookup
+        else:
+            value = getattr(usage_obj, decision_name, None)  # rebind-ok: staged fallback lookup
     return value or 0
 
 
-def _extract_cache_read_input_tokens(usage_obj) -> int:
+def _extract_cache_read_input_tokens(usage_obj: object) -> int:
     """
     Extract cache_read_input_tokens from usage object.
 
