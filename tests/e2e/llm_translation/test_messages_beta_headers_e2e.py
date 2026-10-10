@@ -1,8 +1,8 @@
-import json
 from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 from anthropic.types import TextBlock, ToolUnionParam
 from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
@@ -16,11 +16,13 @@ pytestmark = pytest.mark.e2e
 _BETA_CONFIG: Final = Path(__file__).resolve().parents[3] / "litellm" / "anthropic_beta_headers_config.json"
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"
 _BEDROCK_MODEL_ID: Final = "us.anthropic.claude-fable-5-1"
+_BETA_CONFIG_FILE: Final = TypeAdapter(dict[str, JsonValue])
+_BETA_MAPPING: Final = TypeAdapter(dict[str, str | None])
 _CODE_EXECUTION: Final[ToolUnionParam] = {"type": "code_execution_20250825", "name": "code_execution"}
 
 
 def _mapped_beta_headers(provider: str) -> str:
-    mapping: Final = json.loads(_BETA_CONFIG.read_text())[provider]
+    mapping: Final = _BETA_MAPPING.validate_python(_BETA_CONFIG_FILE.validate_json(_BETA_CONFIG.read_text())[provider])
     return ",".join(name for name, value in mapping.items() if value is not None)
 
 

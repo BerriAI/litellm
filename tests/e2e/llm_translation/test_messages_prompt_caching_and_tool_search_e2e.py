@@ -130,7 +130,7 @@ def test_bedrock_messages_prompt_caching_creates_cache(
     )
 
     assert message.role == "assistant", f"unexpected role: {message.role!r}"
-    assert message.usage.cache_creation_input_tokens > 0 or message.usage.cache_read_input_tokens > 0, (
+    assert (message.usage.cache_creation_input_tokens or 0) > 0 or (message.usage.cache_read_input_tokens or 0) > 0, (
         f"prompt cache was not created or read: {message.usage!r}"
     )
 
@@ -159,7 +159,7 @@ def test_bedrock_messages_prompt_caching_reads_cache_on_second_call(
     client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
     message = client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
 
-    assert message.usage.cache_read_input_tokens > 0, f"cache read was not reported: {message.usage!r}"
+    assert (message.usage.cache_read_input_tokens or 0) > 0, f"cache read was not reported: {message.usage!r}"
 
 
 @pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
@@ -192,7 +192,7 @@ def test_bedrock_messages_streaming_prompt_caching_reads_cache(
     ) as stream:
         message: Final = stream.get_final_message()
 
-    assert message.usage.cache_read_input_tokens > 0, f"streaming cache read was not reported: {message.usage!r}"
+    assert (message.usage.cache_read_input_tokens or 0) > 0, f"streaming cache read was not reported: {message.usage!r}"
     assert _message_text(message).strip(), f"streaming response contained no text: {message.content!r}"
 
 
