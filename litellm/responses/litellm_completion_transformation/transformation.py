@@ -1648,7 +1648,7 @@ class LiteLLMCompletionResponsesConfig:
                     # Ensure we include any accumulated text as text blocks too
                     return normalized_blocks
                 if text_acc:
-                    return "".join(text_acc)
+                    return "\n".join(text_acc)
                 try:
                     # last resort: keep something meaningful for providers that require a string
                     import json as _json
