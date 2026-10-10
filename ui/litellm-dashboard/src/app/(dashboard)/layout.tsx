@@ -1,6 +1,7 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
@@ -115,6 +116,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [mobileNavigationKey, setMobileNavigationKey] = useState<string | null>(null);
+  const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
   if (mobileNavigationKey !== null && (isDesktop || mobileNavigationKey !== navigationKey)) {
     setMobileNavigationKey(null);
   }
@@ -152,11 +154,15 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // sidebar owns its own scroll and the content column scrolls independently,
   // so the page can't be dragged past the end of the nav.
   return (
-    <Sheet open={mobileNavigationOpen} onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}>
-      <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
-        <div className="hidden h-full md:flex">
-          <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
-        </div>
+    <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
+      <div className="hidden h-full md:flex">
+        <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
+      </div>
+      <Sheet
+        handle={mobileNavigationHandle}
+        open={mobileNavigationOpen}
+        onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
+      >
         <SheetContent
           side="left"
           showCloseButton={false}
@@ -168,32 +174,33 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
         </SheetContent>
-        <LiteAdminFrame>
-          <CommandPaletteProvider>
-            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-              <DashboardHeader
-                navigationTrigger={
-                  <SheetTrigger
-                    render={
-                      <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
-                    }
-                  >
-                    <Menu />
-                  </SheetTrigger>
-                }
-              />
-              <DebugWarningBanner accessToken={accessToken} />
-              <NoRedisWarningBanner accessToken={accessToken} />
-              <EnvCredentialLoginWarningBanner accessToken={accessToken} />
-              <LicenseExpiryBanner accessToken={accessToken} />
-              <UserBanner accessToken={accessToken} />
-              <UpgradeBanner accessToken={accessToken} />
-              <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
-            </div>
-          </CommandPaletteProvider>
-        </LiteAdminFrame>
-      </div>
-    </Sheet>
+      </Sheet>
+      <LiteAdminFrame>
+        <CommandPaletteProvider>
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <DashboardHeader
+              navigationTrigger={
+                <SheetTrigger
+                  handle={mobileNavigationHandle}
+                  render={
+                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                  }
+                >
+                  <Menu />
+                </SheetTrigger>
+              }
+            />
+            <DebugWarningBanner accessToken={accessToken} />
+            <NoRedisWarningBanner accessToken={accessToken} />
+            <EnvCredentialLoginWarningBanner accessToken={accessToken} />
+            <LicenseExpiryBanner accessToken={accessToken} />
+            <UserBanner accessToken={accessToken} />
+            <UpgradeBanner accessToken={accessToken} />
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
+          </div>
+        </CommandPaletteProvider>
+      </LiteAdminFrame>
+    </div>
   );
 }
 

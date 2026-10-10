@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, renderWithProviders as render, screen, waitFor, within } from "../../../tests/test-utils";
 import { usePathname } from "next/navigation";
+import userEvent from "@testing-library/user-event";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import Layout from "./layout";
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
@@ -94,6 +104,65 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
 
+  it.each([
+    {
+      name: "dialog",
+      role: "dialog",
+      slot: "dialog-overlay",
+      page: (
+        <Dialog>
+          <DialogTrigger>Open page overlay</DialogTrigger>
+          <DialogContent showCloseButton={false}>
+            <DialogTitle>Page overlay</DialogTitle>
+            <DialogClose>Close page overlay</DialogClose>
+          </DialogContent>
+        </Dialog>
+      ),
+    },
+    {
+      name: "alert dialog",
+      role: "alertdialog",
+      slot: "alert-dialog-overlay",
+      page: (
+        <AlertDialog>
+          <AlertDialogTrigger>Open page overlay</AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogTitle>Page overlay</AlertDialogTitle>
+            <AlertDialogCancel>Close page overlay</AlertDialogCancel>
+          </AlertDialogContent>
+        </AlertDialog>
+      ),
+    },
+    {
+      name: "sheet",
+      role: "dialog",
+      slot: "sheet-overlay",
+      page: (
+        <Sheet>
+          <SheetTrigger>Open page overlay</SheetTrigger>
+          <SheetContent showCloseButton={false}>
+            <SheetTitle>Page overlay</SheetTitle>
+            <SheetClose>Close page overlay</SheetClose>
+          </SheetContent>
+        </Sheet>
+      ),
+    },
+  ])("should display the page $name backdrop while navigation is closed", async ({ role, slot, page }) => {
+    render(
+      <AuthProvider>
+        <Layout>{page}</Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open page overlay" }));
+    await screen.findByRole(role, { name: "Page overlay" });
+    expect(
+      screen.getAllByRole("presentation", { hidden: true }).find((element) => element.dataset.slot === slot),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close page overlay" }));
+  });
+
   it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
     render(
       <AuthProvider>
@@ -133,6 +202,24 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
     rerender(dashboard());
     expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+  });
+
+  it("should return focus to the navigation trigger after closing the drawer with Escape", async () => {
+    const user = userEvent.setup();
+    render(
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
+
+    const trigger = await screen.findByRole("button", { name: "Open navigation" });
+    await user.click(trigger);
+    await screen.findByRole("dialog", { name: "Navigation" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
