@@ -4,12 +4,13 @@ Tests for RAG proxy endpoints.
 
 import io
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from pydantic import TypeAdapter
+import respx
 from fastapi.testclient import TestClient
 
 import litellm
@@ -17,11 +18,18 @@ from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from litellm.types.vector_stores import VectorStoreSearchResponse
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 _TEAM_PROVIDER_KEY: Final = "team-openai-key"
 _REGISTRY_PROVIDER_KEY: Final = "registry-openai-key"
 _TEAM_ID: Final = "team-a"
+_TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
+_REGISTRY_OPENAI_BASE: Final = "https://registry-openai.example/v1"
+_OPENAI_SEARCH_PAGE: Final = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+_BEDROCK_KNOWLEDGE_BASE_ID: Final = "KB12345678"
+_CALLER_AWS_ACCESS_KEY: Final = "caller-access-key"
+_TEAM_AWS_ACCESS_KEY: Final = "team-access-key"
 
 
 @pytest.fixture
@@ -104,8 +112,7 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
 
     # Should not be 403 (role check passed)
     assert response.status_code != 403, (
-        f"internal_user_viewer with vector_store_id should pass role check. "
-        f"Response: {response.json()}"
+        f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
     )
 
 
@@ -121,15 +128,12 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         response = client_internal_user.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-            data={
-                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-            },
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
         )
 
     # Should not be 403
     assert response.status_code != 403, (
-        f"internal_user should be allowed to create new vector stores. "
-        f"Response: {response.json()}"
+        f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
     )
 
 
@@ -177,13 +181,11 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             },
         },
     )
-    assert (
-        response.status_code == 400
-    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    assert response.status_code == 400, (
+        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    )
     body = response.json()
-    assert blocked_field in str(
-        body
-    ), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
 
 
 class TestRagIngestSSRFBlocked:
@@ -202,9 +204,7 @@ class TestRagIngestSSRFBlocked:
             ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
         ],
     )
-    def test_ssrf_field_in_vector_store_config_rejected(
-        self, field, value, client_internal_user
-    ):
+    def test_ssrf_field_in_vector_store_config_rejected(self, field, value, client_internal_user):
         payload = {
             "file_url": "https://example.com/doc.pdf",
             "ingest_options": {
@@ -224,9 +224,7 @@ class TestRagIngestSSRFBlocked:
         )
         body = response.json()
         detail = body.get("detail", {})
-        error_text = (
-            detail.get("error", "") if isinstance(detail, dict) else str(detail)
-        )
+        error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
         assert field in error_text, f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
@@ -239,14 +237,10 @@ class TestRagIngestSSRFBlocked:
                 "/v1/rag/ingest",
                 json={
                     "file_url": "https://example.com/doc.pdf",
-                    "ingest_options": {
-                        "vector_store": {"custom_llm_provider": "bedrock"}
-                    },
+                    "ingest_options": {"vector_store": {"custom_llm_provider": "bedrock"}},
                 },
             )
-        assert response.status_code != 400, (
-            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
-        )
+        assert response.status_code != 400, f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
 
 
 S3_REGISTRY_STORE = {
@@ -337,66 +331,77 @@ def _team_provider_router() -> Router:
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_key": _TEAM_PROVIDER_KEY,
-                    "api_base": "https://team-openai.example/v1",
+                    "api_base": _TEAM_OPENAI_BASE,
                 },
                 "model_info": {"team_id": _TEAM_ID},
             },
-            {
-                "model_name": "gpt-4o-mini",
-                "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
-                    "api_key": "completion-key",
-                    "mock_response": "hello",
-                },
-            },
+            _completion_deployment(),
         ]
     )
 
 
-def _managed_openai_store(vector_store_id: str, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+def _completion_deployment() -> dict[str, object]:
     return {
-        "vector_store_id": vector_store_id,
-        "custom_llm_provider": "openai",
-        "litellm_credential_name": None,
-        "litellm_params": dict(litellm_params),
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "completion-key",
+            "mock_response": "hello",
+        },
     }
 
 
-def _rag_query_search_kwargs(
-    client: TestClient,
-    *,
-    vector_store_id: str,
-    managed_store: Mapping[str, object] | None,
-    router: Router,
-) -> Mapping[str, object]:
-    mock_registry: Final = MagicMock()
-    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_store
-    fake_search: Final = AsyncMock(
-        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+def _team_bedrock_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock/team-provider",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-west-2",
+                    "aws_access_key_id": _TEAM_AWS_ACCESS_KEY,
+                    "aws_secret_access_key": "team-secret-key",
+                },
+                "model_info": {"team_id": _TEAM_ID},
+            },
+            _completion_deployment(),
+        ]
     )
 
+
+def _managed_openai_store(vector_store_id: str, litellm_params: Mapping[str, object]) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(
+        vector_store_id=vector_store_id,
+        custom_llm_provider="openai",
+        litellm_credential_name=None,
+        litellm_params=dict(litellm_params),
+    )
+
+
+def _post_rag_query(
+    client: TestClient,
+    *,
+    retrieval_config: Mapping[str, object],
+    managed_stores: Sequence[LiteLLM_ManagedVectorStore],
+    router: Router,
+) -> httpx.Response:
     with (
-        patch("litellm.vector_stores.asearch", new=fake_search),
-        patch.object(litellm, "vector_store_registry", mock_registry),
-        patch("litellm.proxy.proxy_server.llm_router", router),
-        patch(
-            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-            new=AsyncMock(return_value=True),
+        patch.object(  # test-quality-ok: seeds the real managed-store registry the query path reads
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(vector_stores=list(managed_stores)),
         ),
+        patch("litellm.proxy.proxy_server.llm_router", router),
         _patched_prisma_client(None),
     ):
-        response: Final = client.post(
+        return client.post(
             "/v1/rag/query",
             json={
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": "hello"}],
-                "retrieval_config": {"vector_store_id": vector_store_id, "custom_llm_provider": "openai"},
+                "retrieval_config": dict(retrieval_config),
             },
         )
-
-    assert response.status_code == 200, response.json()
-    fake_search.assert_awaited_once()
-    return TypeAdapter(dict[str, object]).validate_python(fake_search.await_args.kwargs)
 
 
 def test_rag_ingest_forwards_team_provider_credentials_without_persisting_them(client_team_a):
@@ -545,38 +550,99 @@ def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(
     managed_vector_store_table.create.assert_not_called()
 
 
-def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(client_team_a):
-    search_kwargs: Final = _rag_query_search_kwargs(
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
         client_team_a,
-        vector_store_id="provider-native-store",
-        managed_store=None,
+        retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+        managed_stores=(),
         router=_team_provider_router(),
     )
 
-    assert search_kwargs["api_key"] == _TEAM_PROVIDER_KEY
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
 
 
-def test_rag_query_managed_store_credentials_override_team_provider_credentials(client_team_a):
-    search_kwargs: Final = _rag_query_search_kwargs(
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_managed_store_credentials_override_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    search: Final = respx_mock.post(f"{_REGISTRY_OPENAI_BASE}/vector_stores/registry-store-with-key/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
         client_team_a,
-        vector_store_id="registry-store-with-key",
-        managed_store=_managed_openai_store("registry-store-with-key", {"api_key": _REGISTRY_PROVIDER_KEY}),
+        retrieval_config={"vector_store_id": "registry-store-with-key"},
+        managed_stores=(
+            _managed_openai_store(
+                "registry-store-with-key",
+                {"api_key": _REGISTRY_PROVIDER_KEY, "api_base": _REGISTRY_OPENAI_BASE},
+            ),
+        ),
         router=_team_provider_router(),
     )
 
-    assert search_kwargs["api_key"] == _REGISTRY_PROVIDER_KEY
-    assert search_kwargs["api_key"] != _TEAM_PROVIDER_KEY
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_REGISTRY_PROVIDER_KEY}"
 
 
-def test_rag_query_managed_store_without_credentials_uses_team_provider_credentials(client_team_a):
-    search_kwargs: Final = _rag_query_search_kwargs(
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_managed_store_without_credentials_uses_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/registry-store-without-key/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
         client_team_a,
-        vector_store_id="registry-store-without-key",
-        managed_store=_managed_openai_store("registry-store-without-key", {}),
+        retrieval_config={"vector_store_id": "registry-store-without-key"},
+        managed_stores=(_managed_openai_store("registry-store-without-key", {}),),
         router=_team_provider_router(),
     )
 
-    assert search_kwargs["api_key"] == _TEAM_PROVIDER_KEY
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_bedrock_search_keeps_the_callers_region_and_credentials_over_team_deployment(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", _CALLER_AWS_ACCESS_KEY)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "caller-secret-key")
+    for unset in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(unset, raising=False)
+    retrieve: Final = respx_mock.post(
+        url__regex=rf"^https://bedrock-agent-runtime\.[a-z0-9-]+\.amazonaws\.com/knowledgebases/{_BEDROCK_KNOWLEDGE_BASE_ID}/retrieve$"
+    ).respond(json={"retrievalResults": []})
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={
+            "vector_store_id": _BEDROCK_KNOWLEDGE_BASE_ID,
+            "custom_llm_provider": "bedrock",
+            "aws_region_name": "us-east-1",
+        },
+        managed_stores=(),
+        router=_team_bedrock_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert retrieve.call_count == 1
+    sent: Final = retrieve.calls.last.request
+    assert sent.url.host == "bedrock-agent-runtime.us-east-1.amazonaws.com"
+    assert f"Credential={_CALLER_AWS_ACCESS_KEY}/" in sent.headers["authorization"]
 
 
 def test_rag_ingest_resolves_registry_store_provider_and_params(client_internal_user):
@@ -962,12 +1028,14 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
     )
     mock_response._hidden_params["response_cost"] = 3.45e-06
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ), patch("litellm.vector_store_registry", None), patch(
-        "litellm.proxy.proxy_server.prisma_client", None
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1001,7 +1069,9 @@ def test_rag_query_surfaces_upstream_status_code(client_internal_user, upstream_
             new=AsyncMock(side_effect=upstream_error),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1038,10 +1108,14 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
             api_key="test-key",
         )
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new=AsyncMock(side_effect=fake_aquery),
-    ), patch("litellm.vector_store_registry", None), patch("litellm.proxy.proxy_server.prisma_client", None):
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fake_aquery),
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         response = client_internal_user.post(
             "/v1/rag/query",
             json={
@@ -1084,7 +1158,9 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
             new=AsyncMock(side_effect=slow_aquery),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1108,9 +1184,7 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
     assert response.text.endswith("data: [DONE]\n\n")
 
 
-def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(
-    client_internal_user, monkeypatch
-):
+def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(client_internal_user, monkeypatch):
     import litellm as litellm_module
 
     monkeypatch.setattr(litellm_module, "sse_keepalive_ping_interval_seconds", 5)
@@ -1132,7 +1206,9 @@ def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepal
             new=AsyncMock(side_effect=fast_aquery),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1184,13 +1260,17 @@ def test_rag_query_merges_managed_store_params(client_internal_user):
         model="gpt-4o-mini",
     )
 
-    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_aquery,
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1230,13 +1310,17 @@ def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_u
         model="gpt-4o-mini",
     )
 
-    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_aquery,
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1423,9 +1507,7 @@ class TestVectorStoreUploadControls:
             content=b"benign document text\n",
             content_type="text/plain",
         )
-        _options, file_data, _url, _file_id = await parse_rag_ingest_request(
-            request, scanner=EicarTestMalwareScanner()
-        )
+        _options, file_data, _url, _file_id = await parse_rag_ingest_request(request, scanner=EicarTestMalwareScanner())
         assert file_data is not None
         server_filename, content_bytes, secured_content_type = file_data
         assert server_filename != "../../etc/passwd"

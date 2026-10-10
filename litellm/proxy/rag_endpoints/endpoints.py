@@ -65,6 +65,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _TEAM_PROVIDER_CREDENTIALS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _EMPTY_TEAM_PROVIDER_CREDENTIALS: Final[Mapping[str, object]] = MappingProxyType({})
+_TEAM_CREDENTIAL_PROVIDER: Final = "openai"
 
 
 def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -217,15 +218,14 @@ def _team_provider_credentials(
     if any(key in effective_config for key in ("api_key", "api_base", "litellm_credential_name")):
         return _EMPTY_TEAM_PROVIDER_CREDENTIALS
 
-    custom_llm_provider: Final = effective_config.get("custom_llm_provider", "openai")
-    if not isinstance(custom_llm_provider, str):
+    if effective_config.get("custom_llm_provider", _TEAM_CREDENTIAL_PROVIDER) != _TEAM_CREDENTIAL_PROVIDER:
         return _EMPTY_TEAM_PROVIDER_CREDENTIALS
 
     validated_credentials: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(
         get_team_provider_credentials(
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=_TEAM_CREDENTIAL_PROVIDER,
         )
         or {}
     )
