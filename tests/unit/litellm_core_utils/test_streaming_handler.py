@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from collections.abc import AsyncIterator
 from typing import Final, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -6218,6 +6219,68 @@ def _last_chunk_carries_finish_reason_wrapper(
         logging_obj=logging_obj,
         custom_llm_provider="hosted_vllm",
     )
+
+
+@pytest.mark.parametrize("provider", ["openai", "hosted_vllm"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("finish_with_refusal", [True, False])
+@pytest.mark.asyncio
+async def test_stream_preserves_refusal_only_deltas(
+    provider: str, sync_mode: bool, finish_with_refusal: bool, logging_obj: Logging
+) -> None:
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+
+    refusal_parts: Final = ("I can't", " help", " with", " that.")
+
+    def sse_line(delta: dict[str, str], finish_reason: str | None = None) -> str:
+        payload: Final = {
+            "id": "chatcmpl-refusal",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "stream-test-model",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        return f"data: {json.dumps(payload)}"
+
+    refusal_lines: Final = tuple(
+        sse_line({"refusal": part}, "stop" if finish_with_refusal and index == len(refusal_parts) - 1 else None)
+        for index, part in enumerate(refusal_parts)
+    )
+    terminal_lines: Final = () if finish_with_refusal else (sse_line({}, "stop"),)
+    lines: Final = (
+        sse_line({"role": "assistant", "content": ""}),
+        *refusal_lines,
+        *terminal_lines,
+        "data: [DONE]",
+    )
+
+    async def async_lines() -> AsyncIterator[str]:
+        for line in lines:
+            yield line
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=OpenAIChatCompletionStreamingHandler(
+            streaming_response=iter(lines) if sync_mode else async_lines(), sync_stream=sync_mode
+        ),
+        model="stream-test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider=provider,
+    )
+    received: Final = tuple(response) if sync_mode else tuple([chunk async for chunk in response])
+    refusals: Final = tuple(
+        getattr(chunk.choices[0].delta, "refusal", None)
+        for chunk in received
+        if chunk.choices and getattr(chunk.choices[0].delta, "refusal", None) is not None
+    )
+    finishes: Final = tuple(
+        chunk.choices[0].finish_reason
+        for chunk in received
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    )
+
+    assert refusals == refusal_parts
+    assert finishes == ("stop",)
+    assert received[0].choices[0].delta.role == "assistant"
 
 
 @pytest.mark.parametrize("finish_reason", ["tool_calls", "length"])
