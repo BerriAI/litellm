@@ -2294,3 +2294,7 @@ HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
 )
 
 DEFAULT_TOOL_LOOP_MAX_ROUNDS: Final = 20
+
+# Sentinel for "this lookup path did not resolve", distinct from any caller-supplied
+# default, which may itself be None.
+NESTED_VALUE_MISSING_SENTINEL: Final = object()

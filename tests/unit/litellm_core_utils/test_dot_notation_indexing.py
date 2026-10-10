@@ -23,6 +23,60 @@ class TestGetNestedValue:
         data = {"a": {"b": {"c": "value"}}}
         assert get_nested_value(data, "a.b.c") == "value"
 
+    def test_nested_metadata_object_is_reachable(self):
+        """A token that really nests claims under `metadata` resolves.
+
+        The prefix used to be stripped before traversal, so `metadata.roles` was
+        looked up as `roles` and a genuinely nested claim read as missing. JWT auth
+        then fell back to its defaults, which for get_team_id means `team_id_default`
+        rather than the team the token named.
+        """
+        assert get_nested_value({"metadata": {"roles": ["admin"]}}, "metadata.roles") == ["admin"]
+
+    def test_top_level_claim_keeps_precedence_over_nested_metadata(self):
+        """A token carrying both shapes must resolve to the same team it always did.
+
+        Stripping the prefix before traversal meant the top-level claim won, so
+        that stays authoritative. Reading the nested value first would silently
+        move an existing deployment onto a different team.
+        """
+        data = {"metadata": {"roles": ["nested"]}, "roles": ["top-level"]}
+        assert get_nested_value(data, "metadata.roles") == ["top-level"]
+
+    def test_metadata_prefix_still_falls_back_to_top_level(self):
+        """The legacy spelling keeps working when there is no nested object."""
+        assert get_nested_value({"roles": ["admin"]}, "metadata.roles") == ["admin"]
+
+    def test_metadata_prefix_falls_back_to_a_default(self):
+        """With neither shape present the caller's default comes back unchanged."""
+        assert get_nested_value({"other": 1}, "metadata.roles", "fallback") == "fallback"
+
+    def test_metadata_prefix_applies_only_once(self):
+        """Only a leading `metadata.` is treated as a prefix.
+
+        `metadata.metadata.x` strips one segment, so a key literally named
+        `metadata` inside a `metadata` object is still reachable.
+        """
+        data = {"metadata": {"metadata": {"team_id": "team-1"}}}
+        assert get_nested_value(data, "metadata.metadata.team_id") == "team-1"
+
+    def test_nested_metadata_respects_the_default_type(self):
+        """The caller's default still governs type coercion on the nested read."""
+        data = {"metadata": {"team_id": "team-1"}}
+        assert get_nested_value(data, "metadata.team_id", "fallback") == "team-1"
+        assert get_nested_value(data, "metadata.team_id", 1234) == 1234, (
+            "a default of another type must make the nested value unusable here, "
+            "exactly as for a non-prefixed path"
+        )
+
+    def test_bare_metadata_key_is_untouched(self):
+        """A top-level key named `metadata` resolves as written."""
+        assert get_nested_value({"metadata": "value"}, "metadata") == "value"
+
+    def test_non_dict_metadata_is_not_read_as_a_nested_claim(self):
+        """A string `metadata` claim cannot hold a nested object, so the read falls through."""
+        assert get_nested_value({"metadata": "not-a-dict"}, "metadata.roles", "fallback") == "fallback"
+
     def test_missing_key_returns_default(self):
         """Test that missing keys return the default value."""
         data = {"a": {"b": "value"}}
