@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
+    duration_in_seconds_from,
     get_budget_window_start,
     get_next_standardized_reset_time,
 )
@@ -371,6 +372,34 @@ class TestGetBudgetWindowStart(unittest.TestCase):
             get_budget_window_start("1hr", datetime(2024, 1, 16, tzinfo=timezone.utc)),
             datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
+
+
+class TestDurationInSecondsFrom(unittest.TestCase):
+    def test_a_month_lasts_as_long_as_the_month_it_starts_in(self):
+        cases: Final = (
+            (datetime(2026, 1, 15, 12), "1mo", 31),
+            (datetime(2026, 2, 10, 12), "1mo", 28),
+            (datetime(2026, 1, 31, 12), "1mo", 28),
+            (datetime(2028, 1, 31, 12), "1mo", 29),
+            (datetime(2026, 12, 15, 12), "1mo", 31),
+            (datetime(2026, 1, 15, 12), "2mo", 59),
+        )
+        for start, duration, days in cases:
+            with self.subTest(start=start, duration=duration):
+                self.assertEqual(duration_in_seconds_from(start, duration), days * 86400)
+
+    def test_fixed_length_units_do_not_depend_on_the_start(self):
+        for duration in ("45s", "30m", "1h", "1d", "7d", "2w", "30d", "daily", "monthly"):
+            with self.subTest(duration=duration):
+                self.assertEqual(
+                    duration_in_seconds_from(datetime(2026, 2, 10, 12), duration),
+                    duration_in_seconds(duration),
+                )
+
+    def test_a_month_starting_now_matches_duration_in_seconds(self):
+        now: Final = datetime(2026, 1, 31, 9, 30, 0, 250000)
+        with patch.object(duration_parser.time_module, "time", return_value=now.timestamp()):
+            self.assertEqual(duration_in_seconds("1mo"), duration_in_seconds_from(now, "1mo"))
 
 
 if __name__ == "__main__":

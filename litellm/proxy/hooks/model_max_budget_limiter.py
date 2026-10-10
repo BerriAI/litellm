@@ -14,7 +14,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds, duration_in_seconds_from
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -303,7 +303,9 @@ def _readings(values: Sequence[float | None], window_count: int) -> tuple[_Windo
 def _window_reset_at(started_at: float | None, budget_duration: str | None, now: float) -> str | None:
     if started_at is None or budget_duration is None:
         return None
-    ends_at: Final = started_at + duration_in_seconds(budget_duration)
+    ends_at: Final = started_at + duration_in_seconds_from(
+        start=datetime.fromtimestamp(started_at), duration=budget_duration
+    )
     if ends_at <= now:
         return None
     return datetime.fromtimestamp(ends_at, tz=timezone.utc).isoformat()
