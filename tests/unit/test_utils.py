@@ -4278,6 +4278,67 @@ def test_gemini_3_flash_and_31_pro_preview_resolve_4096_cache_minimum(local_mode
     assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
 
 
+@pytest.mark.parametrize("provider_prefix", ["", "gemini/", "vertex_ai/"])
+@pytest.mark.parametrize(
+    "region_prefix",
+    [
+        "",
+        "au.",
+        "eu.",
+        "us.",
+        "ca.",
+        "jp.",
+        "uk.",
+        "in.",
+        "sg.",
+        "kr.",
+        "global.",
+        "apac.",
+        "us-central1.",
+        "europe-west4.",
+        "australia-southeast1.",
+        "asia-northeast1.",
+    ],
+)
+@pytest.mark.parametrize(
+    "base_model",
+    [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-preview",
+        "gemini-2.5-pro",
+        "gemini-3-pro",
+        "gemini-3-pro-preview",
+        "gemini-3.1-pro",
+        "gemini-3.5-pro",
+    ],
+)
+def test_gemini_4096_cache_minimum_across_all_regions_and_pro_variants(
+    provider_prefix: str,
+    region_prefix: str,
+    base_model: str,
+    local_model_cost_map: None,
+) -> None:
+    model: Final = f"{provider_prefix}{region_prefix}{base_model}"
+    assert get_prompt_cache_min_tokens(model=model) == 4096
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-2.5-flash",
+        "au.gemini-2.5-flash",
+        "eu.gemini-2.5-flash",
+        "us.gemini-2.5-flash",
+        "us-central1.gemini-2.5-flash",
+        "vertex_ai/au.gemini-2.5-flash",
+    ],
+)
+def test_gemini_25_flash_resolves_1024_cache_minimum_all_regions(
+    model: str, local_model_cost_map: None
+) -> None:
+    assert get_prompt_cache_min_tokens(model=model) == 1024
+
+
 def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:
     """get_model_info raises for a model it has no entry for. The resolver must swallow that and
     fall back to the default, otherwise the raise reaches callers that would read it as
@@ -4291,7 +4352,7 @@ def test_is_prompt_caching_valid_prompt_uses_per_model_minimum(local_model_cost_
     the flat-1024 check reported claude-opus-4-6 as cacheable and the cache write was rejected
     upstream. Both assertions must live together: is_prompt_caching_valid_prompt returns False on
     any internal error, so the True case is what proves the False case isn't a swallowed exception."""
-    token_count = litellm.token_counter(
+    token_count: Final = litellm.token_counter(
         model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES, use_default_image_token_count=True
     )
     assert 1024 <= token_count < 4096, (
@@ -4301,6 +4362,12 @@ def test_is_prompt_caching_valid_prompt_uses_per_model_minimum(local_model_cost_
 
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES) is False
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES) is True
+    assert is_prompt_caching_valid_prompt(model="gemini-3.5-flash", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="au.gemini-3.5-flash", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="us-central1.gemini-3.5-flash", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="gemini-2.5-pro", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="gemini-2.5-flash", messages=PROMPT_CACHE_MESSAGES) is True
+    assert is_prompt_caching_valid_prompt(model="au.gemini-2.5-flash", messages=PROMPT_CACHE_MESSAGES) is True
 
 
 def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model(local_model_cost_map: None) -> None:

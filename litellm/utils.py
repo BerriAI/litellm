@@ -5564,7 +5564,13 @@ def get_max_tokens(model: str) -> int | None:
 
 
 def _strip_stable_vertex_version(model_name) -> str:
-    return re.sub(r"-\d+$", "", model_name)
+    stripped_region: Final = re.sub(
+        r"(^|/)(?:[a-z0-9_-]+\.)+(?=gem(?:ini|ma)-)",
+        r"\1",
+        model_name,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"-\d+$", "", stripped_region)
 
 
 _DATED_SNAPSHOT_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
@@ -10207,6 +10213,25 @@ def should_use_cohere_v1_client(api_base: str | None, present_version_params: li
     return api_base.endswith("/v1/rerank") or (uses_v1_params and not api_base.endswith("/v2/rerank"))
 
 
+_GEMINI_4096_PROMPT_CACHE_MIN_TOKENS: Final = 4096
+
+
+def _is_gemini_4096_cache_min_model(model: str) -> bool:
+    return bool(
+        re.search(
+            r"gemini-(?:3\.\d+-flash|2\.5-pro|3(?:\.\d+)?-pro)",
+            model.lower(),
+        )
+    )
+
+
+def _lookup_model_prompt_cache_min_tokens(model: str) -> int | None:
+    try:
+        return get_model_info(model=model).get("prompt_cache_min_tokens")
+    except Exception:
+        return None
+
+
 def get_prompt_cache_min_tokens(model: str) -> int:
     """
     Returns the smallest prefix `model` will actually cache.
@@ -10222,10 +10247,15 @@ def get_prompt_cache_min_tokens(model: str) -> int:
     """
     if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None:
         return MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE
-    try:
-        min_tokens: Final = get_model_info(model=model).get("prompt_cache_min_tokens")
-    except Exception:
-        return DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+    normalized_model: Final = re.sub(
+        r"(^|/)(?:[a-z0-9_-]+\.)+(?=gem(?:ini|ma)-)",
+        r"\1",
+        model,
+        flags=re.IGNORECASE,
+    )
+    min_tokens: Final = _lookup_model_prompt_cache_min_tokens(normalized_model)
+    if _is_gemini_4096_cache_min_model(normalized_model):
+        return max(min_tokens or 0, _GEMINI_4096_PROMPT_CACHE_MIN_TOKENS)
     if min_tokens is None:
         return DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
     return min_tokens
