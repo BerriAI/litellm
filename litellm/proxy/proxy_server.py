@@ -12919,7 +12919,7 @@ async def audio_speech(
 
         requested_format: Final = data.get("response_format")
         upstream_content_type: Final = (
-            response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
+            response.content_type if isinstance(response, HttpxBinaryResponseContent) else None
         )
         media_type: Final = resolve_speech_media_type(
             upstream_content_type=upstream_content_type,

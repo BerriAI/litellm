@@ -1,6 +1,9 @@
 import logging
+from typing import Final
 
+import httpx
 import pytest
+from openai import Timeout as SDKTimeout
 from pydantic import ValidationError
 
 from litellm.types.router import (
@@ -24,6 +27,13 @@ from litellm.types.utils import (
     openai_wif_litellm_params,
     server_owned_wif_litellm_params,
 )
+
+
+def test_sdk_timeout_is_normalized_for_provider_clients() -> None:
+    timeout: Final = SDKTimeout(connect=2.0, read=None, write=5.0, pool=7.0)
+    params: Final = GenericLiteLLMParams(timeout=timeout)
+    assert isinstance(params.timeout, httpx.Timeout)
+    assert params.timeout.as_dict() == timeout.as_dict()
 
 
 def test_model_info_declares_mirrored_pricing_fields():
