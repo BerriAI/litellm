@@ -56,6 +56,24 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     return checks
 
 
+def _tool_call_texts(inputs: GenericGuardrailAPIInputs) -> tuple[str, ...]:
+    """Render each tool call's function as `name(arguments)` for screening.
+    A tool call with missing or blank arguments yields nothing to screen."""
+    texts: Final[list[str]] = []  # mutable-ok: builder accumulator returned as a tuple
+    for tool_call in inputs.get("tool_calls") or []:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        arguments: Final[object] = (
+            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+        )
+        if not isinstance(arguments, str) or not arguments.strip():
+            continue
+        name: Final[object] = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+        texts.append(f"{name if isinstance(name, str) else ''}({arguments})")
+    return tuple(texts)
+
+
 def _chunk_text(text: str, max_chars: int) -> tuple[str, ...]:
     """Split text into chunks of at most max_chars that overlap by
     min(2000, max_chars // 4) and together cover the whole text."""
@@ -249,7 +267,9 @@ class DecisionModelGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        texts: Final = tuple(text for text in inputs.get("texts") or [] if text and text.strip())
+        texts: Final = tuple(text for text in inputs.get("texts") or [] if text and text.strip()) + _tool_call_texts(
+            inputs
+        )
         if not texts:
             return inputs
         start_time: Final = time()
