@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import time
 import traceback
 import uuid
 from typing import Final
@@ -45,6 +46,137 @@ def test_authenticated_proxy_callers_get_distinct_exact_cache_keys() -> None:
     )
 
     assert key_a != key_b
+
+
+def test_authenticated_callers_without_server_token_fail_closed_for_all_key_forms() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="qa")
+    caller_a: Final = UserAPIKeyAuth(api_key="raw-a", team_id="team-a", user_id="user-a").model_copy(
+        update={"token": None}
+    )
+    caller_b: Final = UserAPIKeyAuth(api_key="raw-b", team_id="team-a", user_id="user-a").model_copy(
+        update={"token": None}
+    )
+
+    for caller in (caller_a, caller_b):
+        metadata = {"user_api_key_auth": caller, "redis_namespace": "client-selected"}
+        assert cache.get_cache_key(model="gpt-4.1-mini", messages=messages, metadata=metadata) is None
+        assert (
+            cache.get_cache_key(
+                model="gpt-4.1-mini",
+                messages=messages,
+                metadata=metadata,
+                litellm_params={"preset_cache_key": "shared"},
+            )
+            is None
+        )
+
+
+def test_explicit_cache_keys_are_idempotently_scoped_to_valid_callers() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="qa")
+    caller_a: Final = UserAPIKeyAuth(api_key="raw-a", token="hashed-a", team_id="team-a")
+    caller_b: Final = UserAPIKeyAuth(api_key="raw-b", token="hashed-b", team_id="team-a")
+    metadata_a = {"user_api_key_auth": caller_a, "redis_namespace": "client-selected"}
+    metadata_b = {"user_api_key_auth": caller_b, "redis_namespace": "client-selected"}
+
+    key_a = cache.get_cache_key(model="gpt-4.1-mini", messages=messages, metadata=metadata_a)
+    assert key_a is not None
+    explicit_a = cache._prepare_explicit_cache_key("shared", metadata=metadata_a)
+    assert explicit_a is not None
+    assert explicit_a != cache._prepare_explicit_cache_key("shared", metadata=metadata_b)
+    assert cache._prepare_explicit_cache_key(explicit_a, metadata=metadata_a) == explicit_a
+
+
+class _CacheBackendSpy:
+    def __init__(self) -> None:
+        self.get_calls = 0
+        self.set_calls = 0
+
+    def get_cache(self, *args, **kwargs):
+        self.get_calls += 1
+        return {"timestamp": time.time(), "response": {"value": "cached"}}
+
+    def set_cache(self, *args, **kwargs):
+        self.set_calls += 1
+
+    async def async_get_cache(self, *args, **kwargs):
+        self.get_calls += 1
+        return {"timestamp": time.time(), "response": {"value": "cached"}}
+
+    async def async_set_cache(self, *args, **kwargs):
+        self.set_calls += 1
+
+
+def _missing_token_cache_request() -> dict[str, object]:
+    return {
+        "model": "gpt-4.1-mini",
+        "messages": messages,
+        "metadata": {
+            "user_api_key_auth": UserAPIKeyAuth(api_key="raw-a", team_id="team-a").model_copy(
+                update={"token": None}
+            ),
+        },
+    }
+
+
+def test_missing_token_skips_sync_backend_access_for_explicit_key(caplog) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = _CacheBackendSpy()
+    cache.cache = backend
+    request = _missing_token_cache_request()
+
+    assert cache.get_cache(**request, cache_key="shared") is None
+    cache.add_cache("response", **request, cache_key="shared")
+
+    assert backend.get_calls == 0
+    assert backend.set_calls == 0
+    assert "exception in add_cache" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_missing_token_skips_async_backend_access_for_explicit_key() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = _CacheBackendSpy()
+    cache.cache = backend
+    request = _missing_token_cache_request()
+
+    assert await cache.async_get_cache(**request, cache_key="shared") is None
+    await cache.async_add_cache("response", **request, cache_key="shared")
+
+    assert backend.get_calls == 0
+    assert backend.set_calls == 0
+
+
+def test_valid_token_explicit_key_reaches_sync_backend() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = _CacheBackendSpy()
+    cache.cache = backend
+    request = {
+        "model": "gpt-4.1-mini",
+        "messages": messages,
+        "metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="raw-a", token="hashed-a")},
+    }
+
+    cache.add_cache("response", **request, cache_key="shared")
+    assert cache.get_cache(**request, cache_key="shared") == {"value": "cached"}
+    assert backend.set_calls == 1
+    assert backend.get_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_valid_token_explicit_key_reaches_async_backend() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = _CacheBackendSpy()
+    cache.cache = backend
+    request = {
+        "model": "gpt-4.1-mini",
+        "messages": messages,
+        "metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="raw-a", token="hashed-a")},
+    }
+
+    await cache.async_add_cache("response", **request, cache_key="shared")
+    assert await cache.async_get_cache(**request, cache_key="shared") == {"value": "cached"}
+    assert backend.set_calls == 1
+    assert backend.get_calls == 1
 
 
 @pytest.fixture
