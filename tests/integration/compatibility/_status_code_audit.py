@@ -186,11 +186,18 @@ def one_outbound(gateway: Gateway, identity: str) -> dict[str, JsonValue]:
     return object_value(calls[0]["body"])
 
 
-def post(gateway: Gateway, path: str, body: Mapping[str, JsonValue], *, key: str | None = None) -> httpx.Response:
+def post(
+    gateway: Gateway,
+    path: str,
+    body: Mapping[str, JsonValue],
+    *,
+    key: str | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> httpx.Response:
     return gateway.client.post(
         path,
         json=dict(body),
-        headers={"Authorization": f"Bearer {gateway.key if key is None else key}"},
+        headers={"Authorization": f"Bearer {gateway.key if key is None else key}", **(headers or {})},
         timeout=30,
     )
 

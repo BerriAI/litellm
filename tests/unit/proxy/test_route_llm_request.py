@@ -2099,6 +2099,152 @@ async def test_missing_model_still_reaches_a_fixed_target_wildcard_deployment() 
     assert response.model == "gpt-4o"
 
 
+def _router_with_forwarding_and_fixed_wildcards():
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {"model_name": "*/*", "litellm_params": {"model": "hosted_vllm/*/*", "api_base": "http://vllm.invalid/v1"}},
+            {"model_name": "*", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"}},
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_model_reaches_the_fixed_target_wildcard_it_matches() -> None:
+    response: Final = await (
+        await route_request(
+            {"model": "", "messages": [{"role": "user", "content": "hi"}], "mock_response": "fixed target"},
+            _router_with_forwarding_and_fixed_wildcards(),
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.model == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_null_model_matching_a_forwarding_wildcard_is_not_routed_next_to_a_fixed_one() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": None, "messages": [{"role": "user", "content": "hi"}]},
+            _router_with_forwarding_and_fixed_wildcards(),
+            None,
+            "acompletion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_null_model_with_a_prompt_id_is_left_to_the_prompt_manager() -> None:
+    response: Final = await (
+        await route_request(
+            {
+                "model": None,
+                "prompt_id": "greet",
+                "messages": [{"role": "user", "content": "hi"}],
+                "mock_response": "from the prompt's model",
+            },
+            _router_with_defaults({}, wildcard_target="openai/*"),
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "from the prompt's model"
+
+
+@pytest.mark.asyncio
+async def test_empty_model_with_a_prompt_id_is_still_not_routed_to_a_forwarding_wildcard() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": "", "prompt_id": "greet", "messages": [{"role": "user", "content": "hi"}]},
+            _router_with_defaults({}, wildcard_target="hosted_vllm/*"),
+            None,
+            "acompletion",
+        )
+
+
+def _router_with_a_complexity_router(default_litellm_params: dict[str, object]):
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {"model_name": "cheap-model", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k"}},
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "cheap-model"}},
+                    "complexity_router_default_model": "cheap-model",
+                },
+            },
+        ],
+        default_litellm_params=default_litellm_params,
+    )
+
+
+def _claude_code_messages_request(headers: dict[str, str]) -> dict[str, object]:
+    return {
+        "model": "unlisted-subagent-model",
+        "messages": [],
+        "litellm_metadata": {"user_api_key_hash": "caller-key-hash"},
+        "proxy_server_request": {"headers": {"x-claude-code-session-id": "session-12345678", **headers}},
+    }
+
+
+def test_router_default_applies_to_a_claude_code_subagent_turn_a_session_router_may_answer() -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data=_claude_code_messages_request({"x-claude-code-agent-id": "agent-1"}),
+            llm_router=_router_with_a_complexity_router({"max_tokens": 64}),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({}, id="main-turn"),
+        pytest.param({"x-claude-code-agent-id": "agent-1", "x-claude-code-session-id": "short"}, id="invalid-session"),
+    ],
+)
+def test_router_default_ignored_for_an_unlisted_model_no_session_router_answers(headers: dict[str, str]) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data=_claude_code_messages_request(headers),
+            llm_router=_router_with_a_complexity_router({"max_tokens": 64}),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+def test_router_default_ignored_for_a_claude_code_subagent_turn_without_a_session_router() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data=_claude_code_messages_request({"x-claude-code-agent-id": "agent-1"}),
+            llm_router=_router_with_defaults({"max_tokens": 64}),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
 @pytest.mark.asyncio
 async def test_model_optional_route_still_reaches_a_wildcard_deployment_without_a_model() -> None:
     llm_router: Final = MagicMock()

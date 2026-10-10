@@ -5,6 +5,7 @@ serving it, for every model shape, streaming and not, and through the OpenAI and
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Final
@@ -15,6 +16,7 @@ import pytest
 from integration._support.client import Gateway, gateway_from_environment
 from integration.compatibility._status_code_audit import (
     UNSET,
+    USER_MESSAGES,
     CHAT,
     CHAT_FRAMES,
     EMBEDDING,
@@ -433,3 +435,160 @@ def test_router_star_fallback_serves_an_unlisted_model_whatever_the_request_fall
     response: Final = post(fallback_gateway.gateway, "/v1/messages", {**_UNLISTED_MESSAGE, "fallbacks": fallbacks})
     assert response.status_code == 200, response.text
     assert one_outbound(fallback_gateway.gateway, fallback_gateway.identity).get("max_output_tokens") == 32
+
+
+@pytest.fixture(scope="module")
+def mixed_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wildcard]:
+    """A forwarding `*/*` wildcard next to a fixed `*` one: `None` is looked up as `None/None` and matches the
+    forwarding one, while `""` matches only the fixed one."""
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        identity, handle = register(scenario, "audit-mixed", _scripted("fixed"))
+        config: Final[dict[str, JsonValue]] = {
+            "model_list": [
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": target, "api_base": handle.api_base(), "api_key": identity},
+                }
+                for model_name, target in (("*/*", "openai/*/*"), ("*", "openai/gpt-4o-mini"))
+            ],
+            "router_settings": {"num_retries": 0},
+        }
+        with owned_gateway(tmp_path_factory.mktemp("audit-mixed"), config) as owned:
+            yield _Wildcard(owned, identity)
+
+
+@pytest.mark.parametrize("endpoint", tuple(ENDPOINT_PATHS))
+def test_empty_model_reaches_the_fixed_wildcard_it_matches_next_to_a_forwarding_one(
+    mixed_gateway: _Wildcard, endpoint: str
+) -> None:
+    response: Final = post(mixed_gateway.gateway, ENDPOINT_PATHS[endpoint], _body(endpoint, "empty", stream=False))
+    assert response.status_code == 200, response.text
+    assert one_outbound(mixed_gateway.gateway, mixed_gateway.identity).get("model") == "gpt-4o-mini"
+
+
+@pytest.mark.parametrize("shape", ("missing", "null"))
+@pytest.mark.parametrize("endpoint", tuple(ENDPOINT_PATHS))
+def test_null_model_matching_the_forwarding_wildcard_is_rejected_next_to_a_fixed_one(
+    mixed_gateway: _Wildcard, endpoint: str, shape: str
+) -> None:
+    invalid_request(post(mixed_gateway.gateway, ENDPOINT_PATHS[endpoint], _body(endpoint, shape, stream=False)))
+    assert_no_provider_call(mixed_gateway.gateway, mixed_gateway.identity)
+
+
+_PROMPT_MANAGER: Final = """
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+
+class AuditPromptManager(CustomPromptManagement):
+    def get_chat_completion_prompt(self, model, messages, non_default_params, prompt_id, *args, **kwargs):
+        if prompt_id == "audit-greet":
+            return "gpt-4o-mini", [{"role": "system", "content": "audit prompt"}, *messages], non_default_params
+        return model, messages, non_default_params
+
+
+prompt_manager = AuditPromptManager()
+"""
+
+
+@pytest.fixture(scope="module")
+def prompt_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wildcard]:
+    """A forwarding `*` wildcard and a callback prompt manager that picks the model for `audit-greet`."""
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        identity, handle = register(scenario, "audit-prompt", _scripted("fixed"))
+        directory: Final = tmp_path_factory.mktemp("audit-prompt")
+        (directory / "audit_prompt_manager.py").write_text(_PROMPT_MANAGER, encoding="utf-8")
+        config: Final[dict[str, JsonValue]] = {
+            "model_list": [
+                {
+                    "model_name": "*",
+                    "litellm_params": {"model": "openai/*", "api_base": handle.api_base(), "api_key": identity},
+                }
+            ],
+            "litellm_settings": {"callbacks": "audit_prompt_manager.prompt_manager"},
+            "router_settings": {"num_retries": 0},
+        }
+        with owned_gateway(directory, config) as owned:
+            yield _Wildcard(owned, identity)
+
+
+@pytest.mark.parametrize("shape", ("missing", "null"))
+def test_null_model_with_a_prompt_id_is_served_by_the_model_the_prompt_manager_picks(
+    prompt_gateway: _Wildcard, shape: str
+) -> None:
+    response: Final = post(
+        prompt_gateway.gateway,
+        "/v1/chat/completions",
+        {**_body("chat", shape, stream=False), "prompt_id": "audit-greet"},
+    )
+    assert response.status_code == 200, response.text
+    outbound: Final = one_outbound(prompt_gateway.gateway, prompt_gateway.identity)
+    assert outbound.get("model") == "gpt-4o-mini", outbound
+    assert outbound.get("messages") == [{"role": "system", "content": "audit prompt"}, *USER_MESSAGES], outbound
+
+
+def test_empty_model_with_a_prompt_id_is_still_rejected_by_a_forwarding_wildcard(prompt_gateway: _Wildcard) -> None:
+    invalid_request(
+        post(prompt_gateway.gateway, "/v1/chat/completions", {**_body("chat", "empty", stream=False), "prompt_id": "x"})
+    )
+    assert_no_provider_call(prompt_gateway.gateway, prompt_gateway.identity)
+
+
+@pytest.fixture(scope="module")
+def session_router_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wildcard]:
+    """A complexity router whose tiers all answer with one deployment, with router defaults it inherits."""
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        identity, handle = register(scenario, "audit-session-router", _scripted("fixed"))
+        config: Final[dict[str, JsonValue]] = {
+            "model_list": [
+                {
+                    "model_name": "audit-cheap",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_base": handle.api_base(),
+                        "api_key": identity,
+                    },
+                },
+                {
+                    "model_name": "audit-smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), "audit-cheap")
+                        },
+                        "complexity_router_default_model": "audit-cheap",
+                    },
+                },
+            ],
+            "router_settings": {"num_retries": 0, "default_litellm_params": ROUTER_DEFAULTS},
+        }
+        with owned_gateway(tmp_path_factory.mktemp("audit-session-router"), config) as owned:
+            yield _Wildcard(owned, identity)
+
+
+def test_claude_code_subagent_turn_without_max_tokens_is_served_by_the_session_router(
+    session_router_gateway: _Wildcard,
+) -> None:
+    """The session's main turn binds the complexity router; the subagent then names a model the proxy does not list
+    and leaves out `max_tokens`, which the router default supplies, so the session's router answers it."""
+    session: Final = {"x-claude-code-session-id": f"audit-session-{uuid.uuid4().hex}"}
+    with session_router_gateway.gateway.scenario() as scenario:
+        key: Final = scenario.key(router_settings={"num_retries": 0})
+        main_turn: Final = post(
+            session_router_gateway.gateway,
+            "/v1/messages",
+            {"model": "audit-smart-router", "max_tokens": 64, "messages": USER_MESSAGES},
+            key=key,
+            headers=session,
+        )
+        assert main_turn.status_code == 200, main_turn.text
+        drain_rig_upstream()
+        subagent_turn: Final = post(
+            session_router_gateway.gateway,
+            "/v1/messages",
+            {"model": "audit-unlisted-subagent-model", "messages": USER_MESSAGES},
+            key=key,
+            headers={**session, "x-claude-code-agent-id": "audit-agent"},
+        )
+        assert subagent_turn.status_code == 200, subagent_turn.text
+        outbound: Final = one_outbound(session_router_gateway.gateway, session_router_gateway.identity)
+        assert outbound.get("model") == "gpt-4o-mini", outbound

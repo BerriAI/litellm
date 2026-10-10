@@ -322,13 +322,32 @@ def _router_default_litellm_params(
 def _router_serves_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
     """Whether dispatch reaches one of the router's deployments for a model that
     `get_model_list` does not list: a deployment id or name, an alias, a team public name,
-    an A2A agent, or any model a fallback chain (including `*`) answers for."""
+    an A2A agent, any model a fallback chain (including `*`) answers for, or a Claude Code
+    subagent turn its session's routing strategy may answer for."""
     return (
         _is_a2a_agent_model(model_name)
         or llm_router.is_recognized_model(model_name)
         or model_name in llm_router.deployment_names  # pyright: ignore[reportUnknownMemberType]  # Router.deployment_names is an untyped list
         or model_name in llm_router.team_public_model_names
         or _router_falls_back_for_model(llm_router, data, model_name)
+        or _router_may_resume_claude_code_session(llm_router, data)
+    )
+
+
+def _router_may_resume_claude_code_session(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+    """The router sends a Claude Code subagent turn to the auto, complexity, adaptive or
+    quality router its session's main turn picked, whatever model the subagent names."""
+    return (
+        any(
+            (
+                llm_router.auto_routers,
+                llm_router.complexity_routers,
+                llm_router.adaptive_routers,
+                llm_router.quality_routers,
+            )
+        )
+        and llm_router._request_header(data, "x-claude-code-agent-id") is not None  # pyright: ignore[reportPrivateUsage]  # the router's own header read for the session lookup this mirrors
+        and llm_router._claude_code_session_router_cache_key(data) is not None  # pyright: ignore[reportPrivateUsage]  # the router's own session key; None means it never looks up a binding
     )
 
 
@@ -378,14 +397,18 @@ _MATCHED_DEPLOYMENTS_ADAPTER: Final[TypeAdapter[tuple[_MatchedDeployment, ...]]]
 )
 
 
-def _wildcard_forwards_missing_model(llm_router: LitellmRouter) -> bool:
-    """Whether the router would pick a wildcard deployment for a request with no model
-    and every such deployment copies the requested name into its target (`openai/*`), so
-    the provider would get a made-up model instead of a fixed one like `openai/gpt-4o`.
-    An empty model counts as no model: key and team model checks skip it, so letting it
-    through would serve a server's default model (vLLM's) to a key restricted elsewhere."""
+def _wildcard_forwards_missing_model(llm_router: LitellmRouter, data: Mapping[str, object]) -> bool:
+    """Whether the router would pick a wildcard deployment for a request with a null or
+    empty model and every such deployment copies the requested name into its target
+    (`openai/*`), so the provider would get a made-up or empty model instead of a fixed one
+    like `openai/gpt-4o`. An empty one must not reach a provider: key and team model checks
+    skip it, and some servers (vLLM) answer it with their default model. A null model with a
+    `prompt_id` is left to the prompt manager, which may pick the model."""
+    model: Final = data.get("model")
+    if model is None and data.get("prompt_id"):
+        return False
     matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
-        llm_router.pattern_router.get_deployments_by_pattern(model=None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for a missing model; it returns untyped dicts
+        llm_router.pattern_router.get_deployments_by_pattern(model=model if isinstance(model, str) else None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for this model; it returns untyped dicts
     )
     targets: Final = tuple(
         deployment.litellm_params.model
@@ -918,7 +941,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 and not (
                     not data["model"]
                     and route_type in _ROUTE_TYPES_REQUIRING_MODEL
-                    and _wildcard_forwards_missing_model(llm_router)
+                    and _wildcard_forwards_missing_model(llm_router, data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes the request body as an untyped dict
                 )
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
