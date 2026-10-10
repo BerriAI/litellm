@@ -2674,19 +2674,23 @@ async def _resolve_org_filter_for_user_search(
     """
     Return a list of org IDs to filter by, or ``None`` for no filter.
 
-    Reads the ``scope_user_search_to_org`` UI-setting flag and applies
-    role-based access rules when the flag is ON.
+    Re-reads the stored UI settings from the writer so a non-admin search never runs on a
+    missed or stale settings sync, then applies role-based access rules when the
+    ``scope_user_search_to_org`` flag is ON.
     """
+    from litellm.proxy.config_resolvers.settings_rules import coerce_bool
+    from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-        get_ui_settings_cached,
+        apply_runtime_general_settings_flags,
+        read_stored_ui_settings,
     )
-
-    ui_settings: Final = await get_ui_settings_cached()
-    if not ui_settings.get("scope_user_search_to_org", False):
-        return None  # flag OFF — no filtering
 
     if user_api_key_has_admin_view(user_api_key_dict):
         return None  # proxy admin — see everything
+
+    apply_runtime_general_settings_flags(await read_stored_ui_settings(prisma_client, use_writer=True))
+    if not coerce_bool(general_settings.get("scope_user_search_to_org", False)):
+        return None  # flag OFF — no filtering
 
     # Try to resolve org admin memberships
     caller_user = None

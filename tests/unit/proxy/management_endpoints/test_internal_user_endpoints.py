@@ -76,10 +76,7 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag OFF by default
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -110,10 +107,7 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag OFF by default
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     await ui_view_users(
@@ -172,8 +166,7 @@ def test_ui_view_users_search_matches_user_id_or_email(
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
     mocker.patch(  # test-quality-ok: endpoint reads settings via module global; same seam as sibling tests
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={},
+        "litellm.proxy.proxy_server.general_settings", {}
     )
     mocker.patch(  # test-quality-ok: endpoint reads prisma_client via module global; same seam as sibling tests
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
@@ -199,6 +192,8 @@ async def test_ui_view_users_org_admin_filtered_by_org(mocker):
     from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
 
     mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     org_id = "org-123"
 
     async def mock_find_many(*args, **kwargs):
@@ -210,10 +205,7 @@ async def test_ui_view_users_org_admin_filtered_by_org(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -259,11 +251,10 @@ async def test_ui_view_users_non_org_admin_returns_403(mocker):
 
     mock_prisma_client = mocker.MagicMock()
 
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+
     # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -295,12 +286,98 @@ async def test_ui_view_users_non_org_admin_returns_403(mocker):
     assert "scope_user_search_to_org is enabled" in str(exc_info.value.detail)
 
 
+_SCOPED_SEARCH_USER: Final = "scoped-search-user"
+
+
+def _search_database(stored_ui_settings_read: AsyncMock) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db.litellm_uisettings.find_unique = stored_ui_settings_read
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id=_SCOPED_SEARCH_USER, user_email="scoped@example.com", organization_memberships=[]
+        )
+    )
+    return prisma_client
+
+
+def _stored_ui_settings(settings: Mapping[str, object]) -> AsyncMock:
+    return AsyncMock(return_value=SimpleNamespace(ui_settings=json.dumps(settings)))
+
+
+async def _org_filter_for_internal_user(prisma_client: MagicMock) -> list[str] | None:
+    return await _resolve_org_filter_for_user_search(
+        user_api_key_dict=UserAPIKeyAuth(user_id=_SCOPED_SEARCH_USER, user_role=LitellmUserRoles.INTERNAL_USER),
+        team_id=None,
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_search_scope_set_in_the_config_file_is_enforced(mocker: MockerFixture):
+    """scope_user_search_to_org from config.yaml gates the search, not only the stored UI row."""
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    general_settings: Final = SettingsStore("general_settings")
+    general_settings.load_yaml({"scope_user_search_to_org": True})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _org_filter_for_internal_user(_search_database(_stored_ui_settings({})))
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_user_search_scope_saved_in_the_ui_applies_on_the_next_search(mocker: MockerFixture):
+    """A pod that neither served the PATCH nor re-synced since still enforces the saved value."""
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    general_settings: Final = SettingsStore("general_settings")
+    general_settings.load_yaml({})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    assert await _org_filter_for_internal_user(_search_database(_stored_ui_settings({}))) is None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _org_filter_for_internal_user(_search_database(_stored_ui_settings({"scope_user_search_to_org": True})))
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_user_search_never_runs_unfiltered_when_the_stored_ui_settings_cannot_be_read(mocker: MockerFixture):
+    """A failed startup sync leaves the flag unapplied, so the search itself must not fall back to open access."""
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    general_settings: Final = SettingsStore("general_settings")
+    general_settings.load_yaml({})
+    mocker.patch("litellm.proxy.proxy_server.general_settings", general_settings)
+    prisma_client: Final = _search_database(AsyncMock(side_effect=RuntimeError("writer unavailable")))
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ui_view_users(
+            user_api_key_dict=UserAPIKeyAuth(user_id=_SCOPED_SEARCH_USER, user_role=LitellmUserRoles.INTERNAL_USER),
+            user_id=None,
+            user_email="example.com",
+            team_id=None,
+            page=1,
+            page_size=50,
+        )
+
+    assert exc_info.value.status_code == 500
+    prisma_client.db.litellm_usertable.find_many.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_ui_view_users_flag_off_internal_user_can_search(mocker):
     """
     Flag OFF (default): any authenticated user can search all users without org filtering.
     """
     mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
 
     async def mock_find_many(*args, **kwargs):
         where = kwargs.get("where") or {}
@@ -310,10 +387,7 @@ async def test_ui_view_users_flag_off_internal_user_can_search(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag OFF
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     response = await ui_view_users(
@@ -336,6 +410,8 @@ async def test_ui_view_users_flag_on_team_admin_org_team(mocker):
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     org_id = "org-456"
     tid = "team-789"
 
@@ -348,10 +424,7 @@ async def test_ui_view_users_flag_on_team_admin_org_team(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     # Mock get_team_object
     team_obj = LiteLLM_TeamTableCachedObj(
@@ -407,13 +480,12 @@ async def test_ui_view_users_flag_on_team_admin_non_org_team_403(mocker):
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     tid = "team-no-org"
 
     # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     # Mock get_team_object — team has no organization_id
     team_obj = LiteLLM_TeamTableCachedObj(
@@ -468,6 +540,7 @@ async def test_ui_view_users_flag_on_team_admin_org_member_no_team_id(mocker):
     should succeed and filter by the user's org membership.
     """
     mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     org_id = "org-member-org"
 
     async def mock_find_many(*args, **kwargs):
@@ -478,10 +551,7 @@ async def test_ui_view_users_flag_on_team_admin_org_member_no_team_id(mocker):
 
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
@@ -526,6 +596,8 @@ async def test_ui_view_users_flag_on_team_admin_not_in_org_resolves_via_key_team
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     org_id = "org-from-team"
     tid = "key-team-id"
 
@@ -537,10 +609,7 @@ async def test_ui_view_users_flag_on_team_admin_not_in_org_resolves_via_key_team
 
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     team_obj = LiteLLM_TeamTableCachedObj(
         team_id=tid,
@@ -4940,6 +5009,7 @@ _DB_OUTAGE_503_BODY: Final = {
 
 def _user_read_raising(mocker: MockerFixture, error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
+    prisma_client.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
@@ -4977,10 +5047,7 @@ async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_ans
 @pytest.mark.asyncio
 async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(mocker):
     prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
 
     with pytest.raises(httpx.ConnectError):
         await _resolve_org_filter_for_user_search(
@@ -4995,10 +5062,7 @@ async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead
 @pytest.mark.asyncio
 async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(mocker, caplog):
     prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
@@ -5033,10 +5097,7 @@ def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {"scope_user_search_to_org": True})
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
     app.dependency_overrides[user_api_key_auth] = lambda: _db_unavailable_fallback_identity(route)

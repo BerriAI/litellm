@@ -49,6 +49,7 @@ _UI_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "team_admin_editable_team_fields",
