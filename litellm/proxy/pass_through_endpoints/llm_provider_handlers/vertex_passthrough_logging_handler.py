@@ -134,7 +134,7 @@ class VertexPassthroughLoggingHandler:
         ``.../gemini-3.8-flash:streamGenerateContent?alt=sse`` still matches.
         """
         path = urlparse(url_route).path
-        return path.endswith(method) or path.endswith(":" + method)
+        return path.endswith((method, ":" + method))
 
     @staticmethod
     def vertex_passthrough_handler(
