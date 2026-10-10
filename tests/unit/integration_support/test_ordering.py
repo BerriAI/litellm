@@ -63,7 +63,11 @@ def test_equal_unhashable_parameters_share_a_group_only_within_their_fixture_own
 
 def test_shards_balance_cases_without_splitting_a_scoped_configuration() -> None:
     cases: Final = tuple(
-        CollectedCase(f"test_slots.py::test_route[{index}]", (ScopedParameter("module:slots", "rig", index // 4),))
+        CollectedCase(
+            f"test_slots.py::test_route[{index}]",
+            (ScopedParameter("module:slots", "rig", index // 4),),
+            ("module:slots:extra",) if index % 2 else (),
+        )
         for index in range(20)
     )
     plain: Final = tuple(CollectedCase(f"test_slots.py::test_plain[{index}]") for index in range(7))
@@ -75,3 +79,32 @@ def test_shards_balance_cases_without_splitting_a_scoped_configuration() -> None
         configuration: Final = frozenset(case.nodeid for case in group)
         assert sum(configuration <= shard for shard in shards) == 1
     assert shards == case_shards(tuple(reversed(cases + plain)), 3)
+
+
+def test_shards_reuse_unparametrized_fixtures_and_keep_different_results_separate() -> None:
+    shared: Final = tuple(
+        CollectedCase(f"test_sockets.py::test_override[{index}]", fixtures=("module:test_sockets.py:override",))
+        for index in range(4)
+    )
+    other: Final = CollectedCase("test_sockets.py::test_default", fixtures=("module:test_sockets.py:default",))
+    plain: Final = tuple(CollectedCase(f"test_other.py::test_plain[{index}]") for index in range(7))
+    shards: Final = case_shards((*shared, other, *plain), 3)
+    configuration: Final = frozenset(case.nodeid for case in shared)
+    assert sum(configuration <= shard for shard in shards) == 1
+    assert sorted(map(len, shards)) == [4, 4, 4]
+    assert frozenset.union(*shards) == frozenset(case.nodeid for case in (*shared, other, *plain))
+    groups: Final = fixture_groups((*shared, other))
+    assert len({groups[case.nodeid] for case in shared}) == 1
+    assert groups[other.nodeid] != groups[shared[0].nodeid]
+    assert shards == case_shards(tuple(reversed((*shared, other, *plain))), 3)
+
+
+def test_an_oversized_unparametrized_fixture_is_split_into_bounded_groups() -> None:
+    cases: Final = tuple(
+        CollectedCase(f"test_sockets.py::test_route[{index:02}]", fixtures=("module:test_sockets.py:owned",))
+        for index in range(20)
+    )
+    shards: Final = case_shards(cases, 4)
+    assert tuple(map(len, shards)) == (5, 5, 5, 5)
+    assert frozenset.union(*shards) == frozenset(case.nodeid for case in cases)
+    assert sum(len(shard) for shard in shards) == len(cases)

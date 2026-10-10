@@ -132,17 +132,20 @@ def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_repla
         victim: Final = psutil.Process(workers[0])
         victim.suspend()
         try:
-            Event().wait(1)
+            replacement: Final = eventually(
+                lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
+                lambda pids: len(pids) == 3 and owned.log.read_text().count("Application startup complete.") == 3,
+                seconds=30,
+            )
+            assert replacement[-1] not in workers
+            assert not psutil.pid_exists(victim.pid), "Supervisor did not reap the stalled worker"
+            response: Final = owned.gateway.request("GET", "/health/readiness")
+            assert response.status_code == 200, response.text
         finally:
-            victim.kill()
-        replacement: Final = eventually(
-            lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
-            lambda pids: len(pids) == 3 and owned.log.read_text().count("Application startup complete.") == 3,
-            seconds=30,
-        )
-        assert replacement[-1] not in workers
-        assert not psutil.pid_exists(victim.pid)
-        assert owned.gateway.request("GET", "/health/readiness").status_code == 200
+            try:
+                victim.kill()
+            except psutil.NoSuchProcess:
+                pass
 
 
 def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
@@ -268,3 +271,74 @@ def test_seeded_collection_reuses_scoped_fixtures_and_executes_every_case(tmp_pa
     assert sorted(int(event.removeprefix("case ")) for event in observed if event.startswith("case ")) == list(
         range(18)
     )
+
+
+def test_partitioned_collection_reuses_unparametrized_fixtures_and_executes_every_case(tmp_path: Path) -> None:
+    events: Final = tmp_path / "events.txt"
+    probe: Final = tmp_path / "test_fixture_probe.py"
+    probe.write_text(
+        "import pytest\nfrom pathlib import Path\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "def record(value):\n"
+        "    with EVENTS.open('a') as output:\n"
+        "        output.write(value + '\\n')\n"
+        "@pytest.fixture(scope='module')\n"
+        "def shared():\n"
+        "    record('start shared')\n"
+        "    yield 'shared'\n"
+        "    record('stop shared')\n"
+        "@pytest.mark.parametrize('number', range(4))\n"
+        "def test_shared(shared, number):\n"
+        "    assert shared == 'shared'\n"
+        "    record('shared ' + str(number))\n"
+        "@pytest.mark.parametrize('number', range(8))\n"
+        "def test_plain(number):\n"
+        "    record('plain ' + str(number))\n"
+    )
+    (tmp_path / "partition_probe.py").write_text(
+        "from integration._support.ordering import case_shards, collected_case\n"
+        "def pytest_collection_modifyitems(config, items):\n"
+        "    shards = case_shards(tuple(collected_case(item) for item in items), 3)\n"
+        "    selected = shards[config.getoption('integration_shard_index')]\n"
+        "    items[:] = tuple(item for item in items if item.nodeid in selected)\n"
+    )
+    results: Final = tuple(
+        subprocess.run(
+            (
+                sys.executable,
+                "-P",
+                "-m",
+                "pytest",
+                str(probe),
+                "-p",
+                "tests.integration.conftest",
+                "-p",
+                "partition_probe",
+                "--integration-shard-count=3",
+                f"--integration-shard-index={index}",
+                "--integration-order-seed=1848224111",
+                "--timeout=15",
+                "-q",
+            ),
+            env={
+                **{
+                    name: value
+                    for name, value in os.environ.items()
+                    if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING")
+                },
+                "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", ""))),
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        for index in range(3)
+    )
+    assert all(result.returncode == 0 for result in results), tuple(result.stdout + result.stderr for result in results)
+    observed: Final = tuple(events.read_text().splitlines())
+    assert observed.count("start shared") == observed.count("stop shared") == 1
+    assert sorted(event for event in observed if event.startswith("shared ")) == [
+        f"shared {index}" for index in range(4)
+    ]
+    assert sorted(event for event in observed if event.startswith("plain ")) == [f"plain {index}" for index in range(8)]
