@@ -2718,11 +2718,7 @@ def _per_user_oauth_configured() -> bool:
     )
 
     return any(
-        isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         for credential in (litellm.credential_list or ())
     )
 
@@ -2739,12 +2735,8 @@ def _all_per_user_credential_names() -> tuple[str, ...]:
     return tuple(
         credential.credential_name
         for credential in (litellm.credential_list or ())
-        if getattr(credential, "credential_name", None)
-        and isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        if credential.credential_name
+        and credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
 
