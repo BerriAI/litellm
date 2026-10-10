@@ -898,19 +898,20 @@ class BaseResponsesAPIStreamingIterator:
 
         traceback_exception: Final = traceback.format_exc()
         end_time: Final = datetime.now()
+        attempt_logging_obj: Final = self._attempt_logging_obj()
         running_loop: Final = _running_loop()
         if running_loop is not None:
             self._record_pending_logging_task(
                 _spawn_logging_task(
                     running_loop,
-                    self._run_failure_handlers_in_order(exception, traceback_exception, end_time),
+                    self._run_failure_handlers_in_order(attempt_logging_obj, exception, traceback_exception, end_time),
                     task_name="Responses stream failure logging",
                 )
             )
             return
         try:
             run_async_function(
-                async_function=self.logging_obj.async_failure_handler,
+                async_function=attempt_logging_obj.async_failure_handler,
                 exception=exception,
                 traceback_exception=traceback_exception,
                 start_time=self.start_time,
@@ -918,25 +919,58 @@ class BaseResponsesAPIStreamingIterator:
             )
         except Exception:
             pass
-        self._submit_sync_failure_handler(exception, traceback_exception, end_time)
+        self._submit_sync_failure_handler(attempt_logging_obj, exception, traceback_exception, end_time)
+
+    def _attempt_logging_obj(self) -> LiteLLMLoggingObj:
+        """The failure handlers run after this method returns, the sync one on a thread pool nobody waits
+        for. A router fallback reuses the request's Logging object for its next attempt and calls
+        update_from_kwargs() with the fallback deployment's model_info right away, so handlers reading
+        the shared object could attribute this attempt's failure (and its cooldown) to the fallback
+        deployment (#45645). Hand them a copy frozen at the moment of failure instead.
+
+        The has_logged_* dedup flags are still set on the shared object here, as the inline
+        failure_handler call in wrapper_async would, so what later attempts log is unchanged."""
+        shared: Final = self.logging_obj
+        model_call_details: Final = getattr(shared, "model_call_details", None)
+        if not isinstance(model_call_details, dict):
+            return shared
+        attempt_details: Final = dict(model_call_details)
+        litellm_params: Final = attempt_details.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            attempt_details["litellm_params"] = dict(litellm_params)
+        attempt: Final = copy.copy(shared)
+        attempt.model_call_details = attempt_details
+        for event_type in ("async_failure", "sync_failure"):
+            shared.mark_logging_complete(event_type=event_type)
+        return attempt
 
     async def _run_failure_handlers_in_order(
-        self, exception: Exception, traceback_exception: str, end_time: datetime
+        self,
+        attempt_logging_obj: LiteLLMLoggingObj,
+        exception: Exception,
+        traceback_exception: str,
+        end_time: datetime,
     ) -> None:
         try:
-            await self.logging_obj.async_failure_handler(
+            await attempt_logging_obj.async_failure_handler(
                 exception=exception,
                 traceback_exception=traceback_exception,
                 start_time=self.start_time,
                 end_time=end_time,
             )
         finally:
-            self._submit_sync_failure_handler(exception, traceback_exception, end_time)
+            self._submit_sync_failure_handler(attempt_logging_obj, exception, traceback_exception, end_time)
 
-    def _submit_sync_failure_handler(self, exception: Exception, traceback_exception: str, end_time: datetime) -> None:
+    def _submit_sync_failure_handler(
+        self,
+        attempt_logging_obj: LiteLLMLoggingObj,
+        exception: Exception,
+        traceback_exception: str,
+        end_time: datetime,
+    ) -> None:
         try:
             executor.submit(
-                self.logging_obj.failure_handler,
+                attempt_logging_obj.failure_handler,
                 exception,
                 traceback_exception,
                 self.start_time,

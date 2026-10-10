@@ -1351,6 +1351,14 @@ class _FakeLoggingObj:
         self.completion_start_time = None
         self.model_call_details = {"litellm_params": {}}
 
+    def __copy__(self):
+        # The iterator runs failure handlers on a per-attempt copy; return self so these
+        # tests can keep counting handler calls on the object they built.
+        return self
+
+    def mark_logging_complete(self, event_type):
+        pass
+
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
         kwargs.pop("prefer_async_handlers", None)
