@@ -2126,6 +2126,29 @@ class TestVertexClaudeBatch:
         assert bad_row["error"]["code"] == "vertex_ai_error"
         assert "too long" in bad_row["error"]["message"]
 
+    def test_malformed_claude_message_fails_only_its_own_row(self, config):
+        malformed = _claude_output_row("bad", "unused")
+        malformed["response"]["content"] = 5
+        content = json.dumps(_claude_output_row("ok", "fine")).encode() + b"\n" + json.dumps(malformed).encode()
+
+        ok_row, bad_row = (
+            json.loads(line) for line in config._try_transform_vertex_batch_output_to_openai(content).splitlines()
+        )
+
+        assert ok_row["response"]["body"]["choices"][0]["message"]["content"] == "fine"
+        assert bad_row["custom_id"] == "bad"
+        assert bad_row["response"] is None
+        assert bad_row["error"]["code"] == "transformation_error"
+
+    def test_claude_row_without_custom_id_has_no_custom_id_field(self, config):
+        entry = _claude_chat_entry("unused", "hi", max_tokens=10)
+        del entry["custom_id"]
+
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert set(row) == {"request"}
+        assert row["request"]["anthropic_version"] == "vertex-2023-10-16"
+
     @pytest.mark.asyncio
     async def test_streamed_claude_output_is_transformed(self, config):
         async def chunks():
