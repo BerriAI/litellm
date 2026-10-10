@@ -1831,6 +1831,8 @@ RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
 
+_RESPONSES_WS_CLOSE_TIMEOUT_SECONDS: Final = 1.0
+
 _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 
 
@@ -1927,6 +1929,7 @@ class ResponsesWebSocketStreaming:
         self.custom_llm_provider: str | None = custom_llm_provider
         self.messages: list[_MutableJsonObject] = []
         self.input_messages: list[dict[str, object]] = []
+        self._response_in_progress: bool = False
         self.first_message = first_message
         self.guardrail_callbacks: Sequence[PresidioGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
@@ -1949,6 +1952,14 @@ class ResponsesWebSocketStreaming:
                 return
         else:
             event_obj = event
+
+        match event_obj.get("type"):
+            case "response.create" | "response.created":
+                self._response_in_progress = True
+            case "response.completed" | "response.incomplete" | "response.failed" | "error":
+                self._response_in_progress = False
+            case _:
+                pass
 
         if self._should_store_event(event_obj):
             self.messages.append(event_obj)
@@ -2053,7 +2064,38 @@ class ResponsesWebSocketStreaming:
         wrapped_event: Final = _wrap_output_item_encrypted_content(event_obj, self.litellm_metadata)
         return response_str if wrapped_event is None else json.dumps(wrapped_event)
 
+    async def _record_interrupted_response(self) -> None:
+        if not self._response_in_progress:
+            return
+        error_frame: Final = json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "type": "server_error",
+                    "code": "upstream_connection_closed",
+                    "message": "The Responses WebSocket connection closed before the response finished",
+                },
+            }
+        )
+        self._store_event(error_frame)
+        try:
+            await asyncio.wait_for(self.websocket.send_text(error_frame), _RESPONSES_WS_CLOSE_TIMEOUT_SECONDS)
+        except Exception as exc:  # noqa: BLE001  # the client may already be disconnected
+            verbose_logger.debug("Could not notify the Responses WS client of interruption: %s", exc)
+
+    async def _finish_response_logging(self) -> None:
+        try:
+            await self._record_interrupted_response()
+        finally:
+            await self._log_messages()
+
     async def backend_to_client(self) -> None:
+        try:
+            await self._forward_backend_events()
+        finally:
+            await self._finish_response_logging()
+
+    async def _forward_backend_events(self) -> None:
         """Forward events from backend WebSocket to the client."""
         import websockets
 
@@ -2100,8 +2142,6 @@ class ResponsesWebSocketStreaming:
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
         except Exception as e:
             verbose_logger.exception("Error in responses WS backend_to_client: %s", e)
-        finally:
-            await self._log_messages()
 
     def _enforce_authorized_model(self, msg_obj: _MutableJsonObject) -> bool:
         """
@@ -2463,23 +2503,34 @@ class ResponsesWebSocketStreaming:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
 
     async def bidirectional_forward(self) -> Exception | None:
-        forward_task: Final = asyncio.create_task(self.backend_to_client())
+        forward_task: Final = asyncio.create_task(self._forward_backend_events())
+        client_task: Final = asyncio.create_task(self.client_to_backend())
         try:
-            await self.client_to_backend()
-        except Exception:
-            pass
+            await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
         finally:
-            if not forward_task.done():
-                forward_task.cancel()
-                try:
-                    await forward_task
-                except asyncio.CancelledError:
-                    pass
+            forward_task.cancel()
+            client_task.cancel()
             try:
-                await self.backend_ws.close()
-            except Exception:
-                pass
+                await asyncio.gather(forward_task, client_task, return_exceptions=True)
+            finally:
+                try:
+                    await self._finish_response_logging()
+                finally:
+                    await self._close_connections()
         return self._failure_exception()
+
+    async def _close_connections(self) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    self.backend_ws.close(),
+                    self.websocket.close(code=1011 if self._failure_exception() is not None else 1000),
+                    return_exceptions=True,
+                ),
+                _RESPONSES_WS_CLOSE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:  # noqa: BLE001  # closing disconnected peers is best effort
+            verbose_logger.debug("Could not finish closing the Responses WS connections: %s", exc)
 
 
 # ---------------------------------------------------------------------------

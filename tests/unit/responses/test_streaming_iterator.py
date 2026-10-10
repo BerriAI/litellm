@@ -3,9 +3,12 @@ completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
 completion_start_time = end_time."""
 
-import asyncio, importlib
+import asyncio
+import importlib
 import json
-from collections.abc import Callable
+from contextlib import suppress
+from types import SimpleNamespace
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -23,6 +26,7 @@ from litellm.responses.streaming_iterator import(
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
+    ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
     _estimate_usage_from_text,
 )
@@ -32,11 +36,9 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from types import SimpleNamespace
 
 
 def _sse_event(payload: dict) -> bytes:
@@ -830,6 +832,7 @@ def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
 
 def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
     response = _unvalidated_response_with_dict_usage(
         {
             "input_tokens": 29,
@@ -851,6 +854,7 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
 
 def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
     response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj.response_cost_calculator.return_value = 0.000704
@@ -1315,6 +1319,428 @@ def test_persist_completed_response_to_cache_survives_an_unserializable_response
 
     cache.add_cache.assert_not_called()
 
+
+class _NativeWebSocketRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.successes = 0
+        self.failures = 0
+        self.observed: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.successes += 1
+        self.observed.set()
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failures += 1
+        self.observed.set()
+
+
+def _native_ws_logging(recorder: _NativeWebSocketRecorder) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="openai/ws-interruption-test",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="ws-interruption-test",
+        function_id="ws-interruption-test",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"aresponses": True, "custom_llm_provider": "openai"}, optional_params={}
+    )
+    return logging_obj
+
+
+def _native_ws_created(response_id: str = "resp_partial") -> str:
+    return json.dumps(
+        {"type": "response.created", "response": {"id": response_id, "status": "in_progress", "output": []}}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_code", [1000, 1011])
+async def test_native_ws_upstream_close_during_a_response_logs_failure(close_code: int) -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    recorder: Final = _NativeWebSocketRecorder()
+    client: Final = Mock(send_text=AsyncMock())
+    backend: Final = Mock(
+        recv=AsyncMock(side_effect=[_native_ws_created(), ConnectionClosed(Close(close_code, "peer end"), None)])
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=_native_ws_logging(recorder),
+        custom_llm_provider="openai",
+    )
+
+    await handler.backend_to_client()
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    assert json.loads(client.send_text.await_args_list[-1].args[0])["type"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_native_ws_upstream_close_finishes_the_relay_without_a_client_message() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    recorder: Final = _NativeWebSocketRecorder()
+    waiting_client: Final = asyncio.Event()
+    client: Final = Mock(
+        send_text=AsyncMock(), receive_text=AsyncMock(side_effect=waiting_client.wait), close=AsyncMock()
+    )
+    backend: Final = Mock(
+        recv=AsyncMock(side_effect=[_native_ws_created(), ConnectionClosed(Close(1000, "peer end"), None)]),
+        close=AsyncMock(),
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=_native_ws_logging(recorder), custom_llm_provider="openai"
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 1)
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert failure is not None
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    client.close.assert_awaited_once()
+    backend.close.assert_awaited_once()
+
+
+def _native_ws_terminal(event_type: str, response_id: str = "resp_partial") -> str:
+    if event_type == "error":
+        return json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": "provider error"}})
+    return json.dumps(
+        {
+            "type": event_type,
+            "response": {
+                "id": response_id,
+                "status": event_type.removeprefix("response."),
+                "output": [],
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                **(
+                    {"error": {"type": "server_error", "message": "provider failure"}}
+                    if event_type == "response.failed"
+                    else {}
+                ),
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_code", [1000, 1011])
+@pytest.mark.parametrize(
+    "terminal,expected_counts",
+    [("response.completed", (1, 0)), ("response.incomplete", (1, 0)), ("response.failed", (0, 1)), ("error", (0, 1))],
+)
+async def test_native_ws_close_after_a_terminal_event_keeps_its_logging_outcome(
+    close_code: int, terminal: str, expected_counts: tuple[int, int]
+) -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    recorder: Final = _NativeWebSocketRecorder()
+    waiting_client: Final = asyncio.Event()
+    client: Final = Mock(
+        send_text=AsyncMock(), receive_text=AsyncMock(side_effect=waiting_client.wait), close=AsyncMock()
+    )
+    backend: Final = Mock(
+        recv=AsyncMock(
+            side_effect=[
+                _native_ws_created(),
+                _native_ws_terminal(terminal),
+                ConnectionClosed(Close(close_code, "peer end"), None),
+            ]
+        ),
+        close=AsyncMock(),
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=_native_ws_logging(recorder), custom_llm_provider="openai"
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 1)
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert (recorder.successes, recorder.failures) == expected_counts
+    assert (failure is not None) == (expected_counts[1] == 1)
+    assert [json.loads(call.args[0])["type"] for call in client.send_text.await_args_list] == [
+        "response.created",
+        terminal,
+    ]
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_ws_interruption_preserves_completed_turn_usage_without_inventing_partial_usage() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    litellm.register_model(
+        {
+            "openai/ws-interruption-test": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    recorder: Final = _NativeWebSocketRecorder()
+    logging_obj: Final = _native_ws_logging(recorder)
+    client: Final = Mock(send_text=AsyncMock())
+    backend: Final = Mock(
+        recv=AsyncMock(
+            side_effect=[
+                _native_ws_created("resp_complete"),
+                _native_ws_terminal("response.completed", "resp_complete"),
+                _native_ws_created(),
+                json.dumps({"type": "response.output_text.delta", "delta": "unbilled partial text"}),
+                ConnectionClosed(Close(1000, "peer end"), None),
+            ]
+        )
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=logging_obj, custom_llm_provider="openai"
+    )
+
+    await handler.backend_to_client()
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    usage: Final = logging_obj.model_call_details["combined_usage_object"]
+    assert isinstance(usage, Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(10 * 0.001 + 5 * 0.002)
+    assert (recorder.successes, recorder.failures) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_native_ws_close_before_the_first_provider_event_fails_an_accepted_request() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    request_sent: Final = asyncio.Event()
+
+    async def recv(decode: bool = False) -> str:
+        await request_sent.wait()
+        raise ConnectionClosed(Close(1000, "peer end"), None)
+
+    async def send(message: str) -> None:
+        request_sent.set()
+
+    recorder: Final = _NativeWebSocketRecorder()
+    waiting_client: Final = asyncio.Event()
+    client: Final = Mock(
+        send_text=AsyncMock(), receive_text=AsyncMock(side_effect=waiting_client.wait), close=AsyncMock()
+    )
+    backend: Final = Mock(recv=recv, send=send, close=AsyncMock())
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=_native_ws_logging(recorder),
+        custom_llm_provider="openai",
+        first_message=json.dumps({"type": "response.create", "input": "hi"}),
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 1)
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert failure is not None
+    assert [json.loads(call.args[0])["type"] for call in client.send_text.await_args_list] == ["error"]
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    assert client.receive_text.await_count == 1
+    client.close.assert_awaited_once()
+    backend.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_ws_client_disconnect_cancels_the_backend_and_records_interruption() -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    created_sent: Final = asyncio.Event()
+    backend_cancelled: Final = asyncio.Event()
+    never_finishes: Final = asyncio.Event()
+    frames: Final = iter((_native_ws_created(),))
+
+    async def recv(decode: bool = False) -> str:
+        frame: Final = next(frames, None)
+        if frame is not None:
+            return frame
+        try:
+            await never_finishes.wait()
+        finally:
+            backend_cancelled.set()
+        raise AssertionError("backend was not cancelled")
+
+    async def send_text(data: str) -> None:
+        if json.loads(data)["type"] == "response.created":
+            created_sent.set()
+            return
+        raise WebSocketDisconnect()
+
+    async def receive_text() -> str:
+        await created_sent.wait()
+        raise WebSocketDisconnect()
+
+    recorder: Final = _NativeWebSocketRecorder()
+    client: Final = Mock(
+        send_text=send_text, receive_text=receive_text, close=AsyncMock(side_effect=WebSocketDisconnect())
+    )
+    backend: Final = Mock(recv=recv, close=AsyncMock())
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=_native_ws_logging(recorder), custom_llm_provider="openai"
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 1)
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert failure is not None
+    assert backend_cancelled.is_set()
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    backend.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_ws_cancelled_notification_still_logs_failure_and_closes_both_peers() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    notifying_client: Final = asyncio.Event()
+    never_finishes: Final = asyncio.Event()
+
+    async def send_text(data: str) -> None:
+        if json.loads(data)["type"] == "error":
+            notifying_client.set()
+            await never_finishes.wait()
+
+    recorder: Final = _NativeWebSocketRecorder()
+    logging_obj: Final = _native_ws_logging(recorder)
+    client: Final = Mock(
+        send_text=send_text, receive_text=AsyncMock(side_effect=never_finishes.wait), close=AsyncMock()
+    )
+    backend: Final = Mock(
+        recv=AsyncMock(side_effect=[_native_ws_created(), ConnectionClosed(Close(1000, "peer end"), None)]),
+        close=AsyncMock(),
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=logging_obj, custom_llm_provider="openai"
+    )
+
+    relay_task: Final = asyncio.create_task(handler.bidirectional_forward())
+    await asyncio.wait_for(notifying_client.wait(), 1)
+    relay_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await relay_task
+    assert logging_obj.model_call_details.get("combined_usage_object") is not None
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    client.close.assert_awaited_once()
+    backend.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_ws_already_closed_upstream_fails_the_pre_read_request() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    recorder: Final = _NativeWebSocketRecorder()
+    waiting_client: Final = asyncio.Event()
+    client: Final = Mock(
+        send_text=AsyncMock(), receive_text=AsyncMock(side_effect=waiting_client.wait), close=AsyncMock()
+    )
+    backend: Final = Mock(
+        recv=AsyncMock(side_effect=ConnectionClosed(Close(1000, "peer end"), None)),
+        send=AsyncMock(side_effect=ConnectionClosed(Close(1000, "peer end"), None)),
+        close=AsyncMock(),
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=_native_ws_logging(recorder),
+        custom_llm_provider="openai",
+        first_message=json.dumps({"type": "response.create", "input": "hi"}),
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 1)
+
+    assert failure is not None
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    assert [json.loads(call.args[0])["type"] for call in client.send_text.await_args_list] == ["error"]
+
+
+@pytest.mark.asyncio
+async def test_native_ws_ready_next_request_after_upstream_close_has_one_final_logging_outcome() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    recorder: Final = _NativeWebSocketRecorder()
+    client: Final = Mock(
+        send_text=AsyncMock(),
+        receive_text=AsyncMock(return_value=json.dumps({"type": "response.create", "input": "next turn"})),
+        close=AsyncMock(),
+    )
+    backend: Final = Mock(
+        recv=AsyncMock(
+            side_effect=[
+                _native_ws_created(),
+                _native_ws_terminal("response.completed"),
+                ConnectionClosed(Close(1000, "peer end"), None),
+            ]
+        ),
+        send=AsyncMock(side_effect=ConnectionClosed(Close(1000, "peer end"), None)),
+        close=AsyncMock(),
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=_native_ws_logging(recorder), custom_llm_provider="openai"
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 1)
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert failure is not None
+    assert (recorder.successes, recorder.failures) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_native_ws_stalled_error_notification_does_not_keep_the_relay_open() -> None:
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    never_finishes: Final = asyncio.Event()
+
+    async def send_text(data: str) -> None:
+        if json.loads(data)["type"] == "error":
+            await never_finishes.wait()
+
+    recorder: Final = _NativeWebSocketRecorder()
+    client: Final = Mock(
+        send_text=send_text, receive_text=AsyncMock(side_effect=never_finishes.wait), close=AsyncMock()
+    )
+    backend: Final = Mock(
+        recv=AsyncMock(side_effect=[_native_ws_created(), ConnectionClosed(Close(1000, "peer end"), None)]),
+        close=AsyncMock(),
+    )
+    handler: Final = ResponsesWebSocketStreaming(
+        websocket=client, backend_ws=backend, logging_obj=_native_ws_logging(recorder), custom_llm_provider="openai"
+    )
+
+    failure: Final = await asyncio.wait_for(handler.bidirectional_forward(), 2)
+    await asyncio.wait_for(recorder.observed.wait(), 1)
+
+    assert failure is not None
+    assert (recorder.successes, recorder.failures) == (0, 1)
+    client.close.assert_awaited_once()
+    backend.close.assert_awaited_once()
 
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
