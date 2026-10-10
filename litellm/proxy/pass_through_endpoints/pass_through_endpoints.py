@@ -8,7 +8,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import count, groupby
+from itertools import chain, count, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
@@ -120,6 +120,11 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.route_priority import (
+    builtin_pass_through_routes_first,
+    configured_pass_through_routes_first,
+    shadowed_by_builtin_claim,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -672,6 +677,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
             _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
             _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
+            _metadata["user_api_key_team_member_model_max_budget"] = user_api_key_dict.team_member_model_max_budget
             _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
         else:
             for field in (
@@ -3009,6 +3015,41 @@ class SafeRouteAdder:
         return any(id(route) not in lazy_owned for route in SafeRouteAdder._colliding_routes(app, path, methods))
 
     @staticmethod
+    def remove_unregistered_routes(app: FastAPI) -> None:
+        def registered_route_path(route_info: Mapping[str, object]) -> str | None:
+            path: Final = route_info.get("path")
+            if not isinstance(path, str):
+                return None
+            route_type: Final = route_info.get("type")
+            if route_type == "exact":
+                return path
+            if route_type == "subpath":
+                return f"{path}/{{subpath:path}}"
+            return None
+
+        def registered_route_methods(
+            route_info: Mapping[str, str | bool | Sequence[str] | Mapping[str, object]],
+        ) -> tuple[tuple[str, str], ...]:
+            starlette_path: Final = registered_route_path(route_info)
+            methods: Final = route_info.get("methods")
+            if starlette_path is None or not isinstance(methods, (list, tuple)):
+                return ()
+            return tuple((starlette_path, method.upper()) for method in methods)
+
+        registered: Final = frozenset(
+            chain.from_iterable(map(registered_route_methods, _registered_pass_through_routes.values()))
+        )
+        app.router.routes[:] = [  # rebind-ok: the app owns its route table
+            route
+            for route in app.router.routes
+            if not (
+                isinstance(route, Route)
+                and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+                and not any((route.path, method) in registered for method in (route.methods or ()))
+            )
+        ]
+
+    @staticmethod
     def add_api_route_if_not_exists(
         app: FastAPI,
         path: str,
@@ -3048,6 +3089,15 @@ class SafeRouteAdder:
             app.router.routes[:] = _placed_ahead(  # rebind-ok: the app owns its route table
                 app.router.routes, app.router.routes[-1], shadowed[0]
             )
+        lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]] | None] = getattr(
+            getattr(app, "state", None), "lazy_routes", None
+        )
+        if lazy_routes is not None and not builtin_pass_through_routes_first():
+            builtin: Final = tuple(chain.from_iterable(lazy_routes.values()))
+            if shadowed_by_builtin_claim(path, builtin):
+                app.router.routes[:] = configured_pass_through_routes_first(  # rebind-ok: the app owns its route table
+                    app.router.routes, builtin
+                )
         verbose_proxy_logger.debug(
             "Successfully added route: %s with methods %s",
             path,
@@ -3538,6 +3588,8 @@ async def initialize_pass_through_endpoints(
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
             _registered_pass_through_routes.pop(endpoint_key, None)
+    if not builtin_pass_through_routes_first():
+        SafeRouteAdder.remove_unregistered_routes(app)
 
 
 def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint]:
@@ -3985,6 +4037,7 @@ async def delete_pass_through_endpoints(
     Returns - the deleted endpoint
     """
     from litellm.proxy.proxy_server import (
+        app,
         get_config_general_settings,
         update_config_general_settings,
     )
@@ -4035,6 +4088,8 @@ async def delete_pass_through_endpoints(
 
     # Remove routes from registry
     InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
+    if not builtin_pass_through_routes_first():
+        SafeRouteAdder.remove_unregistered_routes(app)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
