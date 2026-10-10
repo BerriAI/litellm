@@ -15,6 +15,9 @@ use super::*;
 #[case::minimax_key("minimax", Some("sk-test"), &[], ("x-api-key", "sk-test"), &["authorization"])]
 #[case::minimax_forwarded_key("minimax", None, &[("X-Api-Key", "caller")], ("x-api-key", "caller"), &["authorization"])]
 #[case::minimax_forwarded_bearer("minimax", None, &[("Authorization", "Bearer caller")], ("authorization", "Bearer caller"), &["x-api-key"])]
+#[case::tencent_key("tencent", Some("sk-test"), &[], ("x-api-key", "sk-test"), &["authorization"])]
+#[case::tencent_forwarded_key("tencent", None, &[("X-Api-Key", "caller")], ("x-api-key", "caller"), &["authorization"])]
+#[case::tencent_forwarded_bearer("tencent", None, &[("Authorization", "Bearer caller")], ("authorization", "Bearer caller"), &["x-api-key"])]
 #[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
 #[case::deepseek_forwards_caller_authorization(
     "deepseek",
@@ -101,6 +104,7 @@ async fn credentials_become_exactly_one_auth_header(
 #[case::edenai("edenai")]
 #[case::openrouter("openrouter")]
 #[case::minimax("minimax")]
+#[case::tencent("tencent")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -141,6 +145,8 @@ async fn a_call_without_credentials_fails_before_sending(
 #[case::deepseek_openai_compatible_base(MODEL, Some("deepseek"), "/beta", "/anthropic/v1/messages")]
 #[case::minimax(MODEL, Some("minimax"), "", "/v1/messages")]
 #[case::minimax_prefix("minimax/claude-sonnet-4-5", None, "/v1/messages", "/v1/messages")]
+#[case::tencent(MODEL, Some("tencent"), "", "/v1/messages")]
+#[case::tencent_prefix("tencent/claude-sonnet-4-5", None, "/v1/messages", "/v1/messages")]
 #[case::edenai(MODEL, Some("edenai"), "/v3", "/v3/v1/messages")]
 #[case::openrouter(MODEL, Some("openrouter"), "/api/v1", "/api/v1/messages")]
 #[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages")]

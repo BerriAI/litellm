@@ -11,6 +11,7 @@ use litellm_llms::{
     github_copilot::messages::transformation::COPILOT_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG,
+    tencent::messages::transformation::TENCENT_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -28,6 +29,7 @@ pub(crate) enum MessagesProvider {
     Edenai,
     GithubCopilot,
     Minimax,
+    Tencent,
     Openrouter,
     VertexAi,
 }
@@ -42,6 +44,7 @@ impl MessagesProvider {
             Self::Edenai => LlmProviders::Edenai,
             Self::GithubCopilot => LlmProviders::GithubCopilot,
             Self::Minimax => LlmProviders::Minimax,
+            Self::Tencent => LlmProviders::Tencent,
             Self::Openrouter => LlmProviders::Openrouter,
             Self::VertexAi => LlmProviders::VertexAi,
         }
@@ -57,6 +60,7 @@ impl MessagesProvider {
             Self::Edenai => &EDENAI_MESSAGES_CONFIG,
             Self::GithubCopilot => &COPILOT_MESSAGES_CONFIG,
             Self::Minimax => &MINIMAX_MESSAGES_CONFIG,
+            Self::Tencent => &TENCENT_MESSAGES_CONFIG,
             Self::Openrouter => &OPENROUTER_MESSAGES_CONFIG,
             Self::VertexAi => &VERTEX_ANTHROPIC_MESSAGES_CONFIG,
         }
@@ -76,6 +80,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
             Some(MessagesProvider::GithubCopilot)
         }
         LlmProviders::Minimax => Some(MessagesProvider::Minimax),
+        LlmProviders::Tencent => Some(MessagesProvider::Tencent),
         LlmProviders::Openrouter => Some(MessagesProvider::Openrouter),
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::VertexAi)
@@ -108,6 +113,7 @@ mod tests {
     #[case::edenai("edenai", MessagesProvider::Edenai)]
     #[case::github_copilot("github_copilot", MessagesProvider::GithubCopilot)]
     #[case::minimax("minimax", MessagesProvider::Minimax)]
+    #[case::tencent("tencent", MessagesProvider::Tencent)]
     #[case::openrouter("openrouter", MessagesProvider::Openrouter)]
     #[case::vertex_ai("vertex_ai", MessagesProvider::VertexAi)]
     fn provider_round_trips_through_its_python_name(

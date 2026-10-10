@@ -12,3 +12,5 @@ mod vertex_ai;
 
 #[path = "live/minimax.rs"]
 mod minimax;
+#[path = "live/tencent.rs"]
+mod tencent;
