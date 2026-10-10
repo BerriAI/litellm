@@ -122,6 +122,7 @@ def test_assistant_message_before_function_call_keeps_one_assistant_turn():
     Round-tripping that order back to chat must fold both into a single assistant
     turn, so the tool result still follows the message that made the call.
     """
+    # the bridge path enables single-text-block collapse (#45618)
     msgs = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
         input=[
             {
@@ -145,13 +146,15 @@ def test_assistant_message_before_function_call_keeps_one_assistant_turn():
                 "call_id": "call_1",
                 "output": "sunny",
             },
-        ]
+        ],
+        collapse_single_text_block=True,
     )
 
     assistant_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "assistant"]
     assert len(assistant_msgs) == 1
     assistant = assistant_msgs[0]
-    assert assistant["content"] == [{"type": "text", "text": "Let me check."}]
+    # a lone text block collapses back to a string in the bridge (#45618)
+    assert assistant["content"] == "Let me check."
     assert [tc["function"]["name"] for tc in assistant["tool_calls"]] == ["get_weather"]
 
     assistant_idx = msgs.index(assistant)

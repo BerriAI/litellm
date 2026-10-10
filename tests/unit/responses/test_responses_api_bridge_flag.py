@@ -358,9 +358,9 @@ class TestUseResponsesApiBridgeFlag:
         assert request_body["messages"] == [
             {
                 "role": "system",
-                "content": [{"type": "text", "text": "You are terse."}, {"type": "text", "text": "Skills: none."}],
+                "content": "You are terse.\n\nSkills: none.",
             },
-            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            {"role": "user", "content": "Hello"},
         ]
         assert "client_metadata" not in request_body
         assert request_body["chat_template_kwargs"] == {"thinking": True}
