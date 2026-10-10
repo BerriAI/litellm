@@ -5,8 +5,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, cast
 
-import litellm
-
 
 def sanitize_prometheus_label_name(label: str) -> str:
     """
@@ -98,6 +96,8 @@ class LabelValidationError:
 
     @property
     def message(self) -> str:
+        import litellm
+
         base_message: Final = f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
         if self.metric_name in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS and any(
             label in ("api_key_alias", "user_email") for label in self.invalid_labels
@@ -349,6 +349,8 @@ PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES: Final[tuple[str, ...]]
 
 def validate_prometheus_deployment_and_latency_caller_identity() -> str:
     """Return the configured caller-identity mode, raising on an invalid value."""
+    import litellm
+
     caller_identity: Final[object] = getattr(
         litellm,
         "prometheus_deployment_and_latency_caller_identity",
@@ -367,6 +369,8 @@ def validate_caller_identity_settings(litellm_settings: Mapping[str, object]) ->
     """Store the caller-identity mode from litellm_settings and validate it together
     with prometheus_metrics_config, raising on an invalid value or on include_labels
     that request a label the selected mode removes."""
+    import litellm
+
     if "prometheus_deployment_and_latency_caller_identity" not in litellm_settings:
         return
     litellm.prometheus_deployment_and_latency_caller_identity = (
@@ -978,6 +982,8 @@ class PrometheusMetricLabels:
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
+        import litellm
+
         default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
             metric_name=label_name,
             labels=getattr(PrometheusMetricLabels, label_name),
