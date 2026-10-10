@@ -915,7 +915,7 @@ class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
-    cache_control: NotRequired[ChatCompletionCachedContent]
+    cache_control: NotRequired[ChatCompletionCachedContent]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionFunctionMessage(TypedDict):
@@ -948,7 +948,7 @@ class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total
 class GenericChatCompletionMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[str | list]
-    cache_control: ChatCompletionCachedContent
+    cache_control: ReadOnly[ChatCompletionCachedContent]
 
 
 ValidUserMessageContentTypes = [
@@ -1139,7 +1139,7 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     provider_specific_fields: dict | None
     reasoning_content: str | None
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None
-    cache_control: ChatCompletionCachedContent
+    cache_control: ReadOnly[ChatCompletionCachedContent]
 
 
 class ChatCompletionUsageBlock(TypedDict, total=False):
