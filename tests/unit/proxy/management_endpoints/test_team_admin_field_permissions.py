@@ -3,7 +3,13 @@ from fastapi import HTTPException
 
 from litellm.models.team import BudgetLimitEntry
 from litellm.models.verification_token import LiteLLM_VerificationToken
-from litellm.proxy._types import LiteLLM_ModelTable, LiteLLM_TeamTable, UpdateKeyRequest, UpdateTeamRequest
+from litellm.proxy._types import (
+    LiteLLM_ModelTable,
+    LiteLLM_TeamTable,
+    LiteLLMKeyType,
+    UpdateKeyRequest,
+    UpdateTeamRequest,
+)
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditAllowed,
     TeamAdminEditingDisabled,
@@ -21,6 +27,11 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_may_manage_projects,
     team_admin_may_raise_max_budget,
     team_admin_member_key_creation_or_raise,
+    team_admin_member_key_creation_verdict,
+    TeamAdminMemberKeyCreationAllowed,
+    TeamAdminMemberKeyCreationDisabled,
+    TeamAdminMemberKeyOwnerNotPermitted,
+    TeamAdminMemberKeyTypeNotPermitted,
     team_admin_request_or_raise,
 )
 
@@ -210,15 +221,47 @@ class TestTeamAdminMayCreateMemberKeys:
     def test_malformed_setting_denies(self, raw):
         assert team_admin_may_create_member_keys({"team_admin_editable_team_fields": raw}) is False
 
-    def test_or_raise_passes_when_granted(self):
-        assert team_admin_member_key_creation_or_raise({"team_admin_editable_team_fields": ["create_member_keys"]}) is None
 
-    def test_or_raise_is_a_403_naming_the_permission_and_where_to_enable_it(self):
+_MEMBER_KEYS_ON = {"team_admin_editable_team_fields": ["create_member_keys"]}
+
+
+class TestTeamAdminMemberKeyCreationVerdict:
+    @pytest.mark.parametrize("owner_role", ["internal_user", "internal_user_viewer"])
+    @pytest.mark.parametrize("key_type", [None, LiteLLMKeyType.DEFAULT, LiteLLMKeyType.LLM_API])
+    def test_an_ordinary_member_and_an_llm_key_are_allowed(self, owner_role, key_type):
+        verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=key_type, owner_role=owner_role)
+        assert verdict == TeamAdminMemberKeyCreationAllowed()
+        assert team_admin_member_key_creation_or_raise(verdict) is None
+
+    def test_disabled_is_a_403_naming_the_permission_and_where_to_enable_it(self):
+        verdict = team_admin_member_key_creation_verdict(
+            {"team_admin_editable_team_fields": ["member_key_budgets"]}, key_type=None, owner_role="internal_user"
+        )
+        assert verdict == TeamAdminMemberKeyCreationDisabled()
         with pytest.raises(HTTPException) as exc:
-            team_admin_member_key_creation_or_raise({"team_admin_editable_team_fields": ["member_key_budgets"]})
+            team_admin_member_key_creation_or_raise(verdict)
         assert exc.value.status_code == 403
         assert "'create_member_keys'" in exc.value.detail
         assert "Settings > UI > Team admin editable fields" in exc.value.detail
+
+    @pytest.mark.parametrize("owner_role", ["proxy_admin", "proxy_admin_viewer", "org_admin", "team", "customer", None])
+    def test_an_owner_who_is_not_an_ordinary_internal_user_is_refused(self, owner_role):
+        """A key authenticates with its owner's role, so a privileged owner would hand that role to the team admin."""
+        verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=None, owner_role=owner_role)
+        assert verdict == TeamAdminMemberKeyOwnerNotPermitted(owner_role=owner_role)
+        with pytest.raises(HTTPException) as exc:
+            team_admin_member_key_creation_or_raise(verdict)
+        assert exc.value.status_code == 403
+        assert f"'{owner_role}'" in exc.value.detail
+
+    @pytest.mark.parametrize("key_type", [LiteLLMKeyType.MANAGEMENT, LiteLLMKeyType.READ_ONLY])
+    def test_a_key_type_that_reaches_beyond_llm_routes_is_refused(self, key_type):
+        verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=key_type, owner_role="internal_user")
+        assert verdict == TeamAdminMemberKeyTypeNotPermitted(key_type=key_type)
+        with pytest.raises(HTTPException) as exc:
+            team_admin_member_key_creation_or_raise(verdict)
+        assert exc.value.status_code == 403
+        assert f"'{key_type.value}'" in exc.value.detail
 
 
 class TestTeamAdminMayRaiseMaxBudget:

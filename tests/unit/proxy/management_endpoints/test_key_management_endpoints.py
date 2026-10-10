@@ -56,6 +56,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
+    _member_key_route_limit,
+    _team_admin_requests_member_key,
     KeyProjectBindingError,
     _effective_key_after_update,
     _effective_key_for_generate,
@@ -22327,97 +22329,85 @@ class TestTeamAdminMemberKeyBudgetUpdate:
         assert "member_key_budgets" not in str(exc.value.detail)
 
 
-class TestTeamAdminCreatesMemberKey:
-    """LIT-6380: a team admin may create a team key owned by another member of that team
-    only when the proxy enables the 'create_member_keys' permission."""
+_MEMBER_KEY_TEAM = LiteLLM_TeamTableCachedObj(
+    team_id="team-1",
+    members_with_roles=[
+        Member(user_id="team-admin-1", role="admin"),
+        Member(user_id="member-1", role="user"),
+        Member(user_id="member-2", role="user"),
+    ],
+)
 
-    def _team(self, members):
-        return LiteLLM_TeamTableCachedObj(team_id="team-1", members_with_roles=members)
 
-    def _admin_and_member(self):
-        return self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")])
-
-    async def _generate(self, monkeypatch, editable_fields, data, team_table, caller):
-        generate_key = AsyncMock(
-            return_value={"key": "sk-new", "expires": None, "user_id": data.user_id, "team_id": data.team_id}
-        )
-        monkeypatch.setattr(
-            "litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": editable_fields}
-        )
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
-        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
-        monkeypatch.setattr(
-            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn", generate_key
-        )
-        await _common_key_generation_helper(
-            data=data,
-            user_api_key_dict=UserAPIKeyAuth(user_id=caller, user_role=LitellmUserRoles.INTERNAL_USER),
-            litellm_changed_by=None,
-            team_table=team_table,
-        )
-        return generate_key
-
-    @pytest.mark.asyncio
-    async def test_team_admin_creates_a_key_owned_by_a_member_when_enabled(self, monkeypatch):
-        generate_key = await self._generate(
-            monkeypatch,
-            ["create_member_keys"],
-            GenerateKeyRequest(user_id="member-1", team_id="team-1"),
-            self._admin_and_member(),
-            caller="team-admin-1",
-        )
-        created = generate_key.call_args.kwargs
-        assert (created["user_id"], created["team_id"]) == ("member-1", "team-1")
-
-    @pytest.mark.asyncio
-    async def test_team_admin_is_pointed_at_the_setting_when_disabled(self, monkeypatch):
-        with pytest.raises(HTTPException) as exc:
-            await self._generate(
-                monkeypatch,
-                ["member_key_budgets"],
-                GenerateKeyRequest(user_id="member-1", team_id="team-1"),
-                self._admin_and_member(),
-                caller="team-admin-1",
-            )
-        assert exc.value.status_code == 403
-        assert "'create_member_keys'" in str(exc.value.detail)
-
-    @pytest.mark.parametrize(
-        "data, team_members, caller",
-        [
-            pytest.param(
-                GenerateKeyRequest(user_id="member-1", team_id="team-1"),
-                [Member(user_id="member-2", role="user"), Member(user_id="member-1", role="user")],
-                "member-2",
-                id="ordinary_member_for_another_member",
-            ),
-            pytest.param(
-                GenerateKeyRequest(user_id="outsider", team_id="team-1"),
-                [Member(user_id="team-admin-1", role="admin")],
-                "team-admin-1",
-                id="team_admin_for_a_user_outside_the_team",
-            ),
-            pytest.param(
-                GenerateKeyRequest(user_id="member-1"),
-                None,
-                "team-admin-1",
-                id="personal_key_for_another_user",
-            ),
-        ],
+def test_team_admin_asking_for_a_teammates_team_key_is_a_member_key_request():
+    assert _team_admin_requests_member_key(
+        data=GenerateKeyRequest(user_id="member-1", team_id="team-1"),
+        team_table=_MEMBER_KEY_TEAM,
+        user_api_key_dict=UserAPIKeyAuth(user_id="team-admin-1", user_role=LitellmUserRoles.INTERNAL_USER),
     )
-    @pytest.mark.asyncio
-    async def test_enabling_the_permission_grants_nothing_else(self, monkeypatch, data, team_members, caller):
-        with pytest.raises(HTTPException) as exc:
-            await self._generate(
-                monkeypatch,
-                ["create_member_keys"],
-                data,
-                None if team_members is None else self._team(team_members),
-                caller=caller,
-            )
-        assert exc.value.status_code == 403
-        assert "User can only create keys for themselves" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize(
+    "data, team_table, caller, caller_role",
+    [
+        pytest.param(
+            GenerateKeyRequest(user_id="member-1", team_id="team-1"),
+            _MEMBER_KEY_TEAM,
+            "member-2",
+            LitellmUserRoles.INTERNAL_USER,
+            id="ordinary_member_for_another_member",
+        ),
+        pytest.param(
+            GenerateKeyRequest(user_id="outsider", team_id="team-1"),
+            _MEMBER_KEY_TEAM,
+            "team-admin-1",
+            LitellmUserRoles.INTERNAL_USER,
+            id="team_admin_for_a_user_outside_the_team",
+        ),
+        pytest.param(
+            GenerateKeyRequest(user_id="member-1"),
+            None,
+            "team-admin-1",
+            LitellmUserRoles.INTERNAL_USER,
+            id="personal_key_for_another_user",
+        ),
+        pytest.param(
+            GenerateKeyRequest(user_id="team-admin-1", team_id="team-1"),
+            _MEMBER_KEY_TEAM,
+            "team-admin-1",
+            LitellmUserRoles.INTERNAL_USER,
+            id="team_admin_for_themselves",
+        ),
+        pytest.param(
+            GenerateKeyRequest(team_id="team-1"),
+            _MEMBER_KEY_TEAM,
+            "team-admin-1",
+            LitellmUserRoles.INTERNAL_USER,
+            id="team_key_with_no_owner",
+        ),
+        pytest.param(
+            GenerateKeyRequest(user_id="member-1", team_id="team-1"),
+            _MEMBER_KEY_TEAM,
+            "team-admin-1",
+            LitellmUserRoles.PROXY_ADMIN,
+            id="proxy_admin_keeps_the_proxy_admin_path",
+        ),
+    ],
+)
+def test_other_key_requests_are_not_member_key_requests(data, team_table, caller, caller_role):
+    assert not _team_admin_requests_member_key(
+        data=data,
+        team_table=team_table,
+        user_api_key_dict=UserAPIKeyAuth(user_id=caller, user_role=caller_role),
+    )
+
+
+def test_member_key_route_limit_confines_only_member_keys_to_llm_routes():
+    assert _member_key_route_limit(acting_as_team_admin=True) == {
+        "key_type": "llm_api",
+        "allowed_routes": ["llm_api_routes"],
+    }
+    assert _member_key_route_limit(acting_as_team_admin=False) == {}
 
 
 @pytest.mark.asyncio
