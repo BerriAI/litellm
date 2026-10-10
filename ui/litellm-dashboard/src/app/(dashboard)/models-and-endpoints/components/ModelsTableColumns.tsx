@@ -195,7 +195,7 @@ function CreatedByCell({
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       {!isConfigModel && createdBy ? (
-        <span className="max-w-44 truncate text-sm text-foreground">
+        <span className="flex min-w-0 max-w-44 text-sm text-foreground">
           <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
         </span>
       ) : (

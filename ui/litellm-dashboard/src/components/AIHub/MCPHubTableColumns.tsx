@@ -201,7 +201,7 @@ export const getMCPHubTableColumns = ({
     sortingFn: "alphanumeric",
     cell: ({ row }) =>
       row.original.created_by ? (
-        <span className="block max-w-60 truncate text-xs">
+        <span className="flex min-w-0 max-w-60 text-xs">
           <UserReference userId={row.original.created_by} displayName={resolveUserName(row.original.created_by)} />
         </span>
       ) : (
