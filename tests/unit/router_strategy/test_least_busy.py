@@ -1,12 +1,21 @@
+import asyncio
+import json
 import logging
 from typing import Final
 
+import httpx
 import pytest
+import respx
+
+import litellm
+from litellm import Router
 
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.least_busy import IN_FLIGHT_COUNT_TTL_SECONDS, LeastBusyLoggingHandler
+from litellm.types.utils import ModelResponse
 
 GROUP: Final = "least-busy-group"
 DEPLOYMENT_A: Final[dict[str, object]] = {"model_info": {"id": "dep-a"}}
@@ -208,3 +217,177 @@ async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(
     assert picked is DEPLOYMENT_B
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert sum("circuit breaker is open" in record.getMessage() for record in caplog.records) == 2
+
+
+def test_model_added():
+    test_cache = DualCache()
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": "1234"},
+        }
+    }
+    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+    request_count_api_key = "gpt-3.5-turbo_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
+
+
+def test_get_available_deployments():
+    test_cache = DualCache()
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment = "azure/gpt-4.1-mini"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": deployment,
+            },
+            "model_info": {"id": "1234"},
+        }
+    }
+    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+    request_count_api_key = f"{model_group}_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
+
+
+ROUTER_GROUP: Final = "least-busy-router-group"
+ROUTER_DEPLOYMENT_IDS: Final = ("1", "2", "3")
+
+
+def _least_busy_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": ROUTER_GROUP,
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": f"key-{deployment_id}"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ROUTER_DEPLOYMENT_IDS
+        ],
+        routing_strategy="least-busy",
+        num_retries=0,
+    )
+
+
+def _router_counts(router: Router) -> dict[str, object]:
+    return {
+        deployment_id: router.cache.get_cache(key=f"{ROUTER_GROUP}_request_count:{deployment_id}")
+        for deployment_id in ROUTER_DEPLOYMENT_IDS
+    }
+
+
+def _sse(chunks: tuple[dict[str, object], ...]) -> httpx.Response:
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+
+def _chat_stream(_: httpx.Request) -> httpx.Response:
+    return _sse(
+        (
+            {
+                "id": "chatcmpl-least-busy",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "poem"}, "finish_reason": None}],
+            },
+            {
+                "id": "chatcmpl-least-busy",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_spreads_open_chat_streams_across_least_busy_deployments(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_chat_stream)
+    router: Final = _least_busy_router()
+
+    streams: Final = [
+        await router.acompletion(
+            model=ROUTER_GROUP, messages=[{"role": "user", "content": "write a poem"}], stream=True
+        )
+        for _ in ROUTER_DEPLOYMENT_IDS
+    ]
+
+    assert _router_counts(router) == {"1": 1, "2": 1, "3": 1}
+    assert sorted(stream._hidden_params["model_id"] for stream in streams) == list(ROUTER_DEPLOYMENT_IDS)
+    assert sorted(call.request.headers["authorization"] for call in route.calls) == [
+        "Bearer key-1",
+        "Bearer key-2",
+        "Bearer key-3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_router_spreads_open_text_completion_streams_across_least_busy_deployments(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_chat_stream)
+    router: Final = _least_busy_router()
+
+    for _ in ROUTER_DEPLOYMENT_IDS:
+        await router.atext_completion(model=ROUTER_GROUP, prompt="write a poem", stream=True)
+
+    assert _router_counts(router) == {"1": 1, "2": 1, "3": 1}
+    assert sorted(call.request.headers["authorization"] for call in route.calls) == [
+        "Bearer key-1",
+        "Bearer key-2",
+        "Bearer key-3",
+    ]
+
+
+@pytest.mark.parametrize("use_async", [True, False])
+@pytest.mark.asyncio
+async def test_router_picks_least_busy_deployment_and_completion_restores_counts(
+    use_async: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-least-busy",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = _least_busy_router()
+    seeded: Final = {"1": 10, "2": 54, "3": 100}
+    for deployment_id, count in seeded.items():
+        router.cache.set_cache(key=f"{ROUTER_GROUP}_request_count:{deployment_id}", value=count)
+
+    deployment: Final = (
+        await router.async_get_available_deployment(model=ROUTER_GROUP, messages=None, request_kwargs={})
+        if use_async
+        else router.get_available_deployment(model=ROUTER_GROUP, messages=None)
+    )
+    response: Final = await router.acompletion(
+        model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert deployment["model_info"]["id"] == "1"
+    assert isinstance(response, ModelResponse)
+    assert response._hidden_params["model_id"] == "1"
+    assert route.calls.last.request.headers["authorization"] == "Bearer key-1"
+    assert _router_counts(router) == seeded

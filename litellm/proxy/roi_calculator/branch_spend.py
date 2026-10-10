@@ -61,12 +61,23 @@ async def read_branch_spend(
 def attribute_branches(
     pulls: tuple[ROIPullRecord, ...], spend: tuple[ROIBranchSpend, ...] | None
 ) -> Mapping[tuple[str, int], ROIBranchAttribution]:
-    counts: Final = Counter((pull.get("source_repo", ""), pull.get("source_branch", "")) for pull in pulls)
+    return attribute_branch_keys(
+        tuple(
+            (pull["repo"], pull["number"], pull.get("source_repo", ""), pull.get("source_branch", "")) for pull in pulls
+        ),
+        spend,
+    )
+
+
+def attribute_branch_keys(
+    pulls: tuple[tuple[str, int, str, str], ...], spend: tuple[ROIBranchSpend, ...] | None
+) -> Mapping[tuple[str, int], ROIBranchAttribution]:
+    counts: Final = Counter((pull[2], pull[3]) for pull in pulls)
     costs: Final = {(row.repo, row.branch): row for row in spend or ()}
 
-    def attribute(pull: ROIPullRecord) -> ROIBranchAttribution:
-        repo: Final = pull.get("source_repo", "")
-        branch: Final = pull.get("source_branch", "")
+    def attribute(pull: tuple[str, int, str, str]) -> ROIBranchAttribution:
+        repo: Final = pull[2]
+        branch: Final = pull[3]
         cost: Final = costs.get((repo, branch))
         if spend is None:
             return ROIBranchAttribution(repo=repo, branch=branch, status="unavailable")
@@ -78,4 +89,4 @@ def attribute_branches(
             repo=repo, branch=branch, spend=cost.spend, requests=cost.requests, status="matched"
         )
 
-    return {(pull["repo"], pull["number"]): attribute(pull) for pull in pulls}
+    return {(pull[0], pull[1]): attribute(pull) for pull in pulls}

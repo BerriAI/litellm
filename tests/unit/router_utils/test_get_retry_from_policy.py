@@ -79,6 +79,16 @@ def test_subclass_falls_back_to_the_parent_field():
     )
 
 
+def test_payment_required_error_uses_bad_request_retries():
+    assert (
+        get_num_retries_from_retry_policy(
+            exception=_error(litellm.PaymentRequiredError),
+            retry_policy=RetryPolicy(BadRequestErrorRetries=0, DefaultRetries=3),
+        )
+        == 0
+    )
+
+
 @pytest.mark.parametrize("exception_type", (litellm.BadGatewayError,))
 def test_default_retries_covers_exceptions_without_a_specific_field(exception_type: type[Exception]):
     exception: Final = _error(exception_type)

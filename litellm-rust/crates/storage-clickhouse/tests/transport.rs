@@ -111,3 +111,83 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
         assert!(matches!(envelope, Err(Error::InvalidResponse)));
     }
 }
+
+#[rstest]
+#[case::result_limit("396", true)]
+#[case::memory_limit("241", false)]
+#[case::timeout("159", false)]
+#[case::unknown("", false)]
+#[tokio::test]
+async fn server_result_limits_allow_smaller_pages_without_retrying_other_failures(
+    #[case] code: &str,
+    #[case] result_limit: bool,
+) {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500).insert_header("X-ClickHouse-Exception-Code", code))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let connection = Connection::parse(&server.uri()).unwrap();
+    let error = execute_read(
+        &Client::no_redirect_for_test(),
+        &connection,
+        "SELECT 1",
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap_err();
+    if result_limit {
+        assert!(matches!(error, Error::ResponseTooLarge));
+    } else {
+        assert!(matches!(error, Error::QueryFailed(500)));
+    }
+}
+
+#[test]
+fn insert_timeout_environment_controls_transport() {
+    for value in ["1", "3", "0", "invalid"] {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "insert_timeout_environment_child"])
+            .env("LITELLM_TEST_INSERT_TIMEOUT", value)
+            .env("CLICKHOUSE_INSERT_TIMEOUT_SECONDS", value)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
+}
+
+#[tokio::test]
+async fn insert_timeout_environment_child() {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let Ok(value) = std::env::var("LITELLM_TEST_INSERT_TIMEOUT") else {
+        return;
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(1500)))
+        .mount(&server)
+        .await;
+    let result = insert_encoded_rows(
+        &Client::no_redirect_for_test(),
+        &Connection::parse(&server.uri()).unwrap(),
+        "traces",
+        "otel_traces",
+        "token",
+        "{}",
+    )
+    .await;
+    match value.as_str() {
+        "1" => assert!(matches!(result, Err(Error::Transport))),
+        "3" => assert!(result.is_ok()),
+        _ => assert!(matches!(
+            result,
+            Err(Error::InvalidLimit("CLICKHOUSE_INSERT_TIMEOUT_SECONDS"))
+        )),
+    }
+}

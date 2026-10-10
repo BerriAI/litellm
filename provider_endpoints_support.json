@@ -1370,7 +1370,8 @@
         "rerank": true,
         "a2a": true,
         "interactions": true,
-        "video_generations": true
+        "video_generations": true,
+        "systemone": true
       }
     },
     "huggingface": {
@@ -2566,6 +2567,20 @@
         "image_variations": true
       }
     },
+    "typesafe": {
+      "display_name": "TypeSafe (`typesafe`)",
+      "url": "https://docs.typesafe.ai/models",
+      "endpoints": {
+        "systemone": true
+      }
+    },
+    "strands_decider": {
+      "display_name": "Strands Decider (`strands_decider`)",
+      "url": "https://docs.litellm.ai/docs/providers",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "tavily": {
       "display_name": "Tavily (`tavily`)",
       "url": "https://docs.litellm.ai/docs/search/tavily",
@@ -2697,7 +2712,7 @@
       }
     },
     "voyage": {
-      "display_name": "Voyage AI (`voyage`)",
+      "display_name": "VoyageAI by MongoDB (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",
       "endpoints": {
         "chat_completions": false,
@@ -2854,6 +2869,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "microsoft_365_copilot": {
+      "display_name": "Microsoft 365 Copilot (`microsoft_365_copilot`)",
+      "url": "https://docs.litellm.ai/docs/providers/microsoft_365_copilot",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "langflow": {
@@ -3103,6 +3136,24 @@
         "moderations": false,
         "batches": false,
         "rerank": false
+      }
+    },
+    "reka": {
+      "display_name": "Reka (`reka`)",
+      "url": "https://docs.litellm.ai/docs/providers/reka",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "charity_engine": {

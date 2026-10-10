@@ -14,13 +14,17 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.proxy.db.autorouter_session_rollup import (
     UPSERT_AUTOROUTER_SESSION_SQL,
+    UPSERT_AUTOROUTER_USER_SESSION_SQL,
     AutoRouterTurnTransaction,
     build_autorouter_turn_transaction,
     flush_autorouter_turn_transactions,
+    write_autorouter_turn,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 ROUTING_DECISION = {"router_model_name": "live-auto", "router_type": "complexity", "routed_model": "haiku"}
 
@@ -42,7 +46,10 @@ def _payload(**overrides: object) -> dict:
 
 
 def _metadata(**overrides: object) -> dict:
-    base: dict = {"routing_decision": dict(ROUTING_DECISION), "usage_object": {"prompt_tokens": 90}}
+    base: dict = {
+        "routing_decision": dict(ROUTING_DECISION),
+        "usage_object": {"prompt_tokens": 90, "completion_tokens": 10},
+    }
     base.update(overrides)
     return base
 
@@ -85,7 +92,10 @@ class TestBuildTransaction:
         transaction = _build(
             metadata=_metadata(
                 routing_decision={**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"},
-                usage_object={"prompt_tokens": 90, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7},
+                usage_object={
+                    "prompt_tokens": 90, "completion_tokens": 10,
+                    "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7,
+                },
             )
         )
         assert transaction == AutoRouterTurnTransaction(
@@ -96,6 +106,7 @@ class TestBuildTransaction:
             model="bedrock/haiku",
             turn_at=datetime(2026, 8, 1, 12, 0, 0),
             total_tokens=100,
+            token_counts_recorded=True,
             spend=0.01,
             saved_spend=0.02,
             classifier_cost=0.0,
@@ -209,6 +220,30 @@ class TestBuildTransaction:
         assert transaction.covered is False
         assert transaction.cache_ttl_seconds is None
         assert transaction.cache_touched is True
+
+    @pytest.mark.parametrize(
+        "usage, recorded",
+        [
+            (None, False), ({}, False), ({"prompt_tokens": 90}, False),
+            ({"prompt_tokens": 90, "completion_tokens": 10}, True),
+            ({"prompt_tokens": 0, "completion_tokens": 0}, True),
+            ({"prompt_tokens": -1, "completion_tokens": 10}, False),
+            ({"prompt_tokens": True, "completion_tokens": 10}, False),
+            ({"prompt_tokens": "90", "completion_tokens": 10}, False),
+        ],
+    )
+    def test_token_coverage_requires_complete_reported_counts(self, usage: object, recorded: bool) -> None:
+        transaction: Final = _build(metadata=_metadata(usage_object=usage))
+        assert transaction is not None
+        assert transaction.token_counts_recorded is recorded
+
+    def test_persisted_turns_preserve_coverage_and_default_old_records_to_unknown(self) -> None:
+        transaction: Final = _build()
+        adapter: Final = TypeAdapter(AutoRouterTurnTransaction)
+        assert transaction is not None
+        assert adapter.validate_json(adapter.dump_json(transaction)).token_counts_recorded is True
+        legacy: Final = adapter.dump_json(transaction, exclude={"token_counts_recorded"})
+        assert adapter.validate_json(legacy).token_counts_recorded is False
 
     def test_a_covered_turn_that_neither_read_nor_wrote_did_not_touch_the_cache(self):
         transaction = _build()
@@ -338,6 +373,7 @@ class TestFlush:
             0.0,
             0.0,
             "canonical-user",
+            0,
         )
 
     def test_a_keys_turns_stay_chronological_when_its_canonical_user_changes(self) -> None:
@@ -485,3 +521,21 @@ def test_internal_call_origin_never_reaches_the_rollup():
     gate alone would count it; the internal_call_origin stamp must exclude it."""
     assert _build(metadata=_metadata(internal_call_origin="shadow_eval_router")) is None
     assert _build() is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("statement", "span_name"),
+    (
+        (UPSERT_AUTOROUTER_SESSION_SQL, "postgres.upsert LiteLLM_AutoRouterSession"),
+        (UPSERT_AUTOROUTER_USER_SESSION_SQL, "postgres.upsert LiteLLM_AutoRouterUserSession"),
+    ),
+)
+async def test_the_turn_upsert_span_names_the_session_table_its_statement_writes(
+    statement: str, span_name: str, postgres_span_names
+) -> None:
+    db: Final = SimpleNamespace(execute_raw=engine_call())
+
+    await write_autorouter_turn(db, _transaction(user_id="u1"), statement)
+
+    assert await postgres_span_names() == (span_name,)

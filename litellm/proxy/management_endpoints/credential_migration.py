@@ -35,19 +35,24 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _ALGO_AES_GCM,
-    _ENCRYPTION_ALGORITHM_SETTING,
-    _V2_GCM_PREFIX,
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
+    _ALGO_AES_GCM,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _ENCRYPTION_ALGORITHM_SETTING,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    ALGO_AES_GCM,
+    ENCRYPTION_ALGORITHM_SETTING,
+    V2_GCM_PREFIX,
     SecretMapDecodeError,
-    _get_salt_key,
+    _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,
     decrypt_value_helper,
     encrypt_value_helper,
+    get_salt_key,
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
@@ -125,7 +130,7 @@ class MigrationReport:
 
 def is_migrated(value: object) -> bool:
     """True if ``value`` is already an AES-256-GCM (``v2:gcm:``) ciphertext."""
-    return isinstance(value, str) and value.startswith(_V2_GCM_PREFIX)
+    return isinstance(value, str) and value.startswith(V2_GCM_PREFIX)
 
 
 def classify_value(value: object, key: str = "scan") -> ValueClass:
@@ -144,7 +149,7 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
         return "not-a-string"
     if value == "":
         return "plaintext"
-    if value.startswith(_V2_GCM_PREFIX):
+    if value.startswith(V2_GCM_PREFIX):
         return "migrated"
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
@@ -163,7 +168,7 @@ def reencrypt_value(value: object, key: str = "migrate") -> object:
     """
     if not isinstance(value, str) or value == "":
         return value
-    if value.startswith(_V2_GCM_PREFIX):
+    if value.startswith(V2_GCM_PREFIX):
         return value  # idempotent: already migrated
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
@@ -196,11 +201,11 @@ def _assert_aes_gate_enabled() -> None:
     """
     from litellm.proxy.proxy_server import general_settings
 
-    algo: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING)
-    if not (isinstance(algo, str) and algo.lower() == _ALGO_AES_GCM):
+    algo: Final = general_settings.get(ENCRYPTION_ALGORITHM_SETTING)
+    if not (isinstance(algo, str) and algo.lower() == ALGO_AES_GCM):
         raise RuntimeError(
             "Encryption migration requires general_settings.encryption_algorithm: "
-            f"'{_ALGO_AES_GCM}'. Current value: {algo!r}. Set it before migrating "
+            f"'{ALGO_AES_GCM}'. Current value: {algo!r}. Set it before migrating "
             "so re-encrypted values are written in the AES-256-GCM format."
         )
 
@@ -261,10 +266,11 @@ async def _migrate_config_settings_row(
             report.plaintext += 1
 
     if changed and not dry_run:
-        await prisma_client.db.litellm_config.update(
-            where={"param_name": param_name},
-            data={"param_value": json.dumps(settings)},
-        )
+        async with db_span("migrate_config_credentials", "LiteLLM_Config"):
+            await prisma_client.db.litellm_config.update(
+                where={"param_name": param_name},
+                data={"param_value": json.dumps(settings)},
+            )
     return report
 
 
@@ -313,10 +319,11 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
             report.plaintext += 1
 
     if changed and not dry_run:
-        await prisma_client.db.litellm_ssoconfig.update(
-            where={"id": "sso_config"},
-            data={"sso_settings": json.dumps(new_settings)},
-        )
+        async with db_span("migrate_sso_credentials", "LiteLLM_SSOConfig"):
+            await prisma_client.db.litellm_ssoconfig.update(
+                where={"id": "sso_config"},
+                data={"sso_settings": json.dumps(new_settings)},
+            )
     return report
 
 
@@ -433,13 +440,13 @@ def _classify_callback_value(value: object) -> ValueClass:
     even when run with the AES write gate off.
     """
     from litellm.proxy.common_utils.callback_utils import (
-        _CALLBACK_VAR_ENCRYPTED_PREFIX,
+        CALLBACK_VAR_ENCRYPTED_PREFIX,
     )
 
     if not isinstance(value, str):
         return "not-a-string"
     inner = value
-    inner = inner.removeprefix(_CALLBACK_VAR_ENCRYPTED_PREFIX)
+    inner = inner.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)  # rebind-ok: pre-existing rebinding on a rename-only line
     return classify_value(inner, key="callback")
 
 
@@ -592,17 +599,17 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
     already-v2 / scanned figures. Returns one report per covered location.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _rotate_master_key,
+        rotate_master_key,
     )
 
     pre: Final = {r.location: r for r in await _scan_covered_tables(prisma_client)}
 
-    current_key: Final = _get_salt_key()
+    current_key: Final = get_salt_key()
     if current_key is None:
         raise RuntimeError(
             "Cannot migrate covered tables: no salt key / master key is set. Set LITELLM_SALT_KEY before migrating."
         )
-    await _rotate_master_key(
+    await rotate_master_key(
         prisma_client=cast("PrismaClient", prisma_client),
         user_api_key_dict=cast("UserAPIKeyAuth", user_api_key_dict),
         current_master_key=current_key,
