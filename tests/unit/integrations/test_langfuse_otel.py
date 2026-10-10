@@ -168,6 +168,31 @@ class TestLangfuseOtelIntegration:
 
         assert span.attributes["langfuse.environment"] == "team-a-env"
 
+    @pytest.mark.parametrize(
+        "completion_start_time",
+        [
+            datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc),
+            datetime(2026, 10, 9, 12, 0, 0, 250000),
+        ],
+        ids=["aware", "naive_local_time"],
+    )
+    def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time: datetime):
+        """The first-token time goes out as Langfuse's completion start time, with an explicit offset."""
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {"completion_start_time": completion_start_time}, {})
+
+        sent: Final = datetime.fromisoformat(span.attributes["langfuse.observation.completion_start_time"])
+        assert sent.tzinfo is not None
+        assert sent.timestamp() == completion_start_time.timestamp()
+
+    def test_set_langfuse_specific_attributes_without_completion_start_time(self):
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {}, {})
+
+        assert "langfuse.observation.completion_start_time" not in span.attributes
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}
