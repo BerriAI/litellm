@@ -7,7 +7,7 @@ import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-hig
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import { vs, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import type { SystemOnePayloadValidation } from "./lib/validatePayload";
+import type { PayloadValidation } from "./lib/validatePayload";
 
 SyntaxHighlighter.registerLanguage("json", json);
 
@@ -57,10 +57,12 @@ const TRANSPARENT_PRE = {
 interface JsonEditorProps {
   value: string;
   onChange: (value: string) => void;
-  validation: SystemOnePayloadValidation;
+  validation: PayloadValidation<unknown>;
+  label?: string;
+  placeholder?: string;
 }
 
-export function ValidationStatus({ validation }: { validation: SystemOnePayloadValidation }) {
+export function ValidationStatus({ validation }: { validation: PayloadValidation<unknown> }) {
   const errorCount = validation.issues.filter((issue) => issue.severity === "error").length;
   if (errorCount > 0) {
     return (
@@ -72,7 +74,7 @@ export function ValidationStatus({ validation }: { validation: SystemOnePayloadV
   return <Badge variant="secondary">Valid payload</Badge>;
 }
 
-export function IssueList({ id, validation }: { id: string; validation: SystemOnePayloadValidation }) {
+export function IssueList({ id, validation }: { id: string; validation: PayloadValidation<unknown> }) {
   if (validation.issues.length === 0) {
     return (
       <p id={id} role="status" className="flex items-center gap-1.5 border-t px-3 py-2 text-xs text-muted-foreground">
@@ -112,7 +114,13 @@ function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
   });
 }
 
-export default function JsonEditor({ value, onChange, validation }: JsonEditorProps) {
+export default function JsonEditor({
+  value,
+  onChange,
+  validation,
+  label = "System One JSON payload",
+  placeholder = "Paste or write a System One request",
+}: JsonEditorProps) {
   const issuesId = useId();
   const highlightRef = useRef<HTMLDivElement>(null);
   const syntaxTheme = useTheme().resolvedTheme === "dark" ? VS_CODE_DARK_PLUS : VS_CODE_LIGHT_PLUS;
@@ -156,7 +164,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           </SyntaxHighlighter>
         </div>
         <textarea
-          aria-label="System One JSON payload"
+          aria-label={label}
           aria-invalid={hasErrors}
           aria-describedby={issuesId}
           value={value}
@@ -169,7 +177,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
-          placeholder="Paste or write a System One request"
+          placeholder={placeholder}
           className={cn(
             EDITOR_TEXT,
             CONTENT_INSET,
