@@ -2386,6 +2386,11 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
+    if name == "proxy":
+        import importlib
+
+        return importlib.import_module("litellm.proxy")
+
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib
 
