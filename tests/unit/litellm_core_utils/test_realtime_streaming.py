@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,8 +17,11 @@ from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -903,22 +906,35 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
     )
 
 
-def _passthrough_provider_config(backend_frame: bytes) -> MagicMock:
-    provider_config: Final = MagicMock()
-    provider_config.transform_realtime_response.return_value = {
-        "response": [json.loads(backend_frame)],
-        "current_output_item_id": None,
-        "current_response_id": None,
-        "current_delta_chunks": None,
-        "current_conversation_id": None,
-        "current_item_chunks": None,
-        "current_delta_type": None,
-        "session_configuration_request": None,
-    }
-    provider_config.transform_realtime_request.side_effect = lambda message, model, session: [message]
-    provider_config.is_setup_message.return_value = False
-    provider_config.is_content_message.return_value = False
-    return provider_config
+class _PassthroughRealtimeConfig(BaseRealtimeConfig):
+    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+        return headers
+
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        return api_base or ""
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> Sequence[str | bytes]:
+        return (message,)
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        return {
+            "response": [json.loads(message)],
+            "current_output_item_id": realtime_response_transform_input["current_output_item_id"],
+            "current_response_id": realtime_response_transform_input["current_response_id"],
+            "current_delta_chunks": realtime_response_transform_input["current_delta_chunks"],
+            "current_conversation_id": realtime_response_transform_input["current_conversation_id"],
+            "current_item_chunks": realtime_response_transform_input["current_item_chunks"],
+            "current_delta_type": realtime_response_transform_input["current_delta_type"],
+            "session_configuration_request": realtime_response_transform_input["session_configuration_request"],
+        }
 
 
 @pytest.mark.asyncio
@@ -950,7 +966,7 @@ async def test_transcript_triggers_response_create_only_when_a_transcript_guardr
         client_ws,
         backend_ws,
         MagicMock(async_success_handler=AsyncMock()),
-        provider_config=_passthrough_provider_config(completed) if through_provider_config else None,
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
     )
 
     await streaming.backend_to_client_send_messages()
