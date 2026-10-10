@@ -2459,6 +2459,38 @@ class ToolOutputRewriteGuardrail(CustomGuardrail):
         return {**inputs, "structured_messages": rewritten}
 
 
+class CustomToolCallRewriteGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages: Final = list(inputs.get("structured_messages") or [])
+        message: Final = messages[0]
+        tool_calls: Final = message.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return inputs
+        tool_call: Final = tool_calls[0]
+        function: Final = tool_call.get("function")
+        if not isinstance(function, dict):
+            return inputs
+        rewritten_tool_call: Final = {
+            **tool_call,
+            "function": {
+                **function,
+                "name": "safe_exec",
+                "arguments": json.dumps({"content": "echo [REDACTED]"}),
+            },
+        }
+        rewritten_messages: Final = [
+            {**message, "tool_calls": [rewritten_tool_call, *tool_calls[1:]]},
+            *messages[1:],
+        ]
+        return {**inputs, "structured_messages": rewritten_messages}
+
+
 class DroppingRewriteGuardrail(CustomGuardrail):
     """Guardrail that rewrites the first user row and drops the last row, so the
     rewrite can only land through the full-conversion fallback."""
@@ -2631,6 +2663,77 @@ class TestStructuredMessagesWriteBack:
         assert result["input"][4]["call_id"] == "call_exec"
         assert COMPRESSED_MARKER in str(result["input"][4]["output"])
         assert len(result["input"]) == 5
+
+    @pytest.mark.asyncio
+    async def test_custom_tool_only_input_is_guardrailed_in_place(self):
+        handler: Final = OpenAIResponsesHandler()
+        custom_tool_call_item: Final = {
+            "id": "ctc_456",
+            "type": "custom_tool_call",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": "echo sensitive-value",
+            "arguments": json.dumps({"content": "echo sensitive-value"}),
+            "status": "completed",
+        }
+        data: Final = {"model": "gpt-5.6", "input": [custom_tool_call_item]}
+
+        result: Final = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
+
+        assert result["input"] == [
+            {
+                "id": "ctc_456",
+                "type": "custom_tool_call",
+                "call_id": "call_exec",
+                "name": "safe_exec",
+                "input": "echo [REDACTED]",
+                "status": "completed",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_consecutive_custom_tool_calls_keep_their_type(self):
+        handler: Final = OpenAIResponsesHandler()
+        first_call: Final = {
+            "id": "ctc_1",
+            "type": "custom_tool_call",
+            "call_id": "call_1",
+            "name": "exec",
+            "input": "echo sensitive-value",
+            "arguments": json.dumps({"content": "echo sensitive-value"}),
+            "status": "completed",
+        }
+        second_call: Final = {
+            "id": "ctc_2",
+            "type": "custom_tool_call",
+            "call_id": "call_2",
+            "name": "exec",
+            "input": "echo public-value",
+            "arguments": json.dumps({"content": "echo public-value"}),
+            "status": "completed",
+        }
+        data: Final = {"model": "gpt-5.6", "input": [first_call, second_call]}
+
+        result: Final = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
+
+        assert result["input"] == [
+            {
+                "id": "ctc_1",
+                "type": "custom_tool_call",
+                "call_id": "call_1",
+                "name": "safe_exec",
+                "input": "echo [REDACTED]",
+                "status": "completed",
+            },
+            {
+                "id": "ctc_2",
+                "type": "custom_tool_call",
+                "call_id": "call_2",
+                "name": "exec",
+                "input": "echo public-value",
+                "status": "completed",
+            },
+        ]
 
     @pytest.mark.asyncio
     async def test_web_search_call_item_preserved_verbatim(self):
