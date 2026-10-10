@@ -78,7 +78,7 @@ def _run_client_secret(session, model, monkeypatch):
         captured.update(kwargs)
         return object()
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "openai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -175,7 +175,7 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model.removeprefix("meta/"), "meta", None, api_base
 
     async def mock_async_realtime(**kwargs):
@@ -196,6 +196,38 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
     assert captured["query_params"] == {"model": "muse-voice-transcribe-1.0", "intent": "transcription"}
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gpt-realtime-2.1", "openai"), ("openai/gpt-realtime-2.1", None)],
+)
+@pytest.mark.asyncio
+async def test_arealtime_forwards_explicit_api_key_to_openai(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def capture_realtime(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(realtime_main.openai_realtime, "async_realtime", capture_realtime)
+    provider_kwargs: Final = {} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}
+
+    await realtime_main._arealtime.__wrapped__(
+        model=model,
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        api_key="sk-stored-credential",
+        **provider_kwargs,
+    )
+
+    assert captured["api_key"] == "sk-stored-credential"
+
+
 @pytest.mark.asyncio
 async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkeypatch):
     """The wiring half of the regression: the vertex branch of _arealtime must
@@ -205,7 +237,7 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
     async def hanging_token_refresh(**kwargs):
         await asyncio.sleep(30)
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "vertex_ai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -524,7 +556,7 @@ async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: 
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model.removeprefix("vertex_ai/"), "vertex_ai", None, api_base
 
     async def mock_token_resolver(**kwargs):

@@ -157,6 +157,11 @@ def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: st
     return name
 
 
+def _delete_credential_if_present(gateway: Gateway, name: str) -> None:
+    response: Final = gateway.request("DELETE", f"/credentials/{name}")
+    assert response.status_code in (200, 404), response.text
+
+
 def _close_code(closed: ConnectionClosed) -> int:
     return 1006 if closed.rcvd is None else closed.rcvd.code
 
@@ -283,6 +288,41 @@ def test_conversation_session_forwards_only_model_and_bills_the_scripted_usage(g
         assert rows[0]["call_type"] == "_arealtime", rows
         assert rows[0]["prompt_tokens"] == INPUT_TOKENS, rows
         assert rows[0]["completion_tokens"] == OUTPUT_TOKENS, rows
+
+
+def test_bare_model_uses_credential_key_for_realtime(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario)
+        credential_name: Final = f"realtime-url-{uuid.uuid4().hex}"
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": credential_name,
+                "credential_values": {"api_key": handle.scenario_id, "api_base": gateway.upstream_url},
+                "credential_info": {"custom_llm_provider": "openai"},
+            },
+        )
+        scenario.cleanups.callback(_delete_credential_if_present, gateway, credential_name)
+        model_name: Final = f"realtime-url-{uuid.uuid4().hex}"
+        created: Final = gateway.post(
+            "/model/new",
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": CONVERSATION_MODEL,
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": credential_name,
+                },
+                "model_info": {},
+            },
+        )
+        model_id: Final = string_value(object_value(created["model_info"])["id"])
+        scenario.cleanups.callback(scenario.delete_model, model_id)
+
+        session: Final = _run("/v1/realtime", f"model={model_name}", gateway.key)
+        assert session.types and session.types[0] == "session.created", session
+        upgrades: Final = _upgrades(gateway, handle.scenario_id)
+        assert len(upgrades) == 1, upgrades
 
 
 def test_intent_without_model_routes_to_the_whisper_default_and_forwards_intent_only(gateway: Gateway) -> None:
