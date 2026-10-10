@@ -6428,7 +6428,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_request_tags(
         litellm_params: dict[str, object],
-        proxy_server_request: dict[str, object],
+        proxy_server_request: Mapping[str, object],
     ) -> list[str]:
         metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("metadata") or {}

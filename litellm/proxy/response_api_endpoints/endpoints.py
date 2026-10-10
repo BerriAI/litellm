@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
+_PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -424,7 +426,7 @@ async def responses_api(
                             model_object_id=response.id,
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
-                            request_tags=request_tags_from_request_data(processor.data),
+                            request_tags=_background_response_spend_tags(processor.data),
                             persist_attribution=True,
                         )
 
@@ -799,6 +801,19 @@ async def get_response(
         )
     await _bill_finished_background_response(response=response, response_id=response_id)
     return response
+
+
+def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
+    proxy_server_request: Final = data.get("proxy_server_request")
+    client_tags: Final = (
+        StandardLoggingPayloadSetup.get_request_tags(
+            {}, _PROXY_SERVER_REQUEST_ADAPTER.validate_python(proxy_server_request)
+        )
+        if isinstance(proxy_server_request, dict)
+        else []
+    )
+    tags: Final = (*(request_tags_from_request_data(data) or ()), *client_tags)
+    return tags or None
 
 
 async def _bill_finished_background_response(response: object, response_id: str) -> None:

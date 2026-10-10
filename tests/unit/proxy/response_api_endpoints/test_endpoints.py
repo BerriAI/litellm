@@ -258,7 +258,8 @@ async def test_responses_api_background_polling_accepts_input_from_prompt_templa
 @pytest.mark.asyncio
 async def test_responses_api_background_create_persists_the_creating_keys_attribution():
     """The cost poll bills a background job off its managed object row, so the create must persist
-    the key hash and tags the poll bills against, the way the batch create does."""
+    the key hash and tags the poll bills against, the way the batch create does, plus the client's
+    User-Agent tags that a spend-by-client view groups the charge under."""
     from fastapi import Response as FastAPIResponse
     from starlette.requests import Request
 
@@ -275,6 +276,7 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
         "input": "hello",
         "background": True,
         "litellm_metadata": {"tags": ["env:prod"]},
+        "proxy_server_request": {"headers": {"user-agent": "codex_cli_rs/0.44.0"}},
     }
     processor.base_process_llm_request = AsyncMock(return_value=queued)
     managed_files = MagicMock()
@@ -325,7 +327,11 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
     store_kwargs = managed_files.store_unified_object_id.await_args.kwargs
     assert store_kwargs["file_purpose"] == "response"
     assert store_kwargs["persist_attribution"] is True
-    assert store_kwargs["request_tags"] == ("env:prod",)
+    assert store_kwargs["request_tags"] == (
+        "env:prod",
+        "User-Agent: codex_cli_rs",
+        "User-Agent: codex_cli_rs/0.44.0",
+    )
 
 
 @pytest.mark.asyncio
