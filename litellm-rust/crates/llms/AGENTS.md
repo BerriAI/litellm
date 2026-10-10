@@ -1,44 +1,65 @@
 # rules
 
+## Scope
+
 - This crate mirrors `litellm/llms/`: base config traits in `src/base_llm/<format>/`, provider transformations in `src/<provider>/<format>/transformation.rs`
 - Transport (clients, media fetching, header helpers, transport errors) lives in `litellm-http`. See `../inference/AGENTS.md` for crate layering
-- Layering, the same for every format
-  - `litellm-llms-types` owns API data contracts
-  - `src/base_llm/<format>/` owns the adapter contract and provider-independent machinery. It never imports a provider or embeds provider policy in trait defaults, normalization or context defaults
-  - `src/<provider>/<format>/` owns that provider's implementation and policy
-  - `inference-<format>` owns call orchestration
-  - These are the intended boundaries, not a claim that all code already satisfies them
-- Provider folders
-  - `src/<provider>/` holds provider-wide policy: credentials, auth, endpoints, model capabilities. `common_utils.rs` means shared across that provider's formats, not across providers
-  - Shared constants and wire types used by several of a provider's formats go in `litellm-llms-types/src/providers/<provider>/`
-  - A provider may explicitly reuse another provider's helper when its policy applies to the backend (Bedrock, Vertex and Azure reuse `anthropic/messages` shaping for Claude). That does not make the policy format-wide
-  - Pure payload rewrites belong with transformations, not transport handlers, even in a file named `handler.rs`
-- AGENTS.md convention
-  - `# rules` then `# references`, both concise bullets
-  - `src/<provider>/AGENTS.md` covers provider-wide policy and docs. `src/<provider>/<format>/AGENTS.md` covers only that endpoint's deviations, reuse and docs
-  - Do not restate rules a parent AGENTS.md already gives
-- Python pairs
-  - Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
-  - Keep operation and parameter names when responsibilities match. Rust types keep the Python name with Rust acronym casing (`BaseOCRConfig` -> `BaseOcrConfig`). Private Python helpers drop the leading underscore
-  - Give Rust-only helpers distinct responsibility names instead of reusing trait method names
-  - Use trait defaults for unchanged inherited behavior and explicit delegation for shared provider behavior. Config traits represent real provider contracts, so do not recreate inheritance with extra traits
-  - The base OCR and Mistral OCR pairs are the reference when aligning transformations
-- Method order
-  - OCR configs: supported params, credential metadata and connection resolution, health-check input, param mapping, env validation, URL, request, async request, response, async response, error conversion
-  - Other formats: param support and mapping, env validation, URL, request, response, then Rust-only runtime hooks
-  - Constants and data types before the config, private helpers after it in operation order, tests last
-- Known partial ports
-  - `AnthropicConfig`, `AmazonConverseConfig` and the non-OCR base traits are partial. Preserve their acceptance gates, passthrough and host fallback contracts
-  - `OpenAiResponsesApiConfig` implements WebSocket transformations and direct HTTP Responses, without Python's model-specific param rewriting or Responses-to-Chat emulation
-  - Chat `supported_openai_param_mappings` lists OpenAI/provider name pairs, unlike Python's name-only list. Audio `map_transcription_params` is a Rust filtering helper
-  - Auth resolution is split between configs and route preparation in `inference-<format>`
-- OCR specifics
-  - `BaseOcrConfig::prepare_request` matches Python's HTTP-handler preparation. `validate_request_body` is Rust-only
-  - `src/base_llm/ocr/error.rs` and `document.rs` are Rust-only: the OCR error taxonomy shared with the route and inline-document helpers
-  - Mistral auth key handling and top-level response-extra preservation differ from Python. Layout refactors must keep those behaviors and their tests
-- Code
-  - Providers choose auth and header policy, shared auth and HTTP infrastructure apply it. Generic config lookup uses the existing settings utilities
-  - Pick traversal by operation (per-block map, filter, or whole-message when blocks depend on each other). Add an abstraction only for a repeated responsibility
-- Tests
-  - Named `#[rstest]` cases instead of loops, `#[fixture]` for setup, `#[with(...)]` for overrides
-  - Verify observable auth precedence, headers, serialization, passthrough and transformations, never code structure
+
+## Layering
+
+- `litellm-llms-types` owns API data contracts
+- `src/base_llm/<format>/` owns the adapter contract and provider-independent machinery. It never imports a provider or embeds provider policy in trait defaults, normalization or context defaults
+- `src/<provider>/<format>/` owns that provider's implementation and policy
+- `inference-<format>` owns call orchestration
+- These are the intended boundaries, not a claim that all code already satisfies them
+
+## Provider folders
+
+- `src/<provider>/` holds provider-wide policy: credentials, auth, endpoints, model capabilities. `common_utils.rs` means shared across that provider's formats, not across providers
+- Shared constants and wire types used by several of a provider's formats go in `litellm-llms-types/src/providers/<provider>/`
+- A provider may explicitly reuse another provider's helper when its policy applies to the backend (Bedrock, Vertex and Azure reuse `anthropic/messages` shaping for Claude). That does not make the policy format-wide
+- Pure payload rewrites belong with transformations, not transport handlers, even in a file named `handler.rs`
+
+## AGENTS.md convention
+
+- `# rules` then `# references`, both concise bullets
+- Split a long `# rules` into `##` topic sections
+- `src/<provider>/AGENTS.md` covers provider-wide policy and docs. `src/<provider>/<format>/AGENTS.md` covers only that endpoint's deviations, reuse and docs
+- Do not restate rules a parent AGENTS.md already gives
+
+## Python pairs
+
+- Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
+- Keep operation and parameter names when responsibilities match. Rust types keep the Python name with Rust acronym casing (`BaseOCRConfig` -> `BaseOcrConfig`). Private Python helpers drop the leading underscore
+- Give Rust-only helpers distinct responsibility names instead of reusing trait method names
+- Use trait defaults for unchanged inherited behavior and explicit delegation for shared provider behavior. Config traits represent real provider contracts, so do not recreate inheritance with extra traits
+- The base OCR and Mistral OCR pairs are the reference when aligning transformations
+
+## Method order
+
+- OCR configs: supported params, credential metadata and connection resolution, health-check input, param mapping, env validation, URL, request, async request, response, async response, error conversion
+- Other formats: param support and mapping, env validation, URL, request, response, then Rust-only runtime hooks
+- Constants and data types before the config, private helpers after it in operation order, tests last
+
+## Known partial ports
+
+- `AnthropicConfig`, `AmazonConverseConfig` and the non-OCR base traits are partial. Preserve their acceptance gates, passthrough and host fallback contracts
+- `OpenAiResponsesApiConfig` implements WebSocket transformations and direct HTTP Responses, without Python's model-specific param rewriting or Responses-to-Chat emulation
+- Chat `supported_openai_param_mappings` lists OpenAI/provider name pairs, unlike Python's name-only list. Audio `map_transcription_params` is a Rust filtering helper
+- Auth resolution is split between configs and route preparation in `inference-<format>`
+
+## OCR specifics
+
+- `BaseOcrConfig::prepare_request` matches Python's HTTP-handler preparation. `validate_request_body` is Rust-only
+- `src/base_llm/ocr/error.rs` and `document.rs` are Rust-only: the OCR error taxonomy shared with the route and inline-document helpers
+- Mistral auth key handling and top-level response-extra preservation differ from Python. Layout refactors must keep those behaviors and their tests
+
+## Code
+
+- Providers choose auth and header policy, shared auth and HTTP infrastructure apply it. Generic config lookup uses the existing settings utilities
+- Pick traversal by operation (per-block map, filter, or whole-message when blocks depend on each other). Add an abstraction only for a repeated responsibility
+
+## Tests
+
+- Named `#[rstest]` cases instead of loops, `#[fixture]` for setup, `#[with(...)]` for overrides
+- Verify observable auth precedence, headers, serialization, passthrough and transformations, never code structure
