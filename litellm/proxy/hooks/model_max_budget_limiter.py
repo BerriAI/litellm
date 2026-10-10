@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -13,7 +14,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds, duration_in_seconds_from
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -198,17 +199,28 @@ def _bedrock_candidates(model: str) -> tuple[str, ...]:
     return (base_model, without_vendor) if without_vendor else (base_model,)
 
 
+@dataclass(frozen=True, slots=True)
+class _WindowReading:
+    current_spend: float
+    started_at: float | None
+
+
 async def build_model_max_budget_usage(
     entity_type: Litellm_EntityType,
     entity_id: str | None,
     model_max_budget: Mapping[str, object] | None,
     cache: DualCache | None,
+    now: datetime | None = None,
 ) -> dict[str, dict[str, object]]:
     """Current-window spend per configured budget model, as `/key/info` and `/user/info` report it.
 
     `cache` must be the DualCache the limiter writes the counters to; callers
     read it off the limiter rather than re-deriving it, so a scope that is being
     blocked can never report zero usage.
+
+    `budget_reset_at` is when the open window ends and its spend counter
+    expires, which is the window's start plus its period. It is None when no
+    window is open, because nothing has been charged since the last one ended.
     """
     if cache is None or entity_id is None or not model_max_budget:
         return {}
@@ -221,41 +233,82 @@ async def build_model_max_budget_usage(
     )
     if not budgets:
         return {}
-    spend_keys: Final = tuple(
-        model_budget_spend_cache_key(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            budget_model=budget_model,
-            budget_duration=budget_config.budget_duration,
-        )
-        for budget_model, budget_config in budgets
+    windows: Final = await _read_windows(
+        cache=cache,
+        spend_keys=tuple(
+            model_budget_spend_cache_key(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                budget_model=budget_model,
+                budget_duration=budget_config.budget_duration,
+            )
+            for budget_model, budget_config in budgets
+        ),
+        start_time_keys=tuple(
+            model_budget_start_time_cache_key(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                budget_model=budget_model,
+                budget_duration=budget_config.budget_duration,
+            )
+            for budget_model, budget_config in budgets
+        ),
     )
-    current_spends: Final = await _current_window_spends(cache=cache, spend_keys=spend_keys)
+    current_time: Final = (now or datetime.now(timezone.utc)).timestamp()
     return {
         budget_model: {
-            "current_spend": round(current_spend, 4),
+            "current_spend": round(window.current_spend, 4),
             "budget_limit": budget_config.max_budget,
             "time_period": budget_config.budget_duration,
+            "budget_reset_at": _window_reset_at(
+                started_at=window.started_at,
+                budget_duration=budget_config.budget_duration,
+                now=current_time,
+            ),
         }
-        for (budget_model, budget_config), current_spend in zip(budgets, current_spends, strict=True)
+        for (budget_model, budget_config), window in zip(budgets, windows, strict=True)
     }
 
 
 @with_service_target("model_budgets")
-async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
-    """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
-    keys: Final = list(spend_keys)
+async def _read_windows(
+    cache: DualCache, spend_keys: Sequence[str], start_time_keys: Sequence[str]
+) -> tuple[_WindowReading, ...]:
+    """Every window's spend and start time in one batched read, however many models are budgeted.
+
+    Redis holds the window total across replicas; the in-memory copy is one replica's share.
+    """
+    keys: Final = [*spend_keys, *start_time_keys]
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
-        return tuple(_as_spend(shared.get(key)) for key in keys)
+        return _readings(tuple(_as_float(shared.get(key)) for key in keys), window_count=len(spend_keys))
     # async_batch_get_cache returns None if it fails internally, and its result is
     # index-aligned with `keys` otherwise. An unusable result reads as a miss,
     # which is what a never-written counter already reads as.
     batched: Final = await cache.async_batch_get_cache(keys=keys)
     if not isinstance(batched, list) or len(batched) != len(keys):
-        return (0.0,) * len(keys)
-    return tuple(_as_spend(current_spend) for current_spend in batched)
+        return tuple(_WindowReading(current_spend=0.0, started_at=None) for _ in spend_keys)
+    return _readings(tuple(_as_float(value) for value in batched), window_count=len(spend_keys))
+
+
+def _readings(values: Sequence[float | None], window_count: int) -> tuple[_WindowReading, ...]:
+    """`values` holds every window's spend followed by every window's start, in the same order."""
+    return tuple(
+        _WindowReading(current_spend=spend or 0.0, started_at=started_at)
+        for spend, started_at in zip(values[:window_count], values[window_count:], strict=True)
+    )
+
+
+def _window_reset_at(started_at: float | None, budget_duration: str | None, now: float) -> str | None:
+    if started_at is None or budget_duration is None:
+        return None
+    ends_at: Final = started_at + duration_in_seconds_from(
+        start=datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone(), duration=budget_duration
+    )
+    if ends_at <= now:
+        return None
+    return datetime.fromtimestamp(ends_at, tz=timezone.utc).isoformat()
 
 
 def _usable_budget_config(raw_budget_config: object) -> BudgetConfig | None:
@@ -274,6 +327,15 @@ def _as_spend(current_spend: object) -> float:
         return float(current_spend or 0.0)  # pyright: ignore[reportArgumentType]  # non-numeric falls to the except
     except (TypeError, ValueError):
         return 0.0
+
+
+def _as_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)  # pyright: ignore[reportArgumentType]  # non-numeric falls to the except
+    except (TypeError, ValueError):
+        return None
 
 
 def _resolve_entity_model_budgets(

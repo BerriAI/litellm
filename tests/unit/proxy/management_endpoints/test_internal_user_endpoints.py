@@ -3499,7 +3499,7 @@ async def test_user_info_v2_response_shape(mocker):
     # these two, so dropping them makes a save replace the user's budgets.
     assert response_dict["model_max_budget"] == {"gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}}
     assert response_dict["model_max_budget_usage"] == {
-        "gpt-3.5-turbo": {"current_spend": 0.0, "budget_limit": 5.0, "time_period": "30d"}
+        "gpt-3.5-turbo": {"current_spend": 0.0, "budget_limit": 5.0, "time_period": "30d", "budget_reset_at": None}
     }
 
     # Verify teams is a list of strings (team IDs), not team objects
