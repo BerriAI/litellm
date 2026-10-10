@@ -6,8 +6,10 @@ import io
 import json
 import logging
 import os
+import threading
 import urllib.parse
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
@@ -5861,6 +5863,64 @@ def test_bedrock_converse_parses_scripted_tool_call_arguments(
     }
 
 
+@pytest.mark.parametrize(
+    ("model", "invoke_model_id", "response_body", "expected_request_body"),
+    [
+        (
+            "bedrock/mistral.mistral-7b-instruct-v0:2",
+            "mistral.mistral-7b-instruct-v0:2",
+            {"outputs": [{"text": "Going well, thanks!", "stop_reason": "stop"}]},
+            {"prompt": "<s>[INST] Hey! how's it going? [/INST]\n", "temperature": 0.2, "max_tokens": 200},
+        ),
+        (
+            "bedrock/invoke/meta.llama3-8b-instruct-v1:0",
+            "meta.llama3-8b-instruct-v1:0",
+            {
+                "generation": "Going well, thanks!",
+                "prompt_token_count": 12,
+                "generation_token_count": 5,
+                "stop_reason": "stop",
+            },
+            {
+                "prompt": "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nHey! how's it going?<|eot_id|>"
+                "<|start_header_id|>assistant<|end_header_id|>\n\n",
+                "temperature": 0.2,
+                "max_gen_len": 200,
+            },
+        ),
+    ],
+)
+@respx.mock
+def test_bedrock_invoke_signs_request_and_parses_scripted_response(
+    model: str,
+    invoke_model_id: str,
+    response_body: dict[str, object],
+    expected_request_body: dict[str, object],
+    fake_provider_credentials: None,
+):
+    route: Final = respx.post(
+        f"https://bedrock-runtime.us-west-2.amazonaws.com/model/{invoke_model_id}/invoke"
+    ).mock(return_value=httpx.Response(200, json=response_body))
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hey! how's it going?"}],
+        temperature=0.2,
+        max_tokens=200,
+        aws_region_name="us-west-2",
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=unit-test/"
+    )
+    assert "/us-west-2/bedrock/aws4_request" in request.headers["authorization"]
+    assert request.headers["x-amz-date"].endswith("Z")
+    assert json.loads(request.content) == expected_request_body
+    assert response.choices[0].message.content == "Going well, thanks!"
+    assert response.choices[0].finish_reason == "stop"
+
+
 @respx.mock
 def test_completion_azure_ad_token_is_forwarded(openai_api_response):
     route: Final = respx.post(
@@ -6197,6 +6257,80 @@ def test_petals_completion_sends_model_and_messages_to_custom_base():
     assert str(request.url) == "https://api.petals.dev/"
     assert request.content == b"model=petals-team%2FStableBeluga2&inputs=hello&max_new_tokens=7"
     assert response.choices[0].message.content == "Hello!"
+
+
+@respx.mock
+def test_petals_config_fills_unset_params_while_explicit_params_win(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm.PetalsConfig, "temperature", 0.4)
+    monkeypatch.setattr(litellm.PetalsConfig, "top_k", 5)
+    route: Final = respx.post("https://api.petals.dev/").mock(
+        return_value=httpx.Response(200, json={"outputs": "Hello!"})
+    )
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    litellm.completion(model="petals-team/StableBeluga2", messages=messages, api_base="https://api.petals.dev")
+    litellm.completion(
+        model="petals-team/StableBeluga2",
+        messages=messages,
+        api_base="https://api.petals.dev",
+        max_tokens=7,
+        temperature=0.9,
+    )
+
+    assert [urllib.parse.parse_qs(call.request.content.decode()) for call in route.calls] == [
+        {
+            "model": ["petals-team/StableBeluga2"],
+            "inputs": ["hello"],
+            "max_new_tokens": [str(litellm.max_tokens)],
+            "temperature": ["0.4"],
+            "top_k": ["5"],
+        },
+        {
+            "model": ["petals-team/StableBeluga2"],
+            "inputs": ["hello"],
+            "max_new_tokens": ["7"],
+            "temperature": ["0.9"],
+            "top_k": ["5"],
+        },
+    ]
+
+
+@respx.mock
+def test_moderation_posts_input_to_custom_base_and_parses_results():
+    route: Final = respx.post("https://moderation.unit-test/v1/moderations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "modr-unit-test",
+                "model": "omni-moderation-latest",
+                "results": [
+                    {
+                        "flagged": True,
+                        "categories": {"harassment": True, "violence": False},
+                        "category_scores": {"harassment": 0.91, "violence": 0.02},
+                    }
+                ],
+            },
+        )
+    )
+
+    response: Final = litellm.moderation(
+        input="i'm ishaan cto of litellm",
+        model="omni-moderation-latest",
+        api_key="sk-moderation-test",
+        api_base="https://moderation.unit-test/v1",
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer sk-moderation-test"
+    assert json.loads(request.content) == {"input": "i'm ishaan cto of litellm", "model": "omni-moderation-latest"}
+    assert response.id == "modr-unit-test"
+    assert response.results[0].flagged is True
+    assert (response.results[0].categories["harassment"], response.results[0].categories["violence"]) == (True, False)
+    assert (
+        response.results[0].category_scores["harassment"],
+        response.results[0].category_scores["violence"],
+    ) == (0.91, 0.02)
 
 
 @respx.mock
@@ -7635,6 +7769,64 @@ async def test_parallel_openai_streams_keep_prompt_responses_separate(
         ("stop",),
         ("stop",),
     )
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_parallel_sync_openai_streams_in_threads_keep_prompt_responses_separate() -> None:
+    both_requests_in_flight: Final = threading.Barrier(2, timeout=10)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        prompt: Final = json.loads(request.content)["messages"][0]["content"]
+        both_requests_in_flight.wait()
+        events: Final = (
+            {
+                "id": "chatcmpl-parallel-sync",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": prompt.replace("request", "response")},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-parallel-sync",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        )
+        body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+
+    def collect(prompt: str) -> tuple[str, tuple[str, ...]]:
+        stream: Final = litellm.completion(
+            model="gpt-4o-mini",
+            api_key="sk-test",
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+        )
+        chunks: Final = tuple(stream)
+        return (
+            "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices),
+            tuple(
+                chunk.choices[0].finish_reason
+                for chunk in chunks
+                if chunk.choices and chunk.choices[0].finish_reason is not None
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses: Final = tuple(pool.map(collect, ("request one", "request two")))
+
+    assert responses == (("response one", ("stop",)), ("response two", ("stop",)))
     assert route.call_count == 2
 
 

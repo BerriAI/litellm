@@ -9583,3 +9583,43 @@ async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRo
 
             assert mock_retry.called
             assert mock_retry.call_args.kwargs.get("num_retries") == num_retries
+
+
+@respx.mock
+def test_pre_call_rules_see_messages_passed_positionally(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-rules",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+            },
+        )
+    )
+
+    with pytest.raises(litellm.APIResponseValidationError, match="failed post-call-rule check"):
+        litellm.completion(
+            "gpt-4o-mini", [{"role": "user", "content": "say something forbidden"}], api_key="sk-test"
+        )
+    allowed: Final = litellm.completion("gpt-4o-mini", [{"role": "user", "content": "say hi"}], api_key="sk-test")
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["messages"] == [{"role": "user", "content": "say hi"}]
+    assert allowed.choices[0].message.content == "ok"
+
+
+def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
+    llama3_models: Final = sorted(litellm.vertex_llama3_models)
+    assert llama3_models != []
+
+    for model in llama3_models:
+        short_name = model.removeprefix("meta/")
+        assert short_name != model
+        prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+        assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
+        assert prefixed_info["key"] == f"vertex_ai/{model}", model
