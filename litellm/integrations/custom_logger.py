@@ -932,7 +932,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         import litellm
         from litellm import Choices, Message, ModelResponse
-        from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
+        from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
+        from litellm.litellm_core_utils.redact_messages import redacted_litellm_params
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -941,9 +942,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if turn_off_message_logging is False and not excluded_fields:
             return model_call_details
 
+        params: Final = model_call_details.get("litellm_params")
+        redacted_params: Final = (
+            MappingProxyType({"litellm_params": redacted_litellm_params(params)})
+            if turn_off_message_logging and isinstance(params, Mapping)
+            else EMPTY_MAPPING
+        )
+        redacted_failure_fields: Final = (
+            MappingProxyType({"traceback_exception": REDACTED_BY_LITELLM})
+            if turn_off_message_logging and model_call_details.get("traceback_exception")
+            else EMPTY_MAPPING
+        )
         standard_logging_object: Final = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
-            return model_call_details.copy()
+            return {**model_call_details, **redacted_params, **redacted_failure_fields}
 
         # Make a copy of just the standard_logging_object to avoid modifying the original
         standard_logging_object_copy: Final = {
@@ -986,18 +998,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if turn_off_message_logging:
             standard_logging_object_copy.update(_redacted_failure_error_fields(standard_logging_object_copy))
 
-        params: Final = model_call_details.get("litellm_params")
-        request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
-        redacted_params: Final = (
-            MappingProxyType({"litellm_params": {**params, "proxy_server_request": without_classifier_audit(request)}})
-            if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict)
-            else EMPTY_MAPPING
-        )
-        redacted_failure_fields: Final = (
-            MappingProxyType({"traceback_exception": REDACTED_BY_LITELLM})
-            if turn_off_message_logging and model_call_details.get("traceback_exception")
-            else EMPTY_MAPPING
-        )
         return {
             **model_call_details,
             **redacted_params,
@@ -1023,7 +1023,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             import litellm
             from litellm._logging import verbose_logger
 
-            all_callbacks: Final = litellm.logging_callback_manager._get_all_callbacks()
+            all_callbacks: Final = litellm.logging_callback_manager.get_all_callbacks()
 
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, "increment_callback_logging_failure"):

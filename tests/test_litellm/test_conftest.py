@@ -7,7 +7,7 @@ from typing import Final
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 PROXY_BASE_URL_SENSITIVE_NODE: Final = (
-    "tests/test_litellm/proxy/management_endpoints/test_mcp_management_endpoints.py"
+    "tests/unit/proxy/management_endpoints/test_mcp_management_endpoints.py"
     "::TestTemporaryMCPSessionEndpoints"
     "::test_mcp_token_opens_sealed_passthrough_code_and_exchanges_with_minted_client"
 )

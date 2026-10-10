@@ -44,8 +44,8 @@ from litellm.integrations.datadog.datadog_mock_client import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
@@ -180,7 +180,7 @@ class DataDogLogger(
             dd_base_url: Final = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
-            self.sync_client = _get_httpx_client()
+            self.sync_client = get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(
@@ -406,7 +406,7 @@ class DataDogLogger(
                 verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(batch_to_send))
 
         except BatchSendCancelled as cancelled:
-            self.log_queue = list(cancelled.undelivered) + self.log_queue  # mutable-ok: logger queue remains appendable
+            self.log_queue = list(cancelled.undelivered) + self.log_queue
             raise asyncio.CancelledError() from cancelled
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
@@ -434,7 +434,7 @@ class DataDogLogger(
             drop_error_message=DD_ERRORS.DATADOG_413_ERROR.value,
             non_success_handler=requeue_after_http_error,
         )
-        return list(undelivered)  # mutable-ok: caller prepends records to the logger queue
+        return list(undelivered)
 
     @staticmethod
     def _exceeds_intake_limits(chunk: Sequence[DatadogPayload]) -> bool:

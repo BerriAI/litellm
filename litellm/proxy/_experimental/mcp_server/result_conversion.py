@@ -11,9 +11,11 @@ revisions (``2024-11-05`` .. ``2025-11-25``) and admits any JSON value, plus
 from __future__ import annotations
 
 import json
-from typing import Final, TypeAlias
+import math
+from collections.abc import Sequence
+from typing import Final, TypeAlias, TypeVar
 
-from mcp.types import CallToolResult, ContentBlock, InputRequiredResult, TextContent, Tool
+from mcp.types import CacheableResult, CallToolResult, ContentBlock, InputRequiredResult, TextContent, Tool
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm.proxy._experimental.mcp_server.tool_outcome import (
@@ -59,7 +61,7 @@ INPUT_REQUIRED_UNSUPPORTED_MESSAGE: Final = (
 
 def error_text_result(exc: Exception) -> CallToolResult:
     return CallToolResult(
-        content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],  # mutable-ok: SDK list field
+        content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],
         is_error=True,
     )
 
@@ -68,13 +70,13 @@ def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolRes
     match outcome:
         case TextResult():
             return CallToolResult(
-                content=[TextContent(type="text", text=outcome.text)],  # mutable-ok: SDK list field
+                content=[TextContent(type="text", text=outcome.text)],
                 is_error=False,
             )
         case JsonResult():
             keep_structured: Final = compat is WireCompat.MODERN or isinstance(outcome.value, dict)
             return CallToolResult(
-                content=[TextContent(type="text", text=outcome.original_text)],  # mutable-ok: SDK list field
+                content=[TextContent(type="text", text=outcome.original_text)],
                 is_error=False,
                 structured_content=outcome.value if keep_structured else None,
             )
@@ -84,7 +86,7 @@ def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolRes
             if compat is WireCompat.MODERN:
                 return outcome
             return CallToolResult(
-                content=[TextContent(type="text", text=INPUT_REQUIRED_UNSUPPORTED_MESSAGE)],  # mutable-ok: SDK
+                content=[TextContent(type="text", text=INPUT_REQUIRED_UNSUPPORTED_MESSAGE)],
                 is_error=True,
             )
         case Exception():
@@ -97,7 +99,7 @@ def complete_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallT
     converted: Final = to_call_tool_result(outcome, compat)
     if isinstance(converted, InputRequiredResult):
         return CallToolResult(
-            content=[TextContent(type="text", text=INPUT_REQUIRED_UNSUPPORTED_MESSAGE)],  # mutable-ok: SDK
+            content=[TextContent(type="text", text=INPUT_REQUIRED_UNSUPPORTED_MESSAGE)],
             is_error=True,
         )
     return converted
@@ -110,7 +112,7 @@ def _downgrade_structured_content(result: CallToolResult) -> CallToolResult:
     fallback: Final = TextContent(type="text", text=json.dumps(structured))
     update: Final[_Downgraded] = {
         "structured_content": None,
-        "content": [*result.content, fallback],  # mutable-ok: SDK list field
+        "content": [*result.content, fallback],
     }
     return result.model_copy(update=update)
 
@@ -118,3 +120,17 @@ def _downgrade_structured_content(result: CallToolResult) -> CallToolResult:
 def to_gateway_tool(tool: Tool, name: str) -> Tool:
     update: Final[_Renamed] = {"name": name}
     return tool.model_copy(deep=True, update=update)
+
+
+_Cacheable = TypeVar("_Cacheable", bound=CacheableResult)
+
+
+def age_freshness(result: _Cacheable, elapsed: float) -> _Cacheable:
+    return result.model_copy(update={"ttl_ms": max(0, result.ttl_ms - math.ceil(max(0.0, elapsed) * 1000))})
+
+
+def aggregate_freshness(results: Sequence[CacheableResult]) -> CacheableResult:
+    return CacheableResult(
+        ttl_ms=min((result.ttl_ms for result in results), default=0),
+        cache_scope="public" if results and all(result.cache_scope == "public" for result in results) else "private",
+    )

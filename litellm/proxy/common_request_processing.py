@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,  # noqa: TID251  # _pre_call_with_fallbacks receives general_settings as a legacy bare dict
     overload,
     runtime_checkable,
 )
@@ -28,6 +29,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
+from typing_extensions import Never
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
@@ -47,6 +49,7 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
@@ -93,6 +96,7 @@ from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_bod
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
     get_tags_from_request_body,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -113,8 +117,14 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
-from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
+from litellm.proxy.route_llm_request import (
+    route_request,
+)
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+    ProxyLogging,
+    _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_and_merge_model_level_guardrails,
+)
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias
@@ -172,6 +182,7 @@ ProxyRouteType: TypeAlias = Literal[
     "avector_store_file_delete",
     "aocr",
     "asearch",
+    "adecisions",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -267,17 +278,32 @@ def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
 
 
+async def close_guarded_stream(stream: object) -> None:
+    if not isinstance(stream, AsyncGenerator):
+        return
+    with anyio.CancelScope(shield=True):
+        try:
+            await stream.aclose()
+        except Exception as e:  # noqa: BLE001  # a failing callback cleanup must not skip the refund and finalizer
+            verbose_proxy_logger.warning(
+                "Closing the guarded stream after a client disconnect raised %s", type(e).__name__
+            )
+
+
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
     if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
         return client_call_id
     return str(uuid.uuid4())
 
 
-def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
     return any(
         isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
         for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
     )
+
+
+_should_return_raw_model_name: Final = should_return_raw_model_name
 
 
 def _apply_client_disconnect_metadata(target_metadata: dict[str, object] | None) -> None:
@@ -608,6 +634,27 @@ def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, s
         code=error_status,
         provider_specific_fields=merged_fields,
         headers=headers,
+    )
+
+
+def proxy_exception_from_route_error(exc: Exception) -> ProxyException:
+    if isinstance(exc, ProxyException):
+        return exc
+    if isinstance(exc, HTTPException):
+        return proxy_exception_from_http_exception(exc, {})
+    error_status: Final = error_status_code(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    message: Final = attribute_of(exc, "message", str(exc))
+    carried_code: Final = attribute_of(exc, "code")
+    provider_fields: Final = attribute_of(exc, "provider_specific_fields")
+    return ProxyException(
+        message=redact_internal_details_from_client_message(
+            strip_bug_report_notice(message) if isinstance(message, str) else str(exc)
+        ),
+        type=openai_error_type(exc, error_status),
+        param=openai_error_param(exc),
+        code=error_status,
+        openai_code=carried_code if isinstance(carried_code, str) else None,
+        provider_specific_fields=provider_fields if isinstance(provider_fields, dict) else None,
     )
 
 
@@ -1285,7 +1332,7 @@ async def open_sse_before_first_byte(
     )
 
 
-def _is_azure_model_router_request(model: str, hidden_params: Mapping[str, object] | None = None) -> bool:
+def is_azure_model_router_request(model: str, hidden_params: Mapping[str, object] | None = None) -> bool:
     """
     Check if a request went down the Azure Model Router route.
 
@@ -1304,6 +1351,9 @@ def _is_azure_model_router_request(model: str, hidden_params: Mapping[str, objec
     from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
     return AzureFoundryModelInfo.is_model_router_call(model=model, hidden_params=hidden_params)
+
+
+_is_azure_model_router_request: Final = is_azure_model_router_request
 
 
 def _override_openai_response_model(
@@ -1371,7 +1421,7 @@ def _override_openai_response_model(
                 return
 
     # Check if this is an Azure Model Router request - if so, preserve the actual model used
-    if _is_azure_model_router_request(requested_model, hidden_params):
+    if is_azure_model_router_request(requested_model, hidden_params):
         verbose_proxy_logger.debug(
             "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
             log_context,
@@ -1441,7 +1491,7 @@ def attach_guardrail_information(response: object, request_data: Mapping[str, ob
         ),
         (),
     )
-    guardrail_information: Final = [  # mutable-ok: response list contract
+    guardrail_information: Final = [
         redact_nested_match_and_regex_keys(entry, keys=_RESPONSE_REDACTED_KEYS)
         for entry in recorded
         if isinstance(entry, dict)
@@ -1680,7 +1730,7 @@ def _timing_values(
     """
     if hidden_params.get("_response_ms") is not None or not use_logging_obj or logging_obj is None:
         return hidden_params
-    return getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
+    return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -1702,7 +1752,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
-        excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
+        excluded_headers: Final = {
             "transfer-encoding",
             "content-encoding",
             "set-cookie",
@@ -1715,7 +1765,7 @@ class ProxyBaseLLMRequestProcessing:
             "upgrade",
         }
 
-        merged_headers: Final = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
+        merged_headers: Final = {
             key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
         }
         merged_headers.update(custom_headers)
@@ -1957,6 +2007,7 @@ class ProxyBaseLLMRequestProcessing:
             "avector_store_file_delete",
             "aocr",
             "asearch",
+            "adecisions",
             "avideo_generation",
             "avideo_list",
             "avideo_status",
@@ -2056,9 +2107,9 @@ class ProxyBaseLLMRequestProcessing:
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
-            from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+            from litellm.proxy.litellm_pre_call_utils import get_metadata_variable_name
 
-            _metadata_variable_name: Final = _get_metadata_variable_name(request)
+            _metadata_variable_name: Final = get_metadata_variable_name(request)
             if _metadata_variable_name not in self.data:
                 self.data[_metadata_variable_name] = {}
             if not isinstance(self.data[_metadata_variable_name], dict):
@@ -2068,11 +2119,12 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        self.data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or self.data.get("model", None)  # default passed in http request
+        self.data["model"] = resolve_inference_model(
+            self.data.get("model"),
+            general_settings,
+            user_model,
+            model,
+            kind="image_edit" if route_type == "aimage_edit" else "completion",
         )
 
         # override with user settings, these are params passed via cli
@@ -2181,11 +2233,11 @@ class ProxyBaseLLMRequestProcessing:
         merged_for_requested: Final = (
             self.data
             if rate_limited_model is None
-            else _check_and_merge_model_level_guardrails(
+            else check_and_merge_model_level_guardrails(
                 data=self.data, llm_router=llm_router, trust_client_model_info=False, model_alias=rate_limited_model
             )
         )
-        self.data = _check_and_merge_model_level_guardrails(
+        self.data = check_and_merge_model_level_guardrails(
             data=merged_for_requested,
             llm_router=llm_router,
             trust_client_model_info=False,
@@ -2199,6 +2251,9 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
+        prefetch_model = self.data.get("model")
+        if llm_router is not None and isinstance(prefetch_model, str):
+            llm_router.arm_routing_read_prefetch(prefetch_model, self.data)
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2248,7 +2303,21 @@ class ProxyBaseLLMRequestProcessing:
         route_type: str,
         llm_router: Router | None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
+            ProxyRateLimitError,
+            per_model_rate_limits_disable_fallbacks,
+        )
+
+        general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
+            Mapping[str, object], general_settings
+        )
+
+        def is_hard_per_model_limit(exc: ProxyRateLimitError) -> bool:
+            return (
+                exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+                and per_model_rate_limits_disable_fallbacks(general_settings_view)
+            )
 
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
@@ -2282,6 +2351,7 @@ class ProxyBaseLLMRequestProcessing:
                 or not configured_fallbacks
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
+                or is_hard_per_model_limit(original_exc)
             ):
                 raise
 
@@ -2321,7 +2391,9 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyRateLimitError:
+                    except ProxyRateLimitError as fallback_exc:
+                        if is_hard_per_model_limit(fallback_exc):
+                            raise
                         continue
             except BaseException:
                 self.data = rate_limited_data
@@ -2428,7 +2500,7 @@ class ProxyBaseLLMRequestProcessing:
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
             return float(stored_cost)
-        recomputed_cost: Final = logging_obj._response_cost_calculator(result=response)
+        recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
         return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
     def _debug_log_request_payload(self) -> None:
@@ -2567,6 +2639,7 @@ class ProxyBaseLLMRequestProcessing:
                 route_type=route_type,
                 llm_router=llm_router,
             )
+            phase_event("litellm.request.pre_call_completed")
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
@@ -2586,7 +2659,7 @@ class ProxyBaseLLMRequestProcessing:
         if _post_call_guardrails_active and not self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request
         ):
-            logging_obj._defer_async_logging = True
+            logging_obj.defer_async_logging = True
 
         tasks: Final = []
         # Start the moderation check (during_call_hook) as early as possible
@@ -2780,7 +2853,7 @@ class ProxyBaseLLMRequestProcessing:
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
                             restamp_model=(
-                                None if _should_return_raw_model_name(self.data) else requested_model_from_client
+                                None if should_return_raw_model_name(self.data) else requested_model_from_client
                             ),
                         )
                         selected_data_generator = wrap_sse_stream_with_keepalive_pings(
@@ -2919,7 +2992,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-                return_raw_model_name=_should_return_raw_model_name(self.data),
+                return_raw_model_name=should_return_raw_model_name(self.data),
             )
 
         fastapi_response.headers.update(
@@ -3149,7 +3222,7 @@ class ProxyBaseLLMRequestProcessing:
             except HTTPException:
                 return
 
-        logging_obj._on_detached_stream_failure = _on_detached_stream_failure
+        logging_obj.on_detached_stream_failure = _on_detached_stream_failure
 
     def _is_streaming_response(self, response: object) -> bool:
         """
@@ -3212,9 +3285,9 @@ class ProxyBaseLLMRequestProcessing:
         because should_run_guardrail treats it as matching every hook.
         """
         from litellm.proxy.proxy_server import llm_router
-        from litellm.proxy.utils import _check_and_merge_model_level_guardrails
+        from litellm.proxy.utils import check_and_merge_model_level_guardrails
 
-        guardrail_data: Final = _check_and_merge_model_level_guardrails(data=self.data, llm_router=llm_router)
+        guardrail_data: Final = check_and_merge_model_level_guardrails(data=self.data, llm_router=llm_router)
         for cb in litellm.callbacks:
             if not isinstance(cb, CustomGuardrail):
                 continue
@@ -3405,10 +3478,10 @@ class ProxyBaseLLMRequestProcessing:
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
                 pending.release(not exception_raised)
-        _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
+        _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
-        logging_obj._enqueue_deferred_logging = None
+        logging_obj.enqueue_deferred_logging = None
         if exception_raised:
             return
         try:
@@ -3455,7 +3528,7 @@ class ProxyBaseLLMRequestProcessing:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
 
-        unwrapped: Final = response._inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+        unwrapped: Final = response.inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
 
         if isinstance(unwrapped, CustomStreamWrapper):
             # Intentionally a live reference (not a copy) — mirrors
@@ -3535,11 +3608,13 @@ class ProxyBaseLLMRequestProcessing:
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import (
-                _check_and_merge_model_level_guardrails,
+                check_and_merge_model_level_guardrails,
                 stream_gated_guardrail_names,
             )
 
-            guardrail_data = _check_and_merge_model_level_guardrails(data=captured_data, llm_router=_global_llm_router)
+            guardrail_data: Final = check_and_merge_model_level_guardrails(
+                data=captured_data, llm_router=_global_llm_router
+            )
             stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
             for cb in litellm.callbacks:
                 if not isinstance(cb, CustomGuardrail):
@@ -3613,13 +3688,13 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
             headers["retry-after"] = str(math.ceil(e.cooldown_time))
 
-    async def _handle_llm_api_exception(
+    async def handle_llm_api_exception(
         self,
         e: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
         version: str | None = None,
-    ):
+    ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         log_llm_api_exception(e, self.litellm_call_id)
         # Allow callbacks to transform the error response
@@ -3704,9 +3779,7 @@ class ProxyBaseLLMRequestProcessing:
             error_body: Final = await http_status_error.response.aread()
             error_text: Final = error_body.decode("utf-8")
 
-            error_headers: Final = {  # mutable-ok: HTTPException takes a plain header dict
-                k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()
-            }
+            error_headers: Final = {k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()}
             raise HTTPException(
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
@@ -3766,6 +3839,8 @@ class ProxyBaseLLMRequestProcessing:
             headers=safe_headers,
         )
 
+    _handle_llm_api_exception = handle_llm_api_exception
+
     #########################################################
     # Proxy Level Streaming Data Generator
     #########################################################
@@ -3799,7 +3874,7 @@ class ProxyBaseLLMRequestProcessing:
         return serialize
 
     @staticmethod
-    async def _finalize_streaming_generator_cleanup(
+    async def finalize_streaming_generator_cleanup(
         request: Request | None,
         request_data: dict,
         response: Any,
@@ -3819,7 +3894,7 @@ class ProxyBaseLLMRequestProcessing:
                 )
             if recorded_client_disconnect:
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
-                ProxyLogging._fire_deferred_stream_logging(request_data)
+                ProxyLogging.fire_deferred_stream_logging(request_data)
                 # A disconnect-time success event (the deferred-guardrail flush
                 # above, or the partial-spend billing below) releases the
                 # request's max_parallel_requests slot through the limiter's
@@ -3837,7 +3912,7 @@ class ProxyBaseLLMRequestProcessing:
                     and proxy_logging_obj is not None
                     and user_api_key_dict is not None
                 ):
-                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+                    await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if hasattr(response, "aclose"):
                 try:
@@ -3855,6 +3930,8 @@ class ProxyBaseLLMRequestProcessing:
                 and logging_obj.model_call_details.get("prompt_cache_response_complete") is not True
             ):
                 await logging_obj.invalidate_baseline_cache_estimate("incomplete_response", completed=True)
+
+    _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
     @staticmethod
     async def async_streaming_data_generator(
@@ -3892,7 +3969,7 @@ class ProxyBaseLLMRequestProcessing:
         # consumed, and cost injection is a no-op -- so the per-chunk coroutine
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
-        caps: Final = ProxyLogging._callback_capabilities()
+        caps: Final = ProxyLogging.callback_capabilities()
         cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
@@ -3900,13 +3977,14 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected = False
         delivered_chunk = False
         recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
+        guarded_stream: Final[AsyncGenerator[object, None]] = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        )
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-            ):
+            async for chunk in guarded_stream:
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -3934,7 +4012,7 @@ class ProxyBaseLLMRequestProcessing:
                         str_so_far += str(chunk.get("content", ""))
 
                     model_name = request_data.get("model", "")
-                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                    chunk = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
                         chunk, model_name, request_data.get("litellm_logging_obj")
                     )
 
@@ -3962,6 +4040,7 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
+            await close_guarded_stream(guarded_stream)
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
@@ -3999,7 +4078,7 @@ class ProxyBaseLLMRequestProcessing:
             seal: Final = "" if seal_open_frame is None else seal_open_frame(recent_tail)
             yield seal + error_frame if seal else error_frame
         finally:
-            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
                 request=request,
                 request_data=request_data,
                 response=response,
@@ -4048,18 +4127,18 @@ class ProxyBaseLLMRequestProcessing:
 
     @overload
     @staticmethod
-    def _process_chunk_with_cost_injection(
+    def process_chunk_with_cost_injection(
         chunk: bytes, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
     ) -> bytes: ...
 
     @overload
     @staticmethod
-    def _process_chunk_with_cost_injection(
+    def process_chunk_with_cost_injection(
         chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
     ) -> object: ...
 
     @staticmethod
-    def _process_chunk_with_cost_injection(
+    def process_chunk_with_cost_injection(
         chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
     ) -> object:
         """
@@ -4107,6 +4186,8 @@ class ProxyBaseLLMRequestProcessing:
             pass
 
         return chunk
+
+    _process_chunk_with_cost_injection = process_chunk_with_cost_injection
 
     @staticmethod
     def _inject_cost_into_sse_frame_str(
@@ -4200,7 +4281,7 @@ class ProxyBaseLLMRequestProcessing:
         debug_missing: Final = object()
         debug_before: Final = call_details.get(debug_key, debug_missing) if isinstance(call_details, dict) else None
         try:
-            cost: Final = litellm_logging_obj._response_cost_calculator(result=model_response)  # pyright: ignore[reportPrivateUsage]  # reuse the call's own cost calc for pricing parity with the logging callback
+            cost: Final = litellm_logging_obj.response_cost_calculator(result=model_response)
         except Exception:  # noqa: BLE001  # a pricing failure falls back to model-name pricing instead of breaking the stream
             return None
         finally:

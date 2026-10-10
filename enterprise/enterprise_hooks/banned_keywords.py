@@ -20,7 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException
 
 
-class _ENTERPRISE_BannedKeywords(CustomLogger):
+class ENTERPRISE_BannedKeywords(CustomLogger):
     enforces_request_content: bool = True
     # Class variables or attributes
     def __init__(self):
@@ -114,3 +114,4 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
         response: str,
     ):
         self.test_violation(test_str=response)
+_ENTERPRISE_BannedKeywords = ENTERPRISE_BannedKeywords

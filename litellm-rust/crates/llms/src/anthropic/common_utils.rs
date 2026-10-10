@@ -4,14 +4,14 @@ use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
 };
-use litellm_types::llms::{
-    anthropic::{AnthropicBeta, BetaSet},
-    anthropic_messages::anthropic_request::{
-        AnthropicMessage, AnthropicTool, ContentBlock, ContentBlockType, EffortLevel,
-        MessageContent,
+use litellm_llms_types::{
+    formats::messages::{
+        ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
+        SystemPrompt,
     },
+    providers::anthropic::{AnthropicBeta, BetaSet},
+    recognized::Recognized,
 };
-use litellm_types::recognized::Recognized;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -229,36 +229,30 @@ pub fn optionally_handle_anthropic_oauth(headers: Headers, api_key: Option<&str>
     OauthHandling::Untouched(headers)
 }
 
-pub fn is_tool_search_used(tools: Option<&[Recognized<AnthropicTool>]>) -> bool {
+pub fn is_tool_search_used(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
     tools.into_iter().flatten().any(|tool| {
         matches!(
             tool,
             Recognized::Known(
-                AnthropicTool::ToolSearchRegex { .. } | AnthropicTool::ToolSearchBm25 { .. }
+                MessagesTool::ToolSearchRegex { .. } | MessagesTool::ToolSearchBm25 { .. }
             )
         )
     })
 }
 
-pub fn has_advisor_tool(tools: Option<&[Recognized<AnthropicTool>]>) -> bool {
+pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
     tools
         .into_iter()
         .flatten()
-        .any(|tool| matches!(tool, Recognized::Known(AnthropicTool::Advisor { .. })))
+        .any(|tool| matches!(tool, Recognized::Known(MessagesTool::Advisor { .. })))
 }
 
-pub fn requires_native_compaction_beta(
-    compaction: Option<&Value>,
-    messages: &[AnthropicMessage],
-) -> bool {
+pub fn requires_native_compaction_beta(compaction: Option<&Value>, messages: &[Message]) -> bool {
     compaction.is_some()
-        || messages
-            .iter()
-            .flat_map(AnthropicMessage::blocks)
-            .any(|block| {
-                block.is_type(ContentBlockType::Compaction)
-                    && block.signature.as_deref().is_some_and(|s| !s.is_empty())
-            })
+        || messages.iter().flat_map(Message::blocks).any(|block| {
+            block.is_type(ContentBlockType::Compaction)
+                && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+        })
 }
 
 fn is_blank(text: Option<&str>) -> bool {
@@ -273,10 +267,7 @@ pub fn is_empty_thinking_block(block: &ContentBlock) -> bool {
     block.is_type(ContentBlockType::Thinking) && is_blank(block.thinking.as_deref())
 }
 
-fn retain_blocks(
-    messages: Vec<AnthropicMessage>,
-    keep: impl Fn(&ContentBlock) -> bool,
-) -> Vec<AnthropicMessage> {
+fn retain_blocks(messages: Vec<Message>, keep: impl Fn(&ContentBlock) -> bool) -> Vec<Message> {
     messages
         .into_iter()
         .filter_map(|message| match message.content {
@@ -293,7 +284,7 @@ fn retain_blocks(
         .collect()
 }
 
-pub fn strip_empty_content_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+pub fn strip_empty_content_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| {
         !is_empty_text_block(block) && !is_empty_thinking_block(block)
     })
@@ -350,11 +341,11 @@ fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
     }
 }
 
-pub fn sanitize_tool_use_ids(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+pub fn sanitize_tool_use_ids(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| match message.content {
-            MessageContent::Blocks(blocks) => AnthropicMessage {
+            MessageContent::Blocks(blocks) => Message {
                 content: MessageContent::Blocks(
                     blocks.into_iter().map(sanitize_tool_use_id_block).collect(),
                 ),
@@ -365,11 +356,11 @@ pub fn sanitize_tool_use_ids(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMe
         .collect()
 }
 
-pub fn strip_provider_specific_fields(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| match message.content {
-            MessageContent::Blocks(blocks) => AnthropicMessage {
+            MessageContent::Blocks(blocks) => Message {
                 content: MessageContent::Blocks(
                     blocks
                         .into_iter()
@@ -395,7 +386,34 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
 }
 
-pub fn strip_encrypted_reasoning_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
+
+fn is_billing_header_block(block: &ContentBlock) -> bool {
+    block.block_type == Some(ContentBlockType::Text)
+        && block
+            .text
+            .as_deref()
+            .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
+}
+
+/// Python's `AnthropicMessagesConfig._filter_billing_headers_from_system`: the Claude Code
+/// attribution blocks the first-party API reads, dropped for hosts that reject them. `None`
+/// when nothing else was in the system prompt.
+pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
+    match system {
+        SystemPrompt::Text(text) if text.starts_with(BILLING_HEADER_PREFIX) => None,
+        SystemPrompt::Text(text) => Some(SystemPrompt::Text(text)),
+        SystemPrompt::Blocks(blocks) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_billing_header_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+        }
+    }
+}
+
+pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }
 
@@ -405,7 +423,7 @@ fn is_advisor_use(block: &ContentBlock) -> bool {
         && block.id.as_deref().is_some_and(|id| !id.is_empty())
 }
 
-pub fn strip_advisor_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| {
@@ -588,13 +606,11 @@ fn flatten_web_search_results_in_blocks(blocks: Vec<ContentBlock>) -> Vec<Conten
         .collect()
 }
 
-pub fn flatten_unencrypted_web_search_results(
-    messages: Vec<AnthropicMessage>,
-) -> Vec<AnthropicMessage> {
+pub fn flatten_unencrypted_web_search_results(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| match message.content {
-            MessageContent::Blocks(blocks) => AnthropicMessage {
+            MessageContent::Blocks(blocks) => Message {
                 content: MessageContent::Blocks(flatten_web_search_results_in_blocks(blocks)),
                 ..message
             },
@@ -608,22 +624,12 @@ mod tests {
     use crate::base_llm::messages::context::SupportedEffortTiers;
     use rstest::{fixture, rstest};
     use serde_json::json;
+    use strum::VariantArray;
 
     use super::*;
 
-    const ALL_LEVELS: [EffortLevel; 5] = [
-        EffortLevel::Low,
-        EffortLevel::Medium,
-        EffortLevel::High,
-        EffortLevel::Xhigh,
-        EffortLevel::Max,
-    ];
-
-    fn apply(
-        sanitizer: fn(Vec<AnthropicMessage>) -> Vec<AnthropicMessage>,
-        messages: Value,
-    ) -> Value {
-        let parsed: Vec<AnthropicMessage> = serde_json::from_value(messages).unwrap();
+    fn apply(sanitizer: fn(Vec<Message>) -> Vec<Message>, messages: Value) -> Value {
+        let parsed: Vec<Message> = serde_json::from_value(messages).unwrap();
         serde_json::to_value(sanitizer(parsed)).unwrap()
     }
 
@@ -631,11 +637,11 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    fn history(messages: Value) -> Vec<AnthropicMessage> {
+    fn history(messages: Value) -> Vec<Message> {
         serde_json::from_value(messages).unwrap()
     }
 
-    fn tools(value: Option<Value>) -> Option<Vec<Recognized<AnthropicTool>>> {
+    fn tools(value: Option<Value>) -> Option<Vec<Recognized<MessagesTool>>> {
         value.map(|tools| serde_json::from_value(tools).unwrap())
     }
 
@@ -1727,7 +1733,10 @@ mod tests {
             ..unmapped
         };
         assert_eq!(
-            ALL_LEVELS.map(|level| supports_effort_tier(&capabilities, level)),
+            EffortLevel::VARIANTS
+                .iter()
+                .map(|level| supports_effort_tier(&capabilities, *level))
+                .collect::<Vec<_>>(),
             expected
         );
     }
@@ -1877,6 +1886,7 @@ mod tests {
                 supports_output_config: false,
                 supports_sampling_params: true,
                 supports_speed: false,
+                supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
             }
         );

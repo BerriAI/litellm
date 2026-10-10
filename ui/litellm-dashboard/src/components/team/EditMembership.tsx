@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { z } from "zod/v4";
+import { z } from "zod";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { FieldGroup } from "@/components/ui/field";
@@ -48,7 +48,8 @@ interface MemberModalProps<T extends BaseMember> {
 
 const ROLE_REQUIRED_MESSAGE = "Please select a role!";
 
-const isEmailish = (value: string): boolean => value === "" || z.email().safeParse(value).success;
+const isEmailish = (value: string): boolean =>
+  value === "" || z.email({ pattern: z.regexes.html5Email }).safeParse(value).success;
 
 const memberFieldSchema = z.union([z.string(), z.number(), z.null(), z.array(z.string())]).optional();
 

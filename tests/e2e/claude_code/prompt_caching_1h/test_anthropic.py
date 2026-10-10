@@ -28,6 +28,7 @@ from typing import Any, Mapping, Optional
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -64,6 +65,16 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
 
 
 @pytest.mark.covers("llm.messages.anthropic.prompt_cache_1h.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_prompt_caching_1h_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with the 1h
     TTL opt-in env var set, and assert the upstream usage block

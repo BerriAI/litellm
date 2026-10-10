@@ -12,7 +12,10 @@ hard failure, not a skip; once configured, a protocol failure is likewise a hard
 failure. See REALTIME_COVERAGE_MATRIX.md.
 """
 
+from typing import Final
+
 import pytest
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from pydantic import BaseModel
@@ -42,7 +45,42 @@ from websockets.exceptions import ConnectionClosedError
 
 pytestmark = pytest.mark.e2e
 
-PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
+AZURE_REALTIME_MODEL: Final = "azure/gpt-realtime"
+
+TEXT_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
+
+TOOL_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                capabilities=(Capability.FUNCTION_CALLING,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
 
 WEATHER_TOOL = FunctionTool(
     name="get_weather",
@@ -62,7 +100,7 @@ class WeatherResult(BaseModel):
     temperature_f: int
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", TEXT_PARAMS)
 def test_text_conversation(
     client: RealtimeClient,
     scoped_key: str,
@@ -99,7 +137,7 @@ def test_text_conversation(
         assert done.response.usage is not None, "response.done missing normalized usage"
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", TOOL_PARAMS)
 def test_tool_call_round_trip(
     client: RealtimeClient,
     scoped_key: str,
@@ -158,7 +196,7 @@ _REFUSED_UPSTREAMS = (
         "azure-bad-key",
         "azure-realtime-refused",
         LiteLLMParamsBody(
-            model="azure/gpt-realtime",
+            model=AZURE_REALTIME_MODEL,
             api_key="invalid-e2e-key",
             api_version="2025-08-28",
             realtime_protocol="GA",
@@ -168,6 +206,15 @@ _REFUSED_UPSTREAMS = (
 
 
 @pytest.mark.parametrize("provider", _REFUSED_UPSTREAMS, ids=[p.id for p in _REFUSED_UPSTREAMS])
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.REALTIME,
+        providers=(Provider.AZURE,),
+        models=(AZURE_REALTIME_MODEL,),
+        mode=Mode.WEBSOCKET,
+    )
+)
 def test_upstream_handshake_refusal_is_an_error_event_and_policy_close(
     client: RealtimeClient,
     resources: ResourceManager,

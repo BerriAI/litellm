@@ -6,10 +6,13 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
 from litellm.caching.redis_cache import RedisCache
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
+
+_RESPONSE_POLLING_TARGET: Final = "response_polling"
 
 
 class ResponsePollingHandler:
@@ -37,6 +40,7 @@ class ResponsePollingHandler:
         """Get Redis cache key for a polling ID"""
         return f"{cls.CACHE_KEY_PREFIX}{polling_id}"
 
+    @with_service_target(_RESPONSE_POLLING_TARGET)
     async def create_initial_state(
         self,
         polling_id: str,
@@ -81,6 +85,7 @@ class ResponsePollingHandler:
 
         return response
 
+    @with_service_target(_RESPONSE_POLLING_TARGET)
     async def update_state(
         self,
         polling_id: str,
@@ -212,6 +217,7 @@ class ResponsePollingHandler:
             "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
 
+    @with_service_target(_RESPONSE_POLLING_TARGET)
     async def get_state(self, polling_id: str) -> dict[str, Any] | None:
         """Get current polling state from Redis"""
         if not self.redis_cache:
@@ -237,6 +243,7 @@ class ResponsePollingHandler:
         )
         return True
 
+    @with_service_target(_RESPONSE_POLLING_TARGET)
     async def delete_polling(self, polling_id: str) -> bool:
         """Delete a polling request from cache"""
         if not self.redis_cache:
