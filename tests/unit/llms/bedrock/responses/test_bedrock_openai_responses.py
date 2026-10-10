@@ -57,6 +57,13 @@ class TestCompleteURL:
         )
         assert url == "https://vpce.example.com/openai/v1/responses"
 
+    def test_runtime_endpoint_param_wins_over_api_base_like_every_other_bedrock_route(self):
+        url = _cfg().get_complete_url(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://vpce.example.com"},
+        )
+        assert url == "https://vpce.example.com/openai/v1/responses"
+
 
 class TestAuth:
     def test_bearer_token_is_used_when_present(self):

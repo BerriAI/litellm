@@ -2,6 +2,7 @@
 
 import json
 import re
+from typing import Final
 
 import httpx
 import pytest
@@ -24,7 +25,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_runtime_chat_completions_is_default,
     get_bedrock_chat_config,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 APPLICATION_INFERENCE_PROFILE_ARN = "arn:aws:bedrock:us-west-2:123412341234:application-inference-profile/a1b2c3"
 
@@ -549,20 +550,49 @@ def test_bearer_api_key_is_sent_as_the_authorization_header(monkeypatch):
     assert headers["Authorization"] == "Bearer bedrock-api-key"
 
 
+FILE_SEARCH_TOOL = {"type": "file_search", "vector_store_ids": ["vs_other_team"]}
+
+
+def _weather_tool_named(name):
+    return {**GET_WEATHER_TOOL, "function": {**GET_WEATHER_TOOL["function"], "name": name}}
+
+
 @pytest.mark.parametrize(
     "request_params, expected_route",
     [
-        ({"tools": [GET_WEATHER_TOOL]}, "converse"),
-        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"}, "converse"),
-        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": None}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL]}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": None}, "responses"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"}, "chat_completions"),
+        (
+            {
+                "tools": [GET_WEATHER_TOOL],
+                "reasoning_effort": "low",
+                "guardrailConfig": {"guardrailIdentifier": "gr-1"},
+            },
+            "converse",
+        ),
+        ({"tools": [GET_WEATHER_TOOL, FILE_SEARCH_TOOL], "reasoning_effort": "low"}, "converse"),
+        ({"tools": GET_WEATHER_TOOL, "reasoning_effort": "low"}, "converse"),
+        ({"tools": ["get_weather"], "reasoning_effort": "low"}, "converse"),
+        ({"tools": [{"type": "function"}], "reasoning_effort": "low"}, "converse"),
+        ({"tools": [_weather_tool_named("get weather!")], "reasoning_effort": "low"}, "converse"),
+        ({"tools": [_weather_tool_named("weather.get")], "reasoning_effort": "low"}, "converse"),
+        ({"tools": [_weather_tool_named("w" * 65)], "reasoning_effort": "low"}, "converse"),
+        ({"tools": [_weather_tool_named("w" * 64)], "reasoning_effort": "low"}, "responses"),
+        ({"tools": [_weather_tool_named("get-weather_2")], "reasoning_effort": "low"}, "responses"),
+        (
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"tools": [FILE_SEARCH_TOOL]}},
+            "converse",
+        ),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"store": False}}, "responses"),
         ({"reasoning_effort": "low"}, "chat_completions"),
         ({"tools": None, "reasoning_effort": "low"}, "chat_completions"),
         ({"tools": [], "reasoning_effort": "low"}, "chat_completions"),
         ({}, "chat_completions"),
     ],
 )
-def test_gpt56_tools_need_reasoning_none_on_chat_completions(local_cost_map, request_params, expected_route):
+def test_gpt56_tools_with_reasoning_bridge_to_responses(local_cost_map, request_params, expected_route):
     assert (
         BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params)
         == expected_route
@@ -601,6 +631,21 @@ def test_gpt56_legacy_functions_route_like_tools(local_cost_map, request_params,
         BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", request_params)
         == "chat_completions"
     )
+
+
+def test_gpt56_tools_with_reasoning_stay_on_converse_without_a_responses_endpoint(local_cost_map, monkeypatch):
+    model = "global.openai.gpt-6-sol"
+    monkeypatch.setitem(
+        litellm.model_cost, model, {**litellm.model_cost[model], "supported_endpoints": ["/v1/chat/completions"]}
+    )
+    params = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"}
+    assert BedrockModelInfo.get_bedrock_route(model, params) == "converse"
+    assert BedrockModelInfo.get_bedrock_route(model, {**params, "reasoning_effort": "none"}) == "chat_completions"
+
+
+def test_gpt56_region_path_tools_with_reasoning_stay_on_converse(local_cost_map):
+    params = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"}
+    assert BedrockModelInfo.get_bedrock_route("bedrock/us-west-2/global.openai.gpt-6-sol", params) == "converse"
 
 
 def test_thinking_block_goes_to_converse(local_cost_map):
@@ -1055,19 +1100,165 @@ def test_gpt_oss_completion_hits_chat_completions_and_splits_reasoning(local_cos
     assert response.choices[0].message.content == "Hi"
 
 
-def test_gpt56_tools_with_reasoning_effort_go_to_converse(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json=CONVERSE_JSON)
+RESPONSES_TOOL_CALL_JSON = {
+    "id": "resp_test",
+    "object": "response",
+    "created_at": 1733529600,
+    "status": "completed",
+    "output": [
+        {
+            "type": "function_call",
+            "id": "fc_0",
+            "call_id": "call_0",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "status": "completed",
+        }
+    ],
+    "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+}
+
+
+@pytest.mark.parametrize(
+    "model", ["bedrock/chat_completions/global.openai.gpt-5.6-sol", "bedrock/global.openai.gpt-6-sol"]
+)
+def test_gpt56_and_newer_tools_with_reasoning_effort_bridge_to_runtime_responses(local_cost_map, fake_aws_env, model):
+    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": model})
     response = litellm.completion(
-        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
-        messages=[{"role": "user", "content": "hello"}],
+        model=model,
+        messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        temperature=0.2,
+        drop_params=True,
+        client=client,
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses"
+    body = json.loads(requests[0].content)
+    assert body["model"] == model.removeprefix("bedrock/").removeprefix("chat_completions/")
+    assert body["reasoning"] == {"effort": "low"}
+    assert [tool["name"] for tool in body["tools"]] == ["get_weather"]
+    assert "temperature" not in body
+    assert response.object == "chat.completion"
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_tools_with_reasoning_and_a_name_openai_rejects_keep_converse_and_its_name_mapping(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[_weather_tool_named("get weather!")],
         reasoning_effort="low",
         client=client,
     )
 
-    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-5.6-sol/converse")
-    assert json.loads(requests[0].content)["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
-    assert response.choices[0].message.content == "ok"
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+    assert json.loads(requests[0].content)["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather_"
+
+
+def test_a_caller_param_named_like_the_bridge_flag_neither_crashes_nor_steers_the_route(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    response = litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        responses_api_bridge_allowed=False,
+        _litellm_responses_api_bridge_allowed=False,
+        client=client,
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def test_tools_with_reasoning_bridge_keeps_the_reasoning_summary_alias(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        extra_body={"reasoningSummary": "auto"},
+        client=client,
+    )
+
+    assert json.loads(requests[0].content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+async def test_async_tools_with_reasoning_bridge_uses_the_supplied_client(local_cost_map, fake_aws_env):
+    requests: Final[list[httpx.Request]] = []
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+
+    response = await litellm.acompletion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(handle)),
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+class _FrozenCredentials:
+    access_key = "AKIDLEGACYCLIENT"
+    secret_key = "legacy-secret"
+    token = None
+
+
+class _LegacyCredentials:
+    def get_frozen_credentials(self):
+        return _FrozenCredentials()
+
+
+class _LegacyBedrockClient:
+    class meta:
+        region_name = "eu-west-1"
+
+    def _get_credentials(self):
+        return _LegacyCredentials()
+
+
+def test_tools_with_reasoning_and_a_legacy_aws_bedrock_client_stay_on_converse(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        aws_bedrock_client=_LegacyBedrockClient(),
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+    assert requests[0].url.host == "bedrock-runtime.eu-west-1.amazonaws.com"
+    assert "Credential=AKIDLEGACYCLIENT/" in requests[0].headers["Authorization"]
+
+
+def test_responses_forced_onto_chat_completions_serves_tools_with_reasoning_on_converse(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.responses(
+        model="bedrock/global.openai.gpt-6-sol",
+        input="weather in Paris",
+        tools=[{"type": "function", "name": "get_weather", "parameters": GET_WEATHER_TOOL["function"]["parameters"]}],
+        reasoning={"effort": "low"},
+        use_chat_completions_api=True,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+    body = json.loads(requests[0].content)
+    assert body["additionalModelRequestFields"] == {"reasoning": {"effort": "low"}}
+    assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
 
 
 def test_gpt56_tools_with_reasoning_none_stay_on_chat_completions(local_cost_map, fake_aws_env):
@@ -1111,23 +1302,6 @@ def test_gpt_56_and_newer_completion_without_the_prefix_posts_runtime_chat_compl
     assert "inferenceConfig" not in body
     assert response.choices[0].message.content == "ok"
     assert response._hidden_params["response_cost"] > 0
-
-
-def test_gpt6_without_the_prefix_tools_with_reasoning_effort_go_to_converse(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json=CONVERSE_JSON)
-    response = litellm.completion(
-        model="bedrock/global.openai.gpt-6-sol",
-        messages=[{"role": "user", "content": "hello"}],
-        tools=[GET_WEATHER_TOOL],
-        reasoning_effort="low",
-        client=client,
-    )
-
-    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
-    body = json.loads(requests[0].content)
-    assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
-    assert body["additionalModelRequestFields"]["reasoning"] == {"effort": "low"}
-    assert response.choices[0].message.content == "ok"
 
 
 def test_gpt6_without_the_prefix_guardrail_config_goes_to_converse(local_cost_map, fake_aws_env):

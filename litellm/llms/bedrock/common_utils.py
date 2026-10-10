@@ -59,6 +59,7 @@ BedrockRoute = Literal[
     "openai",
     "mantle",
     "chat_completions",
+    "responses",
 ]
 
 
@@ -997,7 +998,8 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
-    ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
+    ``reasoning_effort`` is exactly ``"none"`` (function-only ``tools`` on a model listing ``/v1/responses`` are
+    bridged to bedrock-runtime's native Responses API instead), and a ``response_format`` goes native only as
     ``{"type": "json_schema", "json_schema": ...}`` (a pydantic model is converted to that) on a model with
     ``supports_bedrock_runtime_chat_completions_response_format``: a schema on any other model is only
     honored by Converse, and every ``json_object`` form (``response_schema`` included) keeps Converse's
@@ -1015,6 +1017,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
         return True
     if _response_format_needs_converse(model, request_params.get("response_format")):
         return True
+    return _chat_completions_rejects_function_tools(model, request_params) and not _bridgeable_to_responses(
+        model, request_params
+    )
+
+
+def _chat_completions_rejects_function_tools(model: str, request_params: Mapping[str, object]) -> bool:
     if not (request_params.get("tools") or request_params.get("functions")):
         return False
     return (
@@ -1023,12 +1031,64 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     )
 
 
+class _NamedFunction(TypedDict):
+    name: ReadOnly[str]
+
+
+class _FunctionTool(TypedDict):
+    type: ReadOnly[Literal["function"]]
+    function: ReadOnly[_NamedFunction]
+
+
+_FUNCTION_TOOLS_ADAPTER: Final = TypeAdapter(tuple[_FunctionTool, ...])
+_OPENAI_FUNCTION_NAME: Final = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
+def _function_tools_only(tools: object) -> bool:
+    if not isinstance(tools, (list, tuple)):
+        return False
+    try:
+        validated: Final = _FUNCTION_TOOLS_ADAPTER.validate_python(tools)
+    except ValidationError:
+        return False
+    return all(_OPENAI_FUNCTION_NAME.fullmatch(tool["function"]["name"]) for tool in validated)
+
+
+_EXTRA_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _extra_body_has_tools(extra_body: object) -> bool:
+    return isinstance(extra_body, dict) and bool(_EXTRA_BODY_ADAPTER.validate_python(extra_body).get("tools"))
+
+
+def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -> bool:
+    return (
+        not request_params.get("functions")
+        and request_params.get("aws_bedrock_client") is None
+        and _function_tools_only(request_params.get("tools"))
+        and not _extra_body_has_tools(request_params.get("extra_body"))
+        and _bedrock_serves_responses(model)
+    )
+
+
+def _bedrock_serves_responses(model: str) -> bool:
+    region, model_id = split_bedrock_region_path(model)
+    return region is None and any(
+        _price_map_entry_lists_endpoint(_model_cost_entry(key), "/v1/responses")
+        for key in (model_id, f"bedrock/{model_id}")
+    )
+
+
 def _chat_completions_unless_converse_needed(
     model: str, request_params: Mapping[str, object] | None
-) -> Literal["converse", "chat_completions"]:
-    if request_params is not None and bedrock_request_needs_converse(model, request_params):
+) -> Literal["converse", "chat_completions", "responses"]:
+    if request_params is None:
+        return "chat_completions"
+    if bedrock_request_needs_converse(model, request_params):
         return "converse"
-    return "chat_completions"
+    if not _chat_completions_rejects_function_tools(model, request_params):
+        return "chat_completions"
+    return "converse" if request_params.get("_litellm_responses_api_bridge_allowed") is False else "responses"
 
 
 def bedrock_route_for_request(
@@ -1474,8 +1534,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Grok and GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by
         default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
-        feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
-        model stays on Converse without the prefix.
+        feature only Converse serves, to ``responses`` (the chat-to-Responses bridge onto bedrock-runtime's
+        native ``/openai/v1/responses``) when it carries function tools with reasoning on, and ``converse/``
+        pins a model to Converse. Every other OpenAI-family model stays on Converse without the prefix.
         """
         route_mappings: dict[
             str,

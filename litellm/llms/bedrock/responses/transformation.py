@@ -222,17 +222,13 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         api_base: str | None,
         litellm_params: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
     ) -> str:
-        region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
-        override: Final = (
-            api_base
-            or litellm_params.get("aws_bedrock_runtime_endpoint")
-            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        runtime_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
+        _, destination = self.get_runtime_endpoint(
+            api_base=api_base or None,
+            aws_bedrock_runtime_endpoint=runtime_endpoint if isinstance(runtime_endpoint, str) else None,
+            aws_region_name=self._get_aws_region_name(optional_params=litellm_params, model=None),
         )
-        # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
-        # suffixes in GovCloud/ISO, so defer to the shared endpoint builder.
-        host: Final = (
-            override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
-        ).rstrip("/")
+        host: Final = destination.rstrip("/")
         base: Final = next(
             (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
             host,
