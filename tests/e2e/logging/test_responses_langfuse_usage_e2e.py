@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import (
     LangfuseCreds,
@@ -61,7 +62,37 @@ def _completed_usage(stream_events: list[str]) -> ResponsesUsage | None:
 
 class TestResponsesLangfuseUsage:
     @pytest.mark.covers("logging.langfuse.success.logs_usage", exercised_on=["responses"])
-    @pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+    @pytest.mark.parametrize(
+        "stream",
+        [
+            pytest.param(
+                False,
+                marks=meta(
+                    Subject(
+                        domain=Domain.OBSERVABILITY,
+                        route=Route.RESPONSES,
+                        providers=(Provider.OPENAI,),
+                        models=(CHEAP_OPENAI_MODEL,),
+                        mode=Mode.NONSTREAM,
+                    )
+                ),
+                id="non_streaming",
+            ),
+            pytest.param(
+                True,
+                marks=meta(
+                    Subject(
+                        domain=Domain.OBSERVABILITY,
+                        route=Route.RESPONSES,
+                        providers=(Provider.OPENAI,),
+                        models=(CHEAP_OPENAI_MODEL,),
+                        mode=Mode.STREAM,
+                    )
+                ),
+                id="streaming",
+            ),
+        ],
+    )
     def test_responses_call_logs_nonzero_token_usage(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager, stream: bool
     ) -> None:

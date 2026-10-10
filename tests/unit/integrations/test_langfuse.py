@@ -340,37 +340,32 @@ class TestLangfuseUsageDetails(unittest.TestCase):
     def _log_responses_api_generation(self, response_obj: ResponsesAPIResponse) -> dict[str, int]:
         self.use_real_langfuse_client()
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
-            side_effect=lambda generation_params, **kwargs: generation_params,
-            create=True,
-        ):
-            kwargs = {
-                "model": "gpt-5.5",
-                "messages": [{"role": "user", "content": "Test"}],
-                "litellm_params": {"metadata": {}},
-                "optional_params": {},
-                "litellm_call_id": "test-call-id-responses-api-usage",
-                "standard_logging_object": self._build_standard_logging_payload(),
-                "response_cost": 0.0,
-            }
+        kwargs = {
+            "model": "gpt-5.5",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_params": {"metadata": {}},
+            "optional_params": {},
+            "litellm_call_id": "test-call-id-responses-api-usage",
+            "standard_logging_object": self._build_standard_logging_payload(),
+            "response_cost": 0.0,
+        }
 
-            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+        fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
 
-            self.logger._log_langfuse_v2(
-                user_id="test-user",
-                metadata={},
-                litellm_params=kwargs["litellm_params"],
-                output={"role": "assistant", "content": "Response"},
-                start_time=fixed_time,
-                end_time=fixed_time + datetime.timedelta(seconds=1),
-                kwargs=kwargs,
-                optional_params=kwargs["optional_params"],
-                input={"messages": kwargs["messages"]},
-                response_obj=response_obj,
-                level="DEFAULT",
-                litellm_call_id=kwargs["litellm_call_id"],
-            )
+        self.logger._log_langfuse_v2(
+            user_id="test-user",
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            output={"role": "assistant", "content": "Response"},
+            start_time=fixed_time,
+            end_time=fixed_time + datetime.timedelta(seconds=1),
+            kwargs=kwargs,
+            optional_params=kwargs["optional_params"],
+            input={"messages": kwargs["messages"]},
+            response_obj=response_obj,
+            level="DEFAULT",
+            litellm_call_id=kwargs["litellm_call_id"],
+        )
 
         return json.loads(self.exported_generation().attributes["langfuse.observation.usage_details"])
 
