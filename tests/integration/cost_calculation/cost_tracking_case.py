@@ -52,6 +52,11 @@ class CostMapEntry(BaseModel):
     output_cost_per_image_token_batches: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
+    input_cost_per_token_above_100k_tokens: float | None = None
+    output_cost_per_token_above_100k_tokens: float | None = None
+    cache_read_input_token_cost_above_100k_tokens: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     output_vector_size: int | None = None
     input_cost_per_token_batches: float | None = None
     cache_read_input_token_cost: float | None = None
@@ -507,6 +512,7 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "vertex_ai-language-models": "vertex_ai",
         "vertex_ai-image-models": "vertex_ai",
         "vertex_ai-embedding-models": "vertex_ai",
+        "vertex_ai-anthropic_models": "vertex_ai",
         "gemini": "",
         "together_ai": "",
         "fireworks_ai": "",
@@ -550,6 +556,9 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         ),
         "vertex_ai-embedding-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
+        "vertex_ai-anthropic_models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "global"}
         ),
         "gemini": MappingProxyType({}),
         "together_ai": MappingProxyType({}),
