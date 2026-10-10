@@ -1,13 +1,21 @@
-import asyncio, importlib, os
+import asyncio
+import importlib
 import json
+import os
+from collections.abc import AsyncIterator
 from typing import Final
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI, OpenAI
+from pydantic import JsonValue
 
 import litellm
+from litellm import create_thread, get_thread
+from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.google_genai.adapters.transformation import GoogleGenAIStreamWrapper
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
@@ -19,8 +27,7 @@ from litellm.llms.openai.openai import (
     SyncCursorPage,
     Thread,
 )
-from litellm.types.utils import ImageResponse, ModelResponse
-from litellm import create_thread, get_thread
+from litellm.types.utils import Delta, ImageResponse, ModelResponse, ModelResponseStream, StreamingChoices
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from openai.types.beta.assistant import Assistant
@@ -271,6 +278,432 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
         assert tool_call.function.name == "get_weather"
         assert json.loads(tool_call.function.arguments) == {"city": "Paris"}
         assert rebuilt.choices[0].finish_reason == "tool_calls"
+
+
+def _openai_sse_chunk(chunk_id: str, model: str, choices: list[JsonValue]) -> bytes:
+    body: Final[dict[str, JsonValue]] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": choices,
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: respx.MockRouter) -> None:
+    model: Final = "o1"
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-o-series",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "foo"}],
+        parallel_tool_calls=True,
+        drop_params=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body == {"model": model, "messages": [{"role": "user", "content": "foo"}]}
+    assert response.choices[0].message.content == "done"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_prediction_parameter_participates_in_completion_cache_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_body: Final = json.loads(request.content)
+        prediction_content: Final = request_body["prediction"]["content"]
+        response_id: Final = (
+            "chatcmpl-prediction-one" if prediction_content == "prediction one" else "chatcmpl-prediction-two"
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": response_id,
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": prediction_content},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    messages: Final = [{"role": "user", "content": "replace the username"}]
+    first_prediction: Final = {"type": "content", "content": "prediction one"}
+    second_prediction: Final = {"type": "content", "content": "prediction two"}
+
+    first: Final = litellm.completion(
+        model="gpt-4o",
+        messages=messages,
+        prediction=first_prediction,
+        caching=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    cached: Final = litellm.completion(
+        model="gpt-4o",
+        messages=messages,
+        prediction=first_prediction,
+        caching=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    distinct: Final = litellm.completion(
+        model="gpt-4o",
+        messages=messages,
+        prediction=second_prediction,
+        caching=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_bodies: Final = tuple(json.loads(call.request.content) for call in route.calls)
+
+    assert first.id == cached.id == "chatcmpl-prediction-one"
+    assert distinct.id == "chatcmpl-prediction-two"
+    assert route.call_count == 2
+    assert request_bodies == (
+        {"model": "gpt-4o", "messages": messages, "prediction": first_prediction},
+        {"model": "gpt-4o", "messages": messages, "prediction": second_prediction},
+    )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: respx.MockRouter) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "description": "Get the current stock price for a given ticker symbol.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"ticker": {"type": "string", "description": "The stock ticker symbol."}},
+                    "required": ["ticker"],
+                },
+            },
+        }
+    ]
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-tool-call",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4.1",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-tsla",
+                                    "type": "function",
+                                    "function": {"name": "get_stock_price", "arguments": '{"ticker":"TSLA"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="openai/gpt-4.1",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "What is TSLA stock price at today?"}]}],
+        temperature=0.5,
+        max_tokens=1600,
+        tools=tools,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+
+    assert request_body == {
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "What is TSLA stock price at today?"}]}],
+        "temperature": 0.5,
+        "max_tokens": 1600,
+        "tools": tools,
+    }
+    assert (tool_call.id, tool_call.function.name, tool_call.function.arguments) == (
+        "call-tsla",
+        "get_stock_price",
+        '{"ticker":"TSLA"}',
+    )
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-bridge",
+        object="chat.completion.chunk",
+        created=0,
+        model="gpt-3.5-turbo",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="A starship crossed the sky."),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    async def stream() -> AsyncIterator[ModelResponseStream]:
+        yield chunk
+
+    wrapper: Final = GoogleGenAIStreamWrapper(stream())
+    chunks: Final = tuple([item async for item in wrapper])
+
+    assert chunks == (
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "A starship crossed the sky."}], "role": "model"},
+                    "finishReason": None,
+                    "index": 0,
+                    "safetyRatings": [],
+                }
+            ]
+        },
+    )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_streaming_content_with_n_greater_than_one_preserves_choice_indices(
+    respx_mock: respx.MockRouter,
+) -> None:
+    stream_body: Final = b"".join(
+        (
+            _openai_sse_chunk(
+                "chatcmpl-n-content",
+                "gpt-4o",
+                [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-content",
+                "gpt-4o",
+                [{"index": 1, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk("chatcmpl-n-content", "gpt-4o", [{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+            _openai_sse_chunk("chatcmpl-n-content", "gpt-4o", [{"index": 1, "delta": {}, "finish_reason": "stop"}]),
+            b"data: [DONE]\n\n",
+        )
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+    response: Final = litellm.completion(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "Say hello in one word"}],
+        stream=True,
+        n=2,
+        max_tokens=10,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    chunks: Final = tuple(response)
+    request_body: Final = json.loads(route.calls[0].request.content)
+    indices: Final = tuple(chunk.choices[0].index for chunk in chunks if chunk.choices)
+    content_by_index: Final = {
+        index: "".join(
+            chunk.choices[0].delta.content or ""
+            for chunk in chunks
+            if chunk.choices and chunk.choices[0].index == index
+        )
+        for index in (0, 1)
+    }
+
+    assert route.call_count == 1
+    assert request_body == {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Say hello in one word"}],
+        "stream": True,
+        "n": 2,
+        "max_tokens": 10,
+        "stream_options": {"include_usage": True},
+    }
+    assert frozenset(indices) == frozenset({0, 1})
+    assert content_by_index == {0: "Hello", 1: "Hi"}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_streaming_tool_calls_with_n_greater_than_one_preserves_choice_indices(
+    respx_mock: respx.MockRouter,
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location", "unit"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    stream_body: Final = b"".join(
+        (
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-0",
+                                    "type": "function",
+                                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [
+                    {
+                        "index": 1,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [{"index": 1, "delta": {}, "finish_reason": "tool_calls"}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [
+                    {
+                        "index": 2,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-2",
+                                    "type": "function",
+                                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [{"index": 2, "delta": {}, "finish_reason": "tool_calls"}],
+            ),
+            b"data: [DONE]\n\n",
+        )
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+    response: Final = litellm.completion(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        tools=tools,
+        stream=True,
+        n=3,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    chunks: Final = tuple(response)
+    request_body: Final = json.loads(route.calls[0].request.content)
+    indices: Final = tuple(chunk.choices[0].index for chunk in chunks if chunk.choices)
+
+    assert route.call_count == 1
+    assert request_body == {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+        "tools": tools,
+        "stream": True,
+        "n": 3,
+        "stream_options": {"include_usage": True},
+    }
+    assert frozenset(indices) == frozenset({0, 1, 2})
 
 
 _PROVIDER_HEADERS: Final = {"x-request-id": "req_openai", "x-ratelimit-remaining-requests": "41"}

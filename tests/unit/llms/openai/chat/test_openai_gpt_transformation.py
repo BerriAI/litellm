@@ -1096,6 +1096,30 @@ def test_openai_pdf_url_is_downloaded_into_file_data() -> None:
     assert base64.b64decode(file_content["file_data"].split(",", maxsplit=1)[1]) == pdf_content
 
 
+def test_vision_with_custom_model_preserves_base64_image_in_request() -> None:
+    image_data: Final = b"test-image"
+    image_uri: Final = f"data:image/png;base64,{base64.b64encode(image_data).decode('utf-8')}"
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {"type": "image_url", "image_url": {"url": image_uri}},
+            ],
+        }
+    ]
+    request: Final = OpenAIGPTConfig().transform_request(
+        model="my-custom-model",
+        messages=messages,
+        optional_params={"max_tokens": 10},
+        litellm_params={"api_base": "https://my-custom.api.openai.com"},
+        headers={},
+    )
+
+    assert request == {"model": "my-custom-model", "messages": messages, "max_tokens": 10}
+    assert request["messages"][0]["content"][1]["image_url"]["url"] == image_uri
+
+
 class TestToolMessageImageHoisting:
     """transform_request moves tool-message images into a following user message
     (OpenAI-compatible APIs only accept text in role:"tool" messages)."""

@@ -1,10 +1,14 @@
+import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
 
+import litellm
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
 
@@ -134,6 +138,44 @@ class TestJinaAIEmbeddingTransform:
             "input": expected_input,
         }
         assert result == expected_result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_jina_ai_embedding_forwards_task_and_dimensions_and_parses_values(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "jina-embeddings-v3",
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="jina_ai/jina-embeddings-v3",
+        input=["a"],
+        task="separation",
+        dimensions=1024,
+        api_key="jina-test-key",
+        api_base="https://api.jina.ai/v1",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body == {
+        "model": "jina-embeddings-v3",
+        "input": ["a"],
+        "task": "separation",
+        "dimensions": 1024,
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert response.usage.prompt_tokens == 3
 
 
 def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
