@@ -133,7 +133,7 @@ class VertexPassthroughLoggingHandler:
         The query string is stripped first so a route such as
         ``.../gemini-3.8-flash:streamGenerateContent?alt=sse`` still matches.
         """
-        path = urlparse(url_route).path
+        path: Final = urlparse(url_route).path
         return path.endswith((method, ":" + method))
 
     @staticmethod
