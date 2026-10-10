@@ -3919,7 +3919,7 @@ class ProxyBaseLLMRequestProcessing:
     async def async_streaming_data_generator(
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, Any],
         proxy_logging_obj: ProxyLogging,
         *,
         serialize_chunk: StreamChunkSerializer,
@@ -4122,7 +4122,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def should_inject_cost_for_request(
-        request_data: Mapping[str, Any] | None,
+        request_data: Mapping[str, object] | None,
         *,
         protocol_supports_stream_options: bool = True,
     ) -> bool:
@@ -4138,10 +4138,10 @@ class ProxyBaseLLMRequestProcessing:
         """
         if not getattr(litellm, "include_cost_in_streaming_usage", False):
             return False
-        stream_options: Final = request_data.get("stream_options") if isinstance(request_data, Mapping) else None
-        if isinstance(stream_options, Mapping):
-            return bool(stream_options.get("include_usage", False))
-        return not protocol_supports_stream_options
+        stream_options: Final = None if request_data is None else request_data.get("stream_options")
+        if not isinstance(stream_options, Mapping):
+            return not protocol_supports_stream_options
+        return "include_usage" in stream_options and stream_options["include_usage"] is True
 
     @overload
     @staticmethod

@@ -173,7 +173,7 @@ class PassThroughStreamingHandler:
 
         cost_injection_active: Final = (
             ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
-                request_body,
+                resolved_request_body,
                 protocol_supports_stream_options=endpoint_type == EndpointType.OPENAI,
             )
             and bool(model_name)
