@@ -65,6 +65,7 @@ _RESPONSES_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "w
 _BURST_MODEL: Final = f"interception-burst-{uuid.uuid4().hex}"
 _BURST_DEPLOYMENT: Final = iv.deployment("search")
 _STARTED_WORKER: Final = "Started server process ["
+_STARTUP_COMPLETE: Final = "Application startup complete."
 _MALFORMED: Final = (
     pytest.param(5, id="int"),
     pytest.param([{"include_usage": True}], id="list"),
@@ -614,14 +615,58 @@ def test_wrong_azure_key_surfaces_azures_401(rig: _Rig, scenario: Scenario) -> N
     assert len(_upstream(rig, deployment).model_calls) == 1
 
 
-def test_failed_follow_up_call_reaches_the_caller_as_an_error(rig: _Rig, scenario: Scenario) -> None:
+def _tool_call(call: Mapping[str, JsonValue]) -> tuple[str, Mapping[str, JsonValue]]:
+    function: Final = object_value(call["function"])
+    return string_value(function["name"]), iv.JSON_OBJECT.validate_json(string_value(function["arguments"]))
+
+
+def _stream_choices(stream: _Stream) -> Iterator[Mapping[str, JsonValue]]:
+    for frame in stream.frames:
+        yield from rv.ITEMS.validate_python(frame.get("choices") or [])
+
+
+def _streamed_tool_calls(stream: _Stream) -> Iterator[tuple[str, Mapping[str, JsonValue]]]:
+    for choice in _stream_choices(stream):
+        yield from map(
+            _tool_call, rv.ITEMS.validate_python(object_value(choice.get("delta") or {}).get("tool_calls") or [])
+        )
+
+
+def _handed_back(deployment: _Deployment) -> list[tuple[str, Mapping[str, JsonValue]]]:
+    return [(iv.SEARCH_TOOL, {"query": iv.query(deployment.name)})]
+
+
+def _assert_succeeded_once(model: str, identity: str) -> None:
+    rows: Final = _spend_rows(model, 1)
+    assert [string_value(row["request_id"]) for row in rows if row["status"] == "success"] == [identity], rows
+
+
+def test_failed_follow_up_call_hands_the_search_tool_call_back_with_its_usage(rig: _Rig, scenario: Scenario) -> None:
     deployment: Final = _deploy(rig, scenario, "followup-fails")
     stream: Final = _chat(rig, _chat_body(deployment, extra={**_NO_CACHE, "stream_options": dict(_USAGE)}))
-    assert stream.status == 200, stream.text
-    assert iv.FOLLOWUP_FAILURE in stream.text and stream.content == "", stream.text
-    received: Final = _upstream(rig, deployment)
-    _assert_upstream(received, model_calls=2, searches=1)
+    assert stream.status == 200 and stream.content == "", stream.text
+    assert list(_streamed_tool_calls(stream)) == _handed_back(deployment), stream.text
+    finished: Final = [choice["finish_reason"] for choice in _stream_choices(stream) if choice.get("finish_reason")]
+    assert finished == ["tool_calls"], stream.text
+    assert [_totals(usage) for usage in stream.usages] == [iv.FIRST_USAGE["total_tokens"]], stream.text
+    (identity,) = stream.ids
+    _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
+    _assert_succeeded_once(deployment.model, identity)
     assert rig.gateway.chat(_deploy(rig, scenario, "plain").model)["object"] == "chat.completion"
+
+
+def test_failed_follow_up_call_on_a_json_request_hands_the_search_tool_call_back(rig: _Rig, scenario: Scenario) -> None:
+    deployment: Final = _deploy(rig, scenario, "followup-fails")
+    response: Final = rig.gateway.request("POST", "/v1/chat/completions", _chat_body(deployment, stream=False))
+    assert response.status_code == 200, response.text
+    body: Final = iv.JSON_OBJECT.validate_json(response.content)
+    (choice,) = rv.ITEMS.validate_python(body["choices"])
+    calls: Final = rv.ITEMS.validate_python(object_value(choice["message"])["tool_calls"])
+    assert [_tool_call(call) for call in calls] == _handed_back(deployment), body
+    assert choice["finish_reason"] == "tool_calls", body
+    assert _totals(object_value(body["usage"])) == iv.FIRST_USAGE["total_tokens"], body
+    _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
+    _assert_succeeded_once(deployment.model, string_value(body["id"]))
 
 
 def test_search_outage_still_restreams_the_follow_up_answer(rig: _Rig, scenario: Scenario) -> None:
@@ -852,3 +897,9 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_restreaming_with_usag
         rows: Final = _spend_rows(_BURST_MODEL, len(identities) + 1)
         landed: Final = tuple(string_value(row["request_id"]) for row in rows if row["status"] == "success")
         assert sorted(landed) == sorted((*identities, recovered)), rows
+        replaced: Final = eventually(
+            lambda: owned.proxy.log.read_text(),
+            lambda log: len(_worker_pids(log)) == 3 and log.count(_STARTUP_COMPLETE) == 3,
+            seconds=2 * graceful_stop_seconds(),
+        )
+        assert victim_pid not in _worker_pids(replaced)[2:], replaced
