@@ -4887,6 +4887,26 @@ def test_leading_system_list_with_a_non_text_block_stays_an_input_item():
     assert input_items[0]["content"][1]["type"] == "input_image"
 
 
+def test_leading_system_list_with_a_prompt_cache_breakpoint_stays_an_input_item():
+    """A prompt_cache_breakpoint rides only on an input item's content block, so a leading
+    system message carrying one stays an input item and keeps its marker rather than folding."""
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": [_MARKED_SYSTEM_PART]},
+            {"role": "user", "content": "hi"},
+        ],
+        keep_prompt_cache_breakpoints=True,
+    )
+
+    assert instructions is None
+    assert input_items == [
+        {"type": "message", "role": "system", "content": [{**_MARKED_SYSTEM_PART, "type": "input_text"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
 def test_map_optional_params_verbosity_merges_into_text():
     """Chat verbosity must land on Responses text.verbosity alongside text.format regardless of key order."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
