@@ -279,10 +279,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         OpenAI ``semantic_vad`` has no Gemini Live equivalent — return an empty
         dict so callers omit ``realtimeInputConfig`` (mapping it with
-        ``disabled: true`` breaks native-audio sessions).
+        ``disabled: true`` breaks native-audio sessions). Gemini Live closes the
+        socket (1007) when padding or silence tuning comes with ``disabled: true``,
+        so an explicit ``create_response: false`` maps to detection off alone.
         """
         if isinstance(value, dict) and value.get("type") == "semantic_vad" and "create_response" not in value:
             return AutomaticActivityDetection()
+        if isinstance(value, dict) and value.get("create_response") is False:
+            return AutomaticActivityDetection(disabled=True)
 
         automatic_activity_dection: Final = AutomaticActivityDetection()
         if "create_response" in value and isinstance(value["create_response"], bool):
