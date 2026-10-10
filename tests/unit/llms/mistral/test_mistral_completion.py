@@ -67,9 +67,7 @@ async def test_mistral_basic_completion(sync_mode, respx_mock, mistral_api_respo
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
     # Mock the Mistral API endpoint
-    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
-        json=mistral_api_response
-    )
+    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=mistral_api_response)
 
     if sync_mode:
         response = litellm.completion(model=model, messages=messages)
@@ -77,10 +75,7 @@ async def test_mistral_basic_completion(sync_mode, respx_mock, mistral_api_respo
         response = await litellm.acompletion(model=model, messages=messages)
 
     # Verify response
-    assert (
-        response.choices[0].message.content
-        == "Hello from Mistral! How can I help you today?"
-    )
+    assert response.choices[0].message.content == "Hello from Mistral! How can I help you today?"
     assert response.model == "mistral-medium-latest"
     assert response.usage.total_tokens == 25
 
@@ -103,9 +98,7 @@ async def test_mistral_transform_response_empty_content_conversion(
     messages = [{"role": "user", "content": "Generate an empty response"}]
 
     # Mock the Mistral API endpoint with empty content
-    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
-        json=mistral_api_response_with_empty_content
-    )
+    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=mistral_api_response_with_empty_content)
 
     if sync_mode:
         response = litellm.completion(model=model, messages=messages)
@@ -121,9 +114,7 @@ async def test_mistral_transform_response_empty_content_conversion(
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_mistral_transform_request_name_field_removal(
-    sync_mode, respx_mock, mistral_api_response
-):
+async def test_mistral_transform_request_name_field_removal(sync_mode, respx_mock, mistral_api_response):
     """
     Test that Mistral's transform_request method is being called by verifying
     the specific behavior of removing the 'name' field from non-tool messages.
@@ -142,9 +133,7 @@ async def test_mistral_transform_request_name_field_removal(
     ]
 
     # Mock the Mistral API endpoint
-    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
-        json=mistral_api_response
-    )
+    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=mistral_api_response)
 
     if sync_mode:
         response = litellm.completion(model=model, messages=messages)
@@ -152,10 +141,7 @@ async def test_mistral_transform_request_name_field_removal(
         response = await litellm.acompletion(model=model, messages=messages)
 
     # Verify the response works (if transform_request wasn't called, the API would reject the request)
-    assert (
-        response.choices[0].message.content
-        == "Hello from Mistral! How can I help you today?"
-    )
+    assert response.choices[0].message.content == "Hello from Mistral! How can I help you today?"
     assert response.model == "mistral-medium-latest"
 
     # Verify that the request was made (if transform_request failed, this would fail)
@@ -294,9 +280,7 @@ def test_mistral_streaming_function_call_arguments_are_assembled(
         for chunk in stream_chunks
         if chunk.choices and chunk.choices[0].delta.tool_calls is not None
     )
-    assert "".join(argument or "" for argument in argument_fragments) == (
-        '{"location":"Boston","unit":"fahrenheit"}'
-    )
+    assert "".join(argument or "" for argument in argument_fragments) == ('{"location":"Boston","unit":"fahrenheit"}')
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
     assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"
@@ -307,7 +291,9 @@ def test_mistral_streaming_function_call_arguments_are_assembled(
     assert assembled.choices[0].finish_reason == "tool_calls"
 
 
-def test_mistral_completion_cost_is_priced_from_the_returned_usage(respx_mock, mistral_api_response):
+def test_mistral_completion_cost_is_priced_from_the_returned_usage(
+    respx_mock, mistral_api_response, local_model_cost_map
+):
     route: Final = respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=mistral_api_response)
 
     response: Final = litellm.completion(

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
+from collections.abc import Callable
 from typing import Final
 
-from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value
+from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
+from redis import Redis
 
 _TOOL: Final = {
     "type": "function",
@@ -25,9 +29,9 @@ _TOOL: Final = {
 _MESSAGES: Final = [{"role": "user", "content": "Weather in Boston?"}]
 
 
-def _frame(delta: JsonValue, finish_reason: str | None = None) -> bytes:
+def _frame(stream_id: str, delta: JsonValue, finish_reason: str | None = None) -> bytes:
     chunk: Final = {
-        "id": "azure-stream-tool-call",
+        "id": stream_id,
         "object": "chat.completion.chunk",
         "created": 1,
         "model": "gpt-4.1-mini",
@@ -36,40 +40,54 @@ def _frame(delta: JsonValue, finish_reason: str | None = None) -> bytes:
     return f"data: {json.dumps(chunk)}\n\n".encode()
 
 
-_FRAMES: Final = (
-    _frame(
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "index": 0,
-                    "id": "call-weather",
-                    "type": "function",
-                    "function": {
-                        "name": "get_current_weather",
-                        "arguments": '{"location":"Bos',
-                    },
-                }
-            ],
-        }
-    ),
-    _frame({"tool_calls": [{"index": 0, "function": {"arguments": 'ton","unit":"fahrenheit"}'}}]}),
-    _frame({}, finish_reason="tool_calls"),
-    b"data: [DONE]\n\n",
-)
+def _frames(stream_id: str) -> tuple[bytes, ...]:
+    return (
+        _frame(
+            stream_id,
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call-weather",
+                        "type": "function",
+                        "function": {
+                            "name": "get_current_weather",
+                            "arguments": '{"location":"Bos',
+                        },
+                    }
+                ],
+            },
+        ),
+        _frame(stream_id, {"tool_calls": [{"index": 0, "function": {"arguments": 'ton","unit":"fahrenheit"}'}}]}),
+        _frame(stream_id, {}, finish_reason="tool_calls"),
+        b"data: [DONE]\n\n",
+    )
 
 
-def _respond(request: Request) -> Reply:
-    assert request.method == "POST"
-    assert request.target == "/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-02-15-preview"
-    assert request.headers["api-key"] == "synthetic-azure-key"
-    body: Final = JSON_OBJECT.validate_json(request.body)
-    assert body["model"] == "gpt-4.1-mini"
-    assert body["messages"] == _MESSAGES
-    assert body["stream"] is True
-    assert body["tools"] == [_TOOL]
-    assert body["tool_choice"] == "auto"
-    return Reply(content_type="text/event-stream", chunks=_FRAMES)
+def _responder(stream_id: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-02-15-preview"
+        assert request.headers["api-key"] == "synthetic-azure-key"
+        body: Final = JSON_OBJECT.validate_json(request.body)
+        assert body["model"] == "gpt-4.1-mini"
+        assert body["messages"] == _MESSAGES
+        assert body["stream"] is True
+        assert body["tools"] == [_TOOL]
+        assert body["tool_choice"] == "auto"
+        return Reply(content_type="text/event-stream", chunks=_frames(stream_id))
+
+    return respond
+
+
+def _stored(stream_id: str) -> bool:
+    with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as store:
+        return any(
+            stream_id.encode() in (store.get(key) or b"")
+            for key in store.scan_iter(count=1000)
+            if store.type(key) == b"string"
+        )
 
 
 def _tool_call_stream(gateway: Gateway, model: str) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
@@ -106,7 +124,8 @@ def _tool_call_stream(gateway: Gateway, model: str) -> tuple[tuple[str, ...], st
 
 
 def test_azure_astreaming_and_function_calling(gateway: Gateway) -> None:
-    with wire_server(_respond) as wire, gateway.scenario() as scenario:
+    stream_id: Final = f"azure-stream-{uuid.uuid4().hex}"
+    with wire_server(_responder(stream_id)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="azure/gpt-4.1-mini",
             api_base=wire.url,
@@ -114,6 +133,7 @@ def test_azure_astreaming_and_function_calling(gateway: Gateway) -> None:
             api_version="2024-02-15-preview",
         )
         first: Final = _tool_call_stream(gateway, model)
+        eventually(lambda: _stored(stream_id), bool)
         cached: Final = _tool_call_stream(gateway, model)
         received: Final = wire.drain()
 
