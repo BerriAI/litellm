@@ -66,6 +66,7 @@ router: Final = APIRouter()
 _TEAM_PROVIDER_CREDENTIALS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _EMPTY_TEAM_PROVIDER_CREDENTIALS: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_CREDENTIAL_PROVIDER: Final = "openai"
+_EXPLICIT_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base", "litellm_credential_name"})
 
 
 def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -215,7 +216,7 @@ def _team_provider_credentials(
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Mapping[str, object]:
-    if any(key in effective_config for key in ("api_key", "api_base", "litellm_credential_name")):
+    if not _EXPLICIT_CREDENTIAL_KEYS.isdisjoint(effective_config):
         return _EMPTY_TEAM_PROVIDER_CREDENTIALS
 
     if effective_config.get("custom_llm_provider", _TEAM_CREDENTIAL_PROVIDER) != _TEAM_CREDENTIAL_PROVIDER:
@@ -858,7 +859,13 @@ async def rag_query(
             **retrieval_config,
             **store_data,
         }
-        effective_vector_store_config: Final = managed_store_params if managed_store is not None else retrieval_config
+        effective_vector_store_config: Final = (
+            managed_store_params
+            if managed_store is not None
+            else MappingProxyType(
+                {key: value for key, value in retrieval_config.items() if key not in _EXPLICIT_CREDENTIAL_KEYS}
+            )
+        )
         team_credentials: Final = _team_provider_credentials(
             effective_vector_store_config,
             llm_router,

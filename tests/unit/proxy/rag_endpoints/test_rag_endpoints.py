@@ -552,8 +552,12 @@ def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(
 
 
 @pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    "caller_fields",
+    [{}, {"api_key": None}, {"api_base": None}, {"api_key": "sk-caller-key-the-search-never-uses"}],
+)
 def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
-    client_team_a: TestClient, respx_mock: respx.MockRouter
+    client_team_a: TestClient, respx_mock: respx.MockRouter, caller_fields: Mapping[str, object]
 ) -> None:
     search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
         json=_OPENAI_SEARCH_PAGE
@@ -561,7 +565,7 @@ def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
 
     response: Final = _post_rag_query(
         client_team_a,
-        retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+        retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai", **caller_fields},
         managed_stores=(),
         router=_team_provider_router(),
     )
