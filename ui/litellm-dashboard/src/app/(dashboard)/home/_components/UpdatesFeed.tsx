@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ArrowUpRight, Newspaper } from "lucide-react";
 import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
@@ -8,6 +9,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export const BLOG_URL = "https://docs.litellm.ai/blog";
 const MAX_ROWS = 6;
+
+/** Category tags set in blog post frontmatter (blog/tags.yml in litellm-docs). */
+export const UPDATE_FILTERS = [
+  { id: "all", label: "All", tags: null },
+  { id: "models", label: "New models", tags: ["new-model", "day 0 support"] },
+  { id: "apis", label: "API changes", tags: ["api-change"] },
+] as const;
+type UpdateFilterId = (typeof UPDATE_FILTERS)[number]["id"];
+
+export const filterPosts = (posts: readonly BlogPost[], filterId: UpdateFilterId): BlogPost[] => {
+  const tags = UPDATE_FILTERS.find((f) => f.id === filterId)?.tags ?? null;
+  if (!tags) return [...posts];
+  return posts.filter((post) => post.tags?.some((tag) => (tags as readonly string[]).includes(tag)));
+};
 const DAY_MS = 86_400_000;
 
 const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
@@ -35,9 +50,10 @@ const Row = ({ children }: { children: React.ReactNode }) => (
 export default function UpdatesFeed({ className }: { className?: string }) {
   const disabled = useDisableBlogPosts();
   const { data, isLoading, isError, refetch } = useBlogPosts();
+  const [filter, setFilter] = useState<UpdateFilterId>("all");
   if (disabled) return null;
 
-  const posts = data?.posts.slice(0, MAX_ROWS) ?? [];
+  const posts = filterPosts(data?.posts ?? [], filter).slice(0, MAX_ROWS);
 
   return (
     <section aria-labelledby="home-updates-title" data-testid="home-updates" className={className}>
@@ -49,6 +65,25 @@ export default function UpdatesFeed({ className }: { className?: string }) {
           View all
           <ArrowUpRight className="size-3.5" />
         </Button>
+      </div>
+      <div role="tablist" aria-label="Filter updates" className="mt-2 flex flex-wrap gap-1.5">
+        {UPDATE_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            role="tab"
+            aria-selected={filter === f.id}
+            onClick={() => setFilter(f.id)}
+            className={
+              "rounded-full border px-2.5 py-0.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 " +
+              (filter === f.id
+                ? "border-foreground bg-foreground text-background"
+                : "border-border bg-background text-muted-foreground hover:text-foreground")
+            }
+          >
+            {f.label}
+          </button>
+        ))}
       </div>
       {isLoading && (
         <ul className="m-0 list-none p-0">
@@ -69,7 +104,11 @@ export default function UpdatesFeed({ className }: { className?: string }) {
           </Button>
         </div>
       )}
-      {data && posts.length === 0 && <p className="py-3 text-sm text-muted-foreground">No posts yet</p>}
+      {data && posts.length === 0 && (
+        <p className="py-3 text-sm text-muted-foreground">
+          {filter === "all" ? "No posts yet" : "No posts in this category yet"}
+        </p>
+      )}
       {posts.length > 0 && (
         <ol className="m-0 list-none p-0">
           {posts.map((post: BlogPost) => (

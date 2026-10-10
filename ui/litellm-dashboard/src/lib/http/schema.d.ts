@@ -26970,6 +26970,11 @@ export interface components {
             date: string;
             /** Description */
             description: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
             /** Title */
             title: string;
             /** Url */

@@ -490,7 +490,7 @@ async def get_litellm_blog_posts():
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         posts_data = GetBlogPosts.load_local_blog_posts()
 
-    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
+    posts: Final = [BlogPost(**p) for p in posts_data]
     return BlogPostsResponse(posts=posts)
 
 
