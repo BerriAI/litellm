@@ -11,7 +11,7 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
 from fastapi import HTTPException
@@ -51,6 +51,22 @@ A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
 
 _RequestData: TypeAlias = dict[str, object]
+
+
+@runtime_checkable
+class RequestAttachmentScanner(Protocol):
+    async def async_scan_request_attachments(
+        self,
+        data: _RequestData,
+        call_type: CallTypesLiteral,
+    ) -> None: ...
+
+
+async def _scan_request_attachments(
+    guardrail: CustomGuardrail, data: _RequestData, call_type: CallTypesLiteral
+) -> None:
+    if isinstance(guardrail, RequestAttachmentScanner) and hasattr(type(guardrail), "async_scan_request_attachments"):
+        await guardrail.async_scan_request_attachments(data=data, call_type=call_type)
 
 
 class _EndpointTranslation(Protocol):
@@ -250,6 +266,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
+
+        await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
 
         data = await endpoint_translation.process_input_messages(
             data=data,
