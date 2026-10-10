@@ -303,6 +303,7 @@ describe("Request ID column", () => {
         getRowId={(row) => row.request_id}
         size="compact"
         onRowClick={onRowClick}
+        getRowLabel={(row) => `Open request ${row.request_id}`}
       />,
     );
 

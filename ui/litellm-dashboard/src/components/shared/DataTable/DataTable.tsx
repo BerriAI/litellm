@@ -271,6 +271,7 @@ interface BodyRowProps<TData> {
   stickyHeader: boolean;
   enableColumnResizing: boolean;
   onRowClick?: (row: TData) => void;
+  getRowLabel?: (row: TData) => string;
   rowClassName?: (row: Row<TData>) => string;
   renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
 }
@@ -281,6 +282,7 @@ function DataTableBodyRow<TData>({
   stickyHeader,
   enableColumnResizing,
   onRowClick,
+  getRowLabel,
   rowClassName,
   renderSubComponent,
 }: BodyRowProps<TData>) {
@@ -301,12 +303,32 @@ function DataTableBodyRow<TData>({
     onRowClick(row.original);
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (onRowClick === undefined || event.target !== event.currentTarget) {
+      return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    onRowClick(row.original);
+  };
+
   return (
     <Fragment>
       <TableRow
         data-row-id={row.id}
-        className={cn(clickable ? "cursor-pointer" : "", size === "compact" ? "h-8" : "", rowClassName?.(row))}
+        tabIndex={clickable ? 0 : undefined}
+        aria-label={clickable ? getRowLabel?.(row.original) : undefined}
+        className={cn(
+          clickable
+            ? "cursor-pointer focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2"
+            : "",
+          size === "compact" ? "h-8" : "",
+          rowClassName?.(row),
+        )}
         onClick={clickable ? handleClick : undefined}
+        onKeyDown={clickable ? handleKeyDown : undefined}
       >
         {cells.map((cell) => (
           <DataTableBodyCell
@@ -607,6 +629,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
     enableColumnResizing = false,
     onRowClick,
+    getRowLabel,
     rowClassName,
     renderSubComponent,
     maxBodyHeight,
@@ -673,6 +696,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
         stickyHeader={stickyHeader}
         enableColumnResizing={enableColumnResizing}
         onRowClick={onRowClick}
+        getRowLabel={getRowLabel}
         rowClassName={rowClassName}
         renderSubComponent={renderSubComponent}
       />

@@ -2,10 +2,12 @@
 
 import { OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { DataTable } from "@/components/shared/DataTable";
+import { keyDetailHref } from "@/utils/entityLinks";
 
 import { getProjectKeysTableColumns } from "./ProjectKeysTableColumns";
 import { PROJECT_KEYS_PAGE_SIZE_OPTIONS } from "./useProjectsUrlState";
@@ -39,6 +41,7 @@ export function ProjectKeysTable({
   pagination,
   onPaginationChange,
 }: ProjectKeysTableProps) {
+  const router = useRouter();
   const columns = useMemo(() => getProjectKeysTableColumns(), []);
 
   return (
@@ -56,6 +59,10 @@ export function ProjectKeysTable({
       loadingMessage="Loading keys…"
       noDataMessage={<EmptyState />}
       size="compact"
+      onRowClick={(key) => {
+        if (key.token) router.push(keyDetailHref(key.token));
+      }}
+      getRowLabel={(key) => `Open key ${key.key_alias ?? key.token_id}`}
     />
   );
 }

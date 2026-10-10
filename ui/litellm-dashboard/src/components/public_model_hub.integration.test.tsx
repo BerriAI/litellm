@@ -4,7 +4,8 @@ import { render, screen, waitFor, within, fireEvent } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import PublicModelHub from "./public_model_hub";
-import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
+import { getPublicMCPHubColumns } from "./PublicModelHubTableColumns";
+import type { AgentCard, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
 
@@ -61,6 +62,16 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
 });
 
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
+const mockAgent: AgentCard = {
+  protocolVersion: "1",
+  name: "row-activation-agent",
+  description: "Agent used for row activation",
+  url: "https://example.com/agent",
+  version: "1.0",
+  defaultInputModes: [],
+  defaultOutputModes: [],
+  skills: [],
+};
 
 const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
   apiGetMock.mockImplementation((path: string) => {
@@ -143,6 +154,58 @@ describe("PublicModelHub", () => {
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
     expect(modelCalls()[0][0]).toBe(MODEL_HUB_PATH);
     expect(modelQueries()[0]).toEqual({ page: 1, page_size: 50, sort: "model_group" });
+  });
+
+  it("opens model details by clicking a plain cell and exposes the accessible row name", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4" })]);
+    renderHub();
+
+    const row = await screen.findByRole("row", { name: "Open model gpt-4" });
+    await user.click(within(row).getByText("gpt-4"));
+
+    expect(await screen.findByRole("heading", { name: "gpt-4" })).toBeInTheDocument();
+  });
+
+  it("opens model details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4" })]);
+    renderHub();
+
+    const row = await screen.findByRole("row", { name: "Open model gpt-4" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByRole("heading", { name: "gpt-4" })).toBeInTheDocument();
+  });
+
+  it("opens agent details from a plain cell and exposes the accessible row name", async () => {
+    const user = userEvent.setup();
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.agentHubPublicModelsCall).mockResolvedValueOnce([mockAgent]);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: "Agent Hub" }));
+    const row = await screen.findByRole("row", { name: "Open agent row-activation-agent" });
+    await user.click(within(row).getByText("row-activation-agent"));
+
+    expect(await screen.findByRole("heading", { name: "row-activation-agent" })).toBeInTheDocument();
+  });
+
+  it("opens agent details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.agentHubPublicModelsCall).mockResolvedValueOnce([mockAgent]);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: "Agent Hub" }));
+    const row = await screen.findByRole("row", { name: "Open agent row-activation-agent" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByRole("heading", { name: "row-activation-agent" })).toBeInTheDocument();
   });
 
   it("waits for the resolved proxy base url before asking for a page", async () => {
@@ -409,7 +472,7 @@ const mockMcpServer: MCPServerData = {
 };
 
 function PublicMcpTestTable({ data }: { data: MCPServerData[] }) {
-  const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
+  const columns = getPublicMCPHubColumns();
   const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
@@ -447,7 +510,7 @@ describe("publicMCPHubColumns", () => {
   it("does not expose a URL column header", () => {
     render(<PublicMcpTestTable data={[mockMcpServer]} />);
     expect(screen.queryByText("URL")).not.toBeInTheDocument();
-    const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
+    const columns = getPublicMCPHubColumns();
     expect(columns.some((c) => c.header === "URL" || c.meta?.title === "URL")).toBe(false);
   });
 
@@ -459,13 +522,15 @@ describe("publicMCPHubColumns", () => {
 
 describe("public hub MCP details modal", () => {
   it("does not show the upstream url when a server is opened", async () => {
+    const user = userEvent.setup();
     const networkingModule = await import("./networking");
     vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
 
     renderHub();
 
-    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    const row = await screen.findByRole("row", { name: "Open MCP server exa_test" });
+    await user.click(within(row).getByText("exa_test"));
 
     // "Server Overview" only exists inside the opened MCP details modal,
     // so finding it proves the modal rendered and the url assertion is not vacuous.
@@ -473,14 +538,32 @@ describe("public hub MCP details modal", () => {
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
   });
 
+  it("opens MCP server details when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValueOnce([mockMcpServer]);
+
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    const row = await screen.findByRole("row", { name: "Open MCP server exa_test" });
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByText("Server Overview")).toBeInTheDocument();
+  });
+
   it("closes the server details modal from its close control", async () => {
+    const user = userEvent.setup();
     const networkingModule = await import("./networking");
     vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
 
     renderHub();
 
-    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    const row = await screen.findByRole("row", { name: "Open MCP server exa_test" });
+    await user.click(within(row).getByText("exa_test"));
     await screen.findByText("Server Overview");
 
     fireEvent.click(screen.getByRole("button", { name: /close/i }));

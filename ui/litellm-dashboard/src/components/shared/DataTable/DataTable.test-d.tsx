@@ -23,6 +23,13 @@ const noop = () => {};
 
 export const uncontrolled = <DataTable data={data} columns={columns} defaultSorting={sorting} />;
 
+// @ts-expect-error clickable rows require a row label
+export const rowActivationRequiresAccessibleLabel = <DataTable data={data} columns={columns} onRowClick={noop} />;
+
+export const rowActivationAcceptsAccessibleLabel = (
+  <DataTable data={data} columns={columns} onRowClick={noop} getRowLabel={(row) => row.name} />
+);
+
 export const controlled = (
   <DataTable
     data={data}
