@@ -52,6 +52,6 @@ class TestOpenAIPrediction:
         assert usage is not None, f"response omitted usage: {response!r}"
         details = usage.completion_tokens_details
         assert details is not None, f"response omitted completion token details: {usage!r}"
-        assert details.accepted_prediction_tokens > 0 or details.rejected_prediction_tokens > 0, (
+        assert (details.accepted_prediction_tokens or 0) > 0 or (details.rejected_prediction_tokens or 0) > 0, (
             f"provider reported no predicted tokens: {details!r}"
         )

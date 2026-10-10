@@ -7,13 +7,7 @@ import pytest
 from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import (
-    ChatBody,
-    ChatMessage,
-    ChatResponse,
-    GeminiUrlContextTool,
-    LiteLLMParamsBody,
-)
+from models import ChatResponse, GeminiUrlContextTool, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
@@ -49,23 +43,15 @@ class TestGeminiUrlContext:
         resources.defer(lambda: proxy.delete_model(model_id))
         key: Final = resources.key()
         marker: Final = unique_marker()
-        request: Final = ChatBody(
+        raw_response: Final = sdk.openai(key).chat.completions.create(
             model=model_name,
             messages=[
-                ChatMessage(
-                    role="user",
-                    content=f"Use URL context to identify the page title at {URL_CONTEXT_TARGET}. {marker}",
-                )
+                {
+                    "role": "user",
+                    "content": f"Use URL context to identify the page title at {URL_CONTEXT_TARGET}. {marker}",
+                }
             ],
-            tools=[GeminiUrlContextTool()],
-        )
-        raw_response: Final = sdk.openai(key).chat.completions.create(
-            model=request.model,
-            messages=[message.model_dump() for message in request.messages],
-            extra_body={
-                **NO_PROXY_CACHE,
-                "tools": [tool.model_dump(by_alias=True) for tool in request.tools],
-            },
+            extra_body={**NO_PROXY_CACHE, "tools": [GeminiUrlContextTool().model_dump(by_alias=True)]},
         )
         response: Final[ChatResponse] = ChatResponse.model_validate(raw_response.model_dump())
 

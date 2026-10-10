@@ -9,7 +9,7 @@ from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, met
 from lifecycle import ResourceManager
 from models import AnthropicExtraBody, AnthropicToolBody, LiteLLMParamsBody
 from openai import OpenAI
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
@@ -77,8 +77,6 @@ class TestAnthropicCompletion:
     def test_web_search_reports_server_tool_use(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model: Final
-        client: Final
         model, client = _register_anthropic(proxy, resources, sdk, "e2e-anthropic-web-search")
         response: Final = client.chat.completions.create(
             model=model,
@@ -110,8 +108,6 @@ class TestAnthropicCompletion:
     def test_computer_tool_returns_computer_tool_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model: Final
-        client: Final
         model, client = _register_anthropic(
             proxy, resources, sdk, "e2e-anthropic-computer", backend=COMPUTER_20250124_BACKEND
         )
@@ -139,7 +135,9 @@ class TestAnthropicCompletion:
         )
         choice: Final = response.choices[0] if response.choices else None
         assert choice is not None and choice.message.tool_calls, f"no computer tool call: {response!r}"
-        assert choice.message.tool_calls[0].function.name == "computer"
+        tool_call: Final = choice.message.tool_calls[0]
+        assert tool_call.type == "function", f"not a function tool call: {tool_call!r}"
+        assert tool_call.function.name == "computer"
 
     @pytest.mark.covers("llm.chat_completions.anthropic.tool_use.nonstream.works")
     @meta(
@@ -155,8 +153,6 @@ class TestAnthropicCompletion:
     def test_web_fetch_tool_result_is_surfaced(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model: Final
-        client: Final
         model, client = _register_anthropic(proxy, resources, sdk, "e2e-anthropic-web-fetch")
         response: Final = client.chat.completions.create(
             model=model,
@@ -212,7 +208,9 @@ class TestAnthropicCompletion:
         )
         choice = response.choices[0] if response.choices else None
         assert choice is not None and choice.message.tool_calls, f"no editor tool call: {response!r}"
-        assert choice.message.tool_calls[0].function.name == "str_replace_based_edit_tool"
+        tool_call: Final = choice.message.tool_calls[0]
+        assert tool_call.type == "function", f"not a function tool call: {tool_call!r}"
+        assert tool_call.function.name == "str_replace_based_edit_tool"
 
     @pytest.mark.covers("llm.chat_completions.anthropic.tool_use.nonstream.works")
     @meta(
@@ -277,9 +275,7 @@ class TestAnthropicCompletion:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_mcp_tool_use_via_responses(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_mcp_tool_use_via_responses(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         token = os.getenv("ZAPIER_CI_CD_MCP_TOKEN")
         if not token:
             pytest.skip("ZAPIER_CI_CD_MCP_TOKEN is not available; Shared vault has no Zapier MCP credential")

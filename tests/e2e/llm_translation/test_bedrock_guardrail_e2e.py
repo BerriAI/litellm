@@ -7,7 +7,7 @@ import pytest
 from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import ChatMessage, LiteLLMParamsBody
+from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from sdk_clients import SdkClients
 
@@ -53,7 +53,7 @@ class TestBedrockGuardrail:
         prompt: Final = f"where do i buy coffee from? {unique_marker()}"
         response: Final = sdk.openai(resources.key()).chat.completions.create(
             model=model_name,
-            messages=[ChatMessage(role="user", content=prompt).model_dump()],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=64,
             extra_body={
                 "guardrailConfig": {
