@@ -6,6 +6,7 @@
 - Layout
   - `formats/<format>/` holds a provider-neutral API format, `providers/<provider>/` holds one provider's shared pieces
   - Every format and provider is a folder with a `mod.rs` entrypoint and its own `AGENTS.md`. No standalone `<name>.rs` next to a folder
+  - A provider `mod.rs` only declares modules and re-exports them (`pub use constants::*`). Constants go in `constants.rs`, types in a file named for what they describe
   - Format-independent helpers (`headers`, `recognized`, `serde_compat`, `json_schema`) stay at the crate root
 - Formats
   - Name types after the format, never the originator (`formats::messages::MessagesRequest`, not `AnthropicMessagesRequest`)
