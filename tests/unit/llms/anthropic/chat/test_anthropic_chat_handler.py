@@ -1,11 +1,13 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._uuid import uuid
@@ -18,6 +20,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
+from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
 
 
 @pytest.mark.asyncio
@@ -84,6 +87,120 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     request_body = json.loads(captured_requests[0].content)
     assert "default_api_key_rpm_limit" not in request_body
     assert "default_api_key_tpm_limit" not in request_body
+
+
+def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_tool_history",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5-20251001",
+                "content": [{"type": "text", "text": "San Francisco is 72 degrees"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 4, "output_tokens": 6},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-haiku-4-5-20251001",
+        messages=[
+            {"role": "user", "content": "What's the weather like in San Francisco?"},
+            {
+                "role": "assistant",
+                "content": "Here are the current weather conditions",
+                "tool_calls": [
+                    {
+                        "id": "tooluse_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "get_current_weather",
+                            "arguments": '{"location": "San Francisco, CA", "unit": "fahrenheit"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tooluse_weather",
+                "name": "get_current_weather",
+                "content": '{"temperature": "72"}',
+            },
+        ],
+        api_key="anthropic-test-key",
+        max_tokens=32,
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.read())
+    assert request_body["tools"] == [
+        {
+            "name": "dummy_tool",
+            "input_schema": {"type": "object", "properties": {}},
+            "type": "custom",
+            "description": "This is a dummy tool call",
+        }
+    ]
+    assert request_body["messages"][1:] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Here are the current weather conditions"},
+                {
+                    "type": "tool_use",
+                    "id": "tooluse_weather",
+                    "name": "get_current_weather",
+                    "input": {"location": "San Francisco, CA", "unit": "fahrenheit"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "tooluse_weather", "content": '{"temperature": "72"}'}],
+        },
+    ]
+    assert response.choices[0].message.content == "San Francisco is 72 degrees"
+
+
+@respx.mock
+def test_anthropic_tool_call_error_is_mapped_from_the_provider_response():
+    route = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "tool input is invalid"},
+            },
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "call the tool"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "description": "look up a value",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            api_key="anthropic-test-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "anthropic"
+    assert "tool input is invalid" in str(exc_info.value)
+    assert len(route.calls) == 1
 
 
 async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
@@ -590,6 +707,172 @@ def test_message_delta_without_usage_returns_chunk_with_no_usage():
 
     assert model_response.choices[0].finish_reason == "stop"
     assert model_response.usage is None
+
+
+async def _collect_anthropic_stream(sync_mode: bool, **kwargs: object) -> tuple[ModelResponseStream, ...]:
+    if sync_mode:
+        return tuple(litellm.completion(**kwargs))
+    return tuple([chunk async for chunk in await litellm.acompletion(**kwargs)])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@respx.mock
+async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_stream_options",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [],
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 1,
+                    "cache_read_input_tokens": 12,
+                    "cache_creation_input_tokens": 4,
+                },
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Blue sky."},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 2},
+        },
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
+    )
+    route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+    )
+    chunks: Final = await _collect_anthropic_stream(
+        sync_mode,
+        model="anthropic/claude-sonnet-4-6",
+        api_key="test-key",
+        messages=[{"role": "user", "content": "Describe the weather"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    finish_indices: Final = tuple(
+        index
+        for index, chunk in enumerate(chunks)
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    )
+    finish_reasons: Final = tuple(
+        chunk.choices[0].finish_reason
+        for chunk in chunks
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    )
+    usage_indices: Final = tuple(
+        index
+        for index, chunk in enumerate(chunks)
+        if getattr(chunk, "usage", None) is not None
+    )
+    usage_chunk: Final = chunks[usage_indices[0]]
+
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices
+    ) == "Blue sky."
+    assert finish_reasons == ("stop",)
+    assert finish_indices == (len(chunks) - 2,)
+    assert usage_indices == (len(chunks) - 1,)
+    assert usage_chunk.usage.prompt_tokens == 19
+    assert usage_chunk.usage.completion_tokens == 2
+    assert usage_chunk.usage.total_tokens == 21
+    assert usage_chunk.usage.cache_read_input_tokens == 12
+    assert usage_chunk.usage.cache_creation_input_tokens == 4
+    assert json.loads(route.calls[0].request.content)["stream"] is True
+
+
+_SNOOZE_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "snooze",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+
+
+def _stream_one_anthropic_tool_use(content_block: dict[str, object]) -> tuple[ChatCompletionDeltaToolCall, ...]:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_snooze",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": content_block},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    with respx.mock:
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+        )
+        chunks: Final = tuple(
+            litellm.completion(
+                model="anthropic/claude-sonnet-4-6",
+                api_key="test-key",
+                messages=[{"role": "user", "content": "Hit the snooze button."}],
+                tools=[_SNOOZE_TOOL],
+                stream=True,
+            )
+        )
+    return tuple(
+        chunk.choices[0].delta.tool_calls[0] for chunk in chunks if chunk.choices and chunk.choices[0].delta.tool_calls
+    )
+
+
+def test_anthropic_stream_no_argument_tool_call_streams_an_empty_json_object():
+    tool_calls: Final = _stream_one_anthropic_tool_use(
+        {"type": "tool_use", "id": "toolu_snooze", "name": "snooze", "input": {}}
+    )
+
+    assert tuple(tool_call.id for tool_call in tool_calls if tool_call.id is not None) == ("toolu_snooze",)
+    assert tool_calls[0].function.name == "snooze"
+    assert json.loads("".join(tool_call.function.arguments or "" for tool_call in tool_calls)) == {}
+
+
+def test_anthropic_stream_tool_call_keeps_the_programmatic_caller():
+    caller: Final = {"type": "code_execution_20250825", "tool_id": "srvtoolu_snooze"}
+
+    tool_calls: Final = _stream_one_anthropic_tool_use(
+        {"type": "tool_use", "id": "toolu_snooze", "name": "snooze", "input": {}, "caller": caller}
+    )
+
+    assert tool_calls[0].id == "toolu_snooze"
+    assert tool_calls[0].model_dump()["caller"] == caller
 
 
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
@@ -2367,3 +2650,135 @@ def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
         assert chunk._hidden_params["provider_response_model"] == served_model
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
     assert assembled._hidden_params["provider_response_model"] == served_model
+
+
+@respx.mock
+def test_anthropic_streaming_function_call_arguments_are_assembled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_tool_stream",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5-20251001",
+                "content": [],
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_weather",
+                "name": "get_current_weather",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"location":"Bos'},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": 'ton","unit":"fahrenheit"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 7},
+        },
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
+    )
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages: Final = [{"role": "user", "content": "Check the weather in Boston"}]
+    stream: Final = litellm.completion(
+        model="anthropic/claude-haiku-4-5-20251001",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {"type": "string"},
+                        },
+                        "required": ["location", "unit"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+        api_key="test-anthropic-key",
+    )
+    chunks: Final = tuple(stream)
+    tool_call_deltas: Final = tuple(
+        chain.from_iterable(
+            chunk.choices[0].delta.tool_calls or () for chunk in chunks if chunk.choices
+        )
+    )
+    assert tuple(
+        tool_call.function.name
+        for tool_call in tool_call_deltas
+        if tool_call.function.name is not None
+    ) == ("get_current_weather",)
+    arguments: Final = "".join(
+        tool_call.function.arguments or "" for tool_call in tool_call_deltas
+    )
+    assert json.loads(arguments) == {"location": "Boston", "unit": "fahrenheit"}
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=messages)
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert json.loads(assembled.choices[0].message.tool_calls[0].function.arguments) == {
+        "location": "Boston",
+        "unit": "fahrenheit",
+    }
+    assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+@respx.mock
+def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
+    route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            401,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "message": "invalid API key",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": "Say hello"}],
+            stream=True,
+            api_key="bad-anthropic-key",
+            max_retries=0,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.llm_provider == "anthropic"
+    assert route.calls.last.request.headers["x-api-key"] == "bad-anthropic-key"
