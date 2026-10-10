@@ -1,3 +1,5 @@
+import time
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.vertex_ai.common_utils import (
     convert_anyof_null_to_nullable,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
     get_vertex_url,
@@ -1882,3 +1885,31 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+@pytest.fixture
+def host_zone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize(
+    "host_zone", ["UTC", "America/Los_Angeles", "Asia/Kolkata", "Pacific/Kiritimati"], indirect=True
+)
+@pytest.mark.parametrize(
+    ("vertex_datetime", "utc_epoch"),
+    [
+        ("2024-12-04T21:53:12.120184Z", 1733349192),
+        ("2026-10-08T23:41:07.902Z", 1791502867),
+        ("2026-01-15T08:00:00.000000Z", 1768464000),
+        ("2026-09-09T21:39:16Z", 1788989956),
+        ("2026-10-09T08:19:53.576944123Z", 1791533993),
+    ],
+)
+@pytest.mark.usefixtures("host_zone")
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host_zone(
+    vertex_datetime: str, utc_epoch: int
+) -> None:
+    assert convert_vertex_datetime_to_openai_datetime(vertex_datetime) == utc_epoch
