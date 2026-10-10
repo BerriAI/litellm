@@ -54,8 +54,9 @@ export function useHomeUsage(): HomeUsage {
     if (!isAdmin || !accessToken) return;
     let cancelled = false;
     gatewayDailyActivityCall(accessToken, range.startTime, range.endTime)
-      .then((activity) => {
-        if (!cancelled) setGateway(activity as GatewayActivity);
+      .then((activity: GatewayActivity) => {
+        const recorded = activity.total_successful_requests + activity.total_failed_requests > 0;
+        if (!cancelled) setGateway(recorded ? activity : null);
       })
       .catch(() => {
         if (!cancelled) setGateway(null);
