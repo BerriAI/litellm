@@ -5264,3 +5264,95 @@ async def test_list_user_batches_target_model_names_filter_rejected_with_400():
     assert exc.value.type == "invalid_request_error"
     assert exc.value.param == "target_model_names"
     assert exc.value.message == "Filtering by 'target_model_names' is not supported when using managed batches."
+
+
+def _tenant_a_input_file_id() -> str:
+    raw: Final = (
+        "litellm_proxy:application/octet-stream;unified_id,7d1c4b0e-5a7f-4a43-9a0e-3f8e2a1b6c11;"
+        "target_model_names,gpt-4o-mini;llm_output_file_id,file-tenant-a;llm_output_file_model_id,model-a"
+    )
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _tenant_a_input_file_row(unified_file_id: str) -> LiteLLM_ManagedFileTable:
+    return LiteLLM_ManagedFileTable(
+        unified_file_id=unified_file_id,
+        file_object=None,
+        model_mappings={"model-a": "file-tenant-a"},
+        flat_model_file_ids=["file-tenant-a"],
+        created_by="user_a",
+        team_id="team_a",
+    )
+
+
+_INPUT_FILE_CREATE_CALLS: Final = (
+    ("acreate_batch", "input_file_id"),
+    ("acreate_fine_tuning_job", "training_file"),
+    ("acreate_fine_tuning_job", "validation_file"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
+async def test_create_from_another_tenants_managed_file_is_denied(call_type: str, file_field: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    unified_file_id: Final = _tenant_a_input_file_id()
+    managed_files, _ = _managed_files_with_fake_prisma(_tenant_a_input_file_row(unified_file_id))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock()),
+            cache=MagicMock(),
+            data={"model": "gpt-4o-mini", "training_file": "file-own-training", file_field: unified_file_id},
+            call_type=call_type,
+        )
+
+    assert exc_info.value.status_code == 403, f"{call_type}.{file_field} let tenant B use tenant A's file"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
+@pytest.mark.parametrize(
+    "caller_kwargs",
+    [
+        {"user_id": "user_a", "team_id": "team_a"},
+        {"user_id": "teammate_of_a", "team_id": "team_a"},
+        {"user_id": "admin", "team_id": "team_b", "user_role": "proxy_admin"},
+    ],
+    ids=["owner", "same_team", "proxy_admin"],
+)
+async def test_create_from_accessible_managed_file_is_allowed(
+    call_type: str, file_field: str, caller_kwargs: dict[str, str]
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    unified_file_id: Final = _tenant_a_input_file_id()
+    managed_files, _ = _managed_files_with_fake_prisma(_tenant_a_input_file_row(unified_file_id))
+
+    result: Final = await managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(**caller_kwargs, parent_otel_span=MagicMock()),
+        cache=MagicMock(),
+        data={"model": "gpt-4o-mini", file_field: unified_file_id},
+        call_type=call_type,
+    )
+
+    assert isinstance(result, dict) and result[file_field] == unified_file_id, result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
+async def test_create_from_raw_provider_file_id_skips_managed_ownership_lookup(call_type: str, file_field: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    managed_files, table = _managed_files_with_fake_prisma()
+
+    result: Final = await managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock()),
+        cache=MagicMock(),
+        data={"model": "gpt-4o-mini", file_field: "file-raw-provider-id"},
+        call_type=call_type,
+    )
+
+    assert isinstance(result, dict) and result[file_field] == "file-raw-provider-id", result
+    assert not any("unified_file_id" in where for where in table.find_first_calls), table.find_first_calls
