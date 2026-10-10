@@ -1957,6 +1957,8 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "openai_system_messages_first",
     "max_ui_session_budget",
     "budget_rollover",
+    "personal_key_model_access_from_teams",
+    "personal_key_multi_team_access",
     "mcp_tool_search",
     "turn_off_message_logging",
     "datadog_params",

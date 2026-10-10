@@ -18796,7 +18796,9 @@ class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
     description: str
     options: NotRequired[tuple[str, ...]]
     tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
-    default: NotRequired[float]  # reset/clear restores this instead of None; fields whose None means fail-open set it
+    default: NotRequired[
+        ReadOnly[float | str]
+    ]  # reset/clear restores this, not None; fields whose None means fail-open set it
 
 
 _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFieldSpec]] = {
@@ -18837,6 +18839,22 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "description": (
             "Carry spend beyond max_budget into the next window when budgets reset, instead of "
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
+    },
+    "personal_key_model_access_from_teams": {
+        "type": "Boolean",
+        "description": (
+            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
+            "re-evaluated on every request. A user in no team gets no model access. Team keys are unaffected."
+        ),
+    },
+    "personal_key_multi_team_access": {
+        "type": "Select",
+        "options": ("union", "intersection"),
+        "default": "union",
+        "description": (
+            "How a personal key's owner in several teams is resolved when team-derived model access is on. "
+            "union allows a model any of the teams can call, intersection only a model every team can call."
         ),
     },
     "max_ui_session_budget": {
