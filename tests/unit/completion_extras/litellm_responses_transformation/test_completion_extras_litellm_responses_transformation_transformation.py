@@ -5043,6 +5043,14 @@ def test_transform_request_keeps_the_preceding_part_breakpoint_over_the_dropped_
 def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
     """The hook marks the last block of its target message, so a message ending in a block the bridge
     cannot map reaches the stringify path and has to keep the marker there."""
+
+
+def test_convert_response_output_keeps_every_reasoning_item_before_a_message():
+    """Regression for issue #43620 (stream=False): the Responses API can emit several
+    reasoning items before the assistant message, and the bridge used to overwrite
+    its pending reasoning item per item, so only the last one reached
+    message.reasoning_items. Every item must survive the flush."""
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
@@ -5139,3 +5147,126 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     )
 
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+    rs_1 = ResponseReasoningItem(type="reasoning", id="rs_1", summary=[], encrypted_content="enc1")
+    rs_2 = ResponseReasoningItem(type="reasoning", id="rs_2", summary=[], encrypted_content="enc2")
+    message = ResponseOutputMessage(
+        type="message",
+        id="msg_1",
+        role="assistant",
+        status="completed",
+        content=[ResponseOutputText(type="output_text", text="hello", annotations=[])],
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices([rs_1, rs_2, message])
+
+    assert len(choices) == 1
+    reasoning_items = choices[0].message.reasoning_items
+    assert reasoning_items is not None
+    assert [item["id"] for item in reasoning_items] == ["rs_1", "rs_2"]
+
+
+def test_convert_response_output_keeps_every_reasoning_item_before_a_tool_call():
+    """Regression for issue #43620 (stream=False): [reasoning rs_1, reasoning rs_2,
+    function_call] must merge both reasoning items into the trailing tool_calls
+    choice instead of keeping only rs_2."""
+    from openai.types.responses import ResponseFunctionToolCall, ResponseReasoningItem
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    rs_1 = ResponseReasoningItem(type="reasoning", id="rs_1", summary=[], encrypted_content="enc1")
+    rs_2 = ResponseReasoningItem(type="reasoning", id="rs_2", summary=[], encrypted_content="enc2")
+    function_call = ResponseFunctionToolCall(
+        type="function_call",
+        id="fc_1",
+        call_id="call_1",
+        name="get_weather",
+        arguments="{}",
+        status="completed",
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices([rs_1, rs_2, function_call])
+
+    assert len(choices) == 1
+    choice = choices[0]
+    assert choice.finish_reason == "tool_calls"
+    reasoning_items = choice.message.reasoning_items
+    assert reasoning_items is not None
+    assert [item["id"] for item in reasoning_items] == ["rs_1", "rs_2"]
+    assert choice.message.tool_calls[0].id == "fc_1"
+
+
+def test_stream_translator_emits_url_citation_annotations_exactly_once():
+    """Regression for issue #43817: the Responses API delivers annotations as
+    response.output_text.annotation.added events, and the Chat Completions
+    stream bridge dropped them, so a streamed reply never carried the
+    url_citation that the same reply with stream=False reports on
+    message.annotations. The annotation must ride exactly one delta — the
+    terminal response.completed event repeats it in the response payload and
+    re-emitting it there would duplicate it for accumulating clients."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    citation = {
+        "type": "url_citation",
+        "url": "https://a.example",
+        "title": "A",
+        "start_index": 0,
+        "end_index": 5,
+    }
+    reply = {
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": "gpt-5-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Sunny in Paris.",
+                        "annotations": [citation],
+                    }
+                ],
+            }
+        ],
+    }
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = [
+        {"type": "response.created", "response": {**reply, "status": "in_progress", "output": []}},
+        {
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "item_id": "msg_1",
+            "content_index": 0,
+            "delta": "Sunny in Paris.",
+        },
+        {
+            "type": "response.output_text.annotation.added",
+            "output_index": 0,
+            "item_id": "msg_1",
+            "content_index": 0,
+            "annotation_index": 0,
+            "annotation": citation,
+        },
+        {"type": "response.completed", "response": reply},
+    ]
+
+    chunks = [iterator.chunk_parser(event) for event in events]
+
+    carried = [
+        annotation
+        for chunk in chunks
+        for choice in chunk.choices
+        for annotation in (getattr(choice.delta, "annotations", None) or [])
+    ]
+    assert carried == [citation]
