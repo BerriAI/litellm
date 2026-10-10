@@ -9,7 +9,7 @@
 	lint-basedpyright lint-e2e-basedpyright lint-type-discipline \
 	lint-ruff-strict lint-gate lint-test-quality \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
+	install-helm-unittest check-layer-imports check-import-safety check check-inner pre-commit \
 	lint-install lint-fetch-base bootstrap
 
 # Default target
@@ -27,7 +27,7 @@ help:
 	@echo "  make pre-commit         - Legacy alias for make check"
 	@echo "  make format             - Apply ruff format code formatting"
 	@echo "  make format-check       - Check ruff format code formatting (matches CI)"
-	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
+	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, layer imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
 	@echo "  make lint-e2e-basedpyright - Run basedpyright over tests/e2e and tests/e2e_harness (zero errors allowed)"
@@ -35,7 +35,7 @@ help:
 	@echo "  make lint-ruff-strict   - Gate each strict ruff rule's codebase total against its merge-base count"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches the default branch, simulates the merge)"
 	@echo "  make lint-test-quality  - Gate the test suite's TQ counts against their merge-base counts"
-	@echo "  make check-circular-imports - Check for circular imports"
+	@echo "  make check-layer-imports - Check SDK/proxy layer import rules against scripts/layer_imports_allowlist.txt"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
 	@echo "  make test-unit          - Run unit tests (tests/unit and tests/test_litellm)"
@@ -229,8 +229,8 @@ lint-ruff-strict: install-dev
 lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
-check-circular-imports: $(LINT_DEP_INSTALL)
-	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
+check-layer-imports: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python scripts/check_layer_imports.py --base "$$($(RESOLVE_BASE))"
 
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
@@ -238,7 +238,7 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # Combined linting, isomorphic to test-linting.yml's python job so a local pass means a
 # green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
-# type-discipline / basedpyright gates as a delta vs the base, then the circular-import
+# type-discipline / basedpyright gates as a delta vs the base, then the layer-import
 # and import-safety checks. Steps that compare against the base resolve it the same way CI
 # does (merge-base with origin's current default branch). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
@@ -250,10 +250,10 @@ lint-inner: lint-install
 	@base_ref=$$($(RESOLVE_BASE)) && \
 	$(MAKE) BASE_REF="$$base_ref" -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-basedpyright lint-e2e-basedpyright check-layer-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed check-circular-imports check-import-safety
+lint-dev: lint-format-changed check-layer-imports check-import-safety
 
 # Run the gating CI checks against your changes. Scopes to staged files when anything
 # is staged (warning about changed files left unstaged); with nothing staged it falls

@@ -151,7 +151,7 @@ Individual linting commands:
 make format-check       # Check ruff format formatting
 make lint-ruff          # Run Ruff linting
 make lint-basedpyright  # Run basedpyright type checking
-make check-circular-imports    # Check for circular imports
+make check-layer-imports       # Check SDK/proxy layer import rules
 make check-import-safety       # Check import safety
 ```
 
