@@ -110,6 +110,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
@@ -1767,6 +1768,7 @@ async def get_existing_user_info_from_db(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    raise_database_outage: bool = False,
 ) -> LiteLLM_UserTable | None:
     try:
         user_info = await get_user_object(
@@ -1780,6 +1782,8 @@ async def get_existing_user_info_from_db(
             sso_user_id=user_id,
         )
     except Exception as e:
+        if raise_database_outage and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            raise
         verbose_proxy_logger.debug("Error getting user object: %s", e)
         user_info = None
 
@@ -1804,6 +1808,10 @@ async def get_user_info_from_db(
     user_defined_values: SSOUserDefinedValues | None,
     alternate_user_id: str | None = None,
 ) -> LiteLLM_UserTable | NewUserResponse | None:
+    mapped_user_id: Final = None if user_defined_values is None else user_defined_values.get("user_id")
+    resolved_by_database_only: Final = user_defined_values is not None and (
+        not isinstance(mapped_user_id, str) or _is_blank_sso_user_id(mapped_user_id)
+    )
     try:
         provider_id: Final = result.get("id", None) if isinstance(result, dict) else getattr(result, "id", None)
         potential_user_ids: Final = sso_lookup_user_ids(
@@ -1823,6 +1831,7 @@ async def get_user_info_from_db(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                raise_database_outage=resolved_by_database_only,
             )
             if user_info is not None:
                 break
@@ -1838,6 +1847,7 @@ async def get_user_info_from_db(
             user_email=user_email,
             user_defined_values=user_defined_values,
             prisma_client=prisma_client,
+            raise_database_outage=resolved_by_database_only,
         )
 
         await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
@@ -1847,6 +1857,9 @@ async def get_user_info_from_db(
 
         return user_info
     except Exception as e:
+        if resolved_by_database_only and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            verbose_proxy_logger.exception("SSO login failed: the database could not resolve the account: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO") from e
         verbose_proxy_logger.exception("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
     return None
@@ -3306,6 +3319,7 @@ class SSOAuthenticationHandler:
         user_email: str | None,
         user_defined_values: SSOUserDefinedValues | None,
         prisma_client: PrismaClient,
+        raise_database_outage: bool = False,
     ):
         """
         Connects the SSO Users to the User Table in LiteLLM DB
@@ -3335,6 +3349,12 @@ class SSOAuthenticationHandler:
                 )
             return user_info
         except Exception as e:
+            if (
+                user_info is None
+                and raise_database_outage
+                and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e)
+            ):
+                raise
             verbose_proxy_logger.exception("Error upserting SSO user into LiteLLM DB: %s", e)
             return user_info
 

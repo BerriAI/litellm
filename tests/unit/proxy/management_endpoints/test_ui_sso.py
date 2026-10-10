@@ -1863,6 +1863,102 @@ async def test_get_user_info_from_db_user_exists_updates_user():
         assert user_info == updated_user
 
 
+def _database_outage() -> httpx.ConnectError:
+    return httpx.ConnectError("All connection attempts failed")
+
+
+async def _new_user_during_database_outage(**_: object) -> NewUserResponse:
+    raise HTTPException(status_code=500, detail="user insert failed") from _database_outage()
+
+
+async def _sso_user_info_from_db(
+    custom_user_id: object,
+    prisma_client: MagicMock,
+    cached_user: LiteLLM_UserTable | None = None,
+) -> LiteLLM_UserTable | NewUserResponse | None:
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    subject: Final = f"idp-subject-{uuid.uuid4().hex}"
+    email: Final = f"{subject}@example.com"
+    with patch("litellm.proxy.management_endpoints.ui_sso.new_user", _new_user_during_database_outage):
+        return await get_user_info_from_db(
+            result=CustomOpenID(id=subject, email=email, provider="generic", team_ids=[]),
+            prisma_client=prisma_client,
+            user_api_key_cache=MagicMock(
+                async_get_cache=AsyncMock(return_value=cached_user), async_set_cache=AsyncMock()
+            ),
+            proxy_logging_obj=MagicMock(),
+            user_email=email,
+            user_defined_values={
+                "models": [],
+                "user_id": custom_user_id,
+                "user_email": email,
+                "max_budget": None,
+                "user_role": None,
+                "budget_duration": None,
+            },
+            alternate_user_id=subject,
+        )
+
+
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_fails_with_500_when_the_database_is_down_for_a_sign_in_with_no_user_id(
+    custom_user_id: object,
+) -> None:
+    prisma_client: Final = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(side_effect=_database_outage())})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _sso_user_info_from_db(custom_user_id, prisma_client)
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (500, "Failed to retrieve user information from SSO")
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_fails_with_500_when_the_database_drops_while_creating_the_account() -> None:
+    prisma_client: Final = MagicMock(
+        **{
+            "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
+            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _sso_user_info_from_db(None, prisma_client)
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (500, "Failed to retrieve user information from SSO")
+
+
+@pytest.mark.parametrize("custom_user_id", ["", "   "])
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_resolves_no_account_when_the_database_finds_none_for_a_blank_user_id(
+    custom_user_id: str,
+) -> None:
+    prisma_client: Final = MagicMock(
+        **{
+            "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
+            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
+        }
+    )
+
+    assert await _sso_user_info_from_db(custom_user_id, prisma_client) is None
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_keeps_reading_a_database_outage_as_no_account_for_a_mapped_user_id() -> None:
+    prisma_client: Final = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(side_effect=_database_outage())})
+
+    assert await _sso_user_info_from_db("mapped-user-id", prisma_client) is None
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_keeps_the_matched_account_when_its_update_hits_a_database_outage() -> None:
+    matched: Final = LiteLLM_UserTable(user_id="existing-user", user_email="existing@example.com")
+    prisma_client: Final = MagicMock(**{"db.litellm_usertable.update_many": AsyncMock(side_effect=_database_outage())})
+
+    assert await _sso_user_info_from_db(None, prisma_client, cached_user=matched) is matched
+
+
 @pytest.mark.asyncio
 async def test_check_and_update_if_proxy_admin_id():
     """

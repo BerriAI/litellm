@@ -40,6 +40,7 @@ POLL_SECRET_HEADER: Final = "x-litellm-cli-poll-secret"
 CLI_LOGIN_PAGE_TITLE: Final = "<title>LiteLLM CLI Login</title>"
 CLI_SUCCESS_PAGE_TITLE: Final = "<title>CLI Authentication Successful - LiteLLM</title>"
 REFUSED: Final = "SSO login failed: this sign-in did not resolve to a user id"
+LOOKUP_FAILED: Final = "Failed to retrieve user information from SSO"
 BLANK: Final = r"^\s*$"
 COMPLETE_TOKEN_FIELD: Final = re.compile(r'name="browser_complete_token" value="([^"]+)"')
 COMPLETE_FORM_ACTION: Final = re.compile(r'action="([^"]+/sso/cli/complete/[^"]+)"')
@@ -683,12 +684,14 @@ def test_concurrent_failed_profile_lookups_mint_no_session(entra: OwnedProxy, gr
     assert _blank_accounts() == (), _blank_accounts()
 
 
-def test_custom_mapped_sign_in_is_refused_when_the_account_lookup_loses_the_database(
+def test_custom_mapped_sign_in_fails_with_500_when_the_account_lookup_loses_the_database(
     graph: Graph, gateway_module: Gateway, tmp_path: Path
 ) -> None:
-    email: Final = f"mapped-none-{uuid.uuid4().hex[:12]}@example.com"
+    outage_marker: Final = uuid.uuid4().hex[:12]
+    dashboard_email: Final = f"mapped-none-{outage_marker}-dashboard@example.com"
+    cli_email: Final = f"mapped-none-{outage_marker}-cli@example.com"
     with (
-        dropped_connection_relay(os.environ["DATABASE_URL"], email.encode()) as (relay, relayed_url),
+        dropped_connection_relay(os.environ["DATABASE_URL"], outage_marker.encode()) as (relay, relayed_url),
         owned_proxy_process(
             gateway_module,
             tmp_path,
@@ -703,15 +706,29 @@ def test_custom_mapped_sign_in_is_refused_when_the_account_lookup_loses_the_data
         ) as owned,
         gateway_module.scenario() as scenario,
     ):
-        scenario.user(user_email=email, user_role="internal_user")
+        scenario.user(user_email=dashboard_email, user_role="internal_user")
+        scenario.user(user_email=cli_email, user_role="internal_user")
+        cli_login: Final = _start_cli_login(owned.gateway)
         relay.arm()
-        callback: Final = _dashboard_sign_in(owned.gateway, graph, graph.profile(_profile(str(uuid.uuid4()), email)))
+        callback: Final = _dashboard_sign_in(
+            owned.gateway, graph, graph.profile(_profile(str(uuid.uuid4()), dashboard_email))
+        )
+        dashboard_lookup_dropped: Final = relay.dropped.is_set()
+        relay.dropped.clear()
+        with _browser() as browser:
+            cli_callback: Final = _cli_callback(
+                owned.gateway, graph, browser, cli_login, graph.profile(_profile(str(uuid.uuid4()), cli_email))
+            )
         relay.disarm()
-        assert relay.dropped.is_set(), "the account lookup never reached the database"
+        assert dashboard_lookup_dropped and relay.dropped.is_set(), "an account lookup never reached the database"
         session: Final = _session(callback)
-        assert callback.status_code == 401 and session is None, (
+        assert callback.status_code == 500 and session is None, (
             f"{callback.status_code}: session for user_id={None if session is None else session['user_id']!r}"
         )
+        assert JSON_OBJECT.validate_json(callback.content)["detail"] == LOOKUP_FAILED, callback.text
+        assert cli_callback.status_code == 500, f"{cli_callback.status_code} {cli_callback.text}"
+        assert JSON_OBJECT.validate_json(cli_callback.content)["detail"] == LOOKUP_FAILED, cli_callback.text
+        assert _poll(owned.gateway, cli_login) == {"status": "pending"}
 
 
 def test_saml_sign_in_with_a_whitespace_name_id_and_no_email_is_refused(
