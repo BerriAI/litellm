@@ -31,6 +31,7 @@ from RestrictedPython.Eval import default_guarded_getitem
 from RestrictedPython.Guards import (
     full_write_guard,
     guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
     safer_getattr,
 )
 from RestrictedPython.transformer import copy_locations
@@ -137,6 +138,12 @@ def build_sandbox_globals() -> dict[str, object]:
         "_getitem_": default_guarded_getitem,
         "_getiter_": budgeted_iter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        # RestrictedPython emits _unpack_sequence_ for every tuple-unpacking
+        # target that is not a for-loop target -- ``a, b = pair``,
+        # ``a, *rest = seq``, ``with x as (a, b)`` -- and, like _inplacevar_,
+        # ships no default. Without it those statements compile and then raise
+        # NameError the first time the guardrail runs.
+        "_unpack_sequence_": guarded_unpack_sequence,
         "_write_": full_write_guard,
         "_inplacevar_": _inplacevar_,
         "_budget_ok_": budget_ok,
