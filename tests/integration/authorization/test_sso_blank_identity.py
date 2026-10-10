@@ -41,7 +41,6 @@ CLI_LOGIN_PAGE_TITLE: Final = "<title>LiteLLM CLI Login</title>"
 CLI_SUCCESS_PAGE_TITLE: Final = "<title>CLI Authentication Successful - LiteLLM</title>"
 REFUSED: Final = "SSO login failed: this sign-in did not resolve to a user id"
 BLANK: Final = r"^\s*$"
-CLI_LOOKUP_FAILED: Final = "Failed to retrieve user information from SSO"
 COMPLETE_TOKEN_FIELD: Final = re.compile(r'name="browser_complete_token" value="([^"]+)"')
 COMPLETE_FORM_ACTION: Final = re.compile(r'action="([^"]+/sso/cli/complete/[^"]+)"')
 GRAPH_ERROR: Final = json.dumps(
@@ -611,8 +610,8 @@ def test_sign_in_is_refused_when_the_custom_mapping_returns_a_blank_user_id(
             _profile(str(uuid.uuid4()), f"mapped-blank-{uuid.uuid4().hex[:12]}@example.com")
         )
         cli_callback: Final = _cli_callback(proxy, graph, browser, session, cli_hint)
-        assert cli_callback.status_code == 500, _cli_report(proxy, browser, cli_callback, session)
-    assert JSON_OBJECT.validate_json(cli_callback.content)["detail"] == CLI_LOOKUP_FAILED, cli_callback.text
+        assert cli_callback.status_code == 401, _cli_report(proxy, browser, cli_callback, session)
+    assert JSON_OBJECT.validate_json(cli_callback.content)["detail"] == REFUSED, cli_callback.text
     assert _poll(proxy, session) == {"status": "pending"}
     assert _blank_accounts() == (), _blank_accounts()
 

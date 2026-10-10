@@ -9738,6 +9738,60 @@ async def test_cli_completion_signs_a_custom_sso_user_in_as_the_matched_account(
     assert flow["session_data"]["user_id"] == "cli-user-id"
 
 
+def _cli_custom_sso_kwargs(flow: dict, custom_user_id: object) -> dict:
+    defaults: Final = _cli_callback_kwargs(flow)
+    return {
+        **defaults,
+        "parsed_openid_result": {**defaults["parsed_openid_result"], "user_id": ""},
+        "user_defined_values": {
+            "models": [],
+            "user_id": custom_user_id,
+            "user_email": "u@example.com",
+            "max_budget": None,
+            "user_role": None,
+            "budget_duration": None,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", "\t", 424242])
+async def test_cli_completion_rejects_a_custom_sso_user_id_that_resolves_no_account(custom_user_id: object) -> None:
+    flow: Final = {}
+    kwargs: Final = _cli_custom_sso_kwargs(flow, custom_user_id)
+    get_user_info_mock: Final = AsyncMock(return_value=None)
+
+    with (
+        patch("litellm.proxy.proxy_server.user_custom_sso", _custom_sso_returning_user_id(custom_user_id)),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _complete_cli_sso_callback_session(**kwargs)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "SSO login failed: this sign-in did not resolve to a user id"
+    get_user_info_mock.assert_awaited_once()
+    assert "session_data" not in flow
+    kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cli_completion_keeps_the_lookup_failure_for_a_custom_sso_user_id() -> None:
+    flow: Final = {}
+    kwargs: Final = _cli_custom_sso_kwargs(flow, "mapped-user-id")
+
+    with (
+        patch("litellm.proxy.proxy_server.user_custom_sso", _custom_sso_returning_user_id("mapped-user-id")),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", AsyncMock(return_value=None)),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _complete_cli_sso_callback_session(**kwargs)
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Failed to retrieve user information from SSO"
+    assert "session_data" not in flow
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("user_id", ["", "   "])
 async def test_cli_completion_rejects_blank_database_identity_before_session(user_id: str) -> None:

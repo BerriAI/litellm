@@ -2341,6 +2341,8 @@ async def _complete_cli_sso_callback_session(
         alternate_user_id=user_id,
     )
     if user_info is None:
+        if user_defined_values is not None:
+            _require_sso_user_id(user_defined_values["user_id"])
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
     resolved_user_id: Final = _require_sso_user_id(user_info.user_id)
 
