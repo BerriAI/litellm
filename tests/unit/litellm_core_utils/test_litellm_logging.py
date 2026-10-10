@@ -11605,3 +11605,115 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert "_langfuse_masking_function" not in result
 
     assert result["metadata"]["some_key"] == "some_value"
+
+
+# --- no-log callback filtering (#44503) ---
+
+
+class My_proxyAuditLogger(CustomLogger):
+    """Unrelated logger whose name merely contains "proxy" (Greptile's bypass example)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[object] = []
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.logged.append(response_obj)
+
+
+class _PROXY_HandlerStub(CustomLogger):
+    """Stands in for the proxy's internal `_PROXY_*` handler family."""
+
+
+async def _dispatch_async_success(
+    logging_obj: LitellmLogging, callbacks: list[CustomLogger], *, no_log: bool
+) -> ModelResponse:
+    """Drive the real async success dispatch with `callbacks` as the combined callback list."""
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {"acompletion": True, "no-log": no_log}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+    result: Final = _success_response()
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=callbacks):
+        await logging_obj.async_success_handler(
+            result=result,
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+        )
+    return result
+
+
+@pytest.mark.asyncio
+async def test_no_log_request_still_runs_the_real_proxy_spend_logger(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+):
+    """#44503: `no-log` must not stop the proxy from doing its own spend accounting.
+
+    Drives the real `_ProxyDBLogger` through the real async success dispatch; only the
+    DB-writing `_PROXY_track_cost_callback` is recorded.
+    """
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+    tracked: list[object] = []
+    proxy_spend_logger: Final = _ProxyDBLogger()
+
+    async def _record_spend(
+        kwargs: dict[str, object],
+        completion_response: object,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None:
+        tracked.append(completion_response)
+
+    monkeypatch.setattr(proxy_spend_logger, "_PROXY_track_cost_callback", _record_spend)
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+
+    result = await _dispatch_async_success(logging_obj, [proxy_spend_logger], no_log=True)
+
+    assert len(tracked) == 1 and tracked[0] is result, "no-log request must still execute the spend accounting"
+
+
+@pytest.mark.asyncio
+async def test_no_log_suppresses_logger_whose_name_mentions_proxy(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+):
+    """An unrelated logger named like a proxy hook must not bypass the no-log filter."""
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    logger: Final = My_proxyAuditLogger()
+
+    await _dispatch_async_success(logging_obj, [logger], no_log=True)
+
+    assert logger.logged == [], "a name that merely contains 'proxy' must not bypass no-log"
+
+
+@pytest.mark.asyncio
+async def test_logger_whose_name_mentions_proxy_runs_without_no_log(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+):
+    """Differential control: without `no-log`, the same logger runs (dispatch is not broken)."""
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    logger: Final = My_proxyAuditLogger()
+
+    result = await _dispatch_async_success(logging_obj, [logger], no_log=False)
+
+    assert len(logger.logged) == 1 and logger.logged[0] is result
+
+
+def test_no_log_keeps_running_proxy_prefixed_handlers(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+):
+    """The proxy's `_PROXY_*` handler family must keep running on no-log requests."""
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    assert (
+        logging_obj.should_run_callback(
+            callback=_PROXY_HandlerStub(),
+            litellm_params={"no-log": True},
+            event_hook="success",
+        )
+        is True
+    )

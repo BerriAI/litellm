@@ -413,6 +413,10 @@ _INPUT_PRICING_KEY_PREFIXES: Final = (
 _OUTPUT_PRICING_KEY_PREFIXES: Final = ("output_cost_per_token",)
 _BATCH_PRICING_KEY_SUFFIX: Final = "_batches"
 
+# Proxy-internal callbacks that must run even on `no-log` requests: the proxy still has to do
+# its own spend accounting. The `_PROXY_` handler prefix marks most of them; the spend writer
+# `_ProxyDBLogger` predates that prefix, so it is listed explicitly (exact names, no substring).
+_PROXY_INTERNAL_CALLBACK_CLASS_NAMES: Final = frozenset({"_ProxyDBLogger"})
 
 _NO_CARRIED_RATES: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -2321,9 +2325,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
 
         if litellm_params.get("no-log", False) is True:
-            # proxy cost tracking cal backs should run
-
-            if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
+            # Proxy-internal callbacks must still run on `no-log` requests: the proxy's own
+            # spend accounting has to record the request. They use the internal `_PROXY_`
+            # handler prefix or -- for the spend writer, which predates that prefix -- an
+            # explicit entry in `_PROXY_INTERNAL_CALLBACK_CLASS_NAMES`.
+            callback_class_name: Final = callback.__class__.__name__
+            runs_on_no_log: Final = isinstance(callback, CustomLogger) and (
+                callback_class_name.startswith("_PROXY_") or callback_class_name in _PROXY_INTERNAL_CALLBACK_CLASS_NAMES
+            )
+            if not runs_on_no_log:
                 verbose_logger.debug("no-log request, skipping logging for %s event", event_hook)
                 return False
 
