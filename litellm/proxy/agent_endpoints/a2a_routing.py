@@ -17,6 +17,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     agent_completion_kwargs,
     bridge_model_name,
 )
+from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_app_auth_header,
@@ -24,7 +25,6 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
-from litellm.types.utils import LlmProviders
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 
@@ -113,7 +113,7 @@ async def route_a2a_agent_request(
     litellm_params: Final = agent.litellm_params or {}
     backend_auth: Final = await resolve_databricks_app_auth_header(litellm_params)
 
-    if litellm_params.get("custom_llm_provider") == LlmProviders.DATABRICKS_AGENT.value:
+    if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
         return _call_route(
             route_type, _with_backend_auth(_bridge_agent_request(data, agent, litellm_params), backend_auth)
         )
