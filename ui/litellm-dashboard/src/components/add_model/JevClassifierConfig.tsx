@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { defaultJevClassifierConfig, fixedClassifierModels } from "./jev_classifier_config";
+import { defaultJevClassifierConfig, OSS_CLASSIFIER_MODELS } from "./jev_classifier_config";
 
 const providerDescriptions = {
   jev: "Uses TypeSafe System One Choice evaluation with your configured tiers",
@@ -15,7 +15,7 @@ const providerDescriptions = {
   bespoke:
     "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
   databricks:
-    "Uses a Databricks ai_decide serving endpoint with your configured tiers. Set DATABRICKS_API_BASE and DATABRICKS_API_KEY on the gateway, and enter the serving endpoint name as the classifier model.",
+    "Uses the Databricks ai_decide AI Function with your configured tiers. Set DATABRICKS_API_BASE to your workspace URL and DATABRICKS_API_KEY on the gateway.",
 };
 
 export default function JevClassifierConfig({
@@ -27,7 +27,7 @@ export default function JevClassifierConfig({
 }) {
   const id = useId();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
-  const models = fixedClassifierModels(config.provider);
+  const models = config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider] : undefined;
   const update = (patch: Partial<typeof config>) =>
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
 
@@ -50,14 +50,7 @@ export default function JevClassifierConfig({
             </SelectContent>
           </Select>
         ) : (
-          <Input
-            id={`${id}-model`}
-            value={config.model}
-            placeholder={
-              config.provider === "databricks" ? "Serving endpoint name, e.g. databricks-openjev-qwen35-4b" : undefined
-            }
-            onChange={(event) => update({ model: event.target.value })}
-          />
+          <Input id={`${id}-model`} value={config.model} onChange={(event) => update({ model: event.target.value })} />
         )}
       </div>
       <div>

@@ -457,7 +457,7 @@ def test_jev_config_requires_classifier_config() -> None:
         ("jev", "jev-latest", "jev"),
         ("laya", "english", "laya"),
         ("bespoke", "nimble-latest", "bespoke"),
-        ("databricks", "databricks-openjev-qwen35-4b", "databricks"),
+        ("databricks", "ai_decide", "databricks"),
     ],
 )
 def test_classifier_aliases_load_and_serialize_one_canonical_config(
@@ -540,30 +540,26 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
 
 
-def test_databricks_requires_the_bare_serving_endpoint_name_as_the_model() -> None:
-    with pytest.raises(ValueError, match="model is required for provider 'databricks'"):
-        JevClassifierConfig.model_validate({"provider": "databricks"})
-    with pytest.raises(ValueError, match="bare endpoint name"):
-        JevClassifierConfig.model_validate({"provider": "databricks", "model": "serving-endpoints/my-openjev"})
-    with pytest.raises(ValueError, match="bare endpoint name"):
-        JevClassifierConfig.model_validate({"provider": "databricks", "model": ".."})
-    assert JevClassifierConfig.model_validate({"provider": "databricks", "model": "my-openjev"}).model == "my-openjev"
+@pytest.mark.parametrize("model", [None, "databricks-openjev-qwen35-4b", "serving-endpoints/ai_decide", "ai-decide"])
+def test_databricks_accepts_only_ai_decide_as_the_model(model: str | None) -> None:
+    with pytest.raises(ValueError, match="'ai_decide'"):
+        JevClassifierConfig.model_validate({"provider": "databricks", **({"model": model} if model is not None else {})})
+    assert JevClassifierConfig.model_validate({"provider": "databricks", "model": "ai_decide"}).model == "ai_decide"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("configured_key", [False, True])
 @pytest.mark.parametrize("legacy", [False, True])
-async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_endpoint_model(
-    monkeypatch: pytest.MonkeyPatch, configured_key: bool, legacy: bool
+@pytest.mark.parametrize("api_base", ["https://workspace.test", "https://workspace.test/serving-endpoints/"])
+async def test_databricks_routes_through_ai_decide_without_a_model_field_and_accounts_ai_decide(
+    monkeypatch: pytest.MonkeyPatch, configured_key: bool, legacy: bool, api_base: str
 ) -> None:
-    endpoint: Final = "databricks-openjev-qwen35-4b"
     monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
-    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.test/serving-endpoints")
+    monkeypatch.setenv("DATABRICKS_API_BASE", api_base)
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
     monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-env-token")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setitem(litellm.model_cost, f"databricks/{endpoint}", {"input_cost_per_token": 0.01})
-    recorder: Final = _UsageRecorder(f"databricks/{endpoint}")
+    recorder: Final = _UsageRecorder("databricks/ai_decide")
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
         "databricks-route",
@@ -572,34 +568,30 @@ async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_e
             "classifier_type": "jev" if legacy else "oss_classifier",
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
                 "provider": "databricks",
-                "model": endpoint,
-                **({"api_key": "dapi-configured", "api_base": "https://workspace.test/serving-endpoints"} if configured_key else {}),
+                "model": "ai_decide",
+                **({"api_key": "dapi-configured", "api_base": api_base} if configured_key else {}),
             },
             "tiers": {"SIMPLE": "cheap"},
         },
         derive_savings_baseline=False,
     )
     with respx.mock(assert_all_called=True) as upstream:
-        route: Final = upstream.post(f"https://workspace.test/serving-endpoints/{endpoint}/invocations").respond(
+        route: Final = upstream.post("https://workspace.test/api/2.0/ai-functions/ai-decide").respond(
             200,
-            json={
-                "model": "/mosaicml/local_model",
-                "answers": {"tier": _answer().model_dump()},
-                "usage": {"input_tokens": 31, "output_tokens": 0},
-            },
+            json={"response": {"answers": {"tier": _answer().model_dump()}}, "metadata": {"version": "1.0"}},
         )
         outcome: Final = await router.aclassify("choose a tier")
         await GLOBAL_LOGGING_WORKER.flush()
 
     assert outcome.cause == "jev_classifier"
     assert outcome.jev_verdict is not None
-    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("databricks", endpoint)
-    assert outcome.classifier_cost == pytest.approx(0.31)
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("databricks", "ai_decide")
+    assert outcome.jev_verdict.label == "SIMPLE"
+    assert outcome.classifier_cost is None
     sent: Final = route.calls.last.request
     assert sent.headers.get("authorization") == ("Bearer dapi-configured" if configured_key else "Bearer dapi-env-token")
-    assert json.loads(sent.content)["model"] == endpoint
+    assert set(json.loads(sent.content)) == {"state", "questions"}
     assert len(recorder.calls) == 1
-    assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
 
 
 def test_databricks_without_a_base_or_key_fails_at_client_build(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -612,7 +604,7 @@ def test_databricks_without_a_base_or_key_fails_at_client_build(monkeypatch: pyt
             litellm.Router(model_list=[]),
             {
                 "classifier_type": "oss_classifier",
-                "opensource_classifier_config": {"provider": "databricks", "model": "databricks-openjev-qwen35-4b"},
+                "opensource_classifier_config": {"provider": "databricks", "model": "ai_decide"},
                 "tiers": {"SIMPLE": "cheap"},
             },
             derive_savings_baseline=False,
@@ -659,17 +651,12 @@ def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_sta
 def test_databricks_api_base_without_its_own_key_is_rejected_so_the_workspace_token_stays_home() -> None:
     with pytest.raises(ValueError, match="DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE"):
         JevClassifierConfig.model_validate(
-            {"provider": "databricks", "model": "my-openjev", "api_base": "https://collector.invalid/serving-endpoints"}
+            {"provider": "databricks", "model": "ai_decide", "api_base": "https://collector.invalid"}
         )
     paired: Final = JevClassifierConfig.model_validate(
-        {
-            "provider": "databricks",
-            "model": "my-openjev",
-            "api_base": "https://workspace.invalid/serving-endpoints",
-            "api_key": "dapi-own",
-        }
+        {"provider": "databricks", "model": "ai_decide", "api_base": "https://workspace.invalid", "api_key": "dapi-own"}
     )
-    assert (paired.api_base, paired.api_key) == ("https://workspace.invalid/serving-endpoints", "dapi-own")
+    assert (paired.api_base, paired.api_key) == ("https://workspace.invalid", "dapi-own")
 
 
 @pytest.mark.parametrize(

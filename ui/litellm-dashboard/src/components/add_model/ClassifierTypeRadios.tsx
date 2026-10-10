@@ -56,7 +56,7 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
           <span>
             <strong className="font-semibold">OSS Classifier</strong>{" "}
             <span className="text-muted-foreground">
-              uses Jev, Laya, Bespoke, or a Databricks endpoint to decide the tier
+              uses Jev, Laya, Bespoke, or Databricks ai_decide to decide the tier
             </span>
           </span>
         </Label>

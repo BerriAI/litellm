@@ -30,6 +30,7 @@ from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks"]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
+_WITHOUT_MODEL: Final = MappingProxyType({"model": True})
 
 
 class JevChoiceQuestion(LiteLLMBaseModel):
@@ -106,7 +107,7 @@ class HttpJevClassifierClient:
         )
         response: Final = await self._http_client.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler has a dynamic post signature
             self._request_url(request.model),
-            json=request.model_dump(mode="json"),
+            json=request.model_dump(mode="json", exclude=_WITHOUT_MODEL if self._provider == "databricks" else None),
             headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
