@@ -227,6 +227,7 @@ jobs:
               tests/unit/llms/a2a
               tests/unit/llms/aiml
               tests/unit/llms/aiohttp_openai
+              tests/unit/llms/alibaba_token_plan
               tests/unit/llms/apiserpent
               tests/unit/llms/aws_polly
               tests/unit/llms/azure
