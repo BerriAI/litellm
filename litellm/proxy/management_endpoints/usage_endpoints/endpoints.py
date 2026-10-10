@@ -49,7 +49,7 @@ class ProxyUsageChatCompletion:
     auth: UserAPIKeyAuth
     is_admin: bool = False
 
-    async def _process(self, payload: Mapping[str, object]) -> object:
+    async def _process(self, payload: Mapping[str, object]) -> tuple[ModelResponse | Response, UserAPIKeyAuth]:
         from litellm.proxy.auth.user_api_key_auth import (
             enforce_key_and_fallback_model_access,  # pyright: ignore[reportUnknownVariableType]  # Shared auth helper has legacy collection annotations
             run_centralized_common_checks,
@@ -94,8 +94,8 @@ class ProxyUsageChatCompletion:
                 request_data=data,
                 route="/chat/completions",
             )
-            result: Final = TypeAdapter[ModelResponse | StreamingResponse](
-                ModelResponse | StreamingResponse, config=ConfigDict(arbitrary_types_allowed=True)
+            result: Final = TypeAdapter[ModelResponse | Response](
+                ModelResponse | Response, config=ConfigDict(arbitrary_types_allowed=True)
             ).validate_python(
                 await processor.base_process_llm_request(
                     request=request,
@@ -124,12 +124,12 @@ class ProxyUsageChatCompletion:
             )
             raise
         else:
-            return result
+            return result, auth
 
     async def complete(
         self, model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[_ToolDef]
     ) -> ModelResponse:
-        result: Final = await self._process(
+        result, _ = await self._process(
             {
                 "model": model,
                 "messages": messages,
@@ -143,7 +143,7 @@ class ProxyUsageChatCompletion:
     async def stream(
         self, model: str, messages: Sequence[Mapping[str, object]]
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        result: Final = await self._process(
+        result, auth = await self._process(
             {
                 "model": model,
                 "messages": messages,
@@ -159,18 +159,26 @@ class ProxyUsageChatCompletion:
             _relay_late_response,  # pyright: ignore[reportPrivateUsage]  # Reuse the relay's upstream cleanup
         )
 
-        async with aclosing(_relay_late_response(result)) as relay:
-            async for event in SSEDecoder().aiter_bytes(relay):
-                if event.data == "[DONE]":
-                    return
-                if not event.data:
-                    continue
-                payload = TypeAdapter(dict[str, object]).validate_json(event.data)
-                if "error" in payload:
-                    raise HTTPException(status_code=502, detail="Usage AI completion stream failed")
-                chunk = TypeAdapter(ModelResponseStream).validate_python(payload)
-                if chunk.choices:
-                    yield chunk
+        try:
+            async with aclosing(_relay_late_response(result)) as relay:
+                async for event in SSEDecoder().aiter_bytes(relay):
+                    if event.data == "[DONE]":
+                        return
+                    if not event.data:
+                        continue
+                    payload = TypeAdapter(dict[str, object]).validate_json(event.data)
+                    if "error" in payload:
+                        raise HTTPException(status_code=502, detail="Usage AI completion stream failed")
+                    chunk = TypeAdapter(ModelResponseStream).validate_python(payload)
+                    if chunk.choices:
+                        yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
+            from litellm.proxy.spend_tracking.budget_reservation import (
+                release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # Shared helper has legacy dict annotations
+            )
+
+            await release_budget_reservation_on_cancel(auth.budget_reservation)
+            raise
 
 
 @router.post(
