@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 from unittest.mock import AsyncMock, Mock
@@ -79,6 +80,33 @@ def _provider_response(request: httpx.Request) -> httpx.Response:
             200,
             headers={"content-type": "text/event-stream"},
             content=stream_body + b"data: [DONE]\n\n",
+        )
+    if body.get("model") == "gpt-4o-audio-preview":
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_audio",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o-audio-preview",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "audio": {
+                                "id": "audio-response",
+                                "data": base64.b64encode(b"foobar").decode("ascii"),
+                                "transcript": "hello world",
+                                "expires_at": 1700003600,
+                            },
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            },
         )
     if "filtered request" in json.dumps(body):
         return httpx.Response(
@@ -190,12 +218,14 @@ class _CallbackCapture(CustomLogger):
     def __init__(self) -> None:
         self.call_id: Final = str(uuid4())
         self.sync_success: Final = Mock()
+        self.sync_logged: Final = threading.Semaphore(0)
         self.async_success: Final = AsyncMock()
         self.sync_failure: Final = Mock()
         self.async_failure: Final = AsyncMock()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self.sync_success(kwargs=kwargs, response_obj=response_obj)
+        self.sync_logged.release()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         await self.async_success(kwargs=kwargs, response_obj=response_obj)
@@ -288,16 +318,16 @@ async def _assert_success_payload(
         assert standard["total_tokens"] == 3
 
 
-@pytest.mark.asyncio
-async def test_amazing_sync_embedding(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
-    response: Final = await litellm.aembedding(
+def test_amazing_sync_embedding(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
+    response: Final = litellm.embedding(
         model="text-embedding-3-small",
         input=["sync embedding marker"],
         metadata={"requester_metadata": {"marker": "embedding"}},
     )
-    await _assert_success_payload(callback_capture, "text-embedding-3-small", None, "sync embedding marker")
+    assert callback_capture.sync_logged.acquire(timeout=5)
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
-    event: Final = callback_capture.async_success.call_args.kwargs["kwargs"]
+    event: Final = callback_capture.sync_success.call_args.kwargs["kwargs"]
+    assert event["model"] == "text-embedding-3-small"
     assert event["input"] == ["sync embedding marker"]
     assert event["standard_logging_object"]["response"]["data"][0]["embedding"] == [0.1, 0.2, 0.3]
     assert event["standard_logging_object"]["metadata"]["requester_metadata"] == {"marker": "embedding"}
@@ -494,13 +524,16 @@ async def test_async_custom_handler_stream(
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
 
 
-@pytest.mark.asyncio
-async def test_chat_openai_stream(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
+def test_chat_openai_stream(provider_router: respx.MockRouter, callback_capture: _CallbackCapture) -> None:
     messages: Final = [{"role": "user", "content": "sync stream marker"}]
-    response: Final = await litellm.acompletion(model="gpt-4o-mini", messages=messages, stream=True)
-    chunks: Final = tuple([chunk async for chunk in response])
+    response: Final = litellm.completion(model="gpt-4o-mini", messages=messages, stream=True)
+    chunks: Final = tuple(response)
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
-    await _assert_success_payload(callback_capture, "gpt-4o-mini", messages)
+    assert callback_capture.sync_logged.acquire(timeout=5)
+    event: Final = callback_capture.sync_success.call_args.kwargs["kwargs"]
+    assert event["model"] == "gpt-4o-mini"
+    assert event["messages"] == messages
+    assert event["standard_logging_object"]["response"]["choices"][0]["message"]["content"] == "Hello"
 
 
 @pytest.mark.asyncio
@@ -631,6 +664,36 @@ async def test_logging_async_cache_hit_sync_call(
         assert standard["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
 
 
+@pytest.mark.parametrize("turn_off_message_logging", [False, True])
+def test_logging_cache_hit_sync_stream_call(
+    provider_router: respx.MockRouter,
+    callback_capture: _CallbackCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_off_message_logging: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    monkeypatch.setattr(litellm, "turn_off_message_logging", turn_off_message_logging)
+    messages: Final = [{"role": "user", "content": "sync cache marker"}]
+    first_chunks: Final = tuple(
+        litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True)
+    )
+    assert callback_capture.sync_logged.acquire(timeout=5)
+    second_chunks: Final = tuple(
+        litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True)
+    )
+    assert callback_capture.sync_logged.acquire(timeout=5)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks) == "Hello"
+    assert provider_router.calls.call_count == 1
+    standard: Final = callback_capture.sync_success.call_args.kwargs["kwargs"]["standard_logging_object"]
+    assert standard["cache_hit"] is True
+    assert standard["response_cost"] == 0
+    assert standard["saved_cache_cost"] > 0
+    if turn_off_message_logging:
+        assert standard["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+        assert standard["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
+
+
 @pytest.mark.asyncio
 async def test_logging_standard_payload_llm_headers(
     provider_router: respx.MockRouter, callback_capture: _CallbackCapture
@@ -663,6 +726,7 @@ async def test_logging_key_masking_gemini(
     assert event["standard_logging_object"]["model"] == "gemini-1.5-flash"
 
 
+@pytest.mark.parametrize("turn_off_message_logging", [False, True])
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.asyncio
 async def test_standard_logging_payload_audio(
@@ -670,8 +734,9 @@ async def test_standard_logging_payload_audio(
     callback_capture: _CallbackCapture,
     monkeypatch: pytest.MonkeyPatch,
     stream: bool,
+    turn_off_message_logging: bool,
 ) -> None:
-    monkeypatch.setattr(litellm, "turn_off_message_logging", not stream)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", turn_off_message_logging)
     messages: Final = [{"role": "user", "content": "response in 1 word - yes or no"}]
     response: Final = await litellm.acompletion(
         model="openai/gpt-4o-audio-preview",
@@ -682,24 +747,25 @@ async def test_standard_logging_payload_audio(
         litellm_call_id=callback_capture.call_id,
     )
     if stream:
-        tuple([chunk async for chunk in response])
-        provider_request: Final = provider_router.calls[0].request
-        assert json.loads(provider_request.content)["model"] == "gpt-4o-audio-preview"
+        _ = [chunk async for chunk in response]
+    assert json.loads(provider_router.calls[0].request.content)["model"] == "gpt-4o-audio-preview"
     await _assert_success_payload(
         callback_capture, "gpt-4o-audio-preview", None, call_id=callback_capture.call_id
     )
     call: Final = callback_capture.async_success.call_args or callback_capture.sync_success.call_args
     standard: Final = call.kwargs["kwargs"]["standard_logging_object"]
     assert standard["model"] == "gpt-4o-audio-preview"
-    if stream:
-        audio: Final = standard["response"]["choices"][0]["message"]["audio"]
-        assert audio["id"] == "audio-response"
-        assert audio["data"] == base64.b64encode(b"foobar").decode("ascii")
-        assert audio["transcript"] == "hello world"
-        assert audio["expires_at"] == 1700003600
-    else:
+    message: Final = standard["response"]["choices"][0]["message"]
+    if turn_off_message_logging:
         assert standard["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
-        assert standard["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
+        assert message.get("audio") is None
+        assert "hello world" not in json.dumps(standard)
+        return
+    audio: Final = message["audio"]
+    assert audio["id"] == "audio-response"
+    assert audio["data"] == base64.b64encode(b"foobar").decode("ascii")
+    assert audio["transcript"] == "hello world"
+    assert audio["expires_at"] == 1700003600
 
 
 def test_completion_azure_stream_moderation_failure(

@@ -134,7 +134,8 @@ def test_caching_v2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         assert relay.handshakes.qsize() >= 1
 
 
-def test_caching_router(tmp_path: Path) -> None:
+def test_caching_router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
     with tls_relay(tmp_path) as relay:
         router: Final = Router(
             model_list=[
