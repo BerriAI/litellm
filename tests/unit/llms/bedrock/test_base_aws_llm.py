@@ -12,12 +12,12 @@ from fastapi.testclient import TestClient
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.auth import SigV4Auth
-from botocore.credentials import Credentials
+from botocore.credentials import Credentials, ReadOnlyCredentials
 from botocore.exceptions import ClientError, NoCredentialsError
 
 import litellm
@@ -764,38 +764,32 @@ def test_get_request_headers_preserves_bearer_payload(from_environment):
     assert result.method == "POST"
 
 
-def test_get_request_headers_with_sigv4():
-    # Setup
-    llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
-    headers = {"Content-Type": "application/json"}
+def test_get_request_headers_with_sigv4() -> None:
+    credentials: Final = Credentials("test_key", "test_secret", "test_token")
+    result: Final = BaseAWSLLM().get_request_headers(
+        credentials=credentials,
+        aws_region_name="us-west-2",
+        extra_headers=None,
+        endpoint_url="https://api.example.com",
+        data='{"prompt": "test"}',
+        headers={"Content-Type": "application/json"},
+        supports_bearer_token=False,
+    )
 
-    # Create mock request and SigV4 instance
-    mock_request = MagicMock(spec=AWSRequest)
-    mock_request.headers = headers.copy()
-    mock_request.prepare.return_value = MagicMock(spec=AWSPreparedRequest)
-
-    mock_sigv4 = MagicMock()
-
-    # Test without bearer token (should use SigV4)
-    with (
-        patch.dict(os.environ, {}, clear=True),
-        patch("botocore.auth.SigV4Auth", return_value=mock_sigv4) as mock_sigv4_class,
-        patch("botocore.awsrequest.AWSRequest", return_value=mock_request),
-    ):
-        result = llm.get_request_headers(
-            credentials=credentials,
-            aws_region_name="us-west-2",
-            extra_headers=None,
-            endpoint_url="https://api.example.com",
-            data='{"prompt": "test"}',
-            headers=headers,
-        )
-
-        # Verify SigV4 authentication and result
-        mock_sigv4_class.assert_called_once_with(credentials, "bedrock", "us-west-2")
-        mock_sigv4.add_auth.assert_called_once_with(mock_request)
-        assert result == mock_request.prepare.return_value
+    assert result.method == "POST"
+    assert result.url == "https://api.example.com"
+    assert result.body == '{"prompt": "test"}'
+    assert result.headers["X-Amz-Security-Token"] == "test_token"
+    authorization: Final = result.headers["Authorization"]
+    assert authorization.split("Credential=")[1].split("/")[0] == "test_key"
+    assert "/us-west-2/bedrock/aws4_request" in authorization
+    assert authorization.split("Signature=")[1] == _recomputed_sigv4_signature(
+        url=result.url,
+        secret_key="test_secret",
+        authorization=authorization,
+        headers=dict(result.headers),
+        body=result.body,
+    )
 
 
 def test_get_request_headers_without_credentials_or_bearer_token_raises_no_credentials():
@@ -4215,3 +4209,147 @@ def test_shared_json_signer_preserves_body_and_signs_for_the_requested_service()
     )
     assert request.body == body
     assert "/us-west-2/s3/aws4_request" in request.headers["Authorization"]
+
+
+@pytest.fixture
+def rotating_sigv4_credentials(monkeypatch: pytest.MonkeyPatch) -> Credentials:
+    from itertools import count
+    from types import SimpleNamespace
+
+    import boto3
+    from botocore.credentials import DeferredRefreshableCredentials
+
+    instant: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    generations: Final = count(1)
+
+    def refresh() -> dict[str, str]:
+        generation: Final = next(generations)
+        return {
+            "access_key": f"rotation-access-{generation}",
+            "secret_key": f"rotation-secret-{generation}",
+            "token": f"rotation-token-{generation}",
+            "expiry_time": (instant + timedelta(seconds=60)).isoformat(),
+        }
+
+    credentials: Final = DeferredRefreshableCredentials(
+        refresh_using=refresh,
+        method="assume-role-with-web-identity",
+        time_fetcher=lambda: instant,
+    )
+    credentials._advisory_refresh_timeout = 120
+    credentials._mandatory_refresh_timeout = 90
+    session: Final = SimpleNamespace(get_credentials=lambda: credentials)
+    monkeypatch.setattr(boto3, "Session", lambda: session)
+    monkeypatch.setattr("botocore.auth.get_current_datetime", lambda: instant)
+    return credentials
+
+
+def _request_with_rotating_credentials(
+    entrypoint: Literal["invoke", "prepared", "mantle", "json_post"],
+    credentials: Credentials | ReadOnlyCredentials,
+    url: str,
+) -> tuple[dict[str, str], str | bytes]:
+    from litellm.llms.bedrock.base_aws_llm import sign_aws_json_post
+    from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+
+    body: Final = {"input": "credential rotation"}
+    if entrypoint == "invoke":
+        invoke_headers, invoke_body = BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers={"Content-Type": "application/json"},
+            optional_params={"aws_region_name": "us-east-1"},
+            request_data=body,
+            api_base=url,
+        )
+        assert invoke_body is not None
+        return invoke_headers, invoke_body
+    if entrypoint == "mantle":
+        mantle_headers, mantle_body = BedrockMantleAnthropicMessagesConfig().sign_request(
+            headers={"Content-Type": "application/json"},
+            optional_params={"aws_region_name": "us-east-1"},
+            request_data=body,
+            api_base=url,
+        )
+        assert mantle_body is not None
+        return mantle_headers, mantle_body
+    if entrypoint == "json_post":
+        prepared: Final = sign_aws_json_post(
+            get_credentials=lambda: credentials,
+            service_name="bedrock",
+            aws_region_name="us-east-1",
+            url=url,
+            body=json.dumps(body),
+            headers={"Content-Type": "application/json"},
+        )
+        assert isinstance(prepared.body, (str, bytes))
+        return dict(prepared.headers), prepared.body
+    prepared_request: Final = BaseAWSLLM().get_request_headers(
+        credentials=credentials,
+        aws_region_name="us-east-1",
+        extra_headers=None,
+        endpoint_url=url,
+        data=json.dumps(body),
+        headers={"Content-Type": "application/json"},
+        supports_bearer_token=False,
+    )
+    assert isinstance(prepared_request.body, (str, bytes))
+    return dict(prepared_request.headers), prepared_request.body
+
+
+def _verified_credential_generation(url: str, headers: dict[str, str], body: str | bytes) -> str:
+    authorization: Final = headers["Authorization"]
+    access_key: Final = authorization.split("Credential=")[1].split("/")[0]
+    generation: Final = access_key.removeprefix("rotation-access-")
+    assert headers["X-Amz-Security-Token"] == f"rotation-token-{generation}", headers
+    assert authorization.split("Signature=")[1] == _recomputed_sigv4_signature(
+        url=url,
+        secret_key=f"rotation-secret-{generation}",
+        authorization=authorization,
+        headers=headers,
+        body=body,
+    ), headers
+    return generation
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "url"),
+    (
+        ("invoke", "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"),
+        ("prepared", "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/converse"),
+        ("mantle", "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"),
+        ("json_post", "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"),
+    ),
+)
+def test_sigv4_rotation_uses_one_generation_per_request_and_refreshes_between_requests(
+    entrypoint: Literal["invoke", "prepared", "mantle", "json_post"],
+    url: str,
+    rotating_sigv4_credentials: Credentials,
+) -> None:
+    first_headers, first_body = _request_with_rotating_credentials(entrypoint, rotating_sigv4_credentials, url)
+    first_generation: Final = _verified_credential_generation(url, first_headers, first_body)
+    second_headers, second_body = _request_with_rotating_credentials(entrypoint, rotating_sigv4_credentials, url)
+    second_generation: Final = _verified_credential_generation(url, second_headers, second_body)
+    assert second_generation != first_generation
+
+
+@pytest.mark.parametrize("entrypoint", ("prepared", "json_post"))
+@pytest.mark.parametrize("frozen", (False, True))
+@pytest.mark.parametrize("token", (None, "rotation-token-static"))
+def test_sigv4_signs_with_static_or_frozen_credentials(
+    entrypoint: Literal["prepared", "json_post"], frozen: bool, token: str | None
+) -> None:
+    credentials: Final = Credentials("rotation-access-static", "rotation-secret-static", token)
+    signing_credentials: Final = credentials.get_frozen_credentials() if frozen else credentials
+    url: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    headers, body = _request_with_rotating_credentials(entrypoint, signing_credentials, url)
+
+    assert headers.get("X-Amz-Security-Token") == token
+    authorization: Final = headers["Authorization"]
+    assert "Credential=rotation-access-static/" in authorization
+    assert authorization.split("Signature=")[1] == _recomputed_sigv4_signature(
+        url=url,
+        secret_key="rotation-secret-static",
+        authorization=authorization,
+        headers=headers,
+        body=body,
+    )
