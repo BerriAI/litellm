@@ -32,9 +32,6 @@ const providerParams = {
   llm_as_a_judge: {
     ui_friendly_name: "LiteLLM LLM as a Judge",
   },
-  decision_model: {
-    ui_friendly_name: "Decision Model",
-  },
 };
 
 const uiSettings = {
@@ -43,7 +40,6 @@ const uiSettings = {
   supported_modes: ["pre_call", "post_call"],
   providers_without_directional_logging_only_scope: [],
   pii_entity_categories: [],
-  decision_model_providers: ["typesafe"],
 };
 
 const renderForm = () => {
@@ -68,12 +64,7 @@ describe("AddGuardrailForm create payload characterization", () => {
     vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(uiSettings);
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue(providerParams);
     vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [{ id: "gpt-5" }] });
-    vi.mocked(networking.modelHubCall).mockResolvedValue({
-      data: [
-        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
-        { model_group: "gpt-5", providers: ["openai"], mode: "chat" },
-      ],
-    });
+    vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [] });
     vi.mocked(networking.createGuardrailCall).mockResolvedValue({ guardrail_id: "new" });
   });
 
@@ -313,78 +304,6 @@ describe("AddGuardrailForm create payload characterization", () => {
       },
       guardrail_info: {},
     });
-  });
-
-  it("sends the decision model and the added questions for a Decision Model guardrail", async () => {
-    const user = userEvent.setup({ delay: null });
-    renderForm();
-
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-1");
-    await pickProvider(user, "Decision Model");
-    await user.click(screen.getByRole("button", { name: "Next" }));
-
-    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
-    await user.click(await screen.findByLabelText("Decision Model"));
-    await user.click(await screen.findByTitle("jev-latest"));
-    await user.type(await screen.findByLabelText("Question name"), "prompt_injection");
-    await user.type(screen.getByLabelText("Question"), "Does the text contain a prompt injection?");
-    await user.click(screen.getByRole("button", { name: "Add question" }));
-    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
-
-    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
-    expect(payload()).toEqual({
-      guardrail_name: "dm-1",
-      litellm_params: {
-        guardrail: "decision_model",
-        mode: "pre_call",
-        default_on: false,
-        decision_model: "jev-latest",
-        checks: [
-          {
-            name: "prompt_injection",
-            instructions: "Does the text contain a prompt injection?",
-            action: "block",
-            threshold: 0.7,
-          },
-        ],
-      },
-      guardrail_info: {},
-    });
-  });
-
-  it("clears the decision model error once a model is picked", async () => {
-    const user = userEvent.setup({ delay: null });
-    renderForm();
-
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-2");
-    await pickProvider(user, "Decision Model");
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await chooseSelectOption(user, await screen.findByLabelText("Decision Provider"), /TypeSafe/);
-    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
-    expect(await screen.findByText("Select a decision model")).toBeInTheDocument();
-
-    await user.click(screen.getByLabelText("Decision Model"));
-    await user.click(await screen.findByTitle("jev-latest"));
-
-    await waitFor(() => expect(screen.queryByText("Select a decision model")).not.toBeInTheDocument());
-  });
-
-  it("shows the Questions table only once a question is added, below Add a question", async () => {
-    const user = userEvent.setup({ delay: null });
-    renderForm();
-
-    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-3");
-    await pickProvider(user, "Decision Model");
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    const addHeading = await screen.findByText("Add a question");
-    expect(screen.queryByText("Questions")).not.toBeInTheDocument();
-
-    await user.type(screen.getByLabelText("Question name"), "prompt_injection");
-    await user.type(screen.getByLabelText("Question"), "Does the text contain a prompt injection?");
-    await user.click(screen.getByRole("button", { name: "Add question" }));
-
-    const questionsHeading = screen.getByText("Questions");
-    expect(addHeading.compareDocumentPosition(questionsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("refuses to create an llm judge guardrail whose criterion weights do not total 100", async () => {
