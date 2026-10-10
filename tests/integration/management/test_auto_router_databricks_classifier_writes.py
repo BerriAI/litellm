@@ -1,7 +1,9 @@
 import asyncio
 import json
+import threading
 import uuid
 from collections.abc import Callable, Mapping
+from queue import SimpleQueue
 from typing import Final
 
 import httpx
@@ -294,8 +296,17 @@ async def test_renaming_the_endpoint_under_a_burst_moves_the_classifier_and_logs
     gateway: Gateway,
 ) -> None:
     base_url: Final = str(gateway.client.base_url)
+    loop: Final = asyncio.get_running_loop()
+    classifying: Final = asyncio.Event()
+    release: Final = threading.Event()
+
+    def classify(request: Request) -> Reply:
+        loop.call_soon_threadsafe(classifying.set)
+        assert release.wait(timeout=30), "The in-flight classifier calls were never released"
+        return _classifier(request)
+
     with (
-        wire_server(_classifier) as judge,
+        wire_server(classify) as judge,
         wire_server(_tier("simple answer")) as simple,
         wire_server(_tier("complex answer")) as complex_tier,
         gateway.scenario() as scenario,
@@ -304,29 +315,40 @@ async def test_renaming_the_endpoint_under_a_burst_moves_the_classifier_and_logs
         complex_model: Final = scenario.model(model="openai/complex-tier", api_base=complex_tier.url)
         classifier: Final = _classifier_config(judge.url)
         name, identity = _create_router(scenario, _router_config(classifier, simple_model, complex_model))
-        burst: Final = asyncio.create_task(_burst(base_url, gateway.key, name, 24))
         renamed: Final = _router_config({**classifier, "model": _SECOND_ENDPOINT}, simple_model, complex_model)
-        patched: Final = gateway.request(
-            "PATCH",
-            f"/model/{identity}/update",
-            {"litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": renamed}},
-        )
-        assert patched.status_code == 200, patched.text
-        during: Final = await burst
+        async with asyncio.TaskGroup() as requests:
+            burst: Final = requests.create_task(_burst(base_url, gateway.key, name, 24))
+            try:
+                await classifying.wait()
+                patched: Final = gateway.request(
+                    "PATCH",
+                    f"/model/{identity}/update",
+                    {"litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": renamed}},
+                )
+                assert patched.status_code == 200, patched.text
+            finally:
+                release.set()
+            during: Final = await burst
         assert [response.status_code for response in during] == [200] * 24, [response.text for response in during]
         assert set(_judge_targets(judge)) <= {f"/{_ENDPOINT}/invocations", f"/{_SECOND_ENDPOINT}/invocations"}
         assert _stored_classifier(gateway, identity)["model"] == _SECOND_ENDPOINT
 
+        convergence_calls: Final[SimpleQueue[str]] = SimpleQueue()
+
         def classifier_target() -> tuple[str, ...]:
             chat: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(name))
             assert chat.status_code == 200, chat.text
+            convergence_calls.put(string_value(chat.json()["id"]))
             return _judge_targets(judge)
 
         eventually(classifier_target, lambda targets: targets == (f"/{_SECOND_ENDPOINT}/invocations",), seconds=30)
         after: Final = await _burst(base_url, gateway.key, name, 6)
         assert [response.status_code for response in after] == [200] * 6, [response.text for response in after]
         assert set(_judge_targets(judge)) == {f"/{_SECOND_ENDPOINT}/invocations"}
-        identities: Final = tuple(string_value(response.json()["id"]) for response in (*during, *after))
+        identities: Final = (
+            *tuple(string_value(response.json()["id"]) for response in (*during, *after)),
+            *tuple(convergence_calls.get_nowait() for _ in range(convergence_calls.qsize())),
+        )
         assert len(set(identities)) == len(identities), identities
         rows: Final = _rows(name, want=len(identities))
         request_rows: Final = [row for row in rows if row["origin"] != "autorouter_classifier"]
