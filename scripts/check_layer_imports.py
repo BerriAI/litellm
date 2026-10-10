@@ -173,11 +173,8 @@ def report(
 
 
 def git_base_allowlist(ref: str) -> frozenset[str] | None:
-    merge_base: Final = subprocess.run(
-        ["git", "merge-base", ref, "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
     shown: Final = subprocess.run(
-        ["git", "show", f"{merge_base}:{ALLOWLIST.as_posix()}"], capture_output=True, text=True, check=False
+        ["git", "show", f"{ref}:{ALLOWLIST.as_posix()}"], capture_output=True, text=True, check=False
     )
     return parse_allowlist(shown.stdout) if shown.returncode == 0 else None
 
@@ -191,7 +188,9 @@ def main(
     base_allowlist: Callable[[str], frozenset[str] | None] = git_base_allowlist,
 ) -> int:
     parser: Final = argparse.ArgumentParser(description="Check SDK/proxy layer import rules")
-    parser.add_argument("--base", help="Also reject allowlist entries missing at the merge base with this ref")
+    parser.add_argument(
+        "--base", help="Also reject allowlist entries missing from the allowlist at this ref (CI passes the merge base)"
+    )
     args: Final = parser.parse_args(argv, namespace=Arguments())
     paths: Final = tuple(sorted(PACKAGE_ROOT.rglob("*.py")))
     base_allowed: Final = base_allowlist(args.base) if args.base else None
