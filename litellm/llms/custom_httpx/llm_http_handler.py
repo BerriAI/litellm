@@ -42,7 +42,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
@@ -7324,7 +7324,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = image_generation_provider_config.validate_environment(
+        headers: Final = await asyncify(image_generation_provider_config.validate_environment)(  # pyright: ignore[reportUnknownArgumentType]  # sync hook signature is untyped
             api_key=api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -7389,13 +7389,15 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: Final[ImageResponse] = image_generation_provider_config.transform_image_generation_response(
+        model_response: Final[
+            ImageResponse
+        ] = await image_generation_provider_config.async_transform_image_generation_response(
             model=model,
             raw_response=response,
             model_response=litellm.ImageResponse(),
             logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
+            request_data=data,  # pyright: ignore[reportUnknownArgumentType]  # handler params are untyped
+            optional_params=image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # handler params are untyped
             litellm_params=dict(litellm_params),
             encoding=None,
         )

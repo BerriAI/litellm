@@ -1,6 +1,8 @@
 import asyncio
+import itertools
 import json
 from datetime import datetime
+from collections.abc import Coroutine
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +14,7 @@ from openai.types.image import Image
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
 
@@ -187,122 +190,59 @@ class TestAimlImageGeneration:
                     pytest.fail(f"An exception occurred - {str(e)}")
 
 
+def _capturing_client(response_json: dict[str, object]) -> tuple[AsyncHTTPHandler, list[httpx.Request]]:
+    requests: Final[list[httpx.Request]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=response_json)
+
+    return AsyncHTTPHandler(transport=httpx.MockTransport(handler)), requests
+
+
 @pytest.mark.asyncio
 async def test_aiml_image_generation_with_dynamic_api_key():
-    """
-    Test that when api_key is passed as a dynamic parameter to aimage_generation,
-    it gets properly used for AIML provider authentication instead of falling back
-    to environment variables.
+    client, requests = _capturing_client(
+        {"created": 1703658209, "data": [{"url": "https://example.com/generated_image.png"}]}
+    )
 
-    This test validates the fix for ensuring dynamic API keys are respected
-    when making image generation requests to the AIML provider.
-    """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    await litellm.aimage_generation(
+        prompt="A cute baby sea otter",
+        model="aiml/flux-pro/v1.1",
+        api_key="test-dynamic-api-key-12345",
+        client=client,
+    )
 
-    import httpx
-
-    # Mock AIML response
-    mock_aiml_response = {
-        "created": 1703658209,
-        "data": [{"url": "https://example.com/generated_image.png"}],
-    }
-
-    # Track captured arguments
-    captured_headers = None
-    captured_url = None
-    captured_json_data = None
-
-    def capture_post_call(*args, **kwargs):
-        nonlocal captured_headers, captured_url, captured_json_data
-        captured_url = kwargs.get("url") or (args[0] if args else None)
-        captured_headers = kwargs.get("headers", {})
-        captured_json_data = kwargs.get("json", {})
-
-        # Create a mock response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = mock_aiml_response
-        mock_response.text = json.dumps(mock_aiml_response)
-        return mock_response
-
-    # Mock the HTTP client that actually makes the request (sync version for image generation)
-    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
-        mock_post.side_effect = capture_post_call
-
-        # Test with dynamic api_key
-        test_api_key = "test-dynamic-api-key-12345"
-
-        response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter",
-            model="aiml/flux-pro/v1.1",
-            api_key=test_api_key,  # This should be used instead of env vars
-        )
-
-        # Validate the response (mocked response processing might not populate data correctly)
-        assert response is not None
-
-        # The most important validations: API key and endpoint usage
-        # These prove that the dynamic API key was properly used
-        assert captured_headers is not None
-        assert "Authorization" in captured_headers
-        assert captured_headers["Authorization"] == f"Bearer {test_api_key}"
-        print("TESTCAPTURED HEADERS", captured_headers)
-        # Validate the correct AIML endpoint was called
-        assert captured_url is not None
-        assert "api.aimlapi.com" in captured_url
-        assert "/v1/images/generations" in captured_url
-
-        # Validate the request data
-        assert captured_json_data is not None
-        assert captured_json_data["prompt"] == "A cute baby sea otter"
-        assert captured_json_data["model"] == "flux-pro/v1.1"
+    assert len(requests) == 1
+    assert requests[0].headers["Authorization"] == "Bearer test-dynamic-api-key-12345"
+    assert requests[0].url.host == "api.aimlapi.com"
+    assert requests[0].url.path.endswith("/v1/images/generations")
+    body: Final = json.loads(requests[0].content)
+    assert body["prompt"] == "A cute baby sea otter"
+    assert body["model"] == "flux-pro/v1.1"
 
 
 @pytest.mark.asyncio
 async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
-    """End-to-end check that ``aiml/openai/gpt-image-2`` keeps the upstream
-    OpenAI request shape (``size``/``n``/``response_format``) instead of
-    being remapped to the AI/ML flux schema (``image_size``/``num_images``/
-    ``output_format``), and hits the correct upstream model name.
-    """
-    import json as _json
-    from unittest.mock import MagicMock, patch
+    client, requests = _capturing_client(
+        {"created": 1703658209, "data": [{"url": "https://example.com/gpt-image-2.png"}]}
+    )
 
-    mock_aiml_response = {
-        "created": 1703658209,
-        "data": [{"url": "https://example.com/gpt-image-2.png"}],
-    }
+    await litellm.aimage_generation(
+        prompt="A T-Rex relaxing on a beach",
+        model="aiml/openai/gpt-image-2",
+        api_key="test-key-mocked-no-credits-needed",
+        size="1024x1536",
+        quality="high",
+        response_format="b64_json",
+        n=1,
+        client=client,
+    )
 
-    captured = {}
-
-    def capture_post_call(*args, **kwargs):
-        captured["url"] = kwargs.get("url") or (args[0] if args else None)
-        captured["headers"] = kwargs.get("headers", {})
-        captured["json"] = kwargs.get("json", {})
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = mock_aiml_response
-        mock_response.text = _json.dumps(mock_aiml_response)
-        return mock_response
-
-    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
-        mock_post.side_effect = capture_post_call
-
-        await litellm.aimage_generation(
-            prompt="A T-Rex relaxing on a beach",
-            model="aiml/openai/gpt-image-2",
-            api_key="test-key-mocked-no-credits-needed",
-            size="1024x1536",
-            quality="high",
-            response_format="b64_json",
-            n=1,
-        )
-
-    assert captured["url"] is not None
-    assert "api.aimlapi.com" in captured["url"]
-    assert "/v1/images/generations" in captured["url"]
-
-    body = captured["json"]
+    assert len(requests) == 1
+    assert requests[0].url.host == "api.aimlapi.com"
+    assert requests[0].url.path.endswith("/v1/images/generations")
+    body: Final = json.loads(requests[0].content)
     assert body["model"] == "openai/gpt-image-2"
     assert body["prompt"] == "A T-Rex relaxing on a beach"
     assert body["size"] == "1024x1536"
@@ -343,3 +283,33 @@ async def test_azure_image_generation_request_body():
         call_args = mock_post.call_args
         request_json = call_args.kwargs.get("json", {})
         assert request_json == expected_body
+
+
+@pytest.mark.asyncio
+async def test_aimage_generation_runs_vertex_requests_concurrently_on_the_event_loop() -> None:
+    response_json: Final = {
+        "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
+    }
+    arrivals: Final = itertools.count(1)
+    both_in_flight: Final = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if next(arrivals) == 2:
+            both_in_flight.set()
+        await both_in_flight.wait()
+        return httpx.Response(status_code=200, json=response_json)
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+
+    def generate() -> Coroutine[object, object, litellm.ImageResponse]:
+        return litellm.aimage_generation(  # pyright: ignore[reportUnknownMemberType]  # aimage_generation kwargs are untyped
+            model="vertex_ai/gemini-2.5-flash-image",
+            prompt="a red circle",
+            api_base="http://localhost:1/generateContent",
+            vertex_location="us-central1",
+            client=client,
+        )
+
+    results: Final = await asyncio.wait_for(asyncio.gather(generate(), generate()), timeout=5)
+
+    assert [result.data[0].b64_json if result.data else None for result in results] == ["aW1n", "aW1n"]
