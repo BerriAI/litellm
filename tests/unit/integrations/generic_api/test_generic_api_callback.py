@@ -30,9 +30,11 @@ def set_verbose_logger_level() -> Iterator[None]:
 
 
 async def _wait_for_events_and_flush(generic_logger: GenericAPILogger, expected: int) -> None:
-    async with asyncio.timeout(10):
+    async def _poll() -> None:
         while len(generic_logger.log_queue) < expected:
             await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=10)
     await generic_logger.flush_queue()
 
 
@@ -422,6 +424,50 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     this_test_messages: Final = [[{"role": "user", "content": f"Test {i}"}] for i in range(2)]
     mine: Final = [record for record in records if record.get("messages") in this_test_messages]
     assert len(mine) == 2, f"Expected this test's 2 calls as NDJSON lines, got {len(mine)} of {len(records)}"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
+    """
+    Test that GenericAPILogger's periodic flush sends queued events without an explicit flush.
+    """
+    # Create a mock for the async_httpx_client's post method
+    mock_post = AsyncMock()
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.text = "OK"
+
+    # Set up an endpoint for testing
+    test_endpoint = "https://example.com/api/logs"
+    test_headers = {"Authorization": "Bearer test_token"}
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", test_endpoint)
+
+    # Short flush interval so periodic_flush fires during the test
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=0.05)
+    generic_logger.async_httpx_client.post = mock_post
+    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
+
+    # Make multiple completion calls
+    for i in range(3):
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+            mock_response="hi",
+            user="test_user",
+        )
+
+    async def _poll() -> None:
+        while sum(len(json.loads(call.kwargs["data"])) for call in mock_post.call_args_list) < 3:
+            await asyncio.sleep(0.01)
+
+    # Wait for the periodic flush to post all 3 events; never call flush_queue ourselves
+    await asyncio.wait_for(_poll(), timeout=10)
+
+    posted_bodies: Final = [json.loads(call.kwargs["data"]) for call in mock_post.call_args_list]
+    for body in posted_bodies:
+        assert isinstance(body, list), "Each posted body should be a JSON array"
+    posted_items: Final = sum(posted_bodies, [])
+    contents: Final = sorted(item["messages"][0]["content"] for item in posted_items)
+    assert contents == [f"Hello, world! {i}" for i in range(3)]
 
 
 @pytest.mark.asyncio
