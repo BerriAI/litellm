@@ -6,15 +6,28 @@ especially ensuring that encoding_format is not included when not provided.
 """
 
 import json
+from typing import Final
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
-
+import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.hosted_vllm.embedding.transformation import (
     HostedVLLMEmbeddingConfig,
 )
+
+_API_BASE: Final = "https://vllm.example.com/v1"
+_API_URL: Final = f"{_API_BASE}/embeddings"
+_MODEL: Final = "hosted_vllm/nomic-ai/nomic-embed-text-v1.5"
+_UPSTREAM_MODEL: Final = "nomic-ai/nomic-embed-text-v1.5"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def _request_json(request: httpx.Request) -> dict[str, object]:
+    return _JSON_OBJECT.validate_json(request.content)
 
 
 class TestHostedVLLMEmbeddingTransformation:
@@ -322,6 +335,112 @@ class TestHostedVLLMEmbeddingTransformation:
         assert "extra_body" not in sent_data
         assert sent_data["model"] == "nvidia/nv-embedqa-e5-v5"
         assert sent_data["input"] == ["Hello world"]
+
+
+def test_hosted_vllm_embedding_sends_model_and_parses_usage(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+                "model": _UPSTREAM_MODEL,
+                "usage": {"prompt_tokens": 4, "total_tokens": 4},
+            },
+        )
+    )
+
+    transformed_request: Final = HostedVLLMEmbeddingConfig().transform_embedding_request(
+        model=_MODEL,
+        input="hello vLLM",
+        optional_params={},
+        headers={},
+    )
+    assert transformed_request == {"model": _UPSTREAM_MODEL, "input": ["hello vLLM"]}
+    response: Final = litellm.embedding(model=_MODEL, input="hello vLLM", api_base=_API_BASE)
+
+    request: Final = route.calls[0].request
+    assert str(request.url) == _API_URL
+    assert _request_json(request) == {"model": _UPSTREAM_MODEL, "input": ["hello vLLM"]}
+    assert response.data[0]["index"] == 0
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert response.usage.total_tokens == 4
+
+
+def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+                    {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+                    {"object": "embedding", "index": 2, "embedding": [0.5, 0.6]},
+                ],
+                "model": _UPSTREAM_MODEL,
+                "usage": {"prompt_tokens": 9, "total_tokens": 9},
+            },
+        )
+    )
+    inputs: Final = ["first sentence", "second sentence", "third sentence"]
+
+    response: Final = litellm.embedding(model=_MODEL, input=inputs, api_base=_API_BASE)
+
+    assert _request_json(route.calls[0].request) == {"model": _UPSTREAM_MODEL, "input": inputs}
+    assert tuple(item["index"] for item in response.data) == (0, 1, 2)
+    assert tuple(tuple(item["embedding"]) for item in response.data) == ((0.1, 0.2), (0.3, 0.4), (0.5, 0.6))
+
+
+def test_hosted_vllm_embedding_sends_api_key_as_bearer_token(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.7, 0.8]}],
+                "model": _UPSTREAM_MODEL,
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model=_MODEL,
+        input="authenticated input",
+        api_base=_API_BASE,
+        api_key="hosted-vllm-test-key",
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["Authorization"] == "Bearer hosted-vllm-test-key"
+    assert _request_json(request) == {"model": _UPSTREAM_MODEL, "input": ["authenticated input"]}
+    assert response.data[0]["embedding"] == [0.7, 0.8]
+
+
+def test_hosted_vllm_embedding_repeats_identical_input_and_result(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.25, 0.75]}],
+                "model": _UPSTREAM_MODEL,
+                "usage": {"prompt_tokens": 8, "total_tokens": 8},
+            },
+        )
+    )
+    input_text: Final = "repeated embedding input"
+
+    responses: Final = tuple(
+        litellm.embedding(model=_MODEL, input=input_text, api_base=_API_BASE) for _ in range(2)
+    )
+
+    assert tuple(_request_json(call.request) for call in route.calls) == (
+        {"model": _UPSTREAM_MODEL, "input": [input_text]},
+        {"model": _UPSTREAM_MODEL, "input": [input_text]},
+    )
+    assert tuple(tuple(response.data[0]["embedding"]) for response in responses) == ((0.25, 0.75), (0.25, 0.75))
 
 
 if __name__ == "__main__":

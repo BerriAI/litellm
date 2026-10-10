@@ -20,7 +20,7 @@ def _openai_response_body(response_id: str, text: str) -> dict[str, object]:
         "incomplete_details": None,
         "instructions": None,
         "max_output_tokens": None,
-        "model": "gpt-4o",
+        "model": "gpt-5.6",
         "output": [
             {
                 "id": f"msg-{response_id}",
@@ -106,10 +106,10 @@ class TestGoogleInteractionsCreate:
                 id="gemini",
             ),
             pytest.param(
-                "gpt-4o",
+                "gpt-5.6",
                 "sk-offline",
                 "https://api.openai.com/v1/responses",
-                {"model": "gpt-4o", "input": "Hello, how are you?"},
+                {"model": "gpt-5.6", "input": "Hello, how are you?"},
                 _openai_response_body("resp-bridge", "4"),
                 id="responses-bridge",
             ),
@@ -136,7 +136,7 @@ class TestGoogleInteractionsCreate:
         assert json.loads(route.calls.last.request.content) == expected_body
         assert response.id
         assert response.object == "interaction"
-        assert response.model == ("gpt-4o" if model == "gpt-4o" else "gemini-2.5-flash")
+        assert response.model == ("gpt-5.6" if model == "gpt-5.6" else "gemini-2.5-flash")
         assert response.status == "completed"
         assert response.created
         assert response.updated
@@ -167,11 +167,11 @@ class TestGoogleInteractionsCreate:
                 id="gemini",
             ),
             pytest.param(
-                "gpt-4o",
+                "gpt-5.6",
                 "sk-offline",
                 "https://api.openai.com/v1/responses",
                 {
-                    "model": "gpt-4o",
+                    "model": "gpt-5.6",
                     "input": "Return the required token.",
                     "instructions": "Reply with exactly this token: keep-system-instruction",
                 },
@@ -214,10 +214,10 @@ class TestGoogleInteractionsCreate:
                 id="gemini",
             ),
             pytest.param(
-                "gpt-4o",
+                "gpt-5.6",
                 "sk-offline",
                 "https://api.openai.com/v1/responses",
-                {"model": "gpt-4o", "input": "Stream an answer.", "stream": True},
+                {"model": "gpt-5.6", "input": "Stream an answer.", "stream": True},
                 None,
                 id="responses-bridge",
             ),
@@ -346,7 +346,7 @@ class TestInteractionsAcreateOffline:
                     "object": "response",
                     "created_at": 1,
                     "status": "completed",
-                    "model": "gpt-4o",
+                    "model": "gpt-5.6",
                     "output": [
                         {
                             "type": "message",
@@ -359,12 +359,12 @@ class TestInteractionsAcreateOffline:
             )
         )
         response: Final = await interactions.acreate(
-            model="gpt-4o",
+            model="gpt-5.6",
             input="What is the speed of light?",
             api_key="sk-offline",
         )
         body: Final = json.loads(route.calls.last.request.content)
-        assert body["model"] == "gpt-4o"
+        assert body["model"] == "gpt-5.6"
         serialized: Final = json.dumps(body)
         assert "What is the speed of light?" in serialized
         assert "response_id:resp-offline" in base64.b64decode(response.id.removeprefix("resp_")).decode()

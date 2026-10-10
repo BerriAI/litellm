@@ -2,16 +2,38 @@
 Unit tests for OpenAI Evals API transformation
 """
 
+from typing import Final
+
 import httpx
 import pytest
+import respx
+from pydantic import TypeAdapter
 
+import litellm
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.types.router import GenericLiteLLMParams
+
+_API_BASE: Final = "https://api.openai.com"
+_API_KEY: Final = "sk-test"
+_EVAL_ID: Final = "eval_123"
+_EVAL_RESPONSE: Final = {
+    "id": _EVAL_ID,
+    "object": "eval",
+    "created_at": 1234567890,
+    "name": "Sentiment evaluation",
+    "data_source_config": {"type": "stored_completions"},
+    "testing_criteria": [{"type": "ground_truth", "metric": "exact_match"}],
+}
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 @pytest.fixture()
 def config() -> OpenAIEvalsConfig:
     return OpenAIEvalsConfig()
+
+
+def _request_json(request: httpx.Request) -> dict[str, object]:
+    return _JSON_OBJECT.validate_json(request.content)
 
 
 def test_validate_environment_sets_headers(config: OpenAIEvalsConfig):
@@ -27,7 +49,6 @@ def test_validate_environment_sets_headers(config: OpenAIEvalsConfig):
 
 def test_validate_environment_requires_api_key(config: OpenAIEvalsConfig, monkeypatch):
     """Test that validate_environment raises error when no API key is provided"""
-    import os
 
     # Ensure OPENAI_API_KEY environment variable is None before validation
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -440,3 +461,96 @@ def test_transform_delete_run_response(config: OpenAIEvalsConfig):
 
     assert result.run_id == "evalrun_123"
     assert result.deleted is True
+
+
+def test_create_eval_sends_configuration_and_parses_eval(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/evals").mock(return_value=httpx.Response(200, json=_EVAL_RESPONSE))
+
+    response: Final = litellm.create_eval(
+        name="Sentiment evaluation",
+        data_source_config={"type": "stored_completions"},
+        testing_criteria=[{"type": "ground_truth", "metric": "exact_match"}],
+        api_key=_API_KEY,
+        api_base=_API_BASE,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.method == "POST"
+    assert str(request.url) == f"{_API_BASE}/v1/evals"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert _request_json(request) == {
+        "name": "Sentiment evaluation",
+        "data_source_config": {"type": "stored_completions"},
+        "testing_criteria": [{"type": "ground_truth", "metric": "exact_match"}],
+    }
+    assert response.id == _EVAL_ID
+    assert response.name == "Sentiment evaluation"
+    assert response.testing_criteria == [{"type": "ground_truth", "metric": "exact_match"}]
+
+
+def test_get_eval_requests_the_requested_id_and_parses_eval(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.get(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
+        return_value=httpx.Response(200, json=_EVAL_RESPONSE)
+    )
+
+    response: Final = litellm.get_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
+
+    request: Final = route.calls[0].request
+    assert request.method == "GET"
+    assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert response.id == _EVAL_ID
+    assert response.data_source_config == {"type": "stored_completions"}
+    assert response.testing_criteria == [{"type": "ground_truth", "metric": "exact_match"}]
+
+
+def test_list_evals_sends_pagination_query_and_parses_page(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.get(f"{_API_BASE}/v1/evals").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [_EVAL_RESPONSE],
+                "first_id": _EVAL_ID,
+                "last_id": _EVAL_ID,
+                "has_more": True,
+            },
+        )
+    )
+
+    response: Final = litellm.list_evals(
+        limit=10,
+        after=_EVAL_ID,
+        order="asc",
+        api_key=_API_KEY,
+        api_base=_API_BASE,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.method == "GET"
+    assert str(request.url) == f"{_API_BASE}/v1/evals?limit=10&after={_EVAL_ID}&order=asc"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert response.first_id == _EVAL_ID
+    assert response.data[0].id == _EVAL_ID
+    assert response.has_more is True
+
+
+def test_update_eval_sends_name_to_requested_id_and_parses_eval(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
+        return_value=httpx.Response(200, json=_EVAL_RESPONSE)
+    )
+
+    response: Final = litellm.update_eval(
+        eval_id=_EVAL_ID,
+        name="Renamed evaluation",
+        api_key=_API_KEY,
+        api_base=_API_BASE,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.method == "POST"
+    assert str(request.url) == f"{_API_BASE}/v1/evals/{_EVAL_ID}"
+    assert request.headers["Authorization"] == f"Bearer {_API_KEY}"
+    assert _request_json(request) == {"name": "Renamed evaluation"}
+    assert response.id == _EVAL_ID
+    assert response.name == "Sentiment evaluation"
