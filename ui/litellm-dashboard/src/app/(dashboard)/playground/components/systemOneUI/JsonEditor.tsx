@@ -5,6 +5,8 @@ import { useId, useRef } from "react";
 import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
+import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 SyntaxHighlighter.registerLanguage("json", json);
@@ -15,14 +17,7 @@ type LineRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["renderer
 const CONTENT_INSET = "pl-14 pr-3";
 const CODE_TAG_PROPS = { className: "language-json", style: { whiteSpace: "pre-wrap" } } as const;
 
-const TOKEN_COLORS = [
-  "[&_.token.property]:text-foreground",
-  "[&_.token.string]:text-sky-800 dark:[&_.token.string]:text-sky-300",
-  "[&_.token.number]:text-sky-800 dark:[&_.token.number]:text-sky-300",
-  "[&_.token.boolean]:text-sky-800 dark:[&_.token.boolean]:text-sky-300",
-  "[&_.token.null]:text-sky-800 dark:[&_.token.null]:text-sky-300",
-  "[&_.token.punctuation]:text-muted-foreground [&_.token.operator]:text-muted-foreground",
-].join(" ");
+const TRANSPARENT_PRE = { background: "transparent", margin: 0, padding: 0 } as const;
 
 interface JsonEditorProps {
   value: string;
@@ -85,6 +80,7 @@ function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
 export default function JsonEditor({ value, onChange, validation }: JsonEditorProps) {
   const issuesId = useId();
   const highlightRef = useRef<HTMLDivElement>(null);
+  const syntaxTheme = useSyntaxTheme(oneLight);
   const lineCount = value.split("\n").length;
   const hasErrors = !validation.isValid;
 
@@ -106,15 +102,11 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
       </div>
       <div className="relative min-h-80 flex-1">
         <div aria-hidden="true" className={cn(GUTTER_WIDTH, "absolute inset-y-0 left-0 border-r bg-muted/50")} />
-        <div
-          ref={highlightRef}
-          aria-hidden="true"
-          className={cn("absolute inset-0 overflow-hidden", EDITOR_TEXT, TOKEN_COLORS)}
-        >
+        <div ref={highlightRef} aria-hidden="true" className={cn("absolute inset-0 overflow-hidden", EDITOR_TEXT)}>
           <SyntaxHighlighter
             language="json"
-            style={{}}
-            useInlineStyles={false}
+            style={syntaxTheme}
+            customStyle={TRANSPARENT_PRE}
             PreTag="div"
             codeTagProps={CODE_TAG_PROPS}
             renderer={LineRows}
