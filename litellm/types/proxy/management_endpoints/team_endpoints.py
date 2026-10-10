@@ -2,12 +2,10 @@ from typing import Any, Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from litellm.models.team import LiteLLM_DeletedTeamTable, LiteLLM_TeamTable, Member
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy._types import (
     KeyManagementRoutes,
-    LiteLLM_DeletedTeamTable,
-    LiteLLM_TeamMembership,
-    LiteLLM_TeamTable,
-    Member,
     MemberDeleteRequest,
 )
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
