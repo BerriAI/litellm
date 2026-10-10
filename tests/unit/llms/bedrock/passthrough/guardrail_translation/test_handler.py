@@ -861,7 +861,7 @@ async def _run_post_call_guardrail_on_stream(
         messages=[],
         stream=True,
         call_type="allm_passthrough_route",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="test-call",
         function_id="test-function",
     )
