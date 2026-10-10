@@ -16,6 +16,7 @@ MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extr
 SHIPPED_MIGRATIONS: Final = frozenset(path.name for path in MIGRATIONS_DIR.iterdir() if path.is_dir())
 CANNED_REPLY: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
 PROVIDER_KEY: Final = "integration-provider-key"
+SCRATCH_ONLY: Final = ("DATABASE_URL_READ_REPLICA",)
 RESOLVERS: Final = pytest.mark.parametrize(
     "database_setup", (MIGRATE_DEPLOY, LEGACY_MIGRATE_DEPLOY), ids=("v2-resolver", "legacy-resolver")
 )
@@ -84,6 +85,7 @@ def test_proxy_extra_boots_without_general_settings_and_serves_a_stored_key(gate
             tmp_path,
             {"DATABASE_URL": database_url},
             config=_config_without_general_settings(tmp_path),
+            remove_environment=SCRATCH_ONLY,
             database_setup=DB_PUSH,
         ) as owned,
     ):
@@ -101,6 +103,7 @@ def test_migration_resolver_applies_every_shipped_migration_and_serves_a_stored_
             tmp_path,
             {"DATABASE_URL": database_url},
             config=_config_without_general_settings(tmp_path),
+            remove_environment=SCRATCH_ONLY,
             database_setup=database_setup,
         ) as owned,
     ):
