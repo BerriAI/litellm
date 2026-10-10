@@ -7,6 +7,7 @@ import httpx
 from httpx import Headers
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import (
@@ -8113,7 +8114,7 @@ async def test_litellm_anthropic_prompt_caching_system(
     }
 
 
-def test_completion_merges_caller_anthropic_beta_header_with_computer_tool_beta(respx_mock: respx.MockRouter):
+def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
             200,
@@ -8151,5 +8152,183 @@ def test_completion_merges_caller_anthropic_beta_header_with_computer_tool_beta(
     sent_betas: Final = frozenset(
         beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
     )
-    assert "computer-use-2025-01-24" in sent_betas
-    assert json.loads(route.calls.last.request.content)["tools"][0]["type"] == "computer_20241022"
+    assert sent_betas == frozenset({"computer-use-2025-01-24"})
+    assert json.loads(route.calls.last.request.content)["tools"] == [
+        {
+            "type": "computer_20241022",
+            "name": "get_current_weather",
+            "display_width_px": 100,
+            "display_height_px": 100,
+            "display_number": 1,
+        }
+    ]
+
+
+def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
+    return {
+        "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 610,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51,
+        },
+    }
+
+
+def test_completion_sends_prefix_as_trailing_assistant_turn_and_prepends_it(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json=_anthropic_message_body([{"type": "text", "text": " won the 2022 World Cup."}], "end_turn")
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Who won the World Cup in 2022?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Argentina"}]},
+    ]
+    assert response.choices[0].message.content == "Argentina won the 2022 World Cup."
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_completion_with_required_tool_choice_and_response_format_returns_tool_calls(respx_mock: respx.MockRouter):
+    class WeatherAnswer(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        question: str
+        answer: str
+
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_weather",
+                        "name": "get_current_weather",
+                        "input": {"location": "NYC"},
+                    }
+                ],
+                "tool_use",
+            ),
+        )
+    )
+    weather_parameters: Final = {
+        "type": "object",
+        "properties": {"location": {"type": "string"}, "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}},
+        "required": ["location"],
+    }
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "system", "content": "response user question with JSON object"},
+            {"role": "user", "content": "Hey! What's the weather in NewYork?"},
+        ],
+        tool_choice="required",
+        response_format=WeatherAnswer,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": weather_parameters,
+                },
+            }
+        ],
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["tool_choice"] == {"type": "any"}
+    assert request_body["tools"] == [
+        {
+            "name": "get_current_weather",
+            "input_schema": weather_parameters,
+            "type": "custom",
+            "description": "Get the current weather in a given location",
+        }
+    ]
+    assert request_body["output_format"] == {
+        "type": "json_schema",
+        "schema": {
+            "properties": {
+                "question": {"title": "Question", "type": "string"},
+                "answer": {"title": "Answer", "type": "string"},
+            },
+            "required": ["question", "answer"],
+            "title": "WeatherAnswer",
+            "type": "object",
+            "additionalProperties": False,
+        },
+    }
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.model_dump() for tool_call in response.choices[0].message.tool_calls] == [
+        {
+            "index": 0,
+            "function": {"arguments": '{"location": "NYC"}', "name": "get_current_weather"},
+            "id": "toolu_weather",
+            "type": "function",
+        }
+    ]
+
+
+def test_completion_surfaces_response_citations_in_provider_specific_fields(respx_mock: respx.MockRouter):
+    citation: Final = {
+        "type": "char_location",
+        "cited_text": "The grass is green. ",
+        "document_index": 0,
+        "document_title": "My Document",
+        "start_char_index": 0,
+        "end_char_index": 20,
+    }
+    document: Final = {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": "The grass is green. The sky is blue."},
+        "title": "My Document",
+        "context": "This is a trustworthy document.",
+        "citations": {"enabled": True},
+    }
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {"type": "text", "text": "According to the document, "},
+                    {"type": "text", "text": "the grass is green", "citations": [citation]},
+                ],
+                "end_turn",
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}
+    ]
+    assert response.choices[0].message.content == "According to the document, the grass is green"
+    assert response.choices[0].message.provider_specific_fields["citations"] == [
+        [{**citation, "supported_text": "the grass is green"}]
+    ]

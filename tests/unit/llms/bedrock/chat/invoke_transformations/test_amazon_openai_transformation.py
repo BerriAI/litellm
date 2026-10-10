@@ -10,6 +10,7 @@ def test_openai_imported_model_preserves_message_types_and_request_parameters() 
     model: Final = f"bedrock/openai/{arn}"
     messages: Final = [
         {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": "Simple text message"},
         {
             "role": "user",
             "content": [

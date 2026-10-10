@@ -67,9 +67,12 @@ def test_azure_gpt5_maps_minimal_reasoning_to_request_body(config: AzureOpenAIGP
         headers={},
     )
 
-    assert request["max_completion_tokens"] == 10
-    assert request["reasoning_effort"] == "minimal"
-    assert "max_tokens" not in request
+    assert request == {
+        "model": "gpt-5",
+        "messages": [{"role": "user", "content": "Solve the problem."}],
+        "max_completion_tokens": 10,
+        "reasoning_effort": "minimal",
+    }
 
 
 def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):

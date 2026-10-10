@@ -1068,37 +1068,58 @@ class TestToolChoiceWithoutToolsDropped:
         assert body["tools"] == tools
 
 
-def test_openai_pdf_url_is_downloaded_into_file_data() -> None:
-    pdf_url: Final = "https://files.example.test/report.pdf"
-    pdf_content: Final = b"%PDF-1.7\nmock-pdf"
-    pdf_data_uri: Final = f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}"
-    in_memory_cache.set_cache(key=pdf_url, value=pdf_data_uri)
+_OPENAI_CHAT_REPLY: Final = {
+    "id": "chatcmpl-media",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "seen"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
 
-    request: Final = OpenAIGPTConfig().transform_request(
+
+@pytest.mark.respx(assert_all_called=True)
+def test_openai_pdf_url_is_downloaded_into_file_data(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    pdf_url: Final = "https://files.example.test/pdf-url-download.pdf"
+    pdf_content: Final = b"%PDF-1.7\nmock-pdf"
+    in_memory_cache.delete_cache(pdf_url)
+    download: Final = respx_mock.get(pdf_url).mock(
+        return_value=Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+    )
+    chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+
+    litellm.completion(
         model="gpt-4o",
         messages=[
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Read this file"},
+                    {"type": "text", "text": "What is the first page of the PDF?"},
                     {"type": "file", "file": {"file_id": pdf_url}},
                 ],
             }
         ],
-        optional_params={},
-        litellm_params={},
-        headers={},
+        api_key="sk-openai-test",
     )
 
-    file_content: Final = request["messages"][0]["content"][1]["file"]
-    assert file_content["filename"] == "my_file.pdf"
-    assert file_content["file_data"] == pdf_data_uri
-    assert base64.b64decode(file_content["file_data"].split(",", maxsplit=1)[1]) == pdf_content
+    assert download.call_count == 1
+    assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {
+        "type": "file",
+        "file": {
+            "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
+            "filename": "my_file.pdf",
+        },
+    }
 
 
-def test_vision_with_custom_model_preserves_base64_image_in_request() -> None:
-    image_data: Final = b"test-image"
-    image_uri: Final = f"data:image/png;base64,{base64.b64encode(image_data).decode('utf-8')}"
+@pytest.mark.respx(assert_all_called=True)
+def test_vision_with_custom_model_preserves_base64_image_in_request(respx_mock: respx.MockRouter) -> None:
+    image_uri: Final = f"data:image/png;base64,{base64.b64encode(b'test-image').decode('utf-8')}"
     messages: Final = [
         {
             "role": "user",
@@ -1108,16 +1129,23 @@ def test_vision_with_custom_model_preserves_base64_image_in_request() -> None:
             ],
         }
     ]
-    request: Final = OpenAIGPTConfig().transform_request(
-        model="my-custom-model",
-        messages=messages,
-        optional_params={"max_tokens": 10},
-        litellm_params={"api_base": "https://my-custom.api.openai.com"},
-        headers={},
+    route: Final = respx_mock.post("https://my-custom.api.openai.com/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
     )
 
-    assert request == {"model": "my-custom-model", "messages": messages, "max_tokens": 10}
-    assert request["messages"][0]["content"][1]["image_url"]["url"] == image_uri
+    litellm.completion(
+        model="openai/my-custom-model",
+        max_tokens=10,
+        api_base="https://my-custom.api.openai.com",
+        messages=messages,
+        api_key="sk-openai-test",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "my-custom-model",
+        "messages": messages,
+        "max_tokens": 10,
+    }
 
 
 class TestToolMessageImageHoisting:

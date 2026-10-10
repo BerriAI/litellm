@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -52,30 +53,45 @@ def _openai_response_body(response_id: str, text: str) -> dict[str, object]:
     }
 
 
+def _bridge_interaction_id(response_id: str) -> str:
+    encoded: Final = f"litellm:custom_llm_provider:openai;model_id:None;response_id:{response_id}".encode()
+    return f"resp_{base64.b64encode(encoded).decode()}"
+
+
+def _sse_event(event_type: str, sequence_number: int, payload: dict[str, object]) -> str:
+    data: Final = json.dumps({"type": event_type, "sequence_number": sequence_number, **payload})
+    return f"event: {event_type}\ndata: {data}\n\n"
+
+
+def _responses_stream_body() -> str:
+    completed: Final = _openai_response_body("resp-stream", "Hello")
+    in_progress: Final = {**completed, "status": "in_progress", "output": [], "usage": None}
+    text_location: Final = {"item_id": "msg-resp-stream", "output_index": 0, "content_index": 0}
+    empty_part: Final = {"type": "output_text", "text": "", "annotations": []}
+    item: Final = {"id": "msg-resp-stream", "type": "message", "role": "assistant"}
+    events: Final = (
+        ("response.created", {"response": in_progress}),
+        ("response.in_progress", {"response": in_progress}),
+        ("response.output_item.added", {"output_index": 0, "item": {**item, "status": "in_progress", "content": []}}),
+        ("response.content_part.added", {**text_location, "part": empty_part}),
+        ("response.output_text.delta", {**text_location, "delta": "Hello"}),
+        ("response.output_text.done", {**text_location, "text": "Hello"}),
+        ("response.content_part.done", {**text_location, "part": {**empty_part, "text": "Hello"}}),
+        (
+            "response.output_item.done",
+            {"output_index": 0, "item": {**item, "status": "completed", "content": [{**empty_part, "text": "Hello"}]}},
+        ),
+        ("response.completed", {"response": completed}),
+    )
+    return "".join(_sse_event(event_type, index, payload) for index, (event_type, payload) in enumerate(events))
+
+
 @pytest.fixture
 def api_key():
     return "test-api-key"
 
 
 class TestGoogleInteractionsCreate:
-    @classmethod
-    def _responses_stream_body(cls) -> str:
-        delta_event: Final = {
-            "type": "response.output_text.delta",
-            "delta": "Hello",
-            "item_id": "item_1",
-            "output_index": 0,
-            "content_index": 0,
-        }
-        completed_event: Final = {
-            "type": "response.completed",
-            "response": _openai_response_body("resp-stream", "Hello"),
-        }
-        return (
-            f"event: response.output_text.delta\ndata: {json.dumps(delta_event)}\n\n"
-            f"event: response.completed\ndata: {json.dumps(completed_event)}\n\n"
-        )
-
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_missing_model_and_agent(self, api_key):
         """Test error when neither model nor agent is provided."""
@@ -86,13 +102,23 @@ class TestGoogleInteractionsCreate:
             )
 
     @pytest.mark.parametrize(
-        ("model", "api_key", "url", "expected_body", "response_body"),
+        ("model", "api_key", "url", "expected_body", "response_body", "expected_response"),
         [
             pytest.param(
                 "gemini/gemini-2.5-flash",
                 "gemini-offline",
                 "https://generativelanguage.googleapis.com/v1beta/interactions",
                 {"model": "gemini-2.5-flash", "input": "Hello, how are you?"},
+                {
+                    "id": "interaction-gemini",
+                    "object": "interaction",
+                    "model": "gemini-2.5-flash",
+                    "status": "completed",
+                    "created": "2026-05-01T00:00:00Z",
+                    "updated": "2026-05-01T00:00:00Z",
+                    "outputs": [{"type": "text", "text": "4"}],
+                    "usage": {"total_input_tokens": 6, "total_output_tokens": 1},
+                },
                 {
                     "id": "interaction-gemini",
                     "object": "interaction",
@@ -111,6 +137,17 @@ class TestGoogleInteractionsCreate:
                 "https://api.openai.com/v1/responses",
                 {"model": "gpt-5.6", "input": "Hello, how are you?"},
                 _openai_response_body("resp-bridge", "4"),
+                {
+                    "id": _bridge_interaction_id("resp-bridge"),
+                    "object": "interaction",
+                    "model": "gpt-5.6",
+                    "status": "completed",
+                    "created": datetime.fromtimestamp(1700000000).isoformat(),
+                    "updated": datetime.fromtimestamp(1700000000).isoformat(),
+                    "outputs": [{"type": "text", "text": "4"}],
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "4"}]}],
+                    "usage": {"total_input_tokens": 6, "total_output_tokens": 1},
+                },
                 id="responses-bridge",
             ),
         ],
@@ -124,6 +161,7 @@ class TestGoogleInteractionsCreate:
         url: str,
         expected_body: dict[str, object],
         response_body: dict[str, object],
+        expected_response: dict[str, object],
     ) -> None:
         route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=response_body))
 
@@ -134,16 +172,7 @@ class TestGoogleInteractionsCreate:
         )
 
         assert json.loads(route.calls.last.request.content) == expected_body
-        assert response.id
-        assert response.object == "interaction"
-        assert response.model == ("gpt-5.6" if model == "gpt-5.6" else "gemini-2.5-flash")
-        assert response.status == "completed"
-        assert response.created
-        assert response.updated
-        assert len(response.outputs) == 1
-        assert response.outputs[0]["text"] == "4"
-        assert response.usage["total_input_tokens"] == 6
-        assert response.usage["total_output_tokens"] == 1
+        assert response.model_dump(exclude_none=True) == expected_response
 
     @pytest.mark.parametrize(
         ("model", "api_key", "url", "expected_body", "response_body"),
@@ -203,7 +232,7 @@ class TestGoogleInteractionsCreate:
         assert response.status == "completed"
 
     @pytest.mark.parametrize(
-        ("model", "api_key", "url", "expected_body", "sse_body"),
+        ("model", "api_key", "url", "expected_body", "sse_body", "expected_chunks"),
         [
             pytest.param(
                 "gemini/gemini-2.5-flash",
@@ -211,6 +240,7 @@ class TestGoogleInteractionsCreate:
                 "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse",
                 {"model": "gemini-2.5-flash", "input": "Stream an answer.", "stream": True},
                 'data: {"event_type":"step.delta","delta":{"type":"text","text":"Hello"}}\n\n',
+                ({"event_type": "step.delta", "object": "interaction", "delta": {"type": "text", "text": "Hello"}},),
                 id="gemini",
             ),
             pytest.param(
@@ -218,7 +248,37 @@ class TestGoogleInteractionsCreate:
                 "sk-offline",
                 "https://api.openai.com/v1/responses",
                 {"model": "gpt-5.6", "input": "Stream an answer.", "stream": True},
-                None,
+                _responses_stream_body(),
+                (
+                    {
+                        "event_type": "interaction.created",
+                        "id": _bridge_interaction_id("resp-stream"),
+                        "object": "interaction",
+                        "model": "gpt-5.6",
+                        "status": "in_progress",
+                    },
+                    {
+                        "event_type": "step.start",
+                        "object": "interaction",
+                        "index": 0,
+                        "step": {"type": "model_output", "content": []},
+                    },
+                    {
+                        "event_type": "step.delta",
+                        "object": "interaction",
+                        "delta": {"type": "text", "text": "Hello"},
+                        "index": 0,
+                    },
+                    {"event_type": "step.stop", "object": "interaction", "index": 0},
+                    {
+                        "event_type": "interaction.completed",
+                        "id": _bridge_interaction_id("resp-stream"),
+                        "object": "interaction",
+                        "model": "gpt-5.6",
+                        "status": "completed",
+                        "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hello"}]}],
+                    },
+                ),
                 id="responses-bridge",
             ),
         ],
@@ -231,11 +291,11 @@ class TestGoogleInteractionsCreate:
         api_key: str,
         url: str,
         expected_body: dict[str, object],
-        sse_body: str | None,
+        sse_body: str,
+        expected_chunks: tuple[dict[str, object], ...],
     ) -> None:
-        stream_body: Final = sse_body or self._responses_stream_body()
         route: Final = respx_mock.post(url).mock(
-            return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+            return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
         )
 
         response_stream: Final = interactions.create(
@@ -244,12 +304,10 @@ class TestGoogleInteractionsCreate:
             stream=True,
             api_key=api_key,
         )
-        chunks: Final = tuple(response_stream)
+        chunks: Final = tuple(chunk.model_dump(exclude_none=True) for chunk in response_stream)
 
         assert json.loads(route.calls.last.request.content) == expected_body
-        assert any(
-            chunk.event_type == "step.delta" and chunk.delta == {"type": "text", "text": "Hello"} for chunk in chunks
-        )
+        assert chunks == expected_chunks
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_invalid_model_raises_not_found(self, respx_mock: MockRouter) -> None:
@@ -304,8 +362,14 @@ class TestInteractionsAcreateOffline:
             "model": "gemini-2.5-flash",
             "input": "What is the speed of light?",
         }
-        assert response.id == "interaction-offline"
-        assert response.status == "completed"
+        assert response.model_dump(exclude_none=True) == {
+            "id": "interaction-offline",
+            "object": "interaction",
+            "model": "gemini-2.5-flash",
+            "status": "completed",
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "299792458"}]}],
+            "usage": {"input_tokens": 6, "output_tokens": 3},
+        }
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
@@ -324,16 +388,16 @@ class TestInteractionsAcreateOffline:
             stream=True,
             api_key="gemini-offline",
         )
-        chunks: Final = [chunk async for chunk in response_stream]
+        chunks: Final = [chunk.model_dump(exclude_none=True) async for chunk in response_stream]
 
         assert json.loads(route.calls.last.request.content) == {
             "model": "gemini-2.5-flash",
             "input": "Stream an answer.",
             "stream": True,
         }
-        assert any(
-            chunk.event_type == "step.delta" and chunk.delta == {"type": "text", "text": "Hello"} for chunk in chunks
-        )
+        assert chunks == [
+            {"event_type": "step.delta", "object": "interaction", "delta": {"type": "text", "text": "Hello"}},
+        ]
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio

@@ -196,6 +196,8 @@ def test_completion_strips_message_names_from_request(respx_mock: respx.MockRout
         messages=[
             {"role": "system", "content": "Be concise", "name": "system_prompt"},
             {"role": "user", "content": "Say OK", "name": "caller"},
+            {"role": "assistant", "content": "OK", "name": "responder"},
+            {"role": "user", "content": "Again", "name": "caller"},
         ],
         api_key="xai-test-key",
         api_base=XAI_API_BASE,
@@ -205,6 +207,8 @@ def test_completion_strips_message_names_from_request(respx_mock: respx.MockRout
     assert request_body["messages"] == [
         {"role": "system", "content": "Be concise"},
         {"role": "user", "content": "Say OK", "name": "caller"},
+        {"role": "assistant", "content": "OK"},
+        {"role": "user", "content": "Again", "name": "caller"},
     ]
     assert response.choices[0].message.content == "OK"
 

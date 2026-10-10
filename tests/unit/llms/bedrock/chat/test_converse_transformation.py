@@ -457,36 +457,6 @@ async def test_bedrock_max_completion_tokens_become_converse_max_tokens() -> Non
     assert request_body["inferenceConfig"] == {"maxTokens": 10}
 
 
-@pytest.mark.respx(assert_all_called=True)
-def test_bedrock_mapped_nova_model_sends_converse_request(
-    local_model_cost_map: None, respx_mock: respx.Router
-) -> None:
-    litellm.add_known_models()
-    route: Final = respx_mock.post(
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "output": {"message": {"role": "assistant", "content": [{"text": "converse"}]}},
-                "stopReason": "end_turn",
-                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-            },
-        )
-    )
-    response: Final = litellm.completion(
-        model="bedrock/us.amazon.nova-pro-v1:0",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        aws_access_key_id="AKIAMAPPEDMODELKEY",
-        aws_secret_access_key="mapped-model-secret",
-        aws_region_name="us-west-2",
-        client=HTTPHandler(),
-    )
-
-    assert response.choices[0].message.content == "converse"
-    assert route.calls[0].request.url.raw_path == b"/model/us.amazon.nova-pro-v1%3A0/converse"
-
-
 @pytest.mark.parametrize("parameter", ["top_k", "topK"])
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: respx.Router) -> None:
@@ -516,13 +486,26 @@ def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: re
     assert request_body["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
 
+@pytest.mark.parametrize(
+    ("model_id", "expected_url"),
+    [
+        (
+            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3",
+            "https://bedrock-runtime.us-west-2.amazonaws.com/model/"
+            "arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse",
+        ),
+        (
+            "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+            "https://bedrock-runtime.eu-central-1.amazonaws.com/model/"
+            "arn%3Aaws%3Abedrock%3Aeu-central-1%3A000000000000%3Aapplication-inference-profile%2Fa0a0a0a0a0a0/converse",
+        ),
+    ],
+)
 @pytest.mark.respx(assert_all_called=True)
-def test_bedrock_provisioned_throughput_model_id_is_used_in_converse_url(respx_mock: respx.Router) -> None:
-    model_id: Final = "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
-    expected_url: Final = (
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/"
-        "arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
-    )
+def test_bedrock_model_id_arn_sets_converse_url_and_region(
+    model_id: str, expected_url: str, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "ap-south-1")
     route: Final = respx_mock.post(expected_url).mock(
         return_value=httpx.Response(
             200,
@@ -540,7 +523,6 @@ def test_bedrock_provisioned_throughput_model_id_is_used_in_converse_url(respx_m
         model_id=model_id,
         aws_access_key_id="AKIAPTUMODELKEY",
         aws_secret_access_key="ptu-model-secret",
-        aws_region_name="us-west-2",
         client=HTTPHandler(),
     )
 
@@ -549,13 +531,70 @@ def test_bedrock_provisioned_throughput_model_id_is_used_in_converse_url(respx_m
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_bedrock_application_profile_model_id_is_used_in_converse_url(respx_mock: respx.Router) -> None:
-    model_id: Final = "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0"
-    expected_url: Final = (
-        "https://bedrock-runtime.eu-central-1.amazonaws.com/model/"
-        "arn%3Aaws%3Abedrock%3Aeu-central-1%3A000000000000%3Aapplication-inference-profile%2Fa0a0a0a0a0a0/converse"
+def test_bedrock_application_profile_model_and_model_id_use_same_route(respx_mock: respx.Router) -> None:
+    application_profile_arn: Final = (
+        "arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/profile-id"
     )
-    route: Final = respx_mock.post(expected_url).mock(
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.eu-central-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aeu-central-1%3A000000000000%3Aapplication-inference-profile%2Fprofile-id/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "profile"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    model_args: Final = {
+        "messages": [{"role": "user", "content": "select the application profile"}],
+        "aws_access_key_id": "AKIAPROFILEKEY",
+        "aws_secret_access_key": "profile-secret",
+        "client": HTTPHandler(),
+    }
+    litellm.completion(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        model_id=application_profile_arn,
+        **model_args,
+    )
+    litellm.completion(model=f"bedrock/converse/{application_profile_arn}", **model_args)
+
+    assert route.call_count == 2
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_cross_region_inference_profile_keeps_prefix_in_converse_url(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "routed"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/us.meta.llama3-3-70b-instruct-v1:0",
+        messages=[{"role": "user", "content": "route to the cross-region model"}],
+        aws_access_key_id="AKIACROSSREGIONKEY",
+        aws_secret_access_key="cross-region-secret",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "routed"
+    assert route.call_count == 1
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_bedrock_converse_like_proxy_uses_bearer_api_key(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post("https://some-api-url/models").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -565,19 +604,18 @@ def test_bedrock_application_profile_model_id_is_used_in_converse_url(respx_mock
             },
         )
     )
-
     response: Final = litellm.completion(
-        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        messages=[{"role": "user", "content": "Hello!"}],
-        model_id=model_id,
-        aws_access_key_id="AKIAAPPPROFILEKEY",
-        aws_secret_access_key="app-profile-secret",
-        aws_region_name="eu-central-1",
+        model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        api_key="Token",
+        api_base="https://some-api-url/models",
         client=HTTPHandler(),
     )
+    request: Final = route.calls[0].request
 
+    assert request.headers["authorization"] == "Bearer Token"
+    assert "x-amz-date" not in request.headers
     assert response.choices[0].message.content == "ok"
-    assert str(route.calls[0].request.url) == expected_url
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -9867,36 +9905,6 @@ def test_cross_region_bedrock_model_cost_falls_back_to_base_model(monkeypatch: p
     assert cost == pytest.approx(base_cost)
 
 
-@pytest.mark.respx(assert_all_called=True)
-def test_bedrock_nova_web_search_options_add_grounding_tool_to_request(respx_mock: respx.Router) -> None:
-    route: Final = respx_mock.post(
-        re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse")
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "output": {"message": {"role": "assistant", "content": [{"text": "grounded"}]}},
-                "stopReason": "end_turn",
-                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-            },
-        )
-    )
-    response: Final = litellm.completion(
-        model="bedrock/us.amazon.nova-pro-v1:0",
-        messages=[{"role": "user", "content": "Find current launch details"}],
-        web_search_options={},
-        aws_access_key_id="AKIAGROUNDINGKEY",
-        aws_secret_access_key="grounding-secret",
-        aws_region_name="us-west-2",
-        client=HTTPHandler(),
-    )
-    request: Final = json.loads(route.calls[0].request.content)
-
-    assert response.choices[0].message.content == "grounded"
-    assert request["toolConfig"]["tools"] == [{"systemTool": {"name": "nova_grounding"}}]
-    assert request["messages"] == [{"role": "user", "content": [{"text": "Find current launch details"}]}]
-
-
 def test_bedrock_nova_grounding_and_function_tool_share_request() -> None:
     config: Final = AmazonConverseConfig()
     model: Final = "amazon.nova-pro-v1:0"
@@ -9930,8 +9938,6 @@ def test_bedrock_nova_grounding_and_function_tool_share_request() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("async_mode", (False, True))
 async def test_bedrock_nova_grounding_request_transformation(async_mode: bool) -> None:
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
     requests: Final[list[httpx.Request]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -10000,7 +10006,7 @@ def test_bedrock_converse_drops_empty_stop_sequence(respx_mock: respx.Router) ->
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: respx.Router) -> None:
     image_bytes: Final = b"synthetic-image-content"
-    image_route: Final = respx_mock.get("https://1.1.1.1/image.png").mock(
+    respx_mock.get("https://1.1.1.1/image.png").mock(
         return_value=httpx.Response(200, content=image_bytes, headers={"content-type": "image/png"})
     )
     bedrock_route: Final = respx_mock.post(
@@ -10035,7 +10041,6 @@ def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: res
     request_body: Final = json.loads(bedrock_route.calls[0].request.content)
 
     assert response.choices[0].message.content == "a synthetic image"
-    assert image_route.called
     assert request_body["messages"][0]["content"][1]["image"]["format"] == "png"
     assert request_body["messages"][0]["content"][1]["image"]["source"]["bytes"] == base64.b64encode(
         image_bytes

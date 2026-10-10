@@ -23,12 +23,11 @@ import httpx
 import pytest
 import respx
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
-import litellm  # noqa: E402  # sys.path must be patched before importing litellm
-from litellm.llms.custom_httpx.http_handler import (
-    HTTPHandler,  # noqa: E402  # sys.path must be patched before importing litellm
-)
 from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)

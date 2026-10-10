@@ -751,5 +751,5 @@ def test_azure_deployment_id_selects_chat_completions_endpoint(respx_mock: MockR
     )
 
     assert route.call_count == 1
-    assert route.calls[0].request.url.path.endswith("/deployments/deployment-gpt-4o/chat/completions")
+    assert route.calls[0].request.url.path == "/openai/deployments/deployment-gpt-4o/chat/completions"
     assert response.choices[0].message.content == "Hello"

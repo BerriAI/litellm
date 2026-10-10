@@ -2,6 +2,7 @@
 Test Azure AI cost calculator, especially Model Router flat cost.
 """
 
+import json
 from datetime import datetime
 from typing import Final
 
@@ -256,23 +257,47 @@ class TestAzureModelRouterCostBreakdown:
             stream_options={"include_usage": True},
         )
         chunks: Final = tuple(stream)
-        response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=messages)
-        logging_obj: Final = _router_logging("model-router")
-        cost: Final = completion_cost(
-            completion_response=response,
-            model=ROUTED_MODEL,
-            custom_llm_provider="azure_ai",
-            litellm_logging_obj=logging_obj,
-        )
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        final_usage: Final = chunks[-1].usage
 
         assert route.call_count == 1
-        assert response.usage.prompt_tokens == 5000
-        assert response.usage.completion_tokens == 2000
-        assert logging_obj.cost_breakdown is not None
-        assert logging_obj.cost_breakdown.get("additional_costs") == pytest.approx(
-            {"Azure Model Router Flat Cost": ROUTED_FEE}, rel=1e-9
+        assert json.loads(route.calls.last.request.content)["model"] == "model-router"
+        assert (final_usage.prompt_tokens, final_usage.completion_tokens) == (5000, 2000)
+        assert final_usage.cost == pytest.approx(routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9)
+
+    @pytest.mark.respx(assert_all_called=True)
+    def test_model_router_completion_reports_routed_cost_plus_flat_fee(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.post("https://example-resource.services.ai.azure.com/models/chat/completions").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "chatcmpl-router",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": ROUTED_MODEL,
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 5000, "completion_tokens": 2000, "total_tokens": 7000},
+                },
+            )
         )
-        assert cost >= ROUTED_FEE
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+
+        response: Final = litellm.completion(
+            model="azure_ai/model_router/azure-model-router",
+            messages=[{"role": "user", "content": "hi who is this"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+        )
+
+        assert json.loads(route.calls.last.request.content) == {
+            "model": "azure-model-router",
+            "messages": [{"role": "user", "content": "hi who is this"}],
+        }
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9
+        )
 
     def test_unmapped_router_name_carries_the_fee_as_its_input_cost(self) -> None:
         logging_obj = _router_logging("azure-model-router")

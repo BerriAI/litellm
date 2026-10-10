@@ -2,9 +2,9 @@ import asyncio
 import importlib
 import json
 import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from types import ModuleType
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 from unittest.mock import Mock, patch
 
 import httpx
@@ -12,12 +12,11 @@ import pytest
 import respx
 from openai import AsyncOpenAI, OpenAI
 from openai._types import Response as SDKResponse
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 import litellm
 from litellm import create_thread, get_thread
 from litellm.caching.caching import Cache, LiteLLMCacheType
-from litellm.google_genai.adapters.transformation import GoogleGenAIStreamWrapper
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
@@ -30,12 +29,9 @@ from litellm.llms.openai.openai import (
     Thread,
 )
 from litellm.types.utils import (
-    Delta,
     ImageResponse,
     ModelResponse,
-    ModelResponseStream,
     PromptTokensDetails,
-    StreamingChoices,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -425,8 +421,8 @@ def _openai_sse_chunk(chunk_id: str, model: str, choices: list[JsonValue]) -> by
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: respx.MockRouter) -> None:
-    model: Final = "o1"
+@pytest.mark.parametrize("model", ["o1", "o3-mini"])
+def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: respx.MockRouter, model: str) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
@@ -535,6 +531,21 @@ def test_prediction_parameter_participates_in_completion_cache_key(
     )
 
 
+class _OpenAIFunction(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    description: str | None = None
+    name: str
+    parameters: dict[str, JsonValue] | None = None
+
+
+class _OpenAITool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["function"]
+    function: _OpenAIFunction
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: respx.MockRouter) -> None:
     tools: Final = [
@@ -586,7 +597,7 @@ def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: r
         messages=[{"role": "user", "content": [{"type": "text", "text": "What is TSLA stock price at today?"}]}],
         temperature=0.5,
         max_tokens=1600,
-        tools=tools,
+        tools=[_OpenAITool.model_validate(tool) for tool in tools],
         api_key="sk-openai-test",
         num_retries=0,
         max_retries=0,
@@ -611,37 +622,79 @@ def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: r
 
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
-async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks() -> None:
-    chunk: Final = ModelResponseStream(
-        id="chatcmpl-bridge",
-        object="chat.completion.chunk",
-        created=0,
-        model="gpt-3.5-turbo",
-        choices=[
-            StreamingChoices(
-                index=0,
-                delta=Delta(role="assistant", content="A starship crossed the sky."),
-                finish_reason=None,
-            )
-        ],
+async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    stream_body: Final = b"".join(
+        (
+            _openai_sse_chunk(
+                "chatcmpl-bridge",
+                "gpt-3.5-turbo",
+                [{"index": 0, "delta": {"role": "assistant", "content": "A starship "}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-bridge",
+                "gpt-3.5-turbo",
+                [{"index": 0, "delta": {"content": "crossed the sky."}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk("chatcmpl-bridge", "gpt-3.5-turbo", [{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+            b"data: [DONE]\n\n",
+        )
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-openai-test"},
+            }
+        ]
     )
 
-    async def stream() -> AsyncIterator[ModelResponseStream]:
-        yield chunk
+    stream: Final = await router.agenerate_content_stream(
+        model="openai/gpt-3.5-turbo",
+        contents=[{"parts": [{"text": "Write a long story about space exploration"}], "role": "user"}],
+        generationConfig={"maxOutputTokens": 500},
+    )
+    chunks: Final = tuple([json.loads(chunk.removeprefix(b"data: ")) async for chunk in stream])
 
-    wrapper: Final = GoogleGenAIStreamWrapper(stream())
-    chunks: Final = tuple([item async for item in wrapper])
-
+    assert json.loads(route.calls[0].request.content) == {
+        "messages": [{"role": "user", "content": "Write a long story about space exploration"}],
+        "model": "gpt-3.5-turbo",
+        "max_tokens": 500,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
     assert chunks == (
         {
             "candidates": [
                 {
-                    "content": {"parts": [{"text": "A starship crossed the sky."}], "role": "model"},
+                    "content": {"parts": [{"text": "A starship "}], "role": "model"},
                     "finishReason": None,
                     "index": 0,
                     "safetyRatings": [],
                 }
             ]
+        },
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "crossed the sky."}], "role": "model"},
+                    "finishReason": None,
+                    "index": 0,
+                    "safetyRatings": [],
+                }
+            ]
+        },
+        {
+            "candidates": [
+                {"content": {"parts": [], "role": "model"}, "finishReason": "STOP", "index": 0, "safetyRatings": []}
+            ],
+            "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
         },
     )
 

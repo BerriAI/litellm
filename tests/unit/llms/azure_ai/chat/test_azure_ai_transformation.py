@@ -109,17 +109,87 @@ def test_azure_ai_validate_environment_with_api_key():
     assert headers["Content-Type"] == "application/json"
 
 
-def test_azure_ai_request_body_preserves_messages_and_model() -> None:
-    messages: Final = [{"role": "user", "content": "hi"}]
-    request: Final = AzureAIStudioConfig().transform_request(
+@pytest.mark.asyncio
+async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoint(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://example-resource.services.ai.azure.com/models/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-azure-ai",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi!"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22},
+            },
+        )
+    )
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "Hello! How can I assist you today?"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    response: Final = await litellm.acompletion(
+        custom_llm_provider="azure_ai",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com/models",
         model="azure_ai/gpt-4.1-mini",
         messages=messages,
-        optional_params={},
-        litellm_params={},
-        headers={},
     )
 
-    assert request == {"model": "azure_ai/gpt-4.1-mini", "messages": messages}
+    assert route.calls.last.request.headers["api-key"] == "azure-ai-test-key"
+    assert json.loads(route.calls.last.request.content) == {"model": "gpt-4.1-mini", "messages": messages}
+    assert response.choices[0].message.content == "Hi!"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_path"),
+    [
+        pytest.param(
+            "https://example-resource.services.ai.azure.com",
+            "/models/chat/completions",
+            id="resource-root",
+        ),
+        pytest.param(
+            "https://example-resource.services.ai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
+            "?api-version=2023-03-15-preview",
+            "/openai/deployments/gpt-4.1-mini/chat/completions",
+            id="full-deployment-url",
+        ),
+    ],
+)
+def test_azure_ai_completion_routes_flexible_api_base(
+    respx_mock: respx.MockRouter, api_base: str, expected_path: str
+) -> None:
+    route: Final = respx_mock.post(host="example-resource.services.ai.azure.com", path=expected_path).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-azure-ai",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 14, "completion_tokens": 1, "total_tokens": 15},
+            },
+        )
+    )
+    messages: Final = [{"role": "user", "content": "What is the meaning of life?"}]
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=api_base,
+        api_key="azure-ai-test-key",
+        messages=messages,
+    )
+
+    assert route.calls.last.request.url.path == expected_path
+    assert json.loads(route.calls.last.request.content) == {"model": "gpt-4.1-mini", "messages": messages}
+    assert response.choices[0].message.content == "42"
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -154,8 +224,7 @@ def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: resp
 
     assert route.call_count == 1
     assert request_body["model"] == "test-router"
-    assert chunks[0].model == "gpt-4.1-nano-2025-04-14"
-    assert chunks[0].model != "azure_ai/model_router/test-router"
+    assert [chunk.model for chunk in chunks] == ["gpt-4.1-nano-2025-04-14", "gpt-4.1-nano-2025-04-14"]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -187,16 +256,12 @@ def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRout
     request_body: Final = json.loads(route.calls[0].request.content)
     model_info: Final = litellm.get_model_info(model="gpt-4.1-mini", custom_llm_provider="azure_ai")
     expected_cost: Final = 11 * model_info["input_cost_per_token"] + 3 * model_info["output_cost_per_token"]
-    cost: Final = litellm.completion_cost(
-        completion_response=response,
-        model="gpt-4.1-mini",
-        custom_llm_provider="azure_ai",
-    )
 
     assert route.call_count == 1
     assert request_body == {"model": "gpt-4.1-mini", "messages": messages}
     assert response.choices[0].message.content == "hello"
-    assert cost == pytest.approx(expected_cost)
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost, rel=1e-9)
 
 
 def test_azure_ai_validate_environment_with_azure_ad_token():

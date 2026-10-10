@@ -14,6 +14,7 @@ from litellm.utils import (
     get_requester_metadata,
     validate_openai_optional_params,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -1919,7 +1920,7 @@ def test_cohere_completion_drops_response_format_from_request(
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert "response_format" not in request_body
+    assert request_body == {"model": "command-r-plus-08-2024", "messages": [{"role": "user", "content": "hello"}]}
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -1939,7 +1940,7 @@ def test_cohere_completion_drops_parallel_tool_calls_from_request(
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert "parallel_tool_calls" not in request_body
+    assert request_body == {"model": "command-r-plus-08-2024", "messages": [{"role": "user", "content": "hello"}]}
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -1958,8 +1959,11 @@ def test_cohere_completion_passes_extra_params_without_api_key(
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert request_body["custom_param"] == "test"
-    assert "api_key" not in request_body
+    assert request_body == {
+        "model": "command-r-plus-08-2024",
+        "messages": [{"role": "user", "content": "hello"}],
+        "custom_param": "test",
+    }
 
 
 def test_cohere_additional_drop_params_removes_only_selected_param(
@@ -1995,18 +1999,47 @@ def test_cohere_completion_applies_additional_drop_params_to_request(
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert "response_format" not in request_body
-    assert "additional_drop_params" not in request_body
+    assert request_body == {"model": "command-r-plus-08-2024", "messages": [{"role": "user", "content": "hello"}]}
 
 
-def test_get_optional_params_preserves_num_retries_as_max_retries() -> None:
-    params: Final = get_optional_params(
-        model="gpt-5.6",
-        custom_llm_provider="openai",
-        max_retries=10,
+class _PreCallOptionalParamsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.max_retries: tuple[object, ...] = ()
+
+    def log_pre_api_call(self, model: str, messages: list[object], kwargs: dict[str, dict[str, object]]) -> None:
+        self.max_retries = (*self.max_retries, kwargs["optional_params"].get("max_retries"))
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_passes_num_retries_to_optional_params_as_max_retries(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    capture: Final = _PreCallOptionalParamsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-retries",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
     )
 
-    assert params["max_retries"] == 10
+    response: Final = litellm.completion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "Hello world"}],
+        num_retries=10,
+        api_key="sk-openai-test",
+    )
+
+    assert capture.max_retries == (10,)
+    assert response.choices[0].message.content == "ok"
 
 
 @pytest.mark.respx(assert_all_called=True)

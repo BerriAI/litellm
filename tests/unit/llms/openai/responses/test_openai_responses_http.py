@@ -374,15 +374,26 @@ def test_chat_completion_bridges_responses_only_model_tools() -> None:
     ]
 
 
-def test_codex_chat_completion_uses_responses_endpoint() -> None:
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_codex_chat_completion_uses_responses_endpoint(sync_mode: bool) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-codex-mini-latest",
+                "litellm_params": {"model": "openai/gpt-5.3-codex", "api_key": "sk-test"},
+            }
+        ]
+    )
+    messages: Final = [{"role": "user", "content": "Hey!"}]
+
     with respx.mock() as mock_router:
         route: Final = mock_router.post(_OPENAI_URL).mock(
             return_value=httpx.Response(status_code=200, json=_response_body("resp_codex"))
         )
-        response: Final = litellm.completion(
-            model="openai/gpt-5.3-codex",
-            api_key="sk-test",
-            messages=[{"role": "user", "content": "Hey!"}],
+        response: Final = (
+            router.completion(model="openai-codex-mini-latest", messages=messages)
+            if sync_mode
+            else await router.acompletion(model="openai-codex-mini-latest", messages=messages)
         )
         requests: Final = tuple(route.calls)
 
@@ -431,7 +442,7 @@ def test_codex_chat_completion_stream_strips_cache_control_and_transforms_tools(
         chunks: Final = tuple(stream)
         requests: Final = tuple(route.calls)
 
-    assert len(chunks) > 0
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == _OUTPUT_TEXT
     assert len(requests) == 1
     request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
     assert request_body["stream"] is True

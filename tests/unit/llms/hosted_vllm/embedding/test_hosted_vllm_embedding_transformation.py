@@ -15,9 +15,11 @@ import respx
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.hosted_vllm.embedding.transformation import (
     HostedVLLMEmbeddingConfig,
 )
+from litellm.types.utils import EmbeddingResponse
 
 _API_BASE: Final = "https://vllm.example.com/v1"
 _API_URL: Final = f"{_API_BASE}/embeddings"
@@ -28,6 +30,13 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 def _request_json(request: httpx.Request) -> dict[str, object]:
     return _JSON_OBJECT.validate_json(request.content)
+
+
+async def _embed(sync_mode: bool, router: respx.MockRouter, embedding_input: str | list[str]) -> EmbeddingResponse:
+    if sync_mode:
+        return litellm.embedding(model=_MODEL, input=embedding_input, api_base=_API_BASE)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(router.async_handler))
+    return await litellm.aembedding(model=_MODEL, input=embedding_input, api_base=_API_BASE, client=client)
 
 
 class TestHostedVLLMEmbeddingTransformation:
@@ -337,7 +346,10 @@ class TestHostedVLLMEmbeddingTransformation:
         assert sent_data["input"] == ["Hello world"]
 
 
-def test_hosted_vllm_embedding_sends_model_and_parses_usage(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_hosted_vllm_embedding_sends_model_and_parses_usage(
+    respx_mock: respx.MockRouter, sync_mode: bool
+) -> None:
     route: Final = respx_mock.post(_API_URL).mock(
         return_value=httpx.Response(
             200,
@@ -350,14 +362,7 @@ def test_hosted_vllm_embedding_sends_model_and_parses_usage(respx_mock: respx.Mo
         )
     )
 
-    transformed_request: Final = HostedVLLMEmbeddingConfig().transform_embedding_request(
-        model=_MODEL,
-        input="hello vLLM",
-        optional_params={},
-        headers={},
-    )
-    assert transformed_request == {"model": _UPSTREAM_MODEL, "input": ["hello vLLM"]}
-    response: Final = litellm.embedding(model=_MODEL, input="hello vLLM", api_base=_API_BASE)
+    response: Final = await _embed(sync_mode, respx_mock, "hello vLLM")
 
     request: Final = route.calls[0].request
     assert str(request.url) == _API_URL
@@ -367,7 +372,10 @@ def test_hosted_vllm_embedding_sends_model_and_parses_usage(respx_mock: respx.Mo
     assert response.usage.total_tokens == 4
 
 
-def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(
+    respx_mock: respx.MockRouter, sync_mode: bool
+) -> None:
     route: Final = respx_mock.post(_API_URL).mock(
         return_value=httpx.Response(
             200,
@@ -385,7 +393,7 @@ def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(respx_mock: r
     )
     inputs: Final = ["first sentence", "second sentence", "third sentence"]
 
-    response: Final = litellm.embedding(model=_MODEL, input=inputs, api_base=_API_BASE)
+    response: Final = await _embed(sync_mode, respx_mock, inputs)
 
     assert _request_json(route.calls[0].request) == {"model": _UPSTREAM_MODEL, "input": inputs}
     assert tuple(item["index"] for item in response.data) == (0, 1, 2)

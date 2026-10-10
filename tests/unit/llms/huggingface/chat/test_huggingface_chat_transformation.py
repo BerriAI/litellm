@@ -341,6 +341,7 @@ def test_completion_streaming_uses_resolved_provider_model(respx_mock: respx.Moc
         "Hugging ",
         "Face",
     )
+    assert {chunk.model for chunk in chunks} == {"together/meta-llama/Meta-Llama-3-8B-Instruct"}
 
 
 @pytest.mark.asyncio
@@ -402,6 +403,7 @@ async def test_async_completion_streaming_uses_resolved_provider_model(
         "Hugging ",
         "Face",
     )
+    assert {chunk.model for chunk in chunks} == {"together/meta-llama/Meta-Llama-3-8B-Instruct"}
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -413,12 +415,12 @@ def test_completion_with_api_base_uses_endpoint_url(respx_mock: respx.MockRouter
     response: Final = litellm.completion(
         model="huggingface/tgi",
         messages=messages,
-        api_base="https://custom.huggingface.test/v1",
+        api_base="https://custom.huggingface.test",
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
-    assert route.called
+    assert str(route.calls[0].request.url) == "https://custom.huggingface.test/v1/chat/completions"
     assert response.choices[0].message.content == "Hugging Face response"
 
 
@@ -435,13 +437,13 @@ async def test_async_completion_with_api_base_uses_endpoint_url(
     response: Final = await litellm.acompletion(
         model="huggingface/tgi",
         messages=messages,
-        api_base="https://custom.huggingface.test/v1",
+        api_base="https://custom.huggingface.test",
         api_key="test-api-key",
         client=client,
     )
     await client.client.aclose()
 
-    assert route.called
+    assert str(route.calls[0].request.url) == "https://custom.huggingface.test/v1/chat/completions"
     assert response.choices[0].message.content == "Hugging Face response"
 
 
@@ -459,7 +461,7 @@ def test_completion_streaming_with_api_base_uses_endpoint_url(respx_mock: respx.
         litellm.completion(
             model="huggingface/tgi",
             messages=messages,
-            api_base="https://custom.huggingface.test/v1",
+            api_base="https://custom.huggingface.test",
             stream=True,
             api_key="test-api-key",
             client=HTTPHandler(),
