@@ -8765,8 +8765,16 @@ async def ahealth_check(
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
-
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
+        if mode is None and custom_llm_provider in {provider.value for provider in LlmProviders}:
+            provider_config: Final = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+            )
+            if provider_config is not None:
+                mode = (  # rebind-ok: resolve provider-config default
+                    provider_config.get_health_check_mode()
+                )
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
