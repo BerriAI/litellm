@@ -61,6 +61,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
+    ThirdlawGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
@@ -142,6 +145,7 @@ class SupportedGuardrailIntegrations(Enum):
     REPELLOAI = "repelloai"
     SINGULR = "singulr"
     HEADROOM = "headroom"
+    THIRDLAW = "thirdlaw"
     COMPRESR = "compresr"
     TYPESAFE = "typesafe"
     STRAIKER = "straiker"
@@ -1326,6 +1330,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    ThirdlawGuardrailConfigModel,
     SingulrGuardrailConfigModel,
     Agent365GuardrailConfigModel,
 ):

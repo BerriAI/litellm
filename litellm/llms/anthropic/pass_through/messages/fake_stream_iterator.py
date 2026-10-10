@@ -12,9 +12,13 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
+from pydantic import TypeAdapter
+
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+
+_CITATIONS_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 class FakeAnthropicMessagesStreamIterator:
@@ -41,14 +45,21 @@ class FakeAnthropicMessagesStreamIterator:
 
     def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
-        chunks: Final = []
+        chunks: Final[list[bytes]] = []  # mutable-ok: append-built SSE frame buffer, returned as is
         block_type: Final = block_dict.get("type")
 
         if block_type == "text":
+            raw_citations: Final = block_dict.get("citations")
+            citations: Final = (
+                _CITATIONS_ADAPTER.validate_python(raw_citations) if isinstance(raw_citations, list) else ()
+            )
+            text_block: Final[Mapping[str, object]] = (
+                {"type": "text", "text": "", "citations": ()} if citations else {"type": "text", "text": ""}
+            )
             content_block_start = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "text", "text": ""},
+                "content_block": text_block,
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             text: Final = block_dict.get("text", "")
@@ -58,6 +69,18 @@ class FakeAnthropicMessagesStreamIterator:
                 "delta": {"type": "text_delta", "text": text},
             }
             chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
+            chunks.extend(
+                "event: content_block_delta\ndata: {}\n\n".format(
+                    json.dumps(
+                        {
+                            "type": "content_block_delta",
+                            "index": index,
+                            "delta": {"type": "citations_delta", "citation": citation},
+                        }
+                    )
+                ).encode()
+                for citation in citations
+            )
 
         elif block_type == "thinking":
             content_block_start = {
@@ -87,7 +110,7 @@ class FakeAnthropicMessagesStreamIterator:
             content_block_start = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "redacted_thinking"},
+                "content_block": dict(block_dict),
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
 

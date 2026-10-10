@@ -27,6 +27,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   deepkeep: "deepkeep.svg",
   repelloai: "repelloai.png",
   straiker: "straiker.svg",
+  thirdlaw: "thirdlaw.svg",
   alice: "alice.svg",
   agent_365: "microsoft_azure.svg",
   llm_shield_proxy: "llm_shield_proxy.svg",
