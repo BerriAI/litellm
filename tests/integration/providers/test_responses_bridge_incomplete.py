@@ -2417,13 +2417,124 @@ def test_chat_over_responses_deployment_conversation_switching_between_chat_and_
         messages.append({"role": "user", "content": "Wrap up."})
         call(with_tools=True)
 
-        assert [target for target, _ in hits] == [
-            "/responses",
-            "/responses",
-            "/chat/completions",
-            "/responses",
-        ], [target for target, _ in hits]
-        assert len(hits) == 4
+        expected_tool: Final = {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+            "strict": None,
+            "type": "function",
+            "description": "Get the weather for a city.",
+        }
+        user_msg: Final = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": f"Weather in SF? {identity}"}],
+        }
+        sf_assistant: Final = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Checking SF."}],
+        }
+        sf_call: Final = {
+            "type": "function_call",
+            "call_id": "call_sf",
+            "name": "get_weather",
+            "arguments": '{"city":"SF"}',
+        }
+        sf_output: Final = {
+            "type": "function_call_output",
+            "call_id": "call_sf",
+            "output": [{"type": "input_text", "text": "sunny, 21C"}],
+        }
+        assert hits == [
+            (
+                "/responses",
+                {
+                    "model": "gpt-6-sol",
+                    "input": [user_msg],
+                    "reasoning": {"effort": "low"},
+                    "stream": False,
+                    "tools": [expected_tool],
+                },
+            ),
+            (
+                "/responses",
+                {
+                    "model": "gpt-6-sol",
+                    "input": [user_msg, sf_assistant, sf_call, sf_output],
+                    "reasoning": {"effort": "low"},
+                    "stream": False,
+                    "tools": [expected_tool],
+                },
+            ),
+            (
+                "/chat/completions",
+                {
+                    "messages": [
+                        {"role": "user", "content": f"Weather in SF? {identity}"},
+                        {
+                            "content": "Checking SF.",
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": '{"city":"SF"}', "name": "get_weather"},
+                                    "id": "call_sf",
+                                    "type": "function",
+                                }
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "call_sf", "content": "sunny, 21C"},
+                        {
+                            "content": f'{{"done": "{identity}"}}',
+                            "role": "assistant",
+                            "provider_specific_fields": {"commentary": "Here is the summary."},
+                        },
+                        {"role": "user", "content": "Thanks, anything else?"},
+                    ],
+                    "model": "gpt-6-sol",
+                    "reasoning_effort": "low",
+                },
+            ),
+            (
+                "/responses",
+                {
+                    "model": "gpt-6-sol",
+                    "input": [
+                        user_msg,
+                        sf_assistant,
+                        sf_call,
+                        sf_output,
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": f'{{"done": "{identity}"}}'}],
+                        },
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Thanks, anything else?"}],
+                        },
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Plain chat answer."}],
+                        },
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Wrap up."}],
+                        },
+                    ],
+                    "reasoning": {"effort": "low"},
+                    "stream": False,
+                    "tools": [expected_tool],
+                },
+            ),
+        ], hits
 
 
 def test_chat_over_responses_deployment_guardrail_blocks_late_commentary_delta(gateway: Gateway) -> None:
