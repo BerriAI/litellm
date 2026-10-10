@@ -541,18 +541,27 @@ class ChunkProcessor:
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
                         if fragment_id := tool_call.get("id"):
-                            tool_call_map[index]["id"] = fragment_id
+                            if tool_call_map[index]["id"] is None:
+                                tool_call_map[index]["id"] = fragment_id
+                            else:
+                                tool_call_map[index]["id"] += fragment_id
                         if fragment_type := tool_call.get("type"):
                             tool_call_map[index]["type"] = fragment_type
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
                             if fragment_name := function.get("name"):
-                                tool_call_map[index]["name"] = fragment_name
+                                if tool_call_map[index]["name"] is None:
+                                    tool_call_map[index]["name"] = fragment_name
+                                else:
+                                    tool_call_map[index]["name"] += fragment_name
                         else:
                             # function is an object
                             if function_name := getattr(function, "name", None):
-                                tool_call_map[index]["name"] = function_name
+                                if tool_call_map[index]["name"] is None:
+                                    tool_call_map[index]["name"] = function_name
+                                else:
+                                    tool_call_map[index]["name"] += function_name
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
@@ -561,11 +570,17 @@ class ChunkProcessor:
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
-                            tool_call_map[index]["id"] = tool_call.id
+                            if tool_call_map[index]["id"] is None:
+                                tool_call_map[index]["id"] = tool_call.id
+                            else:
+                                tool_call_map[index]["id"] += tool_call.id
                         if hasattr(tool_call, "type") and tool_call.type:
                             tool_call_map[index]["type"] = tool_call.type
                         if object_function_name := getattr(getattr(tool_call, "function", None), "name", None):
-                            tool_call_map[index]["name"] = object_function_name
+                            if tool_call_map[index]["name"] is None:
+                                tool_call_map[index]["name"] = object_function_name
+                            else:
+                                tool_call_map[index]["name"] += object_function_name
 
                         object_custom: ChatCompletionDeltaCustomToolCallPayload | None = getattr(
                             tool_call, "custom", None

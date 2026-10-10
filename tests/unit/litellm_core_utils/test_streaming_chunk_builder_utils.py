@@ -1851,3 +1851,158 @@ def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
 
     assert response is not None
     assert "service_tier" not in response.model_dump()
+
+
+def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
+    """Test that ChunkProcessor.get_combined_tool_content concatenates tool call name and id when streamed in multiple fragments (#44392)."""
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-test-1",
+            created=1744771912,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_",
+                                function=Function(
+                                    name="get_",
+                                    arguments="",
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-test-2",
+            created=1744771913,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="9f2c",
+                                function=Function(
+                                    name="weather",
+                                    arguments='{"city": "Paris"}',
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+    ]
+
+    processor = ChunkProcessor(chunks=chunks)
+    tool_calls = processor.get_combined_tool_content(chunks)
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "call_9f2c"
+    assert tool_calls[0].function.name == "get_weather"
+    assert tool_calls[0].function.arguments == '{"city": "Paris"}'
+
+    dict_chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_",
+                                "type": "function",
+                                "function": {"name": "get_", "arguments": ""},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "abc1",
+                                "type": "function",
+                                "function": {"name": "data", "arguments": '{"query": "AI"}'},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    ]
+    dict_processor = ChunkProcessor(chunks=dict_chunks)
+    dict_tool_calls = dict_processor.get_combined_tool_content(dict_chunks)
+    assert len(dict_tool_calls) == 1
+    assert dict_tool_calls[0].id == "call_abc1"
+    assert dict_tool_calls[0].function.name == "get_data"
+    assert dict_tool_calls[0].function.arguments == '{"query": "AI"}'
+
+    dict_with_object_func_chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_",
+                                "type": "function",
+                                "function": Function(name="search_", arguments=""),
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "web1",
+                                "type": "function",
+                                "function": Function(name="docs", arguments='{"q": "litellm"}'),
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    ]
+    obj_func_processor = ChunkProcessor(chunks=dict_with_object_func_chunks)
+    obj_func_tool_calls = obj_func_processor.get_combined_tool_content(dict_with_object_func_chunks)
+    assert len(obj_func_tool_calls) == 1
+    assert obj_func_tool_calls[0].id == "call_web1"
+    assert obj_func_tool_calls[0].function.name == "search_docs"
+    assert obj_func_tool_calls[0].function.arguments == '{"q": "litellm"}'
