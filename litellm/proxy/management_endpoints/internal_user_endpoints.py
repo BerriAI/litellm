@@ -59,7 +59,11 @@ from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
     ScopeDenied,
+    daily_activity_repository,
+    daily_activity_scope,
     get_daily_activity,
+    get_daily_activity_aggregated,
+    get_user_api_key_filter,
     raise_public,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
@@ -3016,3 +3020,74 @@ async def get_user_daily_activity(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
         )
+
+
+@router.get(
+    "/user/daily/activity/aggregated",
+    tags=["Budget & Spend Tracking", "Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@management_endpoint_wrapper
+async def get_user_daily_activity_aggregated(
+    start_date: str | None = fastapi.Query(default=None, description="Start date in YYYY-MM-DD format"),
+    end_date: str | None = fastapi.Query(default=None, description="End date in YYYY-MM-DD format"),
+    model: str | None = fastapi.Query(default=None, description="Filter by specific model"),
+    api_key: str | None = fastapi.Query(default=None, description="Filter by specific API key"),
+    user_id: str | None = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. "
+        "Non-admins must provide their own user_id.",
+    ),
+    timezone: int | None = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC.",
+    ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, include today's UTC bucket.",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+) -> SpendAnalyticsPaginatedResponse:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    typed_prisma_client: Final[PrismaClient] = prisma_client
+
+    resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
+        user_id=user_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if isinstance(resolved_entity_ids, ScopeDenied):
+        raise_public(resolved_entity_ids)
+    requested_user_id: Final[str | None] = resolved_entity_ids[0] if resolved_entity_ids is not None else None
+    api_key_filter: Final = (
+        api_key
+        if requested_user_id is None
+        else list(await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key))
+    )
+    repository: Final = daily_activity_repository(typed_prisma_client)
+    scope: Final = daily_activity_scope(
+        table="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        exclude_entity_ids=None,
+        api_key=api_key_filter,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        timezone_offset_minutes=timezone,
+        include_current_utc_day=include_current_utc_day,
+    )
+    return await get_daily_activity_aggregated(repository, scope)

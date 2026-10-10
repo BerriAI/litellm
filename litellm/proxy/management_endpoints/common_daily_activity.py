@@ -23,6 +23,8 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     DailySpendData,
@@ -43,6 +45,11 @@ from litellm.types.repositories.daily_activity import (
     RollupMetricsRow,
     SpendLogsWindow,
 )
+
+
+class _UserApiKeyRecord(Protocol):
+    token: str
+    user_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,6 +609,38 @@ async def get_api_key_metadata(
     }
 
 
+async def _get_deleted_keys_for_user(
+    prisma_client: PrismaClient,
+    user_id: str,
+) -> Sequence[_UserApiKeyRecord]:
+    return await DeletedVerificationTokenRepository(prisma_client).table.find_many(
+        where={"user_id": user_id},
+        order={"deleted_at": "desc"},
+    )
+
+
+async def get_user_api_key_filter(
+    prisma_client: PrismaClient,
+    user_id: str,
+    api_key: str | None,
+) -> Sequence[str]:
+    """Return the key digests that should scope a user activity query."""
+    active_keys: Final[Sequence[_UserApiKeyRecord]] = await VerificationTokenRepository(prisma_client).table.find_many(
+        where={"user_id": user_id},
+    )
+    deleted_keys: Final = await _get_deleted_keys_for_user(prisma_client, user_id)
+    user_api_keys: Final = list(
+        dict.fromkeys(
+            key.token
+            for key in (*active_keys, *deleted_keys)
+            if getattr(key, "token", None) and getattr(key, "user_id", None) == user_id
+        )
+    )
+    if api_key is None:
+        return user_api_keys
+    return [api_key] if api_key in user_api_keys else []
+
+
 def _aggregate_spend_records_sync(
     *,
     records: Sequence[DailySpendRecord],
@@ -971,7 +1010,7 @@ async def get_daily_activity(
             ),
         )
     except Exception as exc:
-        verbose_proxy_logger.exception("Error fetching daily activity: %s", exc)
+        verbose_proxy_logger.error("Error fetching daily activity (%s)", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": f"Failed to fetch analytics: {exc}"}
         )
@@ -1087,7 +1126,7 @@ async def get_daily_activity_aggregated(
             ),
         )
     except Exception as exc:
-        verbose_proxy_logger.exception("Error fetching aggregated daily activity: %s", exc)
+        verbose_proxy_logger.error("Error fetching aggregated daily activity (%s)", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": f"Failed to fetch analytics: {exc}"}
         )
