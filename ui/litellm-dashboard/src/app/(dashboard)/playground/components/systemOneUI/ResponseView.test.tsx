@@ -59,6 +59,20 @@ describe("ResponseView", () => {
     expect(screen.getByRole("meter", { name: "1 probability" })).toHaveAttribute("aria-valuetext", "0%");
   });
 
+  it("rounds the calibrated score pill to two decimals and leaves integers bare", () => {
+    const precise: SystemOneResponse = {
+      answers: {
+        severity: { type: "score", score: 3.9809950180008897, probabilities: { "3": 0.02, "4": 0.98 } },
+        clarity: { type: "score", score: 2, probabilities: { "2": 1 }, legend: { "2": "Clear enough" } },
+      },
+    };
+    render(<ResponseView response={precise} isLoading={false} />);
+
+    expect(screen.getByText("3.98")).toBeInTheDocument();
+    expect(screen.queryByText("3.9809950180008897")).not.toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+  });
+
   it("renders structured decision score legends without coercing objects to strings", () => {
     const response: SystemOneResponse = {
       answers: {
