@@ -26,7 +26,7 @@ from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import OwnedProxy, group_members, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -1659,6 +1659,203 @@ def test_chat_pre_call_denial_returns_content_filter(gateway: Gateway, tmp_path:
             body["usage"]["completion_tokens"],
             body["usage"]["total_tokens"],
         ) == (0, 0, 0), body["usage"]
+
+
+def _refusing_provider(request: Request) -> Reply:
+    raise AssertionError(f"denied text completion reached the provider: {request!r}")
+
+
+_STRING_REJECTION: Final = "__DENIAL__"
+_STRING_REJECTER_MODULE: Final = """from litellm.integrations.custom_guardrail import CustomGuardrail
+
+
+class StringRejecter(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return "__DENIAL__"
+"""
+
+
+class _TextCompletionChoice(BaseModel):
+    text: str
+
+
+class _TextCompletionResponse(BaseModel):
+    object: str
+    choices: list[_TextCompletionChoice]
+
+
+class _TextCompletionStreamChoice(BaseModel):
+    text: str | None = None
+
+
+class _TextCompletionStreamFrame(BaseModel):
+    object: str
+    choices: list[_TextCompletionStreamChoice]
+
+
+def _string_rejection_config(tmp_path: Path, identity: str) -> Path:
+    module: Final = "string_rejecter_" + uuid.uuid4().hex
+    (tmp_path / f"{module}.py").write_text(_STRING_REJECTER_MODULE)
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": identity,
+            "litellm_params": {"guardrail": f"{module}.StringRejecter", "mode": "pre_call"},
+        }
+    ]
+    path: Final = tmp_path / "string-rejection.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def test_text_completion_pre_call_denial_returns_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            completion: Final = client.completions.create(
+                model=model, prompt="say hi", extra_body={"guardrails": [identity]}
+            )
+        assert completion.object == "text_completion", completion
+        assert [choice.text for choice in completion.choices] == [_RESPONSES_DENIAL], completion
+        assert wire.drain() == (), completion
+
+
+def test_text_completion_pre_call_denial_streams_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip("BUG: a streamed /v1/completions pre_call denial sends one frame with no text and no [DONE]")
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "stream": True, "guardrails": [identity]},
+            key=key,
+        )
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            chunks: Final = list(
+                client.completions.create(
+                    model=model, prompt="say hi", stream=True, extra_body={"guardrails": [identity]}
+                )
+            )
+        assert {chunk.object for chunk in chunks} == {"text_completion"}, chunks
+        assert "".join(choice.text or "" for chunk in chunks for choice in chunk.choices) == _RESPONSES_DENIAL, chunks
+        assert raw.headers["content-type"].startswith("text/event-stream"), raw.text
+        lines: Final = tuple(line for line in raw.text.split("\n") if line.startswith("data: "))
+        assert lines[-1] == "data: [DONE]", raw.text
+        frames: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+        assert {frame["object"] for frame in frames} == {"text_completion"}, raw.text
+        assert "".join(choice.get("text") or "" for frame in frames for choice in frame["choices"]) == _RESPONSES_DENIAL
+        assert wire.drain() == (), raw.text
+
+
+def test_text_completion_pre_call_string_rejection_returns_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip("BUG: /v1/completions pre_call string rejection returns HTTP 400 instead of a text_completion response")
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _string_rejection_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "guardrails": [identity]},
+            key=key,
+        )
+        assert raw.status_code == 200, raw.text
+        payload: Final = _TextCompletionResponse.model_validate_json(raw.content)
+        assert payload.object == "text_completion", raw.text
+        assert [choice.text for choice in payload.choices] == [_STRING_REJECTION], raw.text
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            completion: Final = client.completions.create(
+                model=model, prompt="say hi", extra_body={"guardrails": [identity]}
+            )
+        assert completion.object == "text_completion", completion
+        assert [choice.text for choice in completion.choices] == [_STRING_REJECTION], completion
+        assert wire.drain() == (), raw.text
+
+
+def test_text_completion_pre_call_string_rejection_streams_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip(
+        "BUG: /v1/completions pre_call string rejection returns HTTP 400 JSON instead of a text/event-stream denial"
+    )
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _string_rejection_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "stream": True, "guardrails": [identity]},
+            key=key,
+        )
+        assert raw.status_code == 200, raw.text
+        assert raw.headers["content-type"].startswith("text/event-stream"), raw.text
+        lines: Final = tuple(line for line in raw.text.split("\n") if line.startswith("data: "))
+        assert lines[-1] == "data: [DONE]", raw.text
+        frames: Final = tuple(
+            _TextCompletionStreamFrame.model_validate_json(line.removeprefix("data: ")) for line in lines[:-1]
+        )
+        assert tuple(frame.object for frame in frames) == ("text_completion",) * len(frames), raw.text
+        assert "".join(choice.text or "" for frame in frames for choice in frame.choices) == _STRING_REJECTION, raw.text
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            chunks: Final = tuple(
+                client.completions.create(
+                    model=model, prompt="say hi", stream=True, extra_body={"guardrails": [identity]}
+                )
+            )
+        assert tuple(chunk.object for chunk in chunks) == ("text_completion",) * len(chunks), chunks
+        assert "".join(choice.text or "" for chunk in chunks for choice in chunk.choices) == _STRING_REJECTION, chunks
+        assert wire.drain() == (), raw.text
 
 
 @pytest.mark.covers("other.observability.guardrails.messages_pre_call_denial_returns_message")

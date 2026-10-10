@@ -11,6 +11,7 @@ import pytest
 import websockets
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 
@@ -382,3 +383,115 @@ def test_max_budget_allows_then_denies_and_records_spend(gateway: Gateway) -> No
         second: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
         assert second.status_code == 422, second.text
         assert "budget_exceeded" in second.text, second.text
+
+
+_PATH_MODEL_BACKEND: Final = "gpt-5.4-mini"
+_PATH_MODEL_ROUTES: Final = (
+    ("/openai/deployments/{model}/chat/completions", "chat"),
+    ("/engines/{model}/chat/completions", "chat"),
+    ("/openai/deployments/{model}/completions", "text"),
+    ("/engines/{model}/completions", "text"),
+)
+
+
+def _path_model_reply(request: Request) -> Reply:
+    assert (request.method, request.target) == ("POST", "/chat/completions"), request
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-" + _marker(),
+                "object": "chat.completion",
+                "created": 1,
+                "model": _PATH_MODEL_BACKEND,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "path"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            }
+        ).encode()
+    )
+
+
+def _path_model_body(kind: str, prompt: str) -> dict[str, JsonValue]:
+    return {"messages": [{"role": "user", "content": prompt}]} if kind == "chat" else {"prompt": prompt}
+
+
+def _upstream_bodies(wire: Wire) -> list[dict[str, JsonValue]]:
+    return [json.loads(request.body) for request in wire.drain()]
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_path_only_model_alias_refuses_an_unallowed_deployment(gateway: Gateway, route: str, kind: str) -> None:
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            other: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=other),
+                _path_model_body(kind, _marker()),
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            assert (_upstream_bodies(other_wire), _upstream_bodies(allowed_wire)) == ([], []), response.text
+            assert response.status_code == 403, response.text
+            assert f"The requested model '{other}' is not available for this API key" in response.text, response.text
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_mixed_body_and_path_model_is_refused_or_served_by_the_body_model(
+    gateway: Gateway, route: str, kind: str
+) -> None:
+    pytest.skip(
+        "BUG: a key scoped to model A that sends model A in the body and an unallowed model B in the "
+        "/openai/deployments or /engines path is served by deployment B"
+    )
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            other: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            prompt: Final = _marker()
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=other),
+                {"model": allowed, **_path_model_body(kind, prompt)},
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            other_bodies: Final = _upstream_bodies(other_wire)
+            allowed_bodies: Final = _upstream_bodies(allowed_wire)
+            outcome: Final = (response.status_code, other_bodies, allowed_bodies)
+            refused: Final = outcome[0] in (401, 403) and outcome[1:] == ([], [])
+            served_by_body_model: Final = outcome == (
+                200,
+                [],
+                [{"model": _PATH_MODEL_BACKEND, "messages": [{"role": "user", "content": prompt}]}],
+            )
+            assert refused or served_by_body_model, (outcome, response.text)
+
+
+@pytest.mark.parametrize(("route", "kind"), _PATH_MODEL_ROUTES)
+def test_path_only_model_alias_reaches_the_allowed_deployment(gateway: Gateway, route: str, kind: str) -> None:
+    with wire_server(_path_model_reply) as allowed_wire, wire_server(_path_model_reply) as other_wire:
+        with gateway.scenario() as scenario:
+            allowed: Final = scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=allowed_wire.url)
+            scenario.model(model=f"openai/{_PATH_MODEL_BACKEND}", api_base=other_wire.url)
+            key: Final = scenario.key(models=[allowed])
+            prompt: Final = _marker()
+            response: Final = gateway.request(
+                "POST",
+                route.format(model=allowed),
+                _path_model_body(kind, prompt),
+                key=key,
+                params={"api-version": "2024-10-21"},
+            )
+            assert response.status_code == 200, response.text
+            payload: Final = response.json()
+            assert [
+                choice["message"]["content"] if kind == "chat" else choice["text"] for choice in payload["choices"]
+            ] == ["path"], response.text
+            assert payload["object"] == ("chat.completion" if kind == "chat" else "text_completion"), response.text
+            assert _upstream_bodies(other_wire) == [], response.text
+            assert _upstream_bodies(allowed_wire) == [
+                {"model": _PATH_MODEL_BACKEND, "messages": [{"role": "user", "content": prompt}]}
+            ], response.text
