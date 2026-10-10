@@ -549,7 +549,10 @@ class MistralConfig(OpenAIGPTConfig):
                                         thinking_texts.append(thinking_block.get("text", ""))
                                 thinking_content = "\n".join(thinking_texts)
                             elif block.get("type") == "text":
-                                text_content = block.get("text", "")
+                                # Mistral may interleave "reference" chunks between
+                                # text chunks when the model cites a source; append
+                                # so no text chunk is dropped.
+                                text_content += block.get("text", "")
 
                         # Set the extracted content
                         choice["message"]["content"] = text_content
