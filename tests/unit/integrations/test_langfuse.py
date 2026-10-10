@@ -11,12 +11,16 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import (
     Choices,
     Message,
@@ -32,6 +36,23 @@ from litellm.types.utils import (
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
+
+
+@pytest.mark.asyncio
+async def test_langfuse_otel_service_hooks_do_not_export_spans() -> None:
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = LangfuseOtelLogger(config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True))
+    parent: Final = logger.tracer.start_span("litellm_request")
+    payload: Final = ServiceLoggerPayload(
+        is_error=False, service=ServiceTypes.REDIS, duration=0.25, call_type="async_get_cache", event_metadata=None
+    )
+    started: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    ended: Final = datetime.datetime(2026, 1, 1, 12, 0, 1)
+
+    await logger.async_service_success_hook(payload, parent, started, ended)
+    await logger.async_service_failure_hook(payload, "redis timed out", parent, started, ended)
+
+    assert exporter.get_finished_spans() == ()
 
 
 class TestLangfuseUsageDetails(unittest.TestCase):

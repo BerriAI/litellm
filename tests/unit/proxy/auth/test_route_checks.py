@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlencode
 
 import pytest
 from fastapi import HTTPException, Request
@@ -4803,3 +4805,70 @@ def test_user_connection_route_registration_order_wins_over_generic_credential_r
         )
         assert match is not None, f"no route matched {method} {path}"
         assert getattr(match, "endpoint", None) is expected
+
+
+def _legacy_route_request(path: str, query_params: Mapping[str, str]) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "query_string": urlencode(query_params).encode(),
+            "headers": [],
+        }
+    )
+
+
+def test_llm_api_route() -> None:
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v1/chat/completions",
+            request=_legacy_route_request("/v1/chat/completions", {}),
+            valid_token=UserAPIKeyAuth(api_key="test_key"),
+            request_data={},
+        )
+        is None
+    )
+
+
+def test_key_info_route_allowed() -> None:
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/key/info",
+            request=_legacy_route_request("/key/info", {"key": "test_key"}),
+            valid_token=UserAPIKeyAuth(api_key="test_key"),
+            request_data={},
+        )
+        is None
+    )
+
+
+def test_user_info_route_allowed() -> None:
+    assert (
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/user/info",
+            request=_legacy_route_request("/user/info", {"user_id": "test_user"}),
+            valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            request_data={},
+        )
+        is None
+    )
+
+
+def test_user_info_route_forbidden() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/user/info",
+            request=_legacy_route_request("/user/info", {"user_id": "wrong_user"}),
+            valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403

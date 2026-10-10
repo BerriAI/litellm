@@ -6,18 +6,24 @@ import json
 import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack, closing
+from datetime import datetime, timezone
+from io import BytesIO
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
 
 import pytest
+import respx
 from botocore.auth import S3SigV4Auth, SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
+import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestBedrockFilesTransformation:
@@ -4286,3 +4292,45 @@ def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_para
     assert _authorization(litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
         "AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"
     )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_async_create_file(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signing_time: Final = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    monkeypatch.setattr("botocore.auth.get_current_datetime", lambda: signing_time)
+    put_route: Final = respx_mock.put(
+        url__regex=(
+            r"https://s3\.us-west-2\.amazonaws\.com/"
+            r"litellm-proxy-941277531214/.+\.jsonl$"
+        )
+    ).respond(status_code=200)
+
+    class BatchFile(BytesIO):
+        name: str = "bedrock_batch_completions.jsonl"
+
+    file_obj: Final = await litellm.acreate_file(
+        file=BatchFile((Path(__file__).parent / "input_batch_completions.jsonl").read_bytes()),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-proxy-941277531214",
+    )
+
+    request: Final = put_route.calls.last.request
+    assert str(request.url).startswith(
+        "https://s3.us-west-2.amazonaws.com/litellm-proxy-941277531214/"
+    )
+    assert "/litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-" in str(request.url)
+    assert str(request.url).endswith(".jsonl")
+    assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert b'"recordId"' in request.content
+    assert file_obj.id.startswith(
+        "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
+    )
+    assert file_obj.filename.endswith(".jsonl")

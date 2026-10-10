@@ -18,6 +18,12 @@ test_paths:
     paths:
       - tests/rust-python-harness
   - reason: >-
+      Owned by the open pull request that moves the Rust/Python parity checks (#45135). It ran in
+      the CircleCI build_and_test job that globbed tests/test_*.py, which this migration deletes,
+      and that pull request gives it a new home
+    paths:
+      - tests/test_rust_python_harness.py
+  - reason: >-
       Live-provider caching cases in tests/local_testing that remain outside CI. Jobs that
       glob that directory either deselect them (local_testing_part1 and part2 carry `-k "... and
       not caching and not cache"`) or keep only another keyword (langfuse, router, assistants).

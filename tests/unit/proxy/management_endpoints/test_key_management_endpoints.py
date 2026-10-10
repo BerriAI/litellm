@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
+from pydantic import JsonValue
 
 import inspect
 
@@ -55,6 +56,10 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
+    _is_team_key,
+    _key_generation_required_param_check,
+    _personal_key_generation_check,
+    _team_key_generation_check,
     _common_key_generation_helper,
     KeyProjectBindingError,
     _effective_key_after_update,
@@ -84,6 +89,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     key_generation_check,
     list_keys,
     prepare_key_update_data,
+    prepare_metadata_fields,
     reset_key_spend_fn,
     update_key_fn,
     validate_key_list_check,
@@ -22381,3 +22387,156 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
         "guardrail": "bedrock",
         "aws_secret_access_key": "aws-secret",
     }
+
+
+def test_is_team_key() -> None:
+    assert _is_team_key(GenerateKeyRequest(team_id="test_team_id"))
+    assert not _is_team_key(GenerateKeyRequest(user_id="test_user_id"))
+
+
+def test_team_key_generation_team_member_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "key_generation_settings",
+        {"team_key_generation": {"allowed_team_member_roles": ["admin"]}},
+        raising=False,
+    )
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="admin", user_id="test_user_id")],
+    )
+    admin_member: Final = UserAPIKeyAuth(
+        user_id="test_user_id",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-test",
+        team_member=Member(role="admin", user_id="test_user_id"),
+    )
+    assert _team_key_generation_check(
+        team_table=team,
+        user_api_key_dict=admin_member,
+        data=GenerateKeyRequest(),
+        route=KeyManagementRoutes.KEY_GENERATE,
+    )
+    user_team: Final = team.model_copy(
+        update={"members_with_roles": [Member(role="user", user_id="test_user_id")]}
+    )
+    user_member: Final = admin_member.model_copy(
+        update={"team_member": Member(role="user", user_id="test_user_id")}
+    )
+    with pytest.raises(HTTPException):
+        _team_key_generation_check(
+            team_table=user_team,
+            user_api_key_dict=user_member,
+            data=GenerateKeyRequest(),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+
+
+def test_key_generation_required_params_check() -> None:
+    assert _key_generation_required_param_check(
+        GenerateKeyRequest(tags=["test_tags"]),
+        ["tags"],
+    )
+    assert _key_generation_required_param_check(GenerateKeyRequest(), None)
+    with pytest.raises(HTTPException, match="Required param models"):
+        _key_generation_required_param_check(
+            GenerateKeyRequest(tags=["test_tags"]),
+            ["models"],
+        )
+
+
+def test_personal_key_generation_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "key_generation_settings",
+        {"personal_key_generation": {"allowed_user_roles": ["proxy_admin"]}},
+        raising=False,
+    )
+    assert _personal_key_generation_check(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-test",
+            user_id="admin",
+        ),
+        data=GenerateKeyRequest(),
+    )
+    with pytest.raises(HTTPException):
+        _personal_key_generation_check(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-test",
+                user_id="admin",
+            ),
+            data=GenerateKeyRequest(),
+        )
+
+
+def test_prepare_metadata_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    cases: Final[tuple[tuple[UpdateKeyRequest, dict[str, JsonValue], dict[str, JsonValue], dict[str, JsonValue]], ...]] = (
+        (
+            UpdateKeyRequest(key="sk-test", metadata={"test": "new"}),
+            {"metadata": {"test": "new"}},
+            {"test": "test"},
+            {"metadata": {"test": "new"}},
+        ),
+        (
+            UpdateKeyRequest(key="sk-test", tags=["new_tag"]),
+            {},
+            {"tags": ["old_tag"]},
+            {"metadata": {"tags": ["new_tag"]}},
+        ),
+        (
+            UpdateKeyRequest(key="sk-test", enforced_params=["metadata.tags"]),
+            {},
+            {"tags": ["old_tag"]},
+            {"metadata": {"tags": ["old_tag"], "enforced_params": ["metadata.tags"]}},
+        ),
+        (
+            UpdateKeyRequest(key="sk-test", disable_global_guardrails=True),
+            {},
+            {},
+            {"metadata": {"disable_global_guardrails": True}},
+        ),
+        (
+            UpdateKeyRequest(key="sk-test", disable_global_guardrails=False),
+            {},
+            {"disable_global_guardrails": True},
+            {"metadata": {"disable_global_guardrails": False}},
+        ),
+    )
+    for data, non_default_values, existing_metadata, expected in cases:
+        assert prepare_metadata_fields(
+            data=data,
+            non_default_values=non_default_values,
+            existing_metadata=existing_metadata,
+        ) == expected
+
+
+@pytest.mark.asyncio
+async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    cache: Final = UserApiKeyCache()
+    cached_team: Final = LiteLLM_TeamTableCachedObj(team_id="1234", team_alias="cached-team")
+    await cache.async_set_cache(key="team_id:1234", value=cached_team, model_type=LiteLLM_TeamTableCachedObj, ttl=60)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=cached_team)
+    prisma_client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+
+    with pytest.raises(ProxyException) as raised:
+        await generate_key_fn(
+            data=GenerateKeyRequest(team_id="1234"),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-integration-test",
+                user_id="user",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+        )
+
+    assert raised.value.message == "Team not found for team_id=1234. Non-admin users cannot create keys for non-existent teams."

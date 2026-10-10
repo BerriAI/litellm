@@ -449,6 +449,7 @@ jobs:
             test-path: >-
               tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
               tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
+              tests/unit/enterprise/enterprise_callbacks/test_pagerduty_alerting.py
               tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
               tests/unit/integration_support
               tests/unit/models
@@ -856,17 +857,6 @@ jobs:
               tests/unit/proxy/hooks/test_banned_keyword_list.py
               tests/unit/proxy/test_proxy_setting_guardrails.py
               tests/unit/proxy/test_unit_test_proxy_hooks.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 2
-            timeout-minutes: 15
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: guardrails-tests
-            test-path: >-
-              tests/guardrails_tests
-              --deselect=tests/guardrails_tests/test_custom_guardrail.py::test_get_guardrail_dynamic_request_body_params
             python-version: "3.12"
             workers: 4
             reruns: 2
