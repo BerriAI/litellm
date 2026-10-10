@@ -70,6 +70,27 @@ mod json {
     const RERANK: &str = r#"{"model":"claude-sonnet-4-5","query":"best harbour",
   "documents":["doc one",{"text":"doc two","title":"T","n":3,"ok":true,"none":null,"tags":["a","b"]}]}"#;
 
+    const TOOL_CALLS_AND_TOOL_RESULT: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":"{\"city\": \"Tokyo\"}"}}]},
+  {"role":"tool","tool_call_id":"1","content":"Sunny, 22C"}]}"#;
+
+    const LEGACY_FUNCTION_CALL: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","function_call":{"name":"f","arguments":"{\"city\": \"Tokyo\"}"}}]}"#;
+
+    const ASSISTANT_CONTENT_WITH_TOOL_CALL: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","content":"calling","tool_calls":[{"id":"1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris, France\"}"}}]}]}"#;
+
+    const NULL_TOOL_CALL_ARGUMENTS: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":null}}]},
+  {"role":"tool","tool_call_id":"1","content":"x"}]}"#;
+
+    const MISSING_TOOL_CALL_ARGUMENTS: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f"}}]},
+  {"role":"tool","tool_call_id":"1","content":"x"}]}"#;
+
+    const LEGACY_NULL_FUNCTION_CALL_ARGUMENTS: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","function_call":{"name":"f","arguments":null}}]}"#;
+
     fn assert_count_request_matches_python_token_counter(
         load: JsonLoader,
         body: &str,
@@ -154,6 +175,12 @@ mod json {
             #[case::responses_input_items(super::RESPONSES_INPUT, 62)]
             #[case::embeddings_token_ids(super::EMBEDDINGS_TOKEN_IDS, 5)]
             #[case::rerank_query_and_documents(super::RERANK, 41)]
+            #[case::tool_calls_and_tool_result(super::TOOL_CALLS_AND_TOOL_RESULT, 24)]
+            #[case::legacy_function_call(super::LEGACY_FUNCTION_CALL, 14)]
+            #[case::assistant_content_with_tool_call(super::ASSISTANT_CONTENT_WITH_TOOL_CALL, 16)]
+            #[case::null_tool_call_arguments_count_as_none(super::NULL_TOOL_CALL_ARGUMENTS, 14)]
+            #[case::missing_tool_call_arguments_count_as_empty(super::MISSING_TOOL_CALL_ARGUMENTS, 13)]
+            #[case::legacy_null_function_call_arguments_count_as_none(super::LEGACY_NULL_FUNCTION_CALL_ARGUMENTS, 8)]
             fn count_request_matches_python_token_counter(
                 #[case] body: &str,
                 #[case] expected: usize,
@@ -235,8 +262,17 @@ mod json {
 #[rstest]
 #[case::not_json(b"not json" as &[u8])]
 #[case::messages_not_a_list(br#"{"model":"m","messages":"hi"}"#)]
-#[case::message_with_tool_calls(
-    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":"{}"}}]}]}"#
+#[case::tool_calls_not_a_list(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":"nope"}]}"#
+)]
+#[case::tool_call_without_function(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function"}]}]}"#
+)]
+#[case::tool_call_arguments_is_a_number(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":42}}]}]}"#
+)]
+#[case::tool_call_arguments_is_an_object(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":{"city":"Tokyo"}}}]}]}"#
 )]
 #[case::dict_content(
     br#"{"model":"m","messages":[{"role":"user","content":{"type":"text","text":"x"}}]}"#

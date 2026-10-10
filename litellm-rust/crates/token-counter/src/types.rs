@@ -137,6 +137,47 @@ impl<'de> Visitor<'de> for TextValueVisitor {
     }
 }
 
+/// The parts of an assistant tool call Python counts: only the `arguments`
+/// string contributes (`_count_function_call_tokens` in
+/// `litellm_core_utils/token_counter.py`). An absent arguments key counts as the
+/// empty string, while an explicit null counts as the string "None" the way
+/// Python's `str(None)` does; any other non-string `arguments` declines so
+/// Python handles the fallback instead of miscounting.
+///
+/// `deny_unknown_fields` is deliberately absent from this shape, and from
+/// `ToolCallFunction` and `LegacyFunctionCall`: Python reads only
+/// `function.arguments` off a tool call, so the extra `id`, `type` and `name`
+/// keys the OpenAI shape carries are ignored rather than declined.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct ToolCall {
+    pub(crate) function: ToolCallFunction,
+}
+
+/// Python runs `str(function.get("arguments", ""))`: a missing key counts as
+/// empty, but an explicit null counts as the string "None". `serde(default)`
+/// keeps a missing key at `None`, and the deserializer turns an explicit null
+/// into "None" so the counter sees what Python counts.
+fn explicit_null_arguments_as_none<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    match Option::<String>::deserialize(deserializer)? {
+        Some(arguments) => Ok(Some(arguments)),
+        None => Ok(Some(String::from("None"))),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct ToolCallFunction {
+    #[serde(default, deserialize_with = "explicit_null_arguments_as_none")]
+    pub(crate) arguments: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct LegacyFunctionCall {
+    #[serde(default, deserialize_with = "explicit_null_arguments_as_none")]
+    pub(crate) arguments: Option<String>,
+}
+
 /// Python counts every string-valued key of a message, so any key beyond these
 /// makes the shape unsupported rather than silently uncounted.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -145,6 +186,9 @@ pub(crate) struct Message {
     pub(crate) role: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) content: Option<MessageContent>,
+    pub(crate) tool_call_id: Option<String>,
+    pub(crate) tool_calls: Option<Vec<ToolCall>>,
+    pub(crate) function_call: Option<LegacyFunctionCall>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
