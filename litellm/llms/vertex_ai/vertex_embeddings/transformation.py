@@ -229,6 +229,9 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_response(response=response, model=model, model_response=model_response)
 
+        if not isinstance(response, dict) or "predictions" not in response:
+            raise ValueError("Vertex embedding response missing 'predictions' field")
+
         _predictions: Final = response["predictions"]
 
         embedding_response: Final = []
@@ -257,6 +260,9 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         """
         Transforms a vertex fine-tuned model embedding response to an openai response format.
         """
+        if not isinstance(response, dict) or "predictions" not in response:
+            raise ValueError("Vertex embedding response missing 'predictions' field")
+
         _predictions: Final = response["predictions"]
 
         embedding_response: Final = []
