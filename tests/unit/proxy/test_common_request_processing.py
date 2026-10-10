@@ -10801,17 +10801,15 @@ class TestPreCallHooksForUnroutableModel:
         processor: ProxyBaseLLMRequestProcessing | None = None,
         skip_guardrails: bool = False,
         read_through_attempt: AsyncMock | None = None,
+        extra_body: Mapping[str, object] | None = None,
     ) -> dict:
         from litellm.proxy.common_utils import registry_read_through
         from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             messages: Final = [{"role": "user", "content": "email jane@example.com"}]
-            return {
-                "model": model,
-                "messages": messages,
-                "proxy_server_request": {"body": {"model": model, "messages": messages}},
-            }
+            body: Final = {"model": model, "messages": messages, **copy.deepcopy(dict(extra_body or {}))}
+            return {**body, "proxy_server_request": {"body": copy.deepcopy(body)}}
 
         monkeypatch.setattr(
             litellm.proxy.common_request_processing, "add_litellm_data_to_request", mock_add_litellm_data_to_request
@@ -10948,6 +10946,61 @@ class TestPreCallHooksForUnroutableModel:
         expected_content: Final = "redacted-by-litellm" if expected else "email jane@example.com"
         assert processor.data["messages"] == [{"role": "user", "content": expected_content}]
         assert processor.data["proxy_server_request"]["body"]["messages"] == processor.data["messages"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("extra_body", "expected_body"),
+        [
+            pytest.param(
+                {"system": [{"type": "text", "text": "email jane@example.com"}]},
+                {"system": "redacted-by-litellm"},
+                id="anthropic-system",
+            ),
+            pytest.param(
+                {"instructions": "email jane@example.com"},
+                {"instructions": "redacted-by-litellm"},
+                id="responses-instructions",
+            ),
+            pytest.param(
+                {"contents": [{"role": "user", "parts": [{"text": "email jane@example.com"}]}]},
+                {"contents": [{"role": "user", "parts": [{"text": "redacted-by-litellm"}]}]},
+                id="gemini-contents",
+            ),
+            pytest.param(
+                {"systemInstruction": {"parts": [{"text": "email jane@example.com"}]}},
+                {"systemInstruction": {"parts": [{"text": "redacted-by-litellm"}]}},
+                id="gemini-system-instruction",
+            ),
+            pytest.param(
+                {"config": {"system_instruction": {"parts": [{"text": "email jane@example.com"}]}, "temperature": 0}},
+                {"config": {"system_instruction": {"parts": [{"text": "redacted-by-litellm"}]}, "temperature": 0}},
+                id="gemini-config-system-instruction",
+            ),
+            pytest.param(
+                {"prompt": "email jane@example.com", "input": ["email jane@example.com"], "max_tokens": 5},
+                {"prompt": "", "input": "", "max_tokens": 5},
+                id="prompt-and-input",
+            ),
+        ],
+    )
+    async def test_rejected_request_redacts_every_guardrail_scanned_field(self, monkeypatch, extra_body, expected_body):
+        from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+        monkeypatch.setattr(litellm, "callbacks", [_CountingGuardrail()])
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        with pytest.raises(ProxyModelNotFoundError):
+            await self._run(
+                monkeypatch,
+                model="does-not-exist",
+                llm_router=self._router(),
+                processor=processor,
+                extra_body=extra_body,
+            )
+
+        snapshot: Final = processor.data["proxy_server_request"]["body"]
+        assert {key: processor.data[key] for key in expected_body} == expected_body
+        assert {key: snapshot[key] for key in expected_body} == expected_body
 
     @pytest.mark.asyncio
     async def test_unknown_model_hooks_left_unchanged_gets_one_registry_read_through(self, monkeypatch):

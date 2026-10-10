@@ -2356,9 +2356,12 @@ class ProxyBaseLLMRequestProcessing:
     def _redact_request_rejected_before_guardrails(self, proxy_logging_obj: ProxyLogging) -> None:
         """Redact the content of a request rejected before the pre-call guardrails that apply to it ran.
 
-        The request body, its proxy_server_request snapshot and message logging all carry the
-        redaction marker, so failure callbacks, post-call failure hooks and spend rows never see
-        content a masking guardrail would have rewritten.
+        Covers every request field a pre-call guardrail can rewrite on the routes that reach this
+        check: chat and Anthropic messages and system, completion prompt, Responses input and
+        instructions, embedding and speech input, and Gemini contents and system instruction. The
+        request body, its proxy_server_request snapshot and message logging all carry the redaction
+        marker, so failure callbacks, post-call failure hooks and spend rows never see content a
+        masking guardrail would have rewritten.
         """
         request_metadata: Final = dict[str, object]()
         for bucket in _request_metadata_buckets(self.data):
@@ -2367,9 +2370,25 @@ class ProxyBaseLLMRequestProcessing:
             return
         if "messages" in self.data:
             self.data["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
+        if "contents" in self.data:
+            self.data["contents"] = [{"role": "user", "parts": [{"text": REDACTED_BY_LITELLM}]}]
         for content_key in ("prompt", "input"):
             if content_key in self.data:
                 self.data[content_key] = ""
+        for content_key in ("system", "instructions"):
+            if content_key in self.data:
+                self.data[content_key] = REDACTED_BY_LITELLM
+        redacted_system_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
+        system_instruction_keys: Final = ("systemInstruction", "system_instruction")
+        for content_key in system_instruction_keys:
+            if content_key in self.data:
+                self.data[content_key] = redacted_system_instruction
+        config: Final = self.data.get("config")
+        if isinstance(config, Mapping):
+            self.data["config"] = {
+                **config,
+                **{key: redacted_system_instruction for key in system_instruction_keys if key in config},
+            }
         refresh_proxy_server_request_body_snapshot(self.data)
         logging_obj: Final = self.data.get("litellm_logging_obj")
         if isinstance(logging_obj, LiteLLMLoggingObj):
