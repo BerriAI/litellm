@@ -3925,6 +3925,36 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     assert fabricated_finish_reasons == []
 
 
+async def _drain_stream(response: CustomStreamWrapper, sync_mode: bool) -> None:
+    if sync_mode:
+        tuple(response)
+        return
+    async for _chunk in response:
+        pass
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_hosted_vllm_eof_before_finish_reason_raises(
+    logging_obj: Logging,
+    sync_mode: bool,
+) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+
+    partial_chunk: Final = _reset_test_chunk(content="unfinished")
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[partial_chunk]),
+        model="hosted_vllm/stub-model",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(MidStreamFallbackError, match="finish_reason") as exc_info:
+        await _drain_stream(response, sync_mode)
+
+    assert exc_info.value.generated_content == "unfinished"
+
+
 def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: Logging):
     """
     Regression test: OpenAI chat completions custom tool calls stream as
