@@ -47,7 +47,7 @@ impl CacheRequest {
                     "provider": identity.provider,
                     "model": identity.model,
                     "url": wire.url,
-                    "headers": wire.headers,
+                    "headers": wire.headers.iter().filter(|(name, _)| !name.eq_ignore_ascii_case("x-request-id")).collect::<Vec<_>>(),
                     "body": wire.body,
                 })
             }),
@@ -354,6 +354,9 @@ fn successful_stream(text: &str, terminal: &str) -> bool {
             Ok(None) => return complete && pending.is_empty(),
             Err(_) => return false,
         };
+        if event.data == "[DONE]" {
+            return complete && pending.is_empty();
+        }
         let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
             return false;
         };

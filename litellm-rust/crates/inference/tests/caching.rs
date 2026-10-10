@@ -229,6 +229,22 @@ async fn consume(output: OutputOf<TestRoute>) -> Result<Vec<u8>, RouteError> {
 
 #[rstest]
 #[case::complete("data: {\"type\":\"message_stop\"}\n\n", false, true)]
+#[case::complete_with_sentinel(
+    "data: {\"type\":\"message_stop\"}\n\ndata: [DONE]\n\n",
+    false,
+    true
+)]
+#[case::sentinel_without_terminal("data: [DONE]\n\n", false, false)]
+#[case::sentinel_with_trailing_error(
+    "data: {\"type\":\"message_stop\"}\n\ndata: [DONE]\n\ndata: {\"type\":\"error\"}\n\n",
+    false,
+    false
+)]
+#[case::sentinel_after_error(
+    "data: {\"type\":\"error\"}\n\ndata: {\"type\":\"message_stop\"}\n\ndata: [DONE]\n\n",
+    false,
+    false
+)]
 #[case::truncated("data: {\"type\":\"content_block_delta\"}\n\n", false, false)]
 #[case::error_then_stop(
     "data: {\"type\":\"error\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
@@ -728,4 +744,45 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
         different_surface
     );
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[rstest]
+#[case::generated_id("x-request-id", "second", true)]
+#[case::case_insensitive_id("X-Request-Id", "second", true)]
+#[case::credential_change("authorization", "second", false)]
+#[case::semantic_header_change("anthropic-beta", "second", false)]
+#[tokio::test]
+async fn tracking_ids_do_not_disable_cache_reuse(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] header: &str,
+    #[case] second_value: &str,
+    #[case] reused: bool,
+) {
+    let wire = |value: &str| WireRequest {
+        url: "https://session.example/messages".into(),
+        headers: vec![(header.into(), value.into())],
+        body: json!({"model": "test-model", "messages": []}),
+    };
+    let calls = AtomicUsize::new(0);
+    let invoke = |wire: WireRequest| {
+        let request = CacheRequest::from_wire(cache_request(Value::Null).identity, Some(&wire));
+        let cache = cache.clone();
+        let calls = &calls;
+        async move {
+            execute_unary::<TestRoute, _, _>(
+                request,
+                Some(cache),
+                Some(CacheOptions::new(CacheScope::Shared)),
+                &(),
+                None,
+                || async { Ok(json!({"call": calls.fetch_add(1, Ordering::SeqCst)})) },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let first = invoke(wire("first")).await;
+    let second = invoke(wire(second_value)).await;
+    assert_eq!(first == second, reused);
+    assert_eq!(calls.load(Ordering::SeqCst), if reused { 1 } else { 2 });
 }
