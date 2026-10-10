@@ -1118,6 +1118,7 @@ async def pass_through_request(
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
     )
@@ -1223,6 +1224,7 @@ async def pass_through_request(
             proxy_config=proxy_config,
             route_description="pass_through_endpoint",
         )
+        litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
         logging_obj = Logging(
             model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
@@ -1230,6 +1232,7 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
             start_time=start_time,
             litellm_call_id=litellm_call_id,
+            litellm_trace_id=litellm_trace_id,
             function_id="1245",
             dynamic_success_callbacks=team_callbacks.success_callbacks,
             dynamic_failure_callbacks=team_callbacks.failure_callbacks,

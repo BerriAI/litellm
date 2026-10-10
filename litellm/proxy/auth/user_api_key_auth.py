@@ -71,6 +71,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     get_user_role,
+    is_mcp_discovery_request,
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
@@ -1549,7 +1550,7 @@ async def user_api_key_auth_builder(
     anthropic_api_key_header: str | None,
     google_ai_studio_api_key_header: str | None,
     azure_apim_header: str | None,
-    request_data: dict,
+    request_data: dict[str, object],
     custom_litellm_key_header: str | None = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
@@ -1600,7 +1601,7 @@ async def user_api_key_auth_builder(
             request=request,
         )
         custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
-        if custom_litellm_key_header_name is not None:
+        if custom_litellm_key_header_name is not None and custom_litellm_key_header_name in request.headers:
             api_key = get_api_key_from_custom_header(
                 request=request,
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
@@ -1888,8 +1889,8 @@ async def user_api_key_auth_builder(
                             llm_router=llm_router,
                             team_id=valid_token.team_id,
                         )
-                        skip_budget_checks = False
-                        if model is not None and llm_router is not None:
+                        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
+                        if not skip_budget_checks and model is not None and llm_router is not None:
                             from litellm.proxy.auth.auth_checks import is_model_cost_zero
 
                             skip_budget_checks = (  # rebind-ok: pre-existing rebinding on a rename-only line
@@ -2263,9 +2264,7 @@ async def user_api_key_auth_builder(
 
         return await validate_resolved_virtual_key(
             request=request,
-            request_data=cast(  # cast-ok: model-alias checks must mutate the original request
-                dict[str, object], request_data
-            ),
+            request_data=request_data,
             valid_token=valid_token,
             api_key=api_key,
             route=route,
@@ -2390,8 +2389,8 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             llm_router=llm_router,
             team_id=valid_token.team_id,
         )
-        skip_budget_checks = False
-        if model is not None and llm_router is not None:
+        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
+        if not skip_budget_checks and model is not None and llm_router is not None:
             from litellm.proxy.auth.auth_checks import is_model_cost_zero
 
             skip_budget_checks = is_model_cost_zero(  # rebind-ok: pre-existing rebinding on a rename-only line
@@ -3295,7 +3294,7 @@ async def _reserve_budget_after_common_checks(
 
 
 def _should_skip_budget_checks(
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
     request: Request | None,
     llm_router: litellm.Router | None,
@@ -3308,6 +3307,8 @@ def _should_skip_budget_checks(
         llm_router=llm_router,
         team_id=team_id,
     )
+    if is_mcp_discovery_request(route=route, request_body=request_data):
+        return True
     if model is not None and llm_router is not None:
         return is_model_cost_zero(model=model, llm_router=llm_router)
     return False
