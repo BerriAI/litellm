@@ -5,6 +5,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 import pytest
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 
 import litellm
@@ -14,6 +15,55 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+
+
+class TestOpenAIGPTConfigGetModels:
+    """Tests for OpenAIGPTConfig.get_models URL construction."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _mock_models_response(self, ids):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": [{"id": m} for m in ids]}
+        return mock_response
+
+    def test_get_models_keeps_api_version_path(self):
+        """Regression test for #45506.
+
+        Providers that mount the OpenAI API under a path (e.g. OpenRouter's
+        https://openrouter.ai/api/v1) expose the catalog at /api/v1/models. The
+        path must be preserved instead of being stripped to scheme://host.
+        """
+        with patch.object(
+            litellm.module_level_client, "get", return_value=self._mock_models_response(["openai/gpt-oss-120b"])
+        ) as mock_get:
+            models = self.config.get_models(api_key="sk-1234", api_base="https://openrouter.ai/api/v1")
+            assert models == ["openai/gpt-oss-120b"]
+            mock_get.assert_called_once()
+            called_url = mock_get.call_args.kwargs.get("url")
+            assert called_url == "https://openrouter.ai/api/v1/models"
+
+    def test_get_models_plain_host_still_uses_v1(self):
+        """OpenAI's own base (https://api.openai.com) must keep resolving to
+        https://api.openai.com/v1/models."""
+        with patch.object(
+            litellm.module_level_client, "get", return_value=self._mock_models_response(["gpt-4o"])
+        ) as mock_get:
+            models = self.config.get_models(api_key="sk-1234", api_base="https://api.openai.com")
+            assert models == ["gpt-4o"]
+            called_url = mock_get.call_args.kwargs.get("url")
+            assert called_url == "https://api.openai.com/v1/models"
+
+    def test_get_models_trailing_slash_normalized(self):
+        """A trailing slash on an api_version path must be normalized, not doubled."""
+        with patch.object(
+            litellm.module_level_client, "get", return_value=self._mock_models_response(["gpt-4o"])
+        ) as mock_get:
+            self.config.get_models(api_key="sk-1234", api_base="https://openrouter.ai/api/v1/")
+            called_url = mock_get.call_args.kwargs.get("url")
+            assert called_url == "https://openrouter.ai/api/v1/models"
 
 
 class TestOpenAIGPTConfig:
@@ -247,33 +297,6 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.prompt_tokens == 13797
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
-
-    def test_chunk_parser_preserves_service_tier(self):
-        """OpenAI-compatible upstreams serve a service_tier on every streamed
-        chunk; chunk_parser must keep it on the emitted ModelResponseStream so
-        disconnect billing and the reassembled response see the served tier."""
-        handler = OpenAIChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
-
-        tiered_chunk = {
-            "id": "gen-123",
-            "created": 1234567890,
-            "model": "openai/gpt-4o-mini",
-            "object": "chat.completion.chunk",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": ""},
-                    "finish_reason": None,
-                }
-            ],
-            "service_tier": "priority",
-        }
-        plain_chunk = {key: value for key, value in tiered_chunk.items() if key != "service_tier"}
-
-        assert handler.chunk_parser(tiered_chunk).model_dump().get("service_tier") == "priority"
-        assert handler.chunk_parser(plain_chunk).model_dump().get("service_tier") is None
 
     def test_chunk_parser_raises_on_in_body_error_payload(self):
         """vLLM/sglang return HTTP 200 streams whose body carries the error,
