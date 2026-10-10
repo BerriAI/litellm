@@ -3,6 +3,7 @@ from typing import Final, Literal
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
@@ -91,6 +92,8 @@ def get_supported_openai_params(
             return litellm.nvidiaNimEmbeddingConfig.get_supported_openai_params()
     elif custom_llm_provider == "cerebras":
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "nadir":
+        return litellm.NadirConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "baseten":
         return litellm.BasetenConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "xai":
@@ -102,7 +105,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "bedrock_mantle":
-        return litellm.BedrockMantleChatConfig().get_supported_openai_params(model=model)
+        return bedrock_mantle_chat_config(model).get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":

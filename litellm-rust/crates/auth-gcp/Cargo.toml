@@ -12,10 +12,16 @@ google-sdk = ["dep:google-cloud-auth", "dep:http"]
 litellm-auth-types.workspace = true
 
 moka.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+veil.workspace = true
 
 gcp_auth = "0.12.7"
 google-cloud-auth = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
+
+[dev-dependencies]
+rstest.workspace = true
+tempfile.workspace = true

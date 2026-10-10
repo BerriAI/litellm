@@ -1,38 +1,37 @@
 use litellm_auth::SecretValue;
-use litellm_core::ocr::{
+use litellm_auth::VertexParams;
+use litellm_host_python::{from_py, present};
+use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_host_python::from_py;
 use litellm_llms::base_llm::ocr::error::Error;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
-use super::{
-    document::{FileDocumentInput, PythonFileReader},
-    errors::to_pyerr as ocr_error_to_pyerr,
-};
+use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
+    coercion::FieldSpec,
     credentials::{self, CallerTokenProvider},
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+    python_settings::{PythonSettings, Snapshot},
 };
 
-/// What the host keeps after projection: the caller's callables that answer the document
-/// read and token operations, and the provider name the failure mapping reports.
+/// What the host keeps after projection: the caller's token callable that answers the
+/// token operation, and the provider name the failure mapping reports.
 pub(super) struct OcrHostHandles {
-    pub reader: Option<PythonFileReader>,
     pub azure_ad_token_provider: Option<CallerTokenProvider>,
     pub provider: &'static str,
 }
 
 struct OcrArguments<'a, 'py> {
-    request: &'a Bound<'py, PyAny>,
+    bound: &'a Bound<'py, PyDict>,
     kwargs: &'a Bound<'py, PyDict>,
 }
 
 impl<'py> OcrArguments<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_host_python::lookup(self.kwargs, self.request, name)?
+        litellm_host_python::lookup(self.kwargs, self.bound, name)?
             .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
     }
 
@@ -62,7 +61,7 @@ impl<'py> OcrArguments<'_, 'py> {
     fn extra_headers(&self) -> PyResult<Option<Map<String, Value>>> {
         self.lookup("extra_headers")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| from_py(value.bind(self.request.py())))
+            .map(|value| from_py(value.bind(self.bound.py())))
             .transpose()
     }
 
@@ -70,7 +69,7 @@ impl<'py> OcrArguments<'_, 'py> {
         Ok(self
             .lookup("timeout")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| python_timeout_seconds(self.request.py(), value))
+            .map(|value| python_timeout_seconds(self.bound.py(), value))
             .transpose()?
             .flatten())
     }
@@ -104,22 +103,20 @@ impl ProjectedDocument {
         Ok(Self::File(document.extract()?))
     }
 
-    fn into_parts(self) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
+    /// Reads a file-like document now, so it runs after every other argument was read.
+    fn resolve(self, py: Python<'_>) -> PyResult<OcrDocumentInput> {
         match self {
-            Self::File(FileDocumentInput { input, reader }) => Ok((input, reader)),
-            Self::Other(wire) => Ok((
-                decode_document(wire).map_err(ocr_error_to_pyerr)?.into(),
-                None,
-            )),
+            Self::File(file) => file.resolve(py),
+            Self::Other(wire) => Ok(decode_document(wire).map_err(ocr_error_to_pyerr)?.into()),
         }
     }
 }
 
 pub(super) fn project_request(
-    request: &Bound<'_, PyAny>,
+    bound: &Bound<'_, PyDict>,
     kwargs: &Bound<'_, PyDict>,
 ) -> PyResult<(LiteLLMOcrRequest<OcrDocumentInput>, OcrHostHandles)> {
-    let arguments = OcrArguments { request, kwargs };
+    let arguments = OcrArguments { bound, kwargs };
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
     let document = ProjectedDocument::project(&arguments.document()?)?;
@@ -127,7 +124,18 @@ pub(super) fn project_request(
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
-    let optional_params = project_optional_fields(kwargs, &names)?;
+    let optional_params =
+        project_optional_fields(names.iter().copied(), |name| present(kwargs, bound, name))?;
+    let globals = module_globals_to_read(&optional_params, &names);
+    let defaults = if globals.is_empty() {
+        None
+    } else {
+        PythonSettings::ProviderDefaults.read_or_unset(bound.py())?
+    };
+    let optional_params = match defaults {
+        Some(defaults) => fold_module_globals(bound.py(), optional_params, &globals, &defaults)?,
+        None => optional_params,
+    };
     let input_sources = request_input_sources(
         kwargs,
         names
@@ -136,36 +144,189 @@ pub(super) fn project_request(
             .chain(["api_key", "api_base", "extra_headers"]),
     )?;
     let azure_ad_token_provider = credentials::azure_ad_token_provider(kwargs)?;
-    let (document, reader) = document.into_parts()?;
+    let api_base = arguments.api_base()?;
+    let extra_headers = arguments.extra_headers()?;
+    let timeout_seconds = arguments.timeout_seconds()?;
     let wire = OcrWireRequest {
         model,
-        document,
+        document: document.resolve(bound.py())?,
         api_key,
-        api_base: arguments.api_base()?,
+        api_base,
         custom_llm_provider,
-        extra_headers: arguments.extra_headers()?,
+        extra_headers,
         optional_params,
         input_sources,
-        timeout_seconds: arguments.timeout_seconds()?,
+        timeout_seconds,
     };
     let request = decode_request_input(wire).map_err(ocr_error_to_pyerr)?;
     let provider = request.provider_name();
     Ok((
         request,
         OcrHostHandles {
-            reader,
             azure_ad_token_provider,
             provider,
         },
     ))
 }
 
+/// Python's `VertexBase.get_vertex_ai_project` and `get_vertex_ai_location` fall back to a
+/// `litellm.<name>` module global when a call names neither spelling: the globals of the
+/// specs this route consumes whose wire names the call left out.
+fn module_globals_to_read(
+    optional_params: &Map<String, Value>,
+    consumed: &[&str],
+) -> Vec<&'static str> {
+    VertexParams::SPECS
+        .iter()
+        .filter(|spec| spec.wire.iter().all(|name| consumed.contains(name)))
+        .filter(|spec| {
+            !spec
+                .wire
+                .iter()
+                .any(|name| optional_params.contains_key(*name))
+        })
+        .filter_map(|spec| spec.module_global)
+        .collect()
+}
+
+/// Folds each module global in under the name its spec declares, skipping falsy values the
+/// way Python's `or` chain does.
+fn fold_module_globals(
+    py: Python<'_>,
+    optional_params: Map<String, Value>,
+    globals: &[&'static str],
+    defaults: &Snapshot<'_>,
+) -> PyResult<Map<String, Value>> {
+    let read = globals
+        .iter()
+        .map(|name| {
+            let spec = FieldSpec::new(name, |field| field.falsy_optional_string());
+            Ok(defaults
+                .read(&spec)
+                .map_err(|error| settings_error(py, error.into()))?
+                .map(|value| (name.to_string(), Value::String(value))))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(optional_params
+        .into_iter()
+        .chain(read.into_iter().flatten())
+        .collect())
+}
+
+/// A misconfigured litellm setting is the operator's error, not the request's or the
+/// provider's, so the host raises it as is instead of mapping it onto a provider failure.
+pub(super) const SETTINGS_ERROR_MARKER: &str = "native_settings_error";
+
+fn settings_error(py: Python<'_>, error: PyErr) -> PyErr {
+    error.value(py).setattr(SETTINGS_ERROR_MARKER, true).ok();
+    error
+}
+
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+    use litellm_llms_types::formats::ocr::OcrDocument;
     use pyo3::exceptions::PyValueError;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::global_fills_a_missing_project(
+        serde_json::json!({"vertex_location": "us-east5"}),
+        "vertex_project='from-global', vertex_location='ignored'",
+        serde_json::json!({"vertex_location": "us-east5", "vertex_project": "from-global"}),
+    )]
+    #[case::either_spelling_on_the_call_wins(
+        serde_json::json!({"vertex_ai_project": "from-call"}),
+        "vertex_project='from-global', vertex_location=None",
+        serde_json::json!({"vertex_ai_project": "from-call"}),
+    )]
+    #[case::falsy_globals_are_absent(
+        serde_json::json!({}),
+        "vertex_project=[], vertex_location=''",
+        serde_json::json!({}),
+    )]
+    fn module_globals_fill_the_vertex_params_the_call_leaves_out(
+        #[case] params: Value,
+        #[case] defaults: &str,
+        #[case] expected: Value,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = py
+                .eval(
+                    &std::ffi::CString::new(format!(
+                        "__import__('types').SimpleNamespace({defaults})"
+                    ))
+                    .unwrap(),
+                    None,
+                    None,
+                )
+                .unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
+            let consumed = VertexParams::fields().collect::<Vec<_>>();
+            let params = params.as_object().cloned().unwrap();
+            let globals = module_globals_to_read(&params, &consumed);
+
+            let folded = fold_module_globals(py, params, &globals, &snapshot).unwrap();
+
+            assert_eq!(Value::Object(folded), expected);
+        });
+    }
+
+    #[rstest::rstest]
+    fn a_bad_global_is_a_marked_settings_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = py
+                .eval(
+                    c"__import__('types').SimpleNamespace(vertex_project=1)",
+                    None,
+                    None,
+                )
+                .unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
+
+            let error =
+                fold_module_globals(py, Map::new(), &["vertex_project"], &snapshot).unwrap_err();
+
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(
+                error
+                    .to_string()
+                    .contains("provider_defaults.vertex_project")
+            );
+            assert!(
+                error
+                    .value(py)
+                    .getattr_opt(SETTINGS_ERROR_MARKER)
+                    .unwrap()
+                    .is_some()
+            );
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::not_consumed(&["pages"], serde_json::json!({}), &[])]
+    #[case::consumed_and_absent(
+        &["vertex_project", "vertex_ai_project", "vertex_location", "vertex_ai_location"],
+        serde_json::json!({}),
+        &["vertex_project", "vertex_location"]
+    )]
+    #[case::consumed_and_present_in_either_spelling(
+        &["vertex_project", "vertex_ai_project", "vertex_location", "vertex_ai_location"],
+        serde_json::json!({"vertex_ai_project": "p"}),
+        &["vertex_location"]
+    )]
+    fn only_the_globals_of_consumed_absent_params_are_read(
+        #[case] consumed: &[&str],
+        #[case] params: Value,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            module_globals_to_read(params.as_object().unwrap(), consumed),
+            expected
+        );
+    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -173,17 +334,24 @@ mod tests {
         locals
     }
 
-    fn arguments<'a, 'py>(
-        request: &'a Bound<'py, PyAny>,
-        kwargs: &'a Bound<'py, PyDict>,
-    ) -> OcrArguments<'a, 'py> {
-        OcrArguments { request, kwargs }
+    fn dict<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, PyDict> {
+        locals
+            .get_item(name)
+            .unwrap()
+            .unwrap()
+            .cast_into::<PyDict>()
+            .unwrap()
     }
 
-    fn project_document(
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
-        ProjectedDocument::project(document)?.into_parts()
+    fn arguments<'a, 'py>(
+        bound: &'a Bound<'py, PyDict>,
+        kwargs: &'a Bound<'py, PyDict>,
+    ) -> OcrArguments<'a, 'py> {
+        OcrArguments { bound, kwargs }
+    }
+
+    fn project_document(document: &Bound<'_, PyAny>) -> PyResult<OcrDocumentInput> {
+        ProjectedDocument::project(document)?.resolve(document.py())
     }
 
     fn url_document(url: &str) -> OcrDocumentInput {
@@ -210,178 +378,87 @@ sys.modules['litellm.rust_bridge.timeouts'] = timeouts
     }
 
     #[test]
-    fn kwargs_override_request_attributes_including_explicit_none() {
+    fn kwargs_override_bound_values_including_explicit_none() {
         Python::initialize();
         Python::attach(|py| {
             let locals = eval(
                 py,
                 c"
-class Request:
-    def __init__(self):
-        self.accesses = []
-    def __getattribute__(self, name):
-        if name != 'accesses':
-            object.__getattribute__(self, 'accesses').append(name)
-        return object.__getattribute__(self, name)
-request = Request()
-request.model = 'from-request'
-request.custom_llm_provider = 'mistral'
+bound = {'model': 'from-bound', 'custom_llm_provider': 'mistral'}
 kwargs = {'model': 'from-kwargs', 'custom_llm_provider': None}
 ",
             );
-            let request = locals.get_item("request").unwrap().unwrap();
-            let kwargs = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            let arguments = arguments(&request, &kwargs);
+            let (bound, kwargs) = (dict(&locals, "bound"), dict(&locals, "kwargs"));
+            let arguments = arguments(&bound, &kwargs);
             assert_eq!(arguments.model().unwrap(), "from-kwargs");
             assert_eq!(arguments.custom_llm_provider().unwrap(), None);
-            let accesses: Vec<String> = request.getattr("accesses").unwrap().extract().unwrap();
-            assert_eq!(accesses, Vec::<String>::new());
         });
     }
 
+    /// A reader that rewrites the bound arguments while it runs shows which arguments
+    /// projection read before it and which after: every other argument is read first, and
+    /// the read happens exactly once.
     #[test]
-    fn missing_kwargs_read_the_request_property_once() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"
-class Request:
-    def __init__(self):
-        self.reads = 0
-    @property
-    def model(self):
-        self.reads += 1
-        return 'mistral-ocr-latest'
-request = Request()
-kwargs = {}
-",
-            );
-            let request = locals.get_item("request").unwrap().unwrap();
-            let kwargs = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            assert_eq!(
-                arguments(&request, &kwargs).model().unwrap(),
-                "mistral-ocr-latest"
-            );
-            assert_eq!(
-                request.getattr("reads").unwrap().extract::<i32>().unwrap(),
-                1
-            );
-        });
-    }
-
-    #[test]
-    fn request_property_exceptions_keep_their_identity() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"
-failure = LookupError('model failed')
-class Request:
-    @property
-    def model(self):
-        raise failure
-request = Request()
-kwargs = {}
-",
-            );
-            let request = locals.get_item("request").unwrap().unwrap();
-            let kwargs = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            let error = arguments(&request, &kwargs).model().unwrap_err();
-            assert!(
-                error
-                    .value(py)
-                    .is(locals.get_item("failure").unwrap().unwrap())
-            );
-        });
-    }
-
-    #[test]
-    fn unused_raising_property_is_never_inspected() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"
-class Request:
-    @property
-    def unused(self):
-        raise RuntimeError('unused')
-    model = 'mistral-ocr-latest'
-    custom_llm_provider = None
-request = Request()
-kwargs = {}
-",
-            );
-            let request = locals.get_item("request").unwrap().unwrap();
-            let kwargs = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            let arguments = arguments(&request, &kwargs);
-            assert_eq!(arguments.model().unwrap(), "mistral-ocr-latest");
-            assert_eq!(arguments.custom_llm_provider().unwrap(), None);
-        });
-    }
-
-    #[test]
-    fn document_readers_are_not_consumed_during_projection() {
+    fn document_readers_are_read_once_after_every_other_argument() {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
             let locals = eval(
                 py,
                 c"
-class Request:
-    api_base = 'original'
-    timeout = 1
-    @property
-    def document(self):
-        return document
 class Reader:
+    reads = 0
     def read(self):
-        Request.api_base = 'mutated'
-        Request.timeout = 9
+        Reader.reads += 1
+        bound['api_base'] = 'https://mutated.example.com'
+        bound['extra_headers'] = {'x-source': 'mutated'}
+        bound['timeout'] = 9
         return b'abc'
-document = {'type': 'file', 'file': Reader()}
-request = Request()
+bound = {
+    'model': 'mistral/mistral-ocr-latest',
+    'custom_llm_provider': None,
+    'api_key': None,
+    'api_base': 'https://original.example.com',
+    'extra_headers': {'x-source': 'original'},
+    'timeout': 1,
+    'document': {'type': 'file', 'file': Reader(), 'mime_type': 'application/pdf'},
+}
 kwargs = {}
 ",
             );
-            let request = locals.get_item("request").unwrap().unwrap();
-            let kwargs = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            let arguments = arguments(&request, &kwargs);
-            let document = arguments.document().unwrap();
-            let (input, reader) = project_document(&document).unwrap();
-            assert_eq!(input, OcrDocumentInput::HostReader { mime_type: None });
-            assert_eq!(arguments.api_base().unwrap().as_deref(), Some("original"));
-            assert_eq!(arguments.timeout_seconds().unwrap(), Some(1.0));
-            reader.unwrap().read(py).unwrap();
-            assert_eq!(arguments.api_base().unwrap().as_deref(), Some("mutated"));
-            assert_eq!(arguments.timeout_seconds().unwrap(), Some(9.0));
+            let (projected, _) =
+                project_request(&dict(&locals, "bound"), &dict(&locals, "kwargs")).unwrap();
+            assert_eq!(
+                py.eval(c"Reader.reads", Some(&locals), Some(&locals))
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                projected.document,
+                OcrDocumentInput::Bytes {
+                    bytes: b"abc".as_slice().into(),
+                    file_name: None,
+                    mime_type: Some("application/pdf".into()),
+                }
+            );
+            assert_eq!(
+                projected
+                    .credentials
+                    .api_base
+                    .as_ref()
+                    .map(|base| base.value().as_str()),
+                Some("https://original.example.com")
+            );
+            assert_eq!(
+                projected.transport.extra_headers,
+                [("x-source".to_string(), "original".to_string())]
+            );
+            assert_eq!(
+                projected.transport.timeout,
+                Some(std::time::Duration::from_secs(1))
+            );
         });
     }
 
@@ -396,16 +473,14 @@ kwargs = {}
                     None,
                 )
                 .unwrap();
-            let (input, reader) = project_document(&file).unwrap();
             assert_eq!(
-                input,
+                project_document(&file).unwrap(),
                 OcrDocumentInput::Bytes {
                     bytes: b"%PDF-1.4".as_slice().into(),
                     file_name: None,
                     mime_type: Some("application/pdf".into()),
                 }
             );
-            assert!(reader.is_none());
 
             let original = py
                 .eval(
@@ -414,8 +489,10 @@ kwargs = {}
                     None,
                 )
                 .unwrap();
-            let (input, _) = project_document(&original).unwrap();
-            assert_eq!(input, url_document("https://example.com/a.pdf"));
+            assert_eq!(
+                project_document(&original).unwrap(),
+                url_document("https://example.com/a.pdf")
+            );
         });
     }
 
@@ -497,34 +574,26 @@ document = Document()
         });
     }
 
-    fn request_and_kwargs<'py>(
+    fn bound_and_kwargs<'py>(
         py: Python<'py>,
         kwargs: &std::ffi::CStr,
-    ) -> (Bound<'py, PyAny>, Bound<'py, PyDict>) {
+    ) -> (Bound<'py, PyDict>, Bound<'py, PyDict>) {
         let locals = eval(
             py,
             c"
-class Request:
-    model = 'mistral/mistral-ocr-latest'
-    custom_llm_provider = 'mistral'
-    document = {'type': 'document_url', 'document_url': 'https://example.com/request.pdf'}
-    api_key = None
-    api_base = 'https://request.example.com'
-    extra_headers = {'x-source': 'request'}
-    timeout = 1
-request = Request()
+bound = {
+    'model': 'mistral/mistral-ocr-latest',
+    'custom_llm_provider': 'mistral',
+    'document': {'type': 'document_url', 'document_url': 'https://example.com/bound.pdf'},
+    'api_key': None,
+    'api_base': 'https://bound.example.com',
+    'extra_headers': {'x-source': 'bound'},
+    'timeout': 1,
+}
 ",
         );
         py.run(kwargs, Some(&locals), Some(&locals)).unwrap();
-        (
-            locals.get_item("request").unwrap().unwrap(),
-            locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap(),
-        )
+        (dict(&locals, "bound"), dict(&locals, "kwargs"))
     }
 
     #[test]
@@ -532,7 +601,7 @@ request = Request()
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
-            let (request, kwargs) = request_and_kwargs(
+            let (bound, kwargs) = bound_and_kwargs(
                 py,
                 c"
 kwargs = {
@@ -548,7 +617,7 @@ kwargs = {
 }
 ",
             );
-            let (projected, _) = project_request(&request, &kwargs).unwrap();
+            let (projected, _) = project_request(&bound, &kwargs).unwrap();
             assert_eq!(
                 projected.optional_params.keys().collect::<Vec<_>>(),
                 ["pages"]
@@ -557,12 +626,29 @@ kwargs = {
         });
     }
 
+    #[rstest::rstest]
+    #[case::explicit_none_is_unset(c"bound['pages'] = [1]\nkwargs = {'pages': None}", None)]
+    #[case::bound_fallback(c"bound['pages'] = [1]\nkwargs = {}", Some(serde_json::json!([1])))]
+    #[case::keyword_wins(c"bound['pages'] = [1]\nkwargs = {'pages': [0]}", Some(serde_json::json!([0])))]
+    fn optional_params_read_through_bound_and_drop_none(
+        #[case] script: &std::ffi::CStr,
+        #[case] expected: Option<Value>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            stub_timeout_conversion(py);
+            let (bound, kwargs) = bound_and_kwargs(py, script);
+            let (projected, _) = project_request(&bound, &kwargs).unwrap();
+            assert_eq!(projected.optional_params.get("pages").cloned(), expected);
+        });
+    }
+
     #[test]
     fn replacement_kwargs_project_provider_connection_and_timeout() {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
-            let (request, kwargs) = request_and_kwargs(
+            let (bound, kwargs) = bound_and_kwargs(
                 py,
                 c"
 kwargs = {
@@ -575,7 +661,7 @@ kwargs = {
 }
 ",
             );
-            let (projected, handles) = project_request(&request, &kwargs).unwrap();
+            let (projected, handles) = project_request(&bound, &kwargs).unwrap();
             assert_eq!(handles.provider, "azure_ai");
             assert_eq!(projected.model, "mistral-ocr-latest");
             assert_eq!(
@@ -617,7 +703,7 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let (input, _) = project_document(&document).unwrap();
+            let input = project_document(&document).unwrap();
             assert!(matches!(input, OcrDocumentInput::Bytes { .. }));
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);

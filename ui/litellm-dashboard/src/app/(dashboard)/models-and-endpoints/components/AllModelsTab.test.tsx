@@ -82,6 +82,14 @@ vi.mock("../../hooks/models/useModelCostMap", () => ({
 }));
 
 const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
+const mockCredentials = [
+  { credential_name: "openai-prod", display_name: "Prod OpenAI", credential_values: {}, credential_info: {} },
+];
+const mockUseCredentials = vi.hoisted(() => vi.fn());
+vi.mock("../../hooks/credentials/useCredentials", () => ({
+  useCredentials: mockUseCredentials,
+}));
+
 vi.mock("../../hooks/teams/useTeams", () => ({
   useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
 }));
@@ -152,6 +160,35 @@ describe("AllModelsTab", () => {
     modelsInfoCalls.length = 0;
     setModelsInfo([makeRow()]);
     vi.spyOn(useAuthorizedModule, "default").mockReturnValue(MOCK_AUTHORIZED);
+    mockUseCredentials.mockImplementation(({ enabled = true }: { enabled?: boolean } = {}) => ({
+      data: enabled ? { credentials: mockCredentials } : undefined,
+      isLoading: false,
+    }));
+  });
+
+  describe("credential labels", () => {
+    const rowWithCredential = () => {
+      const row = makeRow();
+      return { ...row, litellm_params: { ...row.litellm_params, litellm_credential_name: "openai-prod" } };
+    };
+
+    it("shows the credential's display name for a proxy admin", async () => {
+      setModelsInfo([rowWithCredential()]);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+      expect(await screen.findByText("Prod OpenAI")).toBeInTheDocument();
+      expect(mockUseCredentials).toHaveBeenLastCalledWith({ enabled: true });
+    });
+
+    it("skips the admin-only credential list for other roles and shows the raw name", async () => {
+      vi.spyOn(useAuthorizedModule, "default").mockReturnValue({ ...MOCK_AUTHORIZED, userRole: "Internal User" });
+      setModelsInfo([rowWithCredential()]);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+      expect(await screen.findByText("openai-prod")).toBeInTheDocument();
+      expect(screen.queryByText("Prod OpenAI")).not.toBeInTheDocument();
+      expect(mockUseCredentials).toHaveBeenLastCalledWith({ enabled: false });
+    });
   });
 
   it("renders the fetched models and the server row count", async () => {
@@ -403,6 +440,17 @@ describe("AllModelsTab", () => {
     });
   });
 
+  it("uses All Proxy Models as the public model name filter default", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
+
+    expect(await screen.findByRole("option", { name: "All Proxy Models" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "All Models" })).not.toBeInTheDocument();
+  });
+
   it("renders every row the server returned for the selected model group so rows match the footer total", () => {
     setModelsInfo([makeRow(), { ...makeRow({ model_info: { id: "model-2" } }), model_name: "claude-opus" }], 2);
     renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
@@ -567,7 +615,7 @@ describe("AllModelsTab", () => {
       renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(screen.getByTestId("models-view-select"));
-      await user.click(await screen.findByRole("option", { name: "All Available Models" }));
+      await user.click(await screen.findByRole("option", { name: "All Proxy Models" }));
 
       await waitFor(() => {
         expect(screen.queryByText(/create a Virtual Key/i)).not.toBeInTheDocument();

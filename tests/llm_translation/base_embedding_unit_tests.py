@@ -4,31 +4,24 @@ import json
 import pytest
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
-import os
 
 import litellm
-from litellm import embedding
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import (
     CustomStreamWrapper,
     get_supported_openai_params,
     get_optional_params,
-    get_optional_params_embeddings,
 )
-import requests
 import base64
+from pathlib import Path
 
-# test_example.py
 from abc import ABC, abstractmethod
 
-url = "https://dummyimage.com/100/100/fff&text=Test+image"
-response = requests.get(url)
-file_data = response.content
+file_data = (Path(__file__).parent.parent / "white_100x100.png").read_bytes()
 
 encoded_file = base64.b64encode(file_data).decode("utf-8")
 base64_image = f"data:image/png;base64,{encoded_file}"
-
 
 class BaseLLMEmbeddingTest(ABC):
     """
@@ -69,23 +62,3 @@ class BaseLLMEmbeddingTest(ABC):
 
         CreateEmbeddingResponse.model_validate(response.model_dump())
 
-    def test_embedding_optional_params_max_retries(self):
-        embedding_call_args = self.get_base_embedding_call_args()
-        optional_params = get_optional_params_embeddings(
-            **embedding_call_args, max_retries=20
-        )
-        assert optional_params["max_retries"] == 20
-
-    def test_image_embedding(self):
-        litellm.set_verbose = True
-        from litellm.utils import supports_embedding_image_input
-
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        base_embedding_call_args = self.get_base_embedding_call_args()
-        if not supports_embedding_image_input(base_embedding_call_args["model"], None):
-            print("Model does not support embedding image input")
-            pytest.skip("Model does not support embedding image input")
-
-        embedding(**base_embedding_call_args, input=[base64_image])

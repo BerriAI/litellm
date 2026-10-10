@@ -1,7 +1,16 @@
+import { parseIdentityForForm } from "./agent_identity";
 /**
  * Shared configuration for agent form fields
  * Used across create, view, and update operations
  */
+
+import {
+  EMPTY_KILL_SWITCH_FORM,
+  buildKillSwitchFromForm,
+  parseKillSwitchForForm,
+  type KillSwitchConfig,
+  type KillSwitchFormValue,
+} from "./kill_switch_config";
 
 export interface FieldConfig {
   name: string;
@@ -49,7 +58,7 @@ export const AGENT_FORM_CONFIG: {
         name: "description",
         label: "Description",
         type: "textarea",
-        required: true,
+        required: false,
         placeholder: "Describe what this agent does...",
         rows: 3,
       },
@@ -236,6 +245,7 @@ export const getDefaultFormValues = () => {
   const defaults: any = {
     defaultInputModes: ["text"],
     defaultOutputModes: ["text"],
+    kill_switch: { ...EMPTY_KILL_SWITCH_FORM },
   };
 
   Object.values(AGENT_FORM_CONFIG).forEach((section) => {
@@ -310,7 +320,20 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.extra_headers = values.extra_headers;
   }
 
+  applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
+
   return agentData;
+};
+
+export const applyKillSwitchToPayload = (
+  agentData: { kill_switch?: KillSwitchConfig | null },
+  form: KillSwitchFormValue | undefined,
+  existingAgent?: { kill_switch?: KillSwitchConfig | null },
+) => {
+  const killSwitch = buildKillSwitchFromForm(form);
+  if (killSwitch !== undefined && (killSwitch !== null || existingAgent?.kill_switch)) {
+    agentData.kill_switch = killSwitch;
+  }
 };
 
 export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] | null }) => ({
@@ -318,6 +341,7 @@ export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] 
 });
 
 export const parseMcpPermissionsForForm = (agent: any) => ({
+  ...parseIdentityForForm(agent),
   allowed_mcp_servers_and_groups: {
     servers: agent.object_permission?.mcp_servers ?? [],
     accessGroups: agent.object_permission?.mcp_access_groups ?? [],
@@ -341,8 +365,9 @@ export const buildMcpObjectPermission = (values: any) => ({
  * Parse agent data for form fields
  */
 export const parseAgentForForm = (agent: any) => {
+  const card = agent.agent_card_params ?? {};
   const skills =
-    agent.agent_card_params?.skills?.map((skill: any) => ({
+    card.skills?.map((skill: any) => ({
       ...skill,
       tags: skill.tags,
       examples: skill.examples || [],
@@ -350,18 +375,18 @@ export const parseAgentForForm = (agent: any) => {
 
   return {
     agent_name: agent.agent_name,
-    name: agent.agent_card_params?.name,
-    description: agent.agent_card_params?.description,
-    url: agent.agent_card_params?.url,
-    version: agent.agent_card_params?.version,
-    protocolVersion: agent.agent_card_params?.protocolVersion,
-    streaming: agent.agent_card_params?.capabilities?.streaming,
-    pushNotifications: agent.agent_card_params?.capabilities?.pushNotifications,
-    stateTransitionHistory: agent.agent_card_params?.capabilities?.stateTransitionHistory,
+    name: card.name || agent.agent_name,
+    description: card.description,
+    url: card.url,
+    version: card.version,
+    protocolVersion: card.protocolVersion,
+    streaming: card.capabilities?.streaming,
+    pushNotifications: card.capabilities?.pushNotifications,
+    stateTransitionHistory: card.capabilities?.stateTransitionHistory,
     skills: skills,
-    iconUrl: agent.agent_card_params?.iconUrl,
-    documentationUrl: agent.agent_card_params?.documentationUrl,
-    supportsAuthenticatedExtendedCard: agent.agent_card_params?.supportsAuthenticatedExtendedCard,
+    iconUrl: card.iconUrl,
+    documentationUrl: card.documentationUrl,
+    supportsAuthenticatedExtendedCard: card.supportsAuthenticatedExtendedCard,
     model: agent.litellm_params?.model,
     make_public: agent.litellm_params?.make_public,
     cost_per_query: agent.litellm_params?.cost_per_query,
@@ -380,6 +405,7 @@ export const parseAgentForForm = (agent: any) => {
       : [],
     // extra_headers: already an array of strings
     extra_headers: agent.extra_headers ?? [],
+    kill_switch: parseKillSwitchForForm(agent.kill_switch),
     ...parseMcpPermissionsForForm(agent),
     ...parseAccessGroupIdsForForm(agent),
   };

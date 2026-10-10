@@ -1,71 +1,61 @@
 mod host;
 
-use host::MessagesRouteHost;
-use litellm_callbacks_legacy_python::{
-    LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
-};
-use litellm_core::messages::route::{messages_machine, supports};
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use host::MessagesPythonHost;
+use litellm_callbacks_legacy_python::LoggingOperation;
+use pyo3::prelude::*;
 
-use crate::errors::RustBridgeDeclined;
+use super::NativeCall;
 
-const SURFACE: LegacySurface = LegacySurface {
-    call_type: "anthropic_messages",
-    input_description: "Messages",
-    stream: Some(PassThroughStream {
-        url_route: "/v1/messages",
-        endpoint_type: "anthropic",
-    }),
-};
-
-fn run_messages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let model: String = request.getattr("model")?.extract()?;
-    let provider: Option<String> = request.getattr("custom_llm_provider")?.extract()?;
-    let stream = request
-        .getattr("stream")?
-        .extract::<Option<bool>>()?
-        .unwrap_or(false);
-    if !supports(&model, provider.as_deref(), stream) {
-        return Err(RustBridgeDeclined::new_err(
-            "the Rust Messages route does not serve this provider",
-        ));
-    }
-    let secrets = crate::secrets::source(py)?;
-    run_legacy_call(
+fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+    crate::routes::run_public_call(
         py,
-        SURFACE,
-        PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(messages_machine(secrets)),
-        MessagesRouteHost::new(request.unbind()),
+        arguments,
+        move |py, arguments, request| {
+            let route = litellm_inference_messages::MessagesRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, selection): (_, crate::cache::Selection),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = selection.attach(services);
+                    let route = match cache {
+                        Some(cache) => route.with_cache(cache),
+                        None => route,
+                    };
+                    route
+                        .execute(
+                            call,
+                            &interceptors,
+                            litellm_inference::CallOptions {
+                                cache: Some(options.policy),
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
+        },
+        MessagesPythonHost::new(call.view()?, asynchronous),
+        hooks,
         asynchronous,
     )
 }
 
 #[pyfunction]
-pub(crate) fn messages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_messages(py, request, args, kwargs, false)
+pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_messages(py, call, false)
 }
 
 #[pyfunction]
-pub(crate) fn amessages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_messages(py, request, args, kwargs, true)
+pub(crate) fn amessages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_messages(py, call, true)
 }

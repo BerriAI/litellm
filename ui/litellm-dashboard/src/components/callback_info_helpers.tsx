@@ -10,6 +10,8 @@ import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 import pointfiveLogo from "../../public/assets/logos/pointfive.png";
+import signozLogo from "../../public/assets/logos/signoz.svg";
+import databricksLogo from "../../public/assets/logos/databricks.svg";
 
 interface CallbackConfig {
   id: string;
@@ -18,6 +20,7 @@ interface CallbackConfig {
   supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
   dynamic_param_options?: Record<string, readonly string[]>;
+  success_event_params?: string[];
   description: string;
 }
 
@@ -32,7 +35,12 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       arize_space_id: "password",
       arize_success_sampling_rate: "number",
       arize_error_sampling_rate: "number",
+      arize_otlp_protocol: "select",
     },
+    dynamic_param_options: {
+      arize_otlp_protocol: ["grpc", "http/protobuf"],
+    },
+    success_event_params: ["arize_otlp_protocol"],
     description: "Arize Logging Integration",
   },
   {
@@ -182,6 +190,20 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "PointFive Logging Integration",
   },
   {
+    id: "zerobus",
+    displayName: "Databricks Zerobus",
+    logo: databricksLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      ZEROBUS_WORKSPACE_URL: "text",
+      ZEROBUS_SERVER_ENDPOINT: "text",
+      ZEROBUS_CLIENT_ID: "text",
+      ZEROBUS_CLIENT_SECRET: "password",
+      ZEROBUS_TABLE_NAME: "text",
+    },
+    description: "Databricks Zerobus Ingest Logging Integration",
+  },
+  {
     id: "s3",
     displayName: "S3",
     logo: awsLogo.src,
@@ -193,6 +215,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       aws_region: "text",
     },
     description: "S3 Bucket (AWS) Logging Integration",
+  },
+  {
+    id: "signoz",
+    displayName: "SigNoz",
+    logo: signozLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      signoz_ingestion_endpoint: "text",
+      signoz_ingestion_key: "password",
+    },
+    description: "SigNoz Logging Integration. Setup: https://signoz.io/docs/litellm-observability/",
   },
   {
     id: "SQS",

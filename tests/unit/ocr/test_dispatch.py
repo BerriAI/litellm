@@ -10,19 +10,13 @@ from litellm.ocr.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
-from litellm.rust_bridge import catalog
+from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.ocr.entrypoints import (
-    NATIVE_AOCR,
-    NATIVE_OCR,
-    LiteLLMOcrRequest,
-    NativeAocr,
-    NativeOcr,
-)
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, NativeAocr, NativeOcr
+from litellm.rust_bridge.public_call import NativeCall
 
-PYTHON_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.PYTHON_ONLY),)
 RUST_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),)
 
 
@@ -42,87 +36,6 @@ def response(model: str = "mistral/mistral-ocr-latest") -> OCRResponse:
     return OCRResponse(pages=[], model=model)
 
 
-def test_python_route_forwards_original_call_shape() -> None:
-    document: Final[Mapping[str, object]] = {
-        "type": "document_url",
-        "document_url": "https://example.invalid/document.pdf",
-    }
-    pages: Final = [0]
-    args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", document)
-    kwargs: Final[Mapping[str, object]] = {"pages": pages}
-    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
-    expected: Final = response()
-
-    def python(*call_args: object, **call_kwargs: object) -> OCRResponse:  # kwargs-ok: records public call shape
-        captured.append((call_args, call_kwargs))
-        return expected
-
-    def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-    ) -> OCRResponse:
-        pytest.fail("Python-only dispatch must not call native")
-
-    result: Final = _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
-        rules=PYTHON_RULES,
-    )
-
-    assert result is expected
-    call_args, call_kwargs = captured[0]
-    assert call_args == args
-    assert call_args[1] is document
-    assert call_kwargs == kwargs
-    assert call_kwargs["pages"] is pages
-    assert kwargs == {"pages": pages}
-
-
-@pytest.mark.asyncio
-async def test_async_python_route_forwards_original_call_shape() -> None:
-    document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
-    pages: Final = [1]
-    args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", document)
-    kwargs: Final[Mapping[str, object]] = {"pages": pages}
-    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
-    expected: Final = response()
-
-    async def python(
-        *call_args: object,
-        **call_kwargs: object,  # kwargs-ok: records public call shape
-    ) -> OCRResponse:
-        captured.append((call_args, call_kwargs))
-        return expected
-
-    async def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-    ) -> OCRResponse:
-        pytest.fail("Python-only dispatch must not call native")
-
-    result: Final = await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=python,
-        binding=aocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
-        rules=PYTHON_RULES,
-    )
-
-    assert result is expected
-    call_args, call_kwargs = captured[0]
-    assert call_args == args
-    assert call_args[1] is document
-    assert call_kwargs == kwargs
-    assert call_kwargs["pages"] is pages
-    assert kwargs == {"pages": pages}
-
-
 def test_native_receives_normalized_positional_request_and_original_call_shape() -> None:
     document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
     timeout: Final = httpx.Timeout(30)
@@ -137,39 +50,36 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
         "extra_headers": extra_headers,
         "pages": pages,
     }
-    captured: Final[list[tuple[LiteLLMOcrRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
-    def python(*call_args: object, **call_kwargs: object) -> OCRResponse:  # kwargs-ok: rejected fallback
-        pytest.fail("Required Rust dispatch must not call Python")
-
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
+        args: Final = request.args
+        kwargs: Final = request.kwargs
         captured.append((request, args, kwargs))
         return expected
 
     result: Final = _DISPATCH.run(
         args,
         kwargs,
-        python=python,
+        python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
     request, call_args, call_kwargs = captured[0]
     assert result is expected
-    assert request.model == "mistral/mistral-ocr-latest"
-    assert request.document is document
-    assert request.api_key == "test-key"
-    assert request.api_base == "https://example.invalid"
-    assert request.timeout is timeout
-    assert request.custom_llm_provider == "mistral"
-    assert request.extra_headers is extra_headers
-    assert request.kwargs == {"pages": pages}
+    assert request.resolved["model"] == "mistral/mistral-ocr-latest"
+    assert request.resolved["document"] is document
+    assert request.resolved["api_key"] == "test-key"
+    assert request.resolved["api_base"] == "https://example.invalid"
+    assert request.resolved["timeout"] is timeout
+    assert request.resolved["custom_llm_provider"] == "mistral"
+    assert request.resolved["extra_headers"] is extra_headers
+    assert request.kwargs == kwargs
     assert request.kwargs["pages"] is pages
     assert call_args is args
     assert call_kwargs is kwargs
@@ -187,69 +97,89 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
         "document": document,
         "pages": pages,
     }
-    captured: Final[list[tuple[LiteLLMOcrRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
-    def python(*call_args: object, **call_kwargs: object) -> OCRResponse:  # kwargs-ok: rejected fallback
-        pytest.fail("Required Rust dispatch must not call Python")
-
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
+        args: Final = request.args
+        kwargs: Final = request.kwargs
         captured.append((request, args, kwargs))
         return expected
 
     result: Final = _DISPATCH.run(
         args,
         kwargs,
-        python=python,
+        python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
     request, call_args, call_kwargs = captured[0]
     assert result is expected
-    assert request.model == "mistral/mistral-ocr-latest"
-    assert request.document is document
-    assert request.kwargs == {"pages": pages}
+    assert request.resolved["model"] == "mistral/mistral-ocr-latest"
+    assert request.resolved["document"] is document
+    assert request.kwargs == kwargs
     assert call_args is args
     assert call_kwargs is kwargs
     assert call_kwargs["model"] == "mistral/mistral-ocr-latest"
     assert call_kwargs["document"] is document
 
 
-def test_aocr_marker_bypasses_native() -> None:
+def test_aocr_marker_cannot_be_served_without_python() -> None:
     document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
     args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", document)
     kwargs: Final[Mapping[str, object]] = {"aocr": True}
-    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
-    expected: Final = response()
-
-    def python(*call_args: object, **call_kwargs: object) -> OCRResponse:  # kwargs-ok: records public call shape
-        captured.append((call_args, call_kwargs))
-        return expected
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
-        pytest.fail("aocr's inner ocr call must stay on Python")
+        pytest.fail("the aocr bypass marker must not reach native")
 
-    result: Final = _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
-        rules=RUST_RULES,
-    )
+    with pytest.raises(runtime.NoPythonImplementationError, match="bypass"):
+        _DISPATCH.run(
+            args,
+            kwargs,
+            python=runtime.NO_PYTHON,
+            binding=ocr_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
+            rules=RUST_RULES,
+        )
 
-    assert result is expected
-    assert captured == [(args, kwargs)]
+
+def test_missing_native_binding_is_a_required_rust_error() -> None:
+    args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
+
+    with pytest.raises(RuntimeError, match="Rust ocr bridge"):
+        _DISPATCH.run(
+            args,
+            {},
+            python=runtime.NO_PYTHON,
+            binding=ocr_binding(None),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
+            rules=RUST_RULES,
+        )
+
+
+def test_non_required_rule_cannot_be_served_without_python() -> None:
+    args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
+
+    def native(
+        request: NativeCall,
+    ) -> OCRResponse:
+        return response()
+
+    with pytest.raises(runtime.NoPythonImplementationError, match="RUST_REQUIRED"):
+        _DISPATCH.run(
+            args,
+            {},
+            python=runtime.NO_PYTHON,
+            binding=ocr_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
+            rules=(RouteRule(Route.OCR, Rollout.PYTHON_ONLY),),
+        )
 
 
 @pytest.mark.parametrize(
@@ -267,16 +197,9 @@ def test_aocr_marker_bypasses_native() -> None:
         ),
     ),
 )
-def test_ocr_parser_errors_before_python_or_native(
-    args: tuple[object, ...], kwargs: Mapping[str, object], message: str
-) -> None:
-    def python(*call_args: object, **call_kwargs: object) -> OCRResponse:  # kwargs-ok: rejects parser failures
-        pytest.fail("OCR parser failures must not call Python")
-
+def test_ocr_parser_errors_before_native(args: tuple[object, ...], kwargs: Mapping[str, object], message: str) -> None:
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         pytest.fail("OCR parser failures must not call native")
 
@@ -284,9 +207,9 @@ def test_ocr_parser_errors_before_python_or_native(
         _DISPATCH.run(
             args,
             kwargs,
-            python=python,
+            python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -307,19 +230,11 @@ def test_ocr_parser_errors_before_python_or_native(
         ),
     ),
 )
-async def test_aocr_parser_errors_before_python_or_native(
+async def test_aocr_parser_errors_before_native(
     args: tuple[object, ...], kwargs: Mapping[str, object], message: str
 ) -> None:
-    async def python(
-        *call_args: object,
-        **call_kwargs: object,  # kwargs-ok: rejects parser failures
-    ) -> OCRResponse:
-        pytest.fail("OCR parser failures must not call Python")
-
     async def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         pytest.fail("OCR parser failures must not call native")
 
@@ -327,9 +242,9 @@ async def test_aocr_parser_errors_before_python_or_native(
         await _ADISPATCH.arun(
             args,
             kwargs,
-            python=python,
+            python=runtime.NO_PYTHON,
             binding=aocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -339,13 +254,11 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
         "type": "document_url",
         "document_url": "https://example.invalid/document.pdf",
     }
-    captured: Final[list[LiteLLMOcrRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         captured.append(request)
         return expected
@@ -358,7 +271,7 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
     finally:
         NATIVE_OCR.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]
+    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
 
 
 @pytest.mark.asyncio
@@ -367,13 +280,11 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         "type": "document_url",
         "document_url": "https://example.invalid/document.pdf",
     }
-    captured: Final[list[LiteLLMOcrRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
     async def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         captured.append(request)
         return expected
@@ -386,40 +297,4 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
     finally:
         NATIVE_AOCR.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]
-
-
-@pytest.mark.parametrize(
-    ("model", "custom_llm_provider", "expected"),
-    (
-        ("aws_textract/detect-document-text", None, "native"),
-        ("detect-document-text", "aws_textract", "native"),
-        ("mistral/mistral-ocr-latest", None, "python"),
-        ("mistral/mistral-ocr-latest", "aws_textract", "native"),
-        ("aws_textract", None, "python"),
-    ),
-)
-def test_provider_scoped_rule_sees_the_provider_named_by_the_model_prefix(
-    model: str, custom_llm_provider: str | None, expected: str
-) -> None:
-    rules: Final[Rules] = (
-        RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-    )
-    document: Final[Mapping[str, object]] = {"type": "image_url", "image_url": "data:image/png;base64,YQ=="}
-    kwargs: Final[Mapping[str, object]] = (
-        {} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}
-    )
-    python_response: Final = response("python")
-    native_response: Final = response("native")
-
-    result: Final = _DISPATCH.run(
-        (model, document),
-        kwargs,
-        python=lambda *_args, **_kwargs: python_response,
-        binding=ocr_binding(lambda *_args, **_kwargs: native_response),
-        native=lambda _hook, _request, _args, _kwargs: native_response,
-        rules=rules,
-    )
-
-    assert cast(OCRResponse, result).model == expected  # noqa: TID251  # sync dispatch returns the response itself
+    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]

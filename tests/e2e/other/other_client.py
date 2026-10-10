@@ -16,15 +16,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, ProbeResult, Result, unwrap
+from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, ProbeResult, Result
+from e2e_metadata import step
 from idp import Keycloak, keycloak_from_env
 from models import (
     ChatBody,
     ChatResponse,
+    JwtKeyMappingDeleteBody,
+    JwtKeyMappingDeleteResponse,
+    JwtKeyMappingListParams,
+    JwtKeyMappingListResponse,
     ModelsListParams,
     ModelsListResponse,
     ReadinessDetailsResponse,
     ReadinessResponse,
+    UserInfoParams,
+    UserInfoWithKeysResponse,
     UserListParams,
     UserListResponse,
     UserNewBody,
@@ -50,11 +57,13 @@ class OtherClient:
         """Resolved per use, so the suite's non-JWT tests never need the IdP env."""
         return keycloak_from_env()
 
+    @step("Call /health/liveliness without credentials")
     def liveness(self) -> ProbeResult:
         """GET /health/liveliness. Unauthenticated; the probe returns status +
         raw body so the test can assert the worker reports itself alive."""
         return self.proxy.transport.probe("/health/liveliness", params=NoBody())
 
+    @step("Call /health/readiness without credentials")
     def readiness_public(self) -> Result[ReadinessResponse]:
         """GET /health/readiness with no credential at all, proving the probe is
         safe to expose to an unauthenticated load balancer."""
@@ -65,6 +74,7 @@ class OtherClient:
             response_type=ReadinessResponse,
         )
 
+    @step("Call /health/readiness/details with the given key")
     def readiness_details(self, key: str) -> Result[ReadinessDetailsResponse]:
         return self.proxy.transport.get(
             "/health/readiness/details",
@@ -73,6 +83,7 @@ class OtherClient:
             response_type=ReadinessDetailsResponse,
         )
 
+    @step("Call /health/readiness/details without credentials")
     def readiness_details_unauthenticated(self) -> Result[ReadinessDetailsResponse]:
         return self.proxy.transport.get(
             "/health/readiness/details",
@@ -81,6 +92,49 @@ class OtherClient:
             response_type=ReadinessDetailsResponse,
         )
 
+    @step("Create the {body.user_role} user {body.user_email} through /user/new")
+    def user_new(self, body: UserNewBody) -> Result[UserNewResponse]:
+        """POST /user/new under the master key: seed the litellm user a JWT
+        `sub` claim resolves to, before that token ever reaches the proxy."""
+        return self.proxy.transport.post(
+            "/user/new",
+            headers=self.proxy.transport.master,
+            json=body,
+            response_type=UserNewResponse,
+        )
+
+    @step("Read the user's keys from /user/info")
+    def user_info(self, user_id: str) -> Result[UserInfoWithKeysResponse]:
+        """GET /user/info under the master key. Only the user's key rows are
+        modelled: `token` is the stored key hash, never the plaintext key."""
+        return self.proxy.transport.get(
+            "/user/info",
+            headers=self.proxy.transport.master,
+            params=UserInfoParams(user_id=user_id),
+            response_type=UserInfoWithKeysResponse,
+        )
+
+    @step("List the JWT-to-key mappings from /jwt/key/mapping/list")
+    def jwt_mapping_list(self) -> Result[JwtKeyMappingListResponse]:
+        """GET /jwt/key/mapping/list under the master key."""
+        return self.proxy.transport.get(
+            "/jwt/key/mapping/list",
+            headers=self.proxy.transport.master,
+            params=JwtKeyMappingListParams(size=100),
+            response_type=JwtKeyMappingListResponse,
+        )
+
+    @step("Delete the JWT-to-key mapping")
+    def jwt_mapping_delete(self, mapping_id: str) -> Result[JwtKeyMappingDeleteResponse]:
+        """POST /jwt/key/mapping/delete under the master key."""
+        return self.proxy.transport.post(
+            "/jwt/key/mapping/delete",
+            headers=self.proxy.transport.master,
+            json=JwtKeyMappingDeleteBody(id=mapping_id),
+            response_type=JwtKeyMappingDeleteResponse,
+        )
+
+    @step("Send a /chat/completions request to {body.model} as team {team} with the given token")
     def chat_as_team(self, token: str, team: str, body: ChatBody) -> Result[ChatResponse]:
         """POST /chat/completions under `token` with `x-litellm-team-id: team`."""
         return self.proxy.transport.post(
@@ -93,6 +147,7 @@ class OtherClient:
             response_type=ChatResponse,
         )
 
+    @step("List the models from /v1/models with the given token, in the Anthropic shape: {anthropic}")
     def list_models_as(self, token: str, *, anthropic: bool = False) -> Result[ModelsListResponse]:
         """GET /v1/models under `token`, in the OpenAI shape or, with `anthropic`, the
         Anthropic Models API shape Claude Code reads. Both carry `data[].id`."""
@@ -104,17 +159,7 @@ class OtherClient:
             response_type=ModelsListResponse,
         )
 
-    def create_user(self, body: UserNewBody) -> str:
-        """POST /user/new as the master key; the row a JWT's `sub` resolves to."""
-        return unwrap(
-            self.proxy.transport.post(
-                "/user/new",
-                headers=self.proxy.management_headers(),
-                json=body,
-                response_type=UserNewResponse,
-            )
-        ).user_id
-
+    @step("List users from /user/list with the given key")
     def list_users_as(self, key: str) -> Result[UserListResponse]:
         """GET /user/list under `key`. Admin-only, so it doubles as the master
         key's authorization proof: the master key (proxy admin) reads it, a

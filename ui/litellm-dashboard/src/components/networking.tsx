@@ -92,10 +92,12 @@ import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
-import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
+import { fetchClient } from "@/lib/http/api";
+import { toAgent, toAgentCard, type Agent, type AgentsResponse } from "./agents/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type {
   MCPGatewaySessionSelector,
@@ -111,17 +113,38 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import type { ExportFormat, ExportScope } from "./EntityUsageExport/types";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
-import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
+import type {
+  SpanDetail,
+  SpanErrorPage,
+  SpanErrorQuery,
+  SpanQuery,
+  Trace,
+  TraceDetailQuery,
+  TraceListQuery,
+  TracePage,
+} from "@litellm/lens-ui";
 import {
   createApiClient,
   deriveErrorMessage,
   extractProxyErrorMessage,
   unwrapProxyErrorMessage,
+  type QueryParams,
 } from "@/lib/http/client";
+import type {
+  CacheLeakageKeysResponse,
+  DailyActivityAggregatedResponse,
+  DailyActivityEntity,
+  DailyActivityKeyPageResponse,
+  DailyActivityKeySearchResponse,
+  DailyActivityRequest,
+  ExportFormat,
+  ExportType,
+  ModelTopKeysResponse,
+} from "./UsagePage/dailyActivityApi";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
@@ -295,6 +318,8 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
+  display_name?: string | null;
+  source?: "db" | "config";
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
@@ -370,6 +395,7 @@ export interface LiteLLMWellKnownUiConfig {
   hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
+  mcp_stdio_enabled?: boolean;
 }
 
 export interface CredentialsResponse {
@@ -529,9 +555,10 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (catalogOnly = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
+    const path = catalogOnly ? "/public/litellm_model_cost_map?catalog_only=true" : "/public/litellm_model_cost_map";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}${path}` : path;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1018,29 +1045,8 @@ export const teamDeleteCall = async (accessToken: string, teamID: string) => {
   }
 };
 
-export interface UserInfo {
-  user_id: string;
-  user_email: string;
-  user_alias: string | null;
-  user_role: string;
-  spend: number;
-  max_budget: number | null;
-  models: string[];
-  key_count: number;
-  created_at: string;
-  updated_at: string;
-  sso_user_id: string | null;
-  budget_duration: string | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export type UserListResponse = {
-  page: number;
-  page_size: number;
-  total: number;
-  total_pages: number;
-  users: UserInfo[];
-};
+export type UserListResponse = components["schemas"]["UserListResponse"];
+export type UserInfo = UserListResponse["users"][number];
 
 export const userListCall = async (
   accessToken: string,
@@ -1055,13 +1061,10 @@ export const userListCall = async (
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
   search: string | null = null,
-) => {
-  /**
-   * Get all available teams on proxy
-   */
-  try {
-    const data = (await apiClient.get(`/user/list`, {
-      accessToken,
+): Promise<UserListResponse> => {
+  const { data } = await fetchClient.GET("/user/list", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: {
       query: {
         user_ids: userIDs && userIDs.length > 0 ? userIDs.join(",") : undefined,
         page: page || undefined,
@@ -1075,12 +1078,10 @@ export const userListCall = async (
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
         search: search || undefined,
       },
-    })) as UserListResponse;
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
+    },
+  });
+  if (!data) throw new Error("User list response is empty");
+  return data;
 };
 
 /**
@@ -1093,6 +1094,8 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
@@ -1281,247 +1284,110 @@ export const transformRequestCall = async (accessToken: string, request: object)
   }
 };
 
-type DailyActivityQueryValue = string | number | string[] | null | undefined;
-
-const DEFAULT_DAILY_ACTIVITY_PAGE_SIZE = "1000";
-
-const appendDailyActivityQueryParam = (params: URLSearchParams, key: string, value: DailyActivityQueryValue) => {
-  if (value === null || value === undefined) {
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length > 0) {
-      params.append(key, value.join(","));
-    }
-    return;
-  }
-
-  params.append(key, `${value}`);
+const ENTITY_ID_QUERY_PARAM: Record<DailyActivityEntity, string> = {
+  user: "user_id",
+  team: "team_ids",
+  tag: "tags",
+  organization: "organization_ids",
+  customer: "end_user_ids",
+  agent: "agent_ids",
 };
 
-const buildDailyActivityUrl = (
-  endpoint: string,
-  startTime: Date,
-  endTime: Date,
-  page: number,
-  extraQueryParams?: Record<string, DailyActivityQueryValue>,
-) => {
-  const resolvedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}${resolvedEndpoint}` : resolvedEndpoint;
-
-  const params = new URLSearchParams();
-  params.append("start_date", formatDate(startTime));
-  params.append("end_date", formatDate(endTime));
-  params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
-  params.append("page", page.toString());
-  // Send timezone offset so backend can adjust date range for UTC storage
-  params.append("timezone", new Date().getTimezoneOffset().toString());
-
-  if (extraQueryParams) {
-    Object.entries(extraQueryParams).forEach(([key, value]) => {
-      appendDailyActivityQueryParam(params, key, value);
-    });
-  }
-
-  const queryString = params.toString();
-  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+const EXCLUDE_ENTITY_ID_QUERY_PARAM: Partial<Record<DailyActivityEntity, string>> = {
+  team: "exclude_team_ids",
+  organization: "exclude_organization_ids",
+  customer: "exclude_end_user_ids",
+  agent: "exclude_agent_ids",
 };
 
-type DailyActivityCallOptions = {
-  accessToken: string;
-  endpoint: string;
-  startTime: Date;
-  endTime: Date;
-  page?: number;
-  extraQueryParams?: Record<string, DailyActivityQueryValue>;
+const dailyActivityQuery = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  extra: QueryParams = {},
+): QueryParams => {
+  const entityIds = req.entityIds ?? undefined;
+  const excludeEntityIds = req.excludeEntityIds;
+  const joinedEntityIds = entityIds && entityIds.length > 0 ? entityIds.join(",") : undefined;
+  const entityIdValue = entity === "user" ? entityIds?.[0] : joinedEntityIds;
+  const excludeParam = EXCLUDE_ENTITY_ID_QUERY_PARAM[entity];
+  return {
+    start_date: formatDate(req.startTime),
+    end_date: formatDate(req.endTime),
+    model: req.model,
+    api_key: req.apiKey,
+    [ENTITY_ID_QUERY_PARAM[entity]]: entityIdValue,
+    ...(excludeParam
+      ? { [excludeParam]: excludeEntityIds && excludeEntityIds.length > 0 ? excludeEntityIds.join(",") : undefined }
+      : {}),
+    timezone: new Date().getTimezoneOffset().toString(),
+    include_current_utc_day: entity === "user" && req.includeCurrentUtcDay ? "true" : undefined,
+    ...extra,
+  };
 };
 
-const fetchDailyActivity = async ({
-  accessToken,
-  endpoint,
-  startTime,
-  endTime,
-  page = 1,
-  extraQueryParams,
-}: DailyActivityCallOptions) => {
-  try {
-    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error(`Failed to fetch daily activity (${endpoint}):`, error);
-    throw error;
-  }
-};
-
-export const userDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  userId: string | null = null,
-  includeCurrentUtcDay: boolean = false,
-  apiKey: string | null = null,
-) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/user/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      user_id: userId,
-      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
-      api_key: apiKey,
-    },
+export const dailyActivityAggregatedCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+): Promise<DailyActivityAggregatedResponse> =>
+  apiClient.get<DailyActivityAggregatedResponse>(`/${entity}/daily/activity/aggregated`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
   });
-};
 
-export const tagDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  tags: string[] | null = null,
-) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/tag/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      tags,
-    },
+export const dailyActivityKeyPageCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  offset: number,
+  limit: number,
+): Promise<DailyActivityKeyPageResponse> =>
+  apiClient.get<DailyActivityKeyPageResponse>(`/${entity}/daily/activity/aggregated/keys`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, { offset, limit }),
   });
-};
 
-export const teamDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  teamIds: string[] | null = null,
-) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/team/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      team_ids: teamIds,
-      exclude_team_ids: "litellm-dashboard",
-    },
+export const dailyActivityKeySearchCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  search: string,
+  limit?: number,
+): Promise<DailyActivityKeySearchResponse> =>
+  apiClient.get<DailyActivityKeySearchResponse>(`/${entity}/daily/activity/aggregated/search`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, { search, ...(limit === undefined ? {} : { limit }) }),
   });
-};
 
-export const teamDailyActivityAggregatedCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  teamIds: string[] | null = null,
-) => {
-  /**
-   * Get aggregated daily team activity with per-team breakdown (no pagination)
-   */
-  try {
-    return await apiClient.get(`/team/daily/activity/aggregated`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
-        exclude_team_ids: "litellm-dashboard",
-      },
-    });
-  } catch (error) {
-    console.error("Failed to fetch aggregated team daily activity:", error);
-    throw error;
-  }
-};
-
-export const teamDailyActivityExportCall = async ({
-  accessToken,
-  startTime,
-  endTime,
-  teamIds,
-  exportType,
-  format,
-}: {
-  accessToken: string;
-  startTime: Date;
-  endTime: Date;
-  teamIds: string[] | null;
-  exportType: ExportScope;
-  format: ExportFormat;
-}): Promise<Blob> => {
-  return apiClient.get<Blob>(`/team/daily/activity/export`, {
-    accessToken,
-    responseType: "blob",
-    query: {
-      start_date: formatDate(startTime),
-      end_date: formatDate(endTime),
-      timezone: new Date().getTimezoneOffset().toString(),
-      export_type: exportType,
-      format,
-      team_id: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
-      exclude_team_ids: "litellm-dashboard",
-    },
+export const dailyActivityModelTopKeysCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  model: string,
+  byModelGroup: boolean,
+  limit?: number,
+): Promise<ModelTopKeysResponse> =>
+  apiClient.get<ModelTopKeysResponse>(`/${entity}/daily/activity/aggregated/model_top_keys`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, {
+      model_group: model,
+      by_model_group: byModelGroup ? "true" : "false",
+      ...(limit === undefined ? {} : { limit }),
+    }),
   });
-};
 
-export const teamDailyActivityKeySearchCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  ...options: [search: string, teamIds?: string[] | null]
-) => {
-  const [search, teamIds = null] = options;
-  try {
-    return await apiClient.get(`/team/daily/activity/aggregated/search`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        search,
-        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
-        exclude_team_ids: "litellm-dashboard",
-      },
-    });
-  } catch (error) {
-    console.error("Failed to search team daily activity keys:", error);
-    throw error;
-  }
-};
+export const dailyActivityExportCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  exportType: ExportType,
+  format: ExportFormat,
+): Promise<Blob> =>
+  apiClient.getBlob(`/${entity}/daily/activity/export`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+  });
+
+export const cacheLeakageKeysCall = (req: DailyActivityRequest, limit?: number): Promise<CacheLeakageKeysResponse> =>
+  apiClient.get<CacheLeakageKeysResponse>(`/user/daily/activity/aggregated/cache_leakage_keys`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery("user", req, limit === undefined ? {} : { limit }),
+  });
 
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
@@ -1539,63 +1405,6 @@ export const teamSpendByUserCall = async (
       team_ids: teamIds.join(","),
     },
   });
-
-export const organizationDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  organizationIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/organization/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      organization_ids: organizationIds,
-    },
-  });
-};
-
-export const customerDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  customerIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/customer/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      end_user_ids: customerIds,
-    },
-  });
-};
-
-export const agentDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  agentIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/agent/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      agent_ids: agentIds,
-    },
-  });
-};
 
 export const getOnboardingCredentials = async (inviteUUID: string) => {
   /**
@@ -2072,6 +1881,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  used_client_oauth_token?: string;
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
@@ -2156,6 +1966,61 @@ export const uiSpendLogsCall = async ({
     throw error;
   }
 };
+
+/**
+ * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
+ * configured; callers can detect that through the thrown `ApiError`'s `status`.
+ */
+export const agentTraceListCall = async ({
+  accessToken,
+  startMs,
+  endMs,
+  cursor,
+}: {
+  accessToken: string;
+  startMs: number;
+  endMs: number;
+  cursor?: string | null;
+}): Promise<TracePage> => {
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
+  return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
+};
+
+export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
+  apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
+
+export const agentTraceCall = async (
+  accessToken: string,
+  traceId: string,
+  traceRef?: string,
+  cursor?: string | null,
+): Promise<Trace> =>
+  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 } satisfies TraceDetailQuery,
+  });
+
+export const agentTraceSpanCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  traceRef?: string,
+): Promise<SpanDetail> =>
+  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
+  });
+
+export const agentTraceSpanErrorCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  options: { traceRef?: string; cursor?: string | null },
+): Promise<SpanErrorPage> =>
+  apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
+    accessToken,
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined } satisfies SpanErrorQuery,
+  });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {
@@ -2314,7 +2179,7 @@ export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
   model_info: Record<string, any>,
-  mode: string,
+  mode?: string,
 ) => {
   try {
     // Construct the URL based on environment
@@ -2575,73 +2440,6 @@ export const keyAliasesCall = async (
   }
 };
 
-export const userDailyActivityAggregatedCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
-) => {
-  /**
-   * Get aggregated daily user activity (no pagination)
-   */
-  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
-  try {
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    return await apiClient.get(`/user/daily/activity/aggregated`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        // Passed raw, matching the paginated caller: both serializers drop null and undefined,
-        // and both keep "". An empty filter must not vanish, or a request scoped to one user or
-        // key would silently widen into an unscoped, proxy-wide read.
-        user_id: userId,
-        include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
-        api_key: apiKey,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to fetch aggregated user daily activity:", error);
-    throw error;
-  }
-};
-
-export const userDailyActivityKeySearchCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  ...options: [search: string, userId?: string | null]
-) => {
-  const [search, userId = null] = options;
-  try {
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    return await apiClient.get(`/user/daily/activity/aggregated/search`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        search,
-        user_id: userId || undefined,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to search user daily activity keys:", error);
-    throw error;
-  }
-};
-
 export const gatewayDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
   /**
    * Get gateway request counts (SGR) recorded by the proxy middleware.
@@ -2663,6 +2461,27 @@ export const gatewayDailyActivityCall = async (accessToken: string, startTime: D
     });
   } catch (error) {
     console.error("Failed to fetch gateway daily activity:", error);
+    throw error;
+  }
+};
+
+export const requestErrorActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/gateway/errors/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch request error activity:", error);
     throw error;
   }
 };
@@ -2779,6 +2598,59 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
     throw error;
   }
 };
+
+export interface UserProviderConnection {
+  credential_name: string;
+  provider: string;
+  connected: boolean;
+  github_login: string | null;
+  connected_at: string | null;
+}
+
+export interface UserProviderConnectionsResponse {
+  connections: UserProviderConnection[];
+}
+
+export interface UserConnectionStartResponse {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  flow_handle: string;
+}
+
+export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
+
+export interface UserConnectionPollResponse {
+  status: UserConnectionPollStatus;
+  interval?: number | null;
+  github_login?: string | null;
+}
+
+const userConnectionPath = (credentialName: string): string =>
+  `/credentials/${encodeURIComponent(credentialName)}/user_connection`;
+
+export const userConnectionsListCall = (accessToken: string): Promise<UserProviderConnectionsResponse> =>
+  apiClient.get<UserProviderConnectionsResponse>("/credentials/user_connections", { accessToken });
+
+export const userConnectionStartCall = (
+  accessToken: string,
+  credentialName: string,
+): Promise<UserConnectionStartResponse> =>
+  apiClient.post<UserConnectionStartResponse>(`${userConnectionPath(credentialName)}/start`, { accessToken });
+
+export const userConnectionPollCall = (
+  accessToken: string,
+  credentialName: string,
+  flowHandle: string,
+): Promise<UserConnectionPollResponse> =>
+  apiClient.post<UserConnectionPollResponse>(`${userConnectionPath(credentialName)}/poll`, {
+    accessToken,
+    body: { flow_handle: flowHandle },
+  });
+
+export const userConnectionDeleteCall = (accessToken: string, credentialName: string): Promise<void> =>
+  apiClient.delete<void>(userConnectionPath(credentialName), { accessToken });
 
 export const credentialUpdateCall = async (
   accessToken: string,
@@ -4768,77 +4640,28 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
   }
 };
 
-export interface DiscoveredAgentCard {
-  protocolVersion?: string;
-  name?: string;
-  description?: string;
-  version?: string;
-  url?: string;
-  iconUrl?: string;
-  documentationUrl?: string;
-  defaultInputModes?: string[];
-  defaultOutputModes?: string[];
-  capabilities?: Record<string, any>;
-  skills?: Array<{
-    id?: string;
-    name?: string;
-    description?: string;
-    tags?: string[];
-    examples?: string[];
-    [key: string]: any;
-  }>;
-  provider?: { organization?: string; url?: string };
-  [key: string]: any;
-}
+export type DiscoveredAgentCard = Agent["agent_card_params"];
 
-export interface DiscoverAgentCardResponse {
-  url: string;
+export type DiscoverAgentCardResponse = Omit<components["schemas"]["DiscoverAgentResponse"], "agent_card"> & {
   agent_card: DiscoveredAgentCard;
-}
+};
 
-/**
- * How the backend should locate the upstream agent card.
- *
- * - ``well_known_fallback`` (default): pure A2A — try the three standard
- *   well-known paths under the base URL.
- * - ``langgraph_platform``: LangGraph Platform — hits the canonical
- *   well-known path with an ``assistant_id`` query parameter, because
- *   LangGraph mounts one shared card endpoint per deployment.
- */
-export type DiscoveryMode = "well_known_fallback" | "langgraph_platform";
-
-export interface DiscoverAgentCardOptions {
-  discovery_mode?: DiscoveryMode;
-  /** Mode-specific params. ``langgraph_platform`` requires ``assistant_id``. */
-  params?: Record<string, any>;
-}
+export type DiscoveryMode = components["schemas"]["DiscoveryMode"];
+export type DiscoverAgentCardOptions = Partial<
+  Pick<components["schemas"]["DiscoverAgentRequest"], "discovery_mode" | "params">
+>;
 
 export const discoverAgentCardCall = async (
   accessToken: string,
   url: string,
   options?: DiscoverAgentCardOptions,
 ): Promise<DiscoverAgentCardResponse> => {
-  const endpoint = proxyBaseUrl ? `${proxyBaseUrl}/v1/a2a/discover` : `/v1/a2a/discover`;
-  const body: Record<string, any> = { url };
-  if (options?.discovery_mode) body.discovery_mode = options.discovery_mode;
-  if (options?.params) body.params = options.params;
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
+  const { data } = await fetchClient.POST("/v1/a2a/discover", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    body: { url, ...options, discovery_mode: options?.discovery_mode ?? "well_known_fallback" },
   });
-
-  if (!response.ok) {
-    const errorData = await response.text();
-    handleError(errorData);
-    throw new Error(errorData);
-  }
-
-  return (await response.json()) as DiscoverAgentCardResponse;
+  if (!data) throw new Error("Agent discovery response is empty");
+  return { ...data, agent_card: toAgentCard(data.agent_card) };
 };
 
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
@@ -4968,6 +4791,7 @@ export const fetchMCPServerHealth = async (accessToken: string, serverIds?: stri
     return await apiClient.get(`/v1/mcp/server/health`, {
       accessToken,
       query: {
+        include_reachability: true,
         server_ids: serverIds && serverIds.length > 0 ? serverIds : undefined,
       },
     });
@@ -5456,55 +5280,17 @@ export const callMCPTool = async (
 };
 
 export const tagCreateCall = async (accessToken: string, formValues: TagNewRequest): Promise<void> => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/new` : `/tag/new`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      await handleError(errorData);
-      return;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error creating tag:", error);
-    throw error;
-  }
+  await fetchClient.POST("/tag/new", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    body: formValues,
+  });
 };
 
 export const tagUpdateCall = async (accessToken: string, formValues: TagUpdateRequest): Promise<void> => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/update` : `/tag/update`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      await handleError(errorData);
-      return;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error updating tag:", error);
-    throw error;
-  }
+  await fetchClient.POST("/tag/update", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    body: formValues,
+  });
 };
 
 export const tagInfoCall = async (accessToken: string, tagNames: string[]): Promise<TagInfoResponse> => {
@@ -6220,58 +6006,33 @@ export const getMajorAirlines = async (accessToken: string) => {
   }
 };
 
-export const getAgentsList = async (accessToken: string, healthCheck: boolean = false) => {
-  try {
-    const params = healthCheck ? "?health_check=true" : "";
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents${params}` : `/v1/agents${params}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to get agents list");
-    }
-
-    const data = await response.json();
-    return { agents: data };
-  } catch (error) {
-    console.error("Failed to get agents list:", error);
-    throw error;
-  }
+export const getAgentsList = async (accessToken: string, healthCheck: boolean = false): Promise<AgentsResponse> => {
+  const { data } = await fetchClient.GET("/v1/agents", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: { query: { health_check: healthCheck } },
+  });
+  if (!data) throw new Error("Agent list response is empty");
+  return { agents: data.map(toAgent) };
 };
 
-export const getAgentInfo = async (accessToken: string, agentId: string) => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to get agent info");
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to get agent info:", error);
-    throw error;
-  }
+export const getAgentInfo = async (accessToken: string, agentId: string): Promise<Agent> => {
+  const { data } = await fetchClient.GET("/v1/agents/{agent_id}", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: { path: { agent_id: agentId } },
+  });
+  if (!data) throw new Error("Agent response is empty");
+  return toAgent(data);
 };
+
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
+
+export const triggerAgentKillSwitchCall = async (
+  accessToken: string,
+  agentId: string,
+): Promise<AgentKillSwitchResult> =>
+  await apiClient.post<AgentKillSwitchResult>(`/v1/agents/${encodeURIComponent(agentId)}/kill_switch`, {
+    accessToken,
+  });
 
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
@@ -6312,6 +6073,7 @@ export const patchAgentCall = async (
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
     access_group_ids?: string[];
+    kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
   },
 ) => {
   try {
@@ -7366,6 +7128,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   return data;
 };
 
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
+};
+
 export type UserBannerSeverity = "info" | "warning" | "error";
 
 export interface UserBanner {
@@ -7396,34 +7165,16 @@ export const updateUserBanner = async (accessToken: string, banner: UserBannerUp
  * @param accessToken - Admin access token
  * @param enabledOnly - If true, only return enabled plugins (default: false)
  */
-export const getClaudeCodePluginsList = async (accessToken: string, enabledOnly: boolean = false) => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/claude-code/plugins?enabled_only=${enabledOnly}`
-      : `/claude-code/plugins?enabled_only=${enabledOnly}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch Claude Code plugins list:", error);
-    throw error;
-  }
+export const getClaudeCodePluginsList = async (
+  accessToken: string,
+  enabledOnly: boolean = false,
+): Promise<ListPluginsResponse> => {
+  const { data } = await fetchClient.GET("/claude-code/plugins", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: { query: { enabled_only: enabledOnly } },
+  });
+  if (!data) throw new Error("Plugin list response is empty");
+  return data;
 };
 
 /**
@@ -7650,6 +7401,11 @@ export interface ToolRow {
   created_by?: string;
   updated_by?: string;
   user_agent?: string;
+  user?: {
+    user_id: string;
+    user_email: string | null;
+    user_alias: string | null;
+  } | null;
   last_used_at?: string;
 }
 

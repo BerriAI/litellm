@@ -1,9 +1,8 @@
 use std::sync::OnceLock;
 
 use litellm_host::{
-    host::HostResult,
     machine::{HostFailure, Interrupted, Machine, Step},
-    route::Route,
+    protocol::Protocol,
 };
 use litellm_tracing::Logger;
 use pyo3::Python;
@@ -23,17 +22,17 @@ impl<M> LoggedMachine<M> {
 }
 
 impl<M: Machine> Machine for LoggedMachine<M> {
-    type Route = M::Route;
+    type Protocol = M::Protocol;
     type Complete = M::Complete;
 
-    fn resume(&mut self, result: Option<HostResult<Self::Route>>) -> Step<'_, Self> {
+    fn resume(&mut self) -> Step<'_, Self> {
         let logger = self.logger.get_or_init(|| Python::attach(super::capture));
-        Box::pin(logger.instrument(logger.scope(|| self.machine.resume(result))))
+        Box::pin(logger.instrument(logger.scope(|| self.machine.resume())))
     }
 
     fn interrupt(
         &mut self,
-        failure: HostFailure<<Self::Route as Route>::Error>,
+        failure: HostFailure<<Self::Protocol as Protocol>::Error>,
     ) -> Interrupted<'_, Self> {
         let logger = self.logger.get_or_init(|| Python::attach(super::capture));
         Box::pin(logger.instrument(logger.scope(|| self.machine.interrupt(failure))))

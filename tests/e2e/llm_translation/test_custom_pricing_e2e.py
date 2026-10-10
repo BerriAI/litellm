@@ -23,6 +23,7 @@ import pytest
 from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from proxy_client import ProxyClient
 from e2e_http import Success, unwrap
 from lifecycle import ResourceManager
@@ -148,6 +149,15 @@ def _poll_breakdown_row(proxy: ProxyClient, key: str, response_id: str | None) -
 
 
 class TestCustomPricing:
+    @meta(
+        Subject(
+            domain=Domain.COST_MAP,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.GEMINI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_custom_pricing_is_billed_at_configured_rate(
         self,
         proxy: ProxyClient,
@@ -193,6 +203,12 @@ class TestCustomPricing:
             f"= {completion * CUSTOM_OUTPUT_RATE}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.COST_MAP,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_model_info_reports_custom_pricing(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -208,6 +224,12 @@ class TestCustomPricing:
             f"{entry.litellm_params.output_cost_per_token} != configured {CUSTOM_OUTPUT_RATE}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.COST_MAP,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_custom_pricing_is_isolated_from_sibling_deployment(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:

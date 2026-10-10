@@ -139,7 +139,7 @@ SidebarMenuBadge.displayName = "SidebarMenuBadge";
 
 const sidebarMenuButtonVariants = cva(
   [
-    "group/menu-btn relative flex w-full items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left text-[13px] font-medium no-underline",
+    "group/menu-btn relative flex w-full items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left text-[13px] font-medium no-underline max-md:min-h-11",
     "text-sidebar-foreground/70 outline-none transition-colors",
     "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
     "focus-visible:ring-2 focus-visible:ring-sidebar-ring",

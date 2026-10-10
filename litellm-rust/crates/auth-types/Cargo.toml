@@ -7,9 +7,11 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+rstest.workspace = true
 tokio.workspace = true

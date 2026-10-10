@@ -85,7 +85,7 @@ class _AsyncPostHandler(Protocol):
         url: str,
         headers: dict[str, str],
         json: _AnalyzePayload,
-        timeout: httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
     ) -> Awaitable[httpx.Response]: ...
 
 
@@ -122,10 +122,6 @@ class VigilGuardGuardrail(CustomGuardrail):
         fallback: Final = (unreachable_fallback or "fail_closed").lower()
         self.unreachable_fallback: _FallbackMode = "fail_open" if fallback == "fail_open" else "fail_closed"
 
-        self.timeout: httpx.Timeout = (
-            _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
-        )
-
         self.async_handler: _AsyncPostHandler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -136,6 +132,8 @@ class VigilGuardGuardrail(CustomGuardrail):
         }
 
         super().__init__(**forwarded)
+
+        self.timeout = _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

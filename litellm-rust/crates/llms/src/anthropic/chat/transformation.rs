@@ -1,23 +1,33 @@
+use litellm_auth::SecretValue;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
 };
-use litellm_types::{
-    llms::openai::ChatMessage,
-    utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
+    Error,
     anthropic::{
-        ANTHROPIC_OAUTH_TOKEN_PREFIX,
-        experimental_pass_through::messages::transformation::{
-            complete_anthropic_url, resolve_anthropic_api_key,
+        chat::handler::ModelResponseIterator,
+        common_utils::{
+            API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
+            resolve_anthropic_api_key,
         },
     },
-    base_llm::chat::transformation::{
-        BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,
-        Unsupported, unsupported_message, unsupported_param,
+    base_llm::{
+        auth::AuthScheme,
+        chat::{
+            streaming::{ChatStream, StreamShape},
+            transformation::{
+                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+            },
+        },
+        messages::streaming::anthropic_sse_event_stream,
     },
 };
 
@@ -38,11 +48,50 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("stop", "stop_sequences"),
 ];
 
+#[derive(Deserialize)]
+struct TextResponseProjection {
+    model: String,
+    content: Vec<TextResponseBlock>,
+    usage: ResponseUsageProjection,
+    stop_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TextResponseBlock {
+    Text {
+        text: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ResponseUsageProjection {
+    input_tokens: u64,
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+}
+
 pub struct AnthropicConfig;
 
 pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicConfig = AnthropicConfig;
 
 impl BaseConfig for AnthropicConfig {
+    fn secret_names(&self) -> Vec<&'static str> {
+        use crate::anthropic::common_utils::{
+            ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_BASE_URL_ENV,
+        };
+        vec![
+            ANTHROPIC_API_KEY_ENV,
+            ANTHROPIC_API_BASE_ENV,
+            ANTHROPIC_BASE_URL_ENV,
+        ]
+    }
+
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
@@ -65,6 +114,7 @@ impl BaseConfig for AnthropicConfig {
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
             body: anthropic_body(model, &build_conversation(&messages), optional_params),
+            stream_shape: StreamShape::default(),
         })
     }
 
@@ -73,75 +123,79 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body = response
-            .body
-            .as_object()
-            .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
-
-        let content = body
-            .get("content")
-            .and_then(Value::as_array)
-            .ok_or(Error::MissingField("content"))?;
+        let body: TextResponseProjection =
+            serde_json::from_value(response.body).map_err(|error| {
+                Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
+            })?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
-        if content
+        if body
+            .content
             .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
+            .any(|block| matches!(block, TextResponseBlock::Other))
         {
             return Err(Error::Unsupported("non-text response content block"));
         }
-        let text: String = content
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
+        let text: String = body
+            .content
+            .into_iter()
+            .map(|block| match block {
+                TextResponseBlock::Text { text } => text,
+                TextResponseBlock::Other => String::new(),
+            })
             .collect();
-
-        let usage = body
-            .get("usage")
-            .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
             created: unix_now(),
-            model: body
-                .get("model")
-                .and_then(Value::as_str)
-                .ok_or(Error::MissingField("model"))?
-                .to_string(),
+            model: body.model,
             choices: vec![ChatCompletionsChoice {
                 index: 0,
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stop_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
+                    .to_string(),
             }],
             usage: usage_from_parts(
-                field("input_tokens"),
-                field("output_tokens"),
-                field("cache_read_input_tokens"),
-                field("cache_creation_input_tokens"),
+                body.usage.input_tokens,
+                body.usage.output_tokens,
+                body.usage.cache_read_input_tokens.unwrap_or(0),
+                body.usage.cache_creation_input_tokens.unwrap_or(0),
             ),
         })
     }
 
-    fn auth(
+    /// A forwarded OAuth bearer is the whole credential: Python pops `x-api-key` for it,
+    /// so the resolved key is not applied over it. Any other forwarded header loses to
+    /// the deployment's key, which Python writes last.
+    fn validate_environment(
         &self,
+        headers: Headers,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<RequestAuth, Error> {
-        Ok(RequestAuth::Header {
-            name: "x-api-key",
-            value: resolve_anthropic_api_key(api_key, env_lookup)?,
-        })
+    ) -> Result<ValidatedEnvironment, Error> {
+        if forwarded_oauth_bearer(&headers).is_some() {
+            return Ok(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Forwarded,
+            });
+        }
+        let auth = AuthScheme::Credential {
+            placement: API_KEY_PLACEMENT,
+            secret: SecretValue::new(resolve_anthropic_api_key(api_key, env_lookup)?),
+        };
+        Ok(ValidatedEnvironment { headers, auth })
+    }
+
+    fn model_response_iterator(&self, shape: StreamShape) -> Option<ChatStream> {
+        Some(ChatStream::new(
+            anthropic_sse_event_stream,
+            ModelResponseIterator::new(shape),
+        ))
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -156,15 +210,6 @@ impl BaseConfig for AnthropicConfig {
     /// the resolved key must not be applied over the top. Any other forwarded
     /// `authorization` is unrelated to this header and does not defer, which is
     /// also what Python does: it sends the deployment's `x-api-key` alongside.
-    fn defers_to_forwarded_auth(&self, headers: &[(String, String)]) -> bool {
-        headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("authorization")
-                && value
-                    .strip_prefix("Bearer ")
-                    .is_some_and(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
-        })
-    }
-
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
@@ -196,7 +241,7 @@ fn anthropic_body(
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": <&'static str>::from(turn.role),
                 "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
             })
         })

@@ -42,6 +42,7 @@ model LiteLLM_BudgetTable {
 model LiteLLM_CredentialsTable {
   credential_id String @id @default(uuid())
   credential_name String @unique
+  display_name String?
   credential_values Json
   credential_info Json? 
   created_at    DateTime               @default(now()) @map("created_at")
@@ -72,11 +73,17 @@ model LiteLLM_AgentsTable {
   agent_card_params Json
   static_headers       Json?          @default("{}")
   extra_headers        String[]       @default([])
+  kill_switch          Json?
   agent_access_groups String[]       @default([])
   access_group_ids     String[]       @default([])
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   spend      Float    @default(0.0)
+  identity_managed Boolean @default(false)
+  enabled Boolean @default(true)
+  execution_mode String @default("autonomous")
+  identity LiteLLM_AgentIdentity?
+  retired_identities LiteLLM_RetiredAgentIdentity[]
   tpm_limit  Int?
   rpm_limit  Int?
   session_tpm_limit Int?
@@ -86,6 +93,56 @@ model LiteLLM_AgentsTable {
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
 }
+
+model LiteLLM_AgentIdentity {
+  agent_id String @id
+  active Boolean @default(true)
+  agent LiteLLM_AgentsTable @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  provider String
+  issuer String
+  tenant_id String
+  client_id String
+  service_principal_id String?
+  required_roles String[] @default([])
+  required_scopes String[] @default(["user_impersonation"])
+  revision String @default(uuid())
+  last_authenticated_at DateTime?
+  @@unique([provider, tenant_id, client_id])
+  @@unique([issuer, service_principal_id])
+}
+
+model LiteLLM_RetiredAgentIdentity {
+  binding_id String @id @default(uuid())
+  agent_id String?
+  agent LiteLLM_AgentsTable? @relation(fields: [agent_id], references: [agent_id], onDelete: SetNull)
+  provider String
+  issuer String
+  tenant_id String
+  client_id String
+  @@unique([provider, tenant_id, client_id])
+}
+
+model LiteLLM_RetiredAgent {
+  original_agent_id String @id
+  retired_at DateTime @default(now())
+}
+
+model LiteLLM_VerifiedSubject {
+  subject_id String @id @default(uuid())
+  issuer String
+  tenant_id String
+  oid String
+  kind String @default("human")
+  user_id String?
+  user LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  verified_via String @default("sso_interactive")
+  verified_at DateTime @default(now())
+  @@unique([issuer, tenant_id, oid])
+  @@index([user_id])
+}
+
+
+
 
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
@@ -240,6 +297,7 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
     team_id    String?
@@ -321,6 +379,7 @@ model LiteLLM_MCPServerTable {
   allowed_tools String[]      @default([])
   tool_name_to_display_name Json? @default("{}")
   tool_name_to_description   Json? @default("{}")
+  pinned_tools Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
   // Admin-configured environment variables interpolated into static_headers
@@ -359,6 +418,7 @@ model LiteLLM_MCPServerTable {
   source_url            String?
   timeout               Float?
   max_concurrent_requests Int?
+  rpm                   Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -391,6 +451,20 @@ model LiteLLM_MCPUserCredentials {
   updated_at     DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@unique([user_id, server_id])
+}
+
+// Per-user provider connections (e.g. GitHub Copilot OAuth) keyed by credential name
+model LiteLLM_UserProviderCredentials {
+  id               String   @id @default(uuid())
+  user_id          String
+  credential_name  String
+  provider         String
+  credential_b64   String
+  created_at       DateTime @default(now()) @map("created_at")
+  updated_at       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([user_id, credential_name])
+  @@index([credential_name])
 }
 
 // Per-user environment variable values for MCP servers.
@@ -598,6 +672,7 @@ model LiteLLM_EndUserTable {
   spend      Float    @default(0.0)
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
+  models String[] @default([])
   budget_id String?
   object_permission_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
@@ -673,6 +748,7 @@ model LiteLLM_SpendLogs {
   session_id          String?
   status              String?
   mcp_namespaced_tool_name String? 
+  billing_agent_id    String?
   agent_id            String?
   proxy_server_request Json?     @default("{}")
   litellm_call_id     String?
@@ -1085,6 +1161,7 @@ model LiteLLM_ManagedFileTable {
   updated_by String?
 
   @@index([unified_file_id])
+  @@index([flat_model_file_ids], type: Gin)
   @@index([team_id, created_at(sort: Desc)])
 }
 
@@ -1258,6 +1335,26 @@ model LiteLLM_DailyToolSpend {
   @@id([date, tool_name])
 }
 
+model LiteLLM_DailyModelUsage {
+  date                String
+  model_group         String
+  model               String
+  custom_llm_provider String
+  task_type           String
+  spend               Float    @default(0.0)
+  prompt_tokens       BigInt   @default(0)
+  completion_tokens   BigInt   @default(0)
+  request_count       BigInt   @default(0)
+  successful_requests BigInt   @default(0)
+  failed_requests     BigInt   @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@id([date, model_group, model, custom_llm_provider, task_type])
+  @@index([date])
+  @@index([model_group])
+}
+
 // Gateway request counts recorded at the ASGI edge by
 // BillableRequestMetricsMiddleware. This is the source of truth for SGR
 // (successful gateway requests): it counts what the proxy actually answered,
@@ -1275,6 +1372,34 @@ model LiteLLM_DailyGatewayRequests {
   updated_at          DateTime @updatedAt
 
   @@id([date, category, route])
+  @@index([date])
+}
+
+model LiteLLM_DailyGatewayFailedRequests {
+  date            String
+  category        String
+  route           String
+  status_code     Int
+  failed_requests BigInt   @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([date, category, route, status_code])
+  @@index([date])
+}
+
+model LiteLLM_DailyRequestErrors {
+  date            String
+  api_key         String
+  team_id         String   @default("")
+  user_id         String   @default("")
+  model_group     String   @default("")
+  status_code     Int
+  failed_requests BigInt   @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([date, api_key, team_id, user_id, model_group, status_code])
   @@index([date])
 }
 
@@ -1665,6 +1790,29 @@ model LiteLLM_AutoRouterUserSession {
   @@index([user_id, last_turn_at], map: "idx_autorouter_user_session_user_last_turn")
 }
 
+// Auto-routed requests per UTC request day and router: the selected-day money behind the
+// auto-router usage view. Written in the same statement as the session rollup, so a day row
+// and its session row never disagree; corrected in the same transaction as late baselines.
+model LiteLLM_AutoRouterDailySpend {
+  date                           String
+  api_key                        String
+  user_id                        String
+  router_name                    String
+  router_type                    String
+  turns                          Int      @default(0)
+  total_tokens                   BigInt   @default(0)
+  token_recorded_turns            Int      @default(0)
+  spend                          Float    @default(0)
+  saved_spend                    Float    @default(0)
+  savings_estimated_turns        Int      @default(0)
+  savings_estimated_actual_spend Float    @default(0)
+  savings_estimated_saved_spend  Float    @default(0)
+  classifier_cost                Float    @default(0)
+  classifier_cost_recorded_turns Int      @default(0)
+
+  @@id([date, api_key, user_id, router_name, router_type])
+}
+
 // Shadow eval: evaluation of an auto-router against one or more keys' live traffic, in
 // either direction. forward duplicates the requests the keys did not route through the
 // router through it, answering whether they should adopt it; reverse duplicates the
@@ -1814,4 +1962,86 @@ model LiteLLM_WorkflowMessage {
 
   @@unique([run_id, sequence_number])
   @@index([run_id])
+}
+
+// Pending billing settlements for background interactions, keyed by the
+// interaction id so any replica can settle one that another replica created.
+// `claimed_at` is the exactly-once gate: the first conditional update wins.
+model LiteLLM_BackgroundInteractionSettlement {
+  interaction_id      String    @id
+  custom_llm_provider String
+  create_context      Json
+  created_at          DateTime  @default(now())
+  claimed_at          DateTime?
+  claimed_by          String?
+  settled_at          DateTime?
+  outcome             String?
+
+  @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
+}
+
+model LiteLLM_Lens {
+  reviews LiteLLM_LensReview[]
+  id      String @id
+  version Int @default(0)
+  data    Json
+  due_at  DateTime? @default(dbgenerated("'1970-01-01 00:00:00'::timestamp without time zone"))
+
+  @@index([due_at], map: "LiteLLM_Lens_due_at_idx")
+}
+
+model LiteLLM_LensRun {
+  id         String @id
+  lens_id  String
+  created_at DateTime
+  data       Json
+
+  @@index([lens_id, created_at])
+}
+
+model LiteLLM_LensReview {
+  lens_id String
+  criteria_key String
+  execution_id String
+  data Json
+  lens LiteLLM_Lens @relation(fields: [lens_id], references: [id], onDelete: Cascade)
+
+  @@id([lens_id, criteria_key, execution_id])
+}
+
+model LiteLLM_LensWorker {
+  id         String @id
+  token_hash String @unique
+  data       Json
+}
+
+model LiteLLM_LensIngestionKey {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensDataset {
+  id         String
+  revision   Int
+  created_at DateTime
+  data       Json
+
+  @@id([id, revision])
+}
+
+model LiteLLM_LensSignalConfig {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensTraceSignal {
+  trace_id      String
+  trace_ref     String @default("")
+  config_key    String
+  span_count    Int
+  claimed_until DateTime?
+  classified_at DateTime?
+  data          Json
+
+  @@id([trace_id, trace_ref])
 }
