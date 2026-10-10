@@ -44,7 +44,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                 },
             ))
         },
-        MessagesPythonHost::new(call.base.clone().unbind(), asynchronous),
+        MessagesPythonHost::new(call.view()?, asynchronous),
         hooks,
         asynchronous,
     )
