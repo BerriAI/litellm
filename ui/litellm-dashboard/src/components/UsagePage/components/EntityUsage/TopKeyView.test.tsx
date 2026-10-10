@@ -3,7 +3,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse } from "../../../key_team_helpers/key_list";
-import * as transformKeyInfo from "../../../key_team_helpers/transform_key_info";
 import * as networking from "../../../networking";
 import TopKeyView from "./TopKeyView";
 
@@ -13,11 +12,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("../../../networking", () => ({
-  keyInfoV1Call: vi.fn(),
-}));
-
-vi.mock("../../../key_team_helpers/transform_key_info", () => ({
-  transformKeyInfo: vi.fn(),
+  keyListCall: vi.fn(),
 }));
 
 vi.mock("../../../templates/key_info_view", () => ({
@@ -33,8 +28,7 @@ const chartBars = (container: HTMLElement) => Array.from(container.querySelector
 
 describe("TopKeyView", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
-  const mockKeyInfoV1Call = vi.mocked(networking.keyInfoV1Call);
-  const mockTransformKeyInfo = vi.mocked(transformKeyInfo.transformKeyInfo);
+  const mockKeyListCall = vi.mocked(networking.keyListCall);
 
   const mockAuth = {
     token: "mock-token",
@@ -60,8 +54,7 @@ describe("TopKeyView", () => {
   beforeEach(() => {
     mockUseAuthorized.mockReturnValue(mockAuth);
     mockSetTopKeysLimit.mockClear();
-    mockKeyInfoV1Call.mockClear();
-    mockTransformKeyInfo.mockClear();
+    mockKeyListCall.mockClear();
   });
 
   it("should render", () => {
@@ -186,10 +179,8 @@ describe("TopKeyView", () => {
   });
 
   it("renders brand-blue bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
-    const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
-    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
-    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockKeyListCall.mockResolvedValue({ keys: [mockTransformedData] });
 
     const user = userEvent.setup();
     const { container } = render(
@@ -216,7 +207,19 @@ describe("TopKeyView", () => {
     fireEvent.click(bars[0]);
 
     await waitFor(() => {
-      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");
+      expect(mockKeyListCall).toHaveBeenCalledWith(
+        "test-token",
+        null,
+        null,
+        null,
+        null,
+        "key-123",
+        1,
+        1,
+        null,
+        null,
+        "user",
+      );
     });
 
     await waitFor(() => {
@@ -459,10 +462,8 @@ describe("TopKeyView", () => {
   });
 
   it("should open modal when key ID is clicked", async () => {
-    const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
-    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
-    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockKeyListCall.mockResolvedValue({ keys: [mockTransformedData] });
 
     const user = userEvent.setup();
     render(
@@ -485,7 +486,19 @@ describe("TopKeyView", () => {
     }
 
     await waitFor(() => {
-      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");
+      expect(mockKeyListCall).toHaveBeenCalledWith(
+        "test-token",
+        null,
+        null,
+        null,
+        null,
+        "key-123",
+        1,
+        1,
+        null,
+        null,
+        "user",
+      );
     });
 
     await waitFor(() => {
@@ -494,8 +507,8 @@ describe("TopKeyView", () => {
   });
 
   it("should only look up keys that still exist in the database, from both the table and the chart", async () => {
-    mockKeyInfoV1Call.mockResolvedValue({ key: "info" });
-    mockTransformKeyInfo.mockReturnValue({ transformed: "data" } as unknown as KeyResponse);
+    const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
+    mockKeyListCall.mockResolvedValue({ keys: [mockTransformedData] });
 
     const user = userEvent.setup();
     const { container } = render(
@@ -518,15 +531,25 @@ describe("TopKeyView", () => {
     bars.forEach((bar) => fireEvent.click(bar));
 
     expect(await screen.findByText("Key Info View for stored-key")).toBeInTheDocument();
-    expect(mockKeyInfoV1Call).toHaveBeenCalledTimes(1);
-    expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "stored-key");
+    expect(mockKeyListCall).toHaveBeenCalledTimes(1);
+    expect(mockKeyListCall).toHaveBeenCalledWith(
+      "test-token",
+      null,
+      null,
+      null,
+      null,
+      "stored-key",
+      1,
+      1,
+      null,
+      null,
+      "user",
+    );
   });
 
   it("should close modal when close button is clicked", async () => {
-    const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
-    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
-    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockKeyListCall.mockResolvedValue({ keys: [mockTransformedData] });
 
     const user = userEvent.setup();
     render(
@@ -561,10 +584,8 @@ describe("TopKeyView", () => {
   });
 
   it("should close modal when escape key is pressed", async () => {
-    const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
-    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
-    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockKeyListCall.mockResolvedValue({ keys: [mockTransformedData] });
 
     const user = userEvent.setup();
     render(
@@ -598,10 +619,8 @@ describe("TopKeyView", () => {
   });
 
   it("should close modal when clicking outside modal", async () => {
-    const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
-    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
-    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockKeyListCall.mockResolvedValue({ keys: [mockTransformedData] });
 
     const user = userEvent.setup();
     const { container } = render(
@@ -664,7 +683,7 @@ describe("TopKeyView", () => {
     }
 
     await waitFor(() => {
-      expect(mockKeyInfoV1Call).not.toHaveBeenCalled();
+      expect(mockKeyListCall).not.toHaveBeenCalled();
     });
 
     expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument();
@@ -672,7 +691,7 @@ describe("TopKeyView", () => {
 
   it("should handle error when fetching key info", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockKeyInfoV1Call.mockRejectedValue(new Error("Network error"));
+    mockKeyListCall.mockRejectedValue(new Error("Network error"));
 
     const user = userEvent.setup();
     render(
@@ -695,7 +714,7 @@ describe("TopKeyView", () => {
     }
 
     await waitFor(() => {
-      expect(mockKeyInfoV1Call).toHaveBeenCalled();
+      expect(mockKeyListCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
