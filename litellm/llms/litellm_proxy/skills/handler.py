@@ -21,8 +21,8 @@ from litellm.llms.litellm_proxy.skills.constants import (
     LITELLM_SKILL_ID_PREFIX,
     MAX_SKILLS_PER_SEARCH,
 )
-from litellm.models.skills import LiteLLM_SkillsTable
-from litellm.proxy._types import NewSkillRequest, UserAPIKeyAuth
+from litellm.models.skills import LiteLLM_SkillsTable, NewSkillRequest
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.repositories.table_repositories import SkillsRepository
 
 # Skills are looked up on every chat completion that has skills enabled
