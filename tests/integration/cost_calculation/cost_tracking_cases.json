@@ -792,6 +792,18 @@
       "max_input_tokens": 1000000,
       "max_output_tokens": 128000,
       "supports_function_calling": true
+    },
+    "claude-opus-5-5": {
+      "litellm_provider": "anthropic",
+      "mode": "chat",
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05,
+      "cache_read_input_token_cost": 2e-07,
+      "cache_creation_input_token_cost": 5e-06,
+      "max_tokens": 128000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "supports_function_calling": true
     }
   },
   "cases": [
@@ -32221,6 +32233,50 @@
         "spend": 0.01716,
         "input_cost": 0.008096,
         "output_cost": 0.009064,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-opus-5-5-input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-opus-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello."
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-opus-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "Hello."
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0156,
+        "input_cost": 0.00736,
+        "output_cost": 0.00824,
         "prompt_tokens": 1840,
         "completion_tokens": 412
       }
