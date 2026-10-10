@@ -16,7 +16,7 @@ from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     _summarise_usage_data,
     stream_usage_ai_chat,
 )
-
+from litellm.utils import ModelResponse, ModelResponseStream
 
 SAMPLE_AGGREGATED_RESPONSE = {
     "results": [
@@ -176,6 +176,19 @@ class TestSummariseEntityData:
         assert "No Team usage data" in summary
 
 
+class FakeUsageCompletion:
+    def __init__(self, response, stream):
+        self.response = response
+        self.stream_response = stream
+
+    async def complete(self, model, messages, tools):
+        return self.response
+
+    async def stream(self, model, messages):
+        async for chunk in self.stream_response:
+            yield chunk
+
+
 class TestStreamUsageAiChat:
     @pytest.mark.asyncio
     async def test_stream_emits_status_events(self):
@@ -208,30 +221,26 @@ class TestStreamUsageAiChat:
         }
 
         async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Total spend is $50.25"
+            chunk = ModelResponseStream(
+                model="test-model",
+                choices=[{"index": 0, "delta": {"content": "Total spend is $50.25"}, "finish_reason": "stop"}],
+            )
             yield chunk
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
                 new_callable=AsyncMock,
             ) as mock_fetch,
         ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[
-                    mock_first_response,
-                    mock_stream(),
-                ]
+            completion = FakeUsageCompletion(
+                ModelResponse(choices=[{"message": mock_first_response.choices[0].message.model_dump()}]), mock_stream()
             )
             mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
 
             events = []
             async for event in stream_usage_ai_chat(
+                completion=completion,
                 messages=[{"role": "user", "content": "What is my total spend?"}],
                 model="gpt-4o-mini",
                 user_id="user-123",
@@ -283,30 +292,26 @@ class TestStreamUsageAiChat:
         }
 
         async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Engineering is the top team."
+            chunk = ModelResponseStream(
+                model="test-model",
+                choices=[{"index": 0, "delta": {"content": "Engineering is the top team."}, "finish_reason": "stop"}],
+            )
             yield chunk
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
                 new_callable=AsyncMock,
             ) as mock_fetch,
         ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[
-                    mock_first_response,
-                    mock_stream(),
-                ]
+            completion = FakeUsageCompletion(
+                ModelResponse(choices=[{"message": mock_first_response.choices[0].message.model_dump()}]), mock_stream()
             )
             mock_fetch.return_value = SAMPLE_TEAM_RESPONSE
 
             events = []
             async for event in stream_usage_ai_chat(
+                completion=completion,
                 messages=[{"role": "user", "content": "Which team spends the most?"}],
                 model="gpt-4o-mini",
                 is_admin=True,
@@ -319,13 +324,12 @@ class TestStreamUsageAiChat:
 
     @pytest.mark.asyncio
     async def test_stream_handles_error(self):
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(side_effect=Exception("LLM error"))
-
+        completion = MagicMock()
+        completion.complete = AsyncMock(side_effect=Exception("LLM error"))
+        with patch.dict(TOOL_HANDLERS, {}):
             events = []
             async for event in stream_usage_ai_chat(
+                completion=completion,
                 messages=[{"role": "user", "content": "test"}],
             ):
                 events.append(json.loads(event.replace("data: ", "").strip()))
@@ -366,17 +370,14 @@ class TestStreamUsageAiChat:
         }
 
         async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Data."
+            chunk = ModelResponseStream(
+                model="test-model", choices=[{"index": 0, "delta": {"content": "Data."}, "finish_reason": "stop"}]
+            )
             yield chunk
 
         mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
 
         with (
-            patch(
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-            ) as mock_litellm,
             patch.dict(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
                 {
@@ -388,15 +389,13 @@ class TestStreamUsageAiChat:
                 },
             ),
         ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[
-                    mock_first_response,
-                    mock_stream(),
-                ]
+            completion = FakeUsageCompletion(
+                ModelResponse(choices=[{"message": mock_first_response.choices[0].message.model_dump()}]), mock_stream()
             )
 
             events = []
             async for event in stream_usage_ai_chat(
+                completion=completion,
                 messages=[{"role": "user", "content": "Show data"}],
                 model="gpt-4o-mini",
                 user_id="my-user-id",
@@ -458,7 +457,7 @@ class TestUsageAiChatServiceAccountGuard:
             _resolve_fetch_kwargs,
         )
 
-        with pytest.raises(ValueError, match='Non-admin caller has user_id=None; refusing to issue an') as exc_info:
+        with pytest.raises(ValueError, match="Non-admin caller has user_id=None; refusing to issue an") as exc_info:
             _resolve_fetch_kwargs(
                 fn_name="get_usage_data",
                 fn_args={"start_date": "2025-01-01", "end_date": "2025-01-31"},
@@ -472,8 +471,9 @@ class TestUsageAiChatKeepalive:
     async def _collect_endpoint_body(self, monkeypatch, interval, delay=0.3) -> tuple[list[bytes], dict]:
         import asyncio
 
-        import litellm
         from fastapi.responses import StreamingResponse
+
+        import litellm
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
             ChatMessage,
@@ -483,17 +483,16 @@ class TestUsageAiChatKeepalive:
 
         monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
 
-        async def slow_acompletion(**kwargs):
+        async def slow_acompletion(*args):
             await asyncio.sleep(delay)
-            response = MagicMock()
-            response.choices = [MagicMock()]
-            response.choices[0].message.tool_calls = None
-            response.choices[0].message.content = "Total spend is $50.25"
+            response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Total spend is $50.25"}}])
             return response
 
-        with patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-            new=AsyncMock(side_effect=slow_acompletion),
+        completion = MagicMock()
+        completion.complete = AsyncMock(side_effect=slow_acompletion)
+        with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.endpoints.ProxyUsageChatCompletion",
+            return_value=completion,
         ):
             response = await usage_ai_chat(
                 data=UsageAIChatRequest(messages=[ChatMessage(role="user", content="hi")], model="gpt-4o-mini"),
@@ -524,3 +523,399 @@ class TestUsageAiChatKeepalive:
         assert b": ping\n\n" not in chunks
         assert chunks[0].startswith(b'data: {"type": "status"')
         assert chunks[-1] == b'data: {"type": "done"}\n\n'
+
+
+@pytest.fixture
+def real_usage_proxy(monkeypatch):
+    from fastapi import Request
+
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.usage_endpoints.endpoints import ProxyUsageChatCompletion
+    from litellm.proxy.utils import ProxyLogging
+
+    calls = []
+
+    class Observer(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            calls.append((user_api_key_dict, data))
+            return data
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "configured-alias",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-only", "mock_response": "answer"},
+            }
+        ],
+        num_retries=0,
+    )
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "master_key", "test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr(litellm, "callbacks", [Observer()])
+    auth = UserAPIKeyAuth(
+        user_id="caller", models=["configured-alias"], token="test-budget-token", max_budget=100, spend=0
+    )
+    request = Request({"type": "http", "method": "POST", "path": "/usage/ai/chat", "headers": []})
+    yield ProxyUsageChatCompletion(request, auth), calls
+    router.reset()
+
+
+class TestProxyUsageChatCompletion:
+    @pytest.mark.asyncio
+    async def test_planning_and_streaming_use_authenticated_proxy_processing(self, real_usage_proxy):
+        completion, calls = real_usage_proxy
+        messages = [{"role": "user", "content": "spend"}]
+        response = await completion.complete("configured-alias", messages, [])
+        chunks = [chunk async for chunk in completion.stream("configured-alias", messages)]
+        assert response.choices[0].message.content == "answer"
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "answer"
+        assert len(calls) == 2
+        for auth, data in calls:
+            assert data["metadata"]["user_api_key_user_id"] == "caller"
+            assert auth is not completion.auth
+            assert auth.budget_reservation["reserved_cost"] > 0
+        assert completion.auth.budget_reservation is None
+
+    @pytest.mark.asyncio
+    async def test_access_denial_never_reaches_provider(self, real_usage_proxy):
+        from litellm.proxy._types import ModelAccessDeniedProxyException
+
+        completion, calls = real_usage_proxy
+        with pytest.raises(ModelAccessDeniedProxyException):
+            await completion.complete("denied", [{"role": "user", "content": "hi"}], [])
+        assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_adapter_rejects_non_stream_provider_response(real_usage_proxy):
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    completion, _ = real_usage_proxy
+    proxy_server.llm_router.model_list[0]["litellm_params"]["mock_response"] = {
+        "choices": [{"message": {"role": "assistant", "content": "not streamed"}}]
+    }
+    with pytest.raises(HTTPException, match="did not return a stream"):
+        _ = [chunk async for chunk in completion.stream("configured-alias", [])]
+
+
+@pytest.mark.asyncio
+async def test_adapter_rejects_provider_stream_error(real_usage_proxy):
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    completion, _ = real_usage_proxy
+    from openai.types.chat import ChatCompletionChunk
+
+    proxy_server.llm_router.model_list[0]["litellm_params"].pop("mock_response")
+
+    async def provider_stream():
+        yield ChatCompletionChunk(
+            id="test",
+            created=0,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[{"index": 0, "delta": {"role": "assistant", "content": "partial"}}],
+        )
+        raise RuntimeError("provider stream interrupted")
+
+    class ProviderResponse:
+        headers = {}
+
+        def parse(self):
+            return provider_stream()
+
+    with patch("openai.resources.chat.completions.AsyncCompletions.create", AsyncMock(return_value=ProviderResponse())):
+        stream = completion.stream("configured-alias", [{"role": "user", "content": "spend"}])
+        assert (await anext(stream)).choices[0].delta.content == "partial"
+        with pytest.raises(HTTPException, match="stream failed"):
+            _ = [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_adapter_ignores_empty_sse_events(real_usage_proxy):
+    from openai._streaming import ServerSentEvent, SSEDecoder
+
+    completion, _ = real_usage_proxy
+
+    class DecoderWithPing(SSEDecoder):
+        async def aiter_bytes(self, iterator):
+            yield ServerSentEvent(event="ping", data="")
+            async for event in super().aiter_bytes(iterator):
+                yield event
+
+    with patch("litellm.proxy.management_endpoints.usage_endpoints.endpoints.SSEDecoder", DecoderWithPing):
+        chunks = [
+            chunk async for chunk in completion.stream("configured-alias", [{"role": "user", "content": "spend"}])
+        ]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "answer"
+
+
+@pytest.mark.asyncio
+async def test_final_stream_executes_followup_tool_and_emits_answer():
+    from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import _stream_final_response
+
+    histories = []
+
+    class Completion:
+        async def stream(self, model, messages):
+            histories.append(tuple(messages))
+            if len(histories) == 1:
+                yield ModelResponseStream(
+                    model="test-model",
+                    choices=[
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "followup",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "get_usage_data",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "start_date": "2025-01-01",
+                                                    "end_date": "2025-01-31",
+                                                    "user_id": "other-user",
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                )
+            else:
+                yield ModelResponseStream(
+                    model="test-model",
+                    choices=[{"index": 0, "delta": {"content": "Final answer"}, "finish_reason": "stop"}],
+                )
+
+    fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
+    with patch.dict(
+        TOOL_HANDLERS,
+        {"get_usage_data": {"fetch": fetch, "summarise": _summarise_usage_data, "label": "global usage data"}},
+    ):
+        events = [
+            json.loads(event.removeprefix("data: "))
+            async for event in _stream_final_response(
+                "alias", [{"role": "user", "content": "spend"}], Completion(), "own-user", False
+            )
+        ]
+    fetch.assert_awaited_once_with(start_date="2025-01-01", end_date="2025-01-31", user_id="own-user")
+    assert histories[1][-1]["role"] == "tool"
+    assert histories[1][-1]["tool_call_id"] == "followup"
+    assert {"type": "chunk", "content": "Final answer"} in events
+
+
+@pytest.mark.asyncio
+async def test_empty_final_stream_is_not_success():
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import _stream_final_response
+
+    class Completion:
+        async def stream(self, model, messages):
+            yield ModelResponseStream(model="test-model", choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
+
+    with pytest.raises(HTTPException):
+        _ = [event async for event in _stream_final_response("alias", [], Completion())]
+
+
+@pytest.mark.asyncio
+async def test_empty_planning_answer_emits_error_not_done():
+    class Completion:
+        async def complete(self, model, messages, tools):
+            return ModelResponse(choices=[{"message": {"role": "assistant", "content": None}}])
+
+    events = [
+        json.loads(event.removeprefix("data: "))
+        async for event in stream_usage_ai_chat([{"role": "user", "content": "spend"}], completion=Completion())
+    ]
+    assert events[-1]["type"] == "error"
+    assert not any(event["type"] == "done" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_adapter_close_finalizes_real_stream_reservation(real_usage_proxy):
+    completion, calls = real_usage_proxy
+    stream = completion.stream("configured-alias", [{"role": "user", "content": "spend"}])
+    await anext(stream)
+    reservation = calls[0][0].budget_reservation
+    assert reservation["reserved_cost"] > 0
+    await stream.aclose()
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_final_response_close_closes_completion_stream():
+    from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import _stream_final_response
+
+    closed = []
+
+    class Completion:
+        async def stream(self, model, messages):
+            try:
+                yield ModelResponseStream(model="test", choices=[{"index": 0, "delta": {"content": "answer"}}])
+            finally:
+                closed.append(True)
+
+    stream = _stream_final_response("alias", [], Completion())
+    await anext(stream)
+    assert "answer" in await anext(stream)
+    await stream.aclose()
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_followup_tool_limit_rejects_another_round():
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import _stream_final_response
+
+    class Completion:
+        async def stream(self, model, messages):
+            yield ModelResponseStream(
+                model="test",
+                choices=[
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "tool",
+                                    "type": "function",
+                                    "function": {"name": "get_usage_data", "arguments": "{}"},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            )
+
+    with pytest.raises(HTTPException, match="tool-call limit"):
+        _ = [event async for event in _stream_final_response("alias", [], Completion(), remaining_tool_rounds=0)]
+
+
+@pytest.mark.asyncio
+async def test_fragmented_followup_arguments_preserve_tool_id_and_user_scope():
+    from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import _stream_final_response
+
+    history = []
+
+    class Completion:
+        async def stream(self, model, messages):
+            history.append(tuple(messages))
+            if len(history) == 1:
+                for delta in (
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "fragmented",
+                                "type": "function",
+                                "function": {"name": "get_usage_data", "arguments": '{"start_date":"2025-01-01",'},
+                            }
+                        ]
+                    },
+                    {
+                        "tool_calls": [
+                            {"index": 0, "function": {"arguments": '"end_date":"2025-01-31","user_id":"other-user"}'}}
+                        ]
+                    },
+                ):
+                    yield ModelResponseStream(model="test", choices=[{"index": 0, "delta": delta}])
+            else:
+                yield ModelResponseStream(
+                    model="test", choices=[{"index": 0, "delta": {"content": "Scoped answer"}, "finish_reason": "stop"}]
+                )
+
+    fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
+    with patch.dict(
+        TOOL_HANDLERS, {"get_usage_data": {"fetch": fetch, "summarise": _summarise_usage_data, "label": "usage"}}
+    ):
+        events = [
+            json.loads(event.removeprefix("data: "))
+            async for event in _stream_final_response("alias", [], Completion(), user_id="own-user")
+        ]
+    assert history[-1][-1]["tool_call_id"] == "fragmented"
+    assert events[-1] == {"type": "chunk", "content": "Scoped answer"}
+    fetch.assert_awaited_once_with(start_date="2025-01-01", end_date="2025-01-31", user_id="own-user")
+
+
+@pytest.mark.asyncio
+async def test_planning_cancellation_releases_inner_reservation(real_usage_proxy):
+    import asyncio
+
+    from litellm.proxy import proxy_server
+
+    completion, calls = real_usage_proxy
+    proxy_server.llm_router.model_list[0]["litellm_params"].pop("mock_response")
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", AsyncMock(side_effect=asyncio.CancelledError())
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await completion.complete("configured-alias", [{"role": "user", "content": "spend"}], [])
+    assert len(calls) == 1
+    assert calls[0][0].budget_reservation["reserved_cost"] > 0
+    assert calls[0][0].budget_reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("followup_round", [False, True])
+async def test_outer_chat_close_closes_provider_before_returning(followup_round):
+    closed = []
+    rounds = []
+    tool_message = {
+        "role": "assistant",
+        "tool_calls": [{"id": "unknown", "type": "function", "function": {"name": "unknown", "arguments": "{}"}}],
+    }
+
+    class Completion:
+        async def complete(self, model, messages, tools):
+            return ModelResponse(choices=[{"message": tool_message}])
+
+        async def stream(self, model, messages):
+            rounds.append(True)
+            try:
+                if followup_round and len(rounds) == 1:
+                    yield ModelResponseStream(
+                        model="test",
+                        choices=[
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": [{"index": 0, **tool_message["tool_calls"][0]}]},
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                    )
+                else:
+                    yield ModelResponseStream(model="test", choices=[{"index": 0, "delta": {"content": "answer"}}])
+            finally:
+                closed.append(len(rounds))
+
+    stream = stream_usage_ai_chat([{"role": "user", "content": "spend"}], completion=Completion())
+    async for event in stream:
+        if json.loads(event.removeprefix("data: "))["type"] == "chunk":
+            break
+    await stream.aclose()
+    assert closed == ([1, 2] if followup_round else [1])
