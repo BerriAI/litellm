@@ -39,14 +39,6 @@ _CASES: Final[tuple[tuple[str, Mode, JsonValue, JsonValue], ...]] = (
 )
 _CASE_IDS: Final = tuple(case[0] for case in _CASES)
 _CASE_VALUES: Final = tuple(case[1:] for case in _CASES)
-_ADAPTER_CASES: Final[tuple[tuple[str, Mode, JsonValue, JsonValue], ...]] = (
-    ("valid-on", "on", pcb.EXPLICIT, pcb.EXPLICIT),
-    ("valid-off", "off", pcb.EXPLICIT, pcb.EXPLICIT),
-    ("malformed-on", "on", "yes", "yes"),
-    ("malformed-off", "off", "yes", "yes"),
-)
-_ADAPTER_CASE_IDS: Final = tuple(case[0] for case in _ADAPTER_CASES)
-_ADAPTER_CASE_VALUES: Final = tuple(case[1:] for case in _ADAPTER_CASES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +323,7 @@ def _anthropic_text(message: anthropic.types.Message, marker: str) -> None:
     assert content.type == "text" and content.text == rv.answer(marker), message
 
 
-@pytest.mark.parametrize(("mode", "breakpoint", "expected"), _ADAPTER_CASE_VALUES, ids=_ADAPTER_CASE_IDS)
+@pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
 def test_anthropic_sdk_marker_on_user_text(
     bridge: _Bridge, mode: Mode, breakpoint: JsonValue, expected: JsonValue
 ) -> None:
@@ -367,14 +359,17 @@ def test_anthropic_sdk_system_string_gets_the_injected_marker(bridge: _Bridge) -
     bridge.spend.landed(bridge.injecting_off, raw.headers["x-litellm-call-id"], None)
 
 
-def test_native_responses_request_never_enters_the_bridge(bridge: _Bridge) -> None:
+@pytest.mark.parametrize(
+    ("mode", "expected"), (("on", pcb.EXPLICIT), ("off", _UNKNOWN_KEY)), ids=("normalized-on", "verbatim-off")
+)
+def test_native_responses_marker_with_an_unknown_key(bridge: _Bridge, mode: Mode, expected: JsonValue) -> None:
     marker: Final = uuid.uuid4().hex
     block: Final[dict[str, JsonValue]] = {"type": "input_text", "text": pcb.prompt(marker)}
     response: Final = bridge.gateway.request(
         "POST",
         "/v1/responses",
         {
-            "model": bridge.on,
+            "model": bridge.model(mode),
             "input": [{"type": "message", "role": "user", "content": [pcb.marked(block, _UNKNOWN_KEY)]}],
             **pcb.NO_CACHE,
         },
@@ -386,8 +381,31 @@ def test_native_responses_request_never_enters_the_bridge(bridge: _Bridge) -> No
     request: Final = pcb.posted(bridge.wire, marker)
     _wire_body(request)
     on_wire: Final = pcb.single_block(pcb.input_items(request), "user")
-    assert on_wire == pcb.marked(block, _UNKNOWN_KEY), on_wire
-    bridge.spend.landed(bridge.on, response.headers["x-litellm-call-id"], marker)
+    assert on_wire == pcb.marked(block, expected), on_wire
+    bridge.spend.landed(bridge.model(mode), response.headers["x-litellm-call-id"], marker)
+
+
+@pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
+def test_openai_sdk_native_responses_marker_on_user_text(
+    bridge: _Bridge, mode: Mode, breakpoint: JsonValue, expected: JsonValue
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    block: Final[dict[str, JsonValue]] = {"type": "input_text", "text": pcb.prompt(marker)}
+    with openai.OpenAI(api_key=bridge.gateway.key, base_url=_v1(bridge.gateway), max_retries=0) as client:
+        raw: Final = client.responses.with_raw_response.create(
+            model=bridge.model(mode),
+            input=[{"type": "message", "role": "user", "content": [pcb.marked(block, breakpoint)]}],
+            extra_body=dict(pcb.NO_CACHE),
+        )
+    response: Final = raw.parse()
+    assert pcb.answers(response.id, marker), response
+    assert response.output_text == rv.answer(marker), response
+    request: Final = pcb.posted(bridge.wire, marker)
+    _wire_body(request)
+    on_wire: Final = pcb.single_block(pcb.input_items(request), "user")
+    assert on_wire["type"] == "input_text" and on_wire["text"] == pcb.prompt(marker), on_wire
+    pcb.assert_marker(on_wire, expected)
+    bridge.spend.landed(bridge.model(mode), raw.headers["x-litellm-call-id"], marker)
 
 
 @pytest.mark.parametrize("breakpoint", _MALFORMED_VALUES, ids=_MALFORMED_IDS)

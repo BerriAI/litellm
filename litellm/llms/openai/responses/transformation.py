@@ -10,7 +10,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -18,6 +18,8 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+    prompt_cache_breakpoint_for_wire,
+    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -37,7 +39,8 @@ from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
-_RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_ARRAY: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -51,6 +54,21 @@ _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
+_INPUT_PART_LIST_KEYS: Final = frozenset({"content", "output"})
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _json_array(value: object) -> Sequence[object] | None:
+    try:
+        return _JSON_ARRAY.validate_python(value)
+    except ValidationError:
+        return None
 
 
 class _ReasoningSupportEntry(LiteLLMBaseModel):
@@ -326,11 +344,46 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
             model=model, input=validated_input, tools=tools
         )
+        marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
+            input=stripped_input, litellm_params=litellm_params
+        )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
-        return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
+        return self._drop_foreign_tool_call_item_ids(marker_safe_input), sanitized_tools
+
+    def _input_with_wire_safe_prompt_cache_breakpoints(
+        self, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+    ) -> str | ResponseInputParam:
+        deployment_drop_params: Final = normalize_drop_params(getattr(litellm_params, "drop_params", None))
+        if not (deployment_drop_params or litellm.drop_params) or not isinstance(input, list):
+            return input
+        wire_safe_items: Final = [self._item_with_wire_safe_prompt_cache_breakpoints(item) for item in input]
+        return cast("ResponseInputParam", wire_safe_items)  # cast-ok: items keep their shape, minus a rejected marker
+
+    @classmethod
+    def _item_with_wire_safe_prompt_cache_breakpoints(cls, item: object) -> object:
+        wire_item: Final = _json_object(item)
+        if wire_item is None:
+            return item
+        return {key: cls._parts_with_wire_safe_prompt_cache_breakpoints(key, value) for key, value in wire_item.items()}
+
+    @classmethod
+    def _parts_with_wire_safe_prompt_cache_breakpoints(cls, key: str, value: object) -> object:
+        parts: Final = _json_array(value) if key in _INPUT_PART_LIST_KEYS else None
+        if parts is None:
+            return value
+        return [cls._part_with_wire_safe_prompt_cache_breakpoint(part) for part in parts]
+
+    @staticmethod
+    def _part_with_wire_safe_prompt_cache_breakpoint(part: object) -> object:
+        wire_part: Final = _json_object(part)
+        if wire_part is None or "prompt_cache_breakpoint" not in wire_part:
+            return part
+        marker: Final = prompt_cache_breakpoint_for_wire(wire_part["prompt_cache_breakpoint"], drop_params=True)
+        unmarked: Final = {key: value for key, value in wire_part.items() if key != "prompt_cache_breakpoint"}
+        return with_prompt_cache_breakpoint(unmarked, marker)
 
     def _tools_with_object_parameters(
         self, model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None
@@ -578,7 +631,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
@@ -978,7 +1031,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = _RAW_RESPONSE_JSON.validate_python(raw_response.json())
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
