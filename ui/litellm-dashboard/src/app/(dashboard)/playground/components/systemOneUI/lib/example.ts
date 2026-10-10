@@ -1,4 +1,5 @@
 import type { DecisionRequest, SystemOneRequest } from "./schemas";
+import type { OpenAIDecisionsRequest } from "./openAIDecisions";
 
 export const SYSTEM_ONE_EXAMPLE = {
   model: "jev-latest",
@@ -37,6 +38,34 @@ export const SYSTEM_ONE_EXAMPLE = {
   },
 } satisfies SystemOneRequest;
 
-export const PLACEHOLDER_DECISION_MODEL = "your-decision-model";
+export const decisionsExample = (model?: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });
 
-export const decisionsExample = (model: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });
+export const openAIDecisionsExample = (model?: string): OpenAIDecisionsRequest => ({
+  model,
+  input: SYSTEM_ONE_EXAMPLE.state,
+  questions: [
+    {
+      type: "choice",
+      name: "area",
+      instructions: SYSTEM_ONE_EXAMPLE.questions.area.instructions,
+      choices: Object.entries(SYSTEM_ONE_EXAMPLE.questions.area.criteria).map(([value, description]) => ({
+        value,
+        description,
+      })),
+    },
+    {
+      type: "predicate",
+      name: "has_repro_steps",
+      instructions: SYSTEM_ONE_EXAMPLE.questions.has_repro_steps.instructions,
+    },
+    {
+      type: "score",
+      name: "severity",
+      instructions: SYSTEM_ONE_EXAMPLE.questions.severity.instructions,
+      levels: SYSTEM_ONE_EXAMPLE.questions.severity.criteria.map((description, index) => ({
+        label: String(index),
+        description,
+      })),
+    },
+  ],
+});
