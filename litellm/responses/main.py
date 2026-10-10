@@ -13,6 +13,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm._internal_context import in_emulated_file_search
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -38,6 +39,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.tool_search.lowering import needs_tool_search_lowering
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -1099,13 +1101,8 @@ def _responses_try_dispatch_mcp_gateway(
     )
 
 
-def _responses_try_dispatch_emulated_file_search(
+def _responses_reentry_kwargs(
     *,
-    tools: Iterable[ToolParam] | None,
-    input: str | ResponseInputParam,
-    model: str,
-    responses_api_provider_config: BaseResponsesAPIConfig | None,
-    use_chat_completions_api: bool,
     include: list[ResponseIncludable] | None,
     instructions: str | None,
     max_output_tokens: int | None,
@@ -1132,22 +1129,12 @@ def _responses_try_dispatch_emulated_file_search(
     extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
+    use_chat_completions_api: bool,
     kwargs: dict[str, object],
-    _is_async: bool,
-) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse] | None:
-    """Return a response when emulated file_search handles the call; otherwise None."""
-    if not _has_file_search_tool(tools) or not (
-        responses_api_provider_config is None
-        or use_chat_completions_api is True
-        or not responses_api_provider_config.supports_native_file_search()
-    ):
-        return None
-    from litellm.responses.file_search.emulated_handler import (
-        aresponses_with_emulated_file_search,
-    )
-
+) -> dict[str, object]:
+    """The keyword arguments an emulation passes when it calls aresponses again for this request."""
     _internal_skip: Final = {"litellm_call_id", "aresponses"}
-    emulated_kwargs: Final = {
+    return {
         "include": include,
         "instructions": instructions,
         "max_output_tokens": max_output_tokens,
@@ -1177,14 +1164,94 @@ def _responses_try_dispatch_emulated_file_search(
         **({"use_chat_completions_api": True} if use_chat_completions_api else {}),
         **{k: v for k, v in kwargs.items() if k not in _internal_skip},
     }
+
+
+def _responses_try_dispatch_emulated_file_search(
+    *,
+    tools: Iterable[ToolParam] | None,
+    input: str | ResponseInputParam,
+    model: str,
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    use_chat_completions_api: bool,
+    reentry_kwargs: Mapping[str, object],
+    _is_async: bool,
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse] | None:
+    """Return a response when emulated file_search handles the call; otherwise None."""
+    if not _has_file_search_tool(tools) or not (
+        responses_api_provider_config is None
+        or use_chat_completions_api is True
+        or not responses_api_provider_config.supports_native_file_search()
+    ):
+        return None
+    from litellm.responses.file_search.emulated_handler import (
+        aresponses_with_emulated_file_search,
+    )
+
     if _is_async:
-        return aresponses_with_emulated_file_search(input=input, model=model, tools=tools, **emulated_kwargs)
+        return aresponses_with_emulated_file_search(input=input, model=model, tools=tools, **reentry_kwargs)
     return run_async_function(
         aresponses_with_emulated_file_search,
         input=input,
         model=model,
         tools=tools,
-        **emulated_kwargs,
+        **reentry_kwargs,
+    )
+
+
+class _DeploymentToolSearchSupport(BaseModel):
+    supports_tool_search: bool | None = None
+
+
+def _supports_tool_search_natively(responses_api_provider_config: BaseResponsesAPIConfig, model_info: object) -> bool:
+    try:
+        declared: Final = _DeploymentToolSearchSupport.model_validate(model_info).supports_tool_search
+    except ValidationError:
+        return responses_api_provider_config.supports_native_tool_search()
+    if declared is None:
+        return responses_api_provider_config.supports_native_tool_search()
+    return declared
+
+
+def _responses_try_dispatch_lowered_tool_search(
+    *,
+    tools: Iterable[ToolParam] | None,
+    input: str | ResponseInputParam,
+    model: str,
+    tool_choice: ToolChoice | None,
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    use_chat_completions_api: bool,
+    model_info: object,
+    reentry_kwargs: Mapping[str, object],
+    _is_async: bool,
+) -> (
+    ResponsesAPIResponse
+    | BaseResponsesAPIStreamingIterator
+    | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+    | None
+):
+    """Return a response when a client tool_search is lowered to a function tool for a native Responses
+    deployment that has no tool search of its own; otherwise None. The chat-completions bridge handles
+    tool_search itself."""
+    declared_tools: Final = tuple(tools) if isinstance(tools, Sequence) else None
+    if (
+        responses_api_provider_config is None
+        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or _supports_tool_search_natively(responses_api_provider_config, model_info)
+        or not needs_tool_search_lowering(input, declared_tools)
+        or in_emulated_file_search()
+    ):
+        return None
+    from litellm.responses.tool_search.handler import (
+        aresponses_with_lowered_tool_search,
+        responses_with_lowered_tool_search,
+    )
+
+    if _is_async:
+        return aresponses_with_lowered_tool_search(
+            input=input, model=model, tools=declared_tools, tool_choice=tool_choice, call_kwargs=reentry_kwargs
+        )
+    return responses_with_lowered_tool_search(
+        input=input, model=model, tools=declared_tools, tool_choice=tool_choice, call_kwargs=reentry_kwargs
     )
 
 
@@ -1396,12 +1463,7 @@ def responses(
             )
         )
 
-        _file_search_dispatch: Final = _responses_try_dispatch_emulated_file_search(
-            tools=tools,
-            input=input,
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            use_chat_completions_api=use_chat_completions_api,
+        reentry_kwargs: Final = _responses_reentry_kwargs(
             include=include,
             instructions=instructions,
             max_output_tokens=max_output_tokens,
@@ -1428,11 +1490,34 @@ def responses(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            use_chat_completions_api=use_chat_completions_api,
             kwargs=kwargs,
+        )
+        _file_search_dispatch: Final = _responses_try_dispatch_emulated_file_search(
+            tools=tools,
+            input=input,
+            model=model,
+            responses_api_provider_config=responses_api_provider_config,
+            use_chat_completions_api=use_chat_completions_api,
+            reentry_kwargs=reentry_kwargs,
             _is_async=_is_async,
         )
         if _file_search_dispatch is not None:
             return _file_search_dispatch
+
+        _tool_search_dispatch: Final = _responses_try_dispatch_lowered_tool_search(
+            tools=tools,
+            input=input,
+            model=model,
+            tool_choice=tool_choice,
+            responses_api_provider_config=responses_api_provider_config,
+            use_chat_completions_api=use_chat_completions_api,
+            model_info=deployment_model_info,
+            reentry_kwargs=reentry_kwargs,
+            _is_async=_is_async,
+        )
+        if _tool_search_dispatch is not None:
+            return _tool_search_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
