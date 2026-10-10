@@ -49,7 +49,7 @@ async def video_generation(
     request: Request,
     fastapi_response: Response,
     input_reference: UploadFile | None = File(None),
-    last_frame: UploadFile | None = File(None),  # noqa: B008
+    last_frame: UploadFile | None = File(None),  # noqa: B008  # FastAPI requires File() as default for multipart
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
