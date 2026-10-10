@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
@@ -29,6 +29,9 @@ vi.mock("../networking", async () => {
     }),
     modelAvailableCall: vi.fn().mockResolvedValue({
       data: [{ id: "gpt-4" }, { id: "gpt-3.5-turbo" }],
+    }),
+    modelHubCall: vi.fn().mockResolvedValue({
+      data: [{ model_group: "chat-dev" }, { model_group: "chat-prod" }],
     }),
     tagListCall: vi.fn().mockResolvedValue({
       tag1: { name: "tag1", description: "Test tag 1" },
@@ -2156,6 +2159,83 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
       expect(onSubmitMock.mock.calls[0][0]).toStrictEqual(UNTOUCHED_SAVE_PAYLOAD);
+    });
+
+    it("loads key model aliases and submits an edited target with its dirty field", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmit, {
+        ...MOCK_KEY_DATA,
+        aliases: { chat: "chat-dev" },
+        team_model_aliases: { chat: "team-chat" },
+      });
+
+      await userEvent.click(await screen.findByRole("button", { name: "Edit chat" }));
+      const target = within(screen.getByRole("row", { name: /Save Cancel/ })).getByRole("combobox");
+      await userEvent.clear(target);
+      await userEvent.type(target, "chat-prod");
+      await userEvent.click(await screen.findByRole("option", { name: "chat-prod" }));
+      await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(await screen.findByText("chat-prod")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ aliases: { chat: "chat-prod" } }),
+          expect.arrayContaining(["aliases"]),
+        );
+      });
+    });
+
+    it("submits an empty alias map when the last key alias is deleted", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmit, { ...MOCK_KEY_DATA, aliases: { chat: "chat-dev" } });
+
+      await userEvent.click(await screen.findByRole("button", { name: "Delete chat" }));
+      expect(onSubmit).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ aliases: {} }),
+          expect.arrayContaining(["aliases"]),
+        );
+      });
+    });
+
+    it("adds a model alias to a key that has none", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmit);
+
+      fireEvent.change(await screen.findByLabelText("Alias Name"), { target: { value: "chat" } });
+      await userEvent.type(screen.getByPlaceholderText("Select target model"), "chat-dev");
+      await userEvent.click(await screen.findByRole("option", { name: "chat-dev" }));
+      await userEvent.click(screen.getByRole("button", { name: "Add Alias" }));
+      expect(onSubmit).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ aliases: { chat: "chat-dev" } }),
+          expect.arrayContaining(["aliases"]),
+        );
+      });
+    });
+
+    it("keeps stored aliases out of an unrelated key edit", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmit, { ...MOCK_KEY_DATA, aliases: { chat: "chat-dev" } });
+
+      expect(await screen.findByText("chat-dev")).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Key Alias"), { target: { value: "renamed-key" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("aliases");
+      expect(onSubmit.mock.calls[0][1]).not.toContain("aliases");
     });
 
     it("drops the policy and prompt keys entirely for a role that cannot see those fields", async () => {
