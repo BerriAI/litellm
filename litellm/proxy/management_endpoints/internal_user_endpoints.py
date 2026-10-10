@@ -3094,9 +3094,3 @@ async def get_user_daily_activity_aggregated(
         return await get_daily_activity_aggregated(repository, scope)
     except HTTPException:
         raise
-    except Exception as e:
-        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occured - %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e}"},
-        )
