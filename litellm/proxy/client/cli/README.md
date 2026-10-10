@@ -36,6 +36,8 @@ The base URL is resolved in this order of precedence:
 3. `base_url` from `~/.litellm/config.json`
 4. `http://localhost:4000`
 
+When none of the first three is set, `lite claude`, `lite codex`, `lite opencode`, and `lite pi` run from a terminal ask for the gateway URL (Enter keeps `http://localhost:4000`) and save the answer as `base_url` in `~/.litellm/config.json`, so later commands use it without asking. Change it with `lite config set base_url <url>`. Non-interactive runs keep the `http://localhost:4000` default
+
 ### Hiding commands from the listings
 
 Deployments that hand `lite` to end users often want to advertise only part of it. Store the commands to keep out of the listings, comma separated:
