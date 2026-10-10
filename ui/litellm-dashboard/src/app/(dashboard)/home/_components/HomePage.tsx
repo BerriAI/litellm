@@ -36,13 +36,22 @@ export default function HomePage() {
       </PageHeader>
 
       <section aria-label={`Usage, last ${HOME_USAGE_DAYS} days`}>
-        <UsageStatStrip
-          results={usage.results}
-          totals={usage.totals}
-          loading={usage.loading}
-          requestCountsPending={usage.requestCountsPending}
-          budget={usage.budget}
-        />
+        {usage.failed ? (
+          <div className="flex items-center justify-between gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
+            <span className="text-destructive">Failed to load usage</span>
+            <Button variant="outline" size="sm" onClick={usage.retry}>
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <UsageStatStrip
+            results={usage.results}
+            totals={usage.totals}
+            loading={usage.loading}
+            requestCountsPending={usage.requestCountsPending}
+            budget={usage.budget}
+          />
+        )}
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">

@@ -23,6 +23,7 @@ export interface HomeUsage {
   requestCountsPending: boolean;
   failed: boolean;
   budget: number | null;
+  retry: () => void;
 }
 
 /** Last HOME_USAGE_DAYS of the signed-in user's view of usage: deployment-wide for admins, their own otherwise. */
@@ -30,6 +31,7 @@ export function useHomeUsage(): HomeUsage {
   const { accessToken, userRole, userId } = useAuthorized();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
+  const [attempt, setAttempt] = useState(0);
   const range = useMemo(() => {
     const endTime = new Date();
     const startTime = new Date(endTime.getTime() - HOME_USAGE_DAYS * 24 * 60 * 60 * 1000);
@@ -46,7 +48,7 @@ export function useHomeUsage(): HomeUsage {
   const { data, loading, failed } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.user.aggregated(request as DailyActivityRequest),
     enabled: request !== null,
-    deps: [accessToken, isAdmin, userId, range.startTime.toISOString()],
+    deps: [accessToken, isAdmin, userId, range.startTime.toISOString(), attempt],
   });
 
   const [gateway, setGateway] = useState<GatewayActivity | null>(null);
@@ -64,7 +66,7 @@ export function useHomeUsage(): HomeUsage {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, accessToken, range]);
+  }, [isAdmin, accessToken, range, attempt]);
 
   const results = useMemo(() => toDailyData(data), [data]);
   const totals = useMemo(
@@ -79,5 +81,6 @@ export function useHomeUsage(): HomeUsage {
     requestCountsPending: loading && gateway === null,
     failed,
     budget: currentUser?.max_budget ?? null,
+    retry: () => setAttempt((n) => n + 1),
   };
 }
