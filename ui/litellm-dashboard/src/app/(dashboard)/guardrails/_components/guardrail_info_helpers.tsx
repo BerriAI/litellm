@@ -1,3 +1,4 @@
+import agentguardsLogo from "../../../../../public/assets/logos/agentguards.jpg";
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
@@ -292,6 +293,7 @@ export const guardrailLogoMap = {
   "Google Cloud Model Armor": googleLogo.src,
   "Guardrails AI": guardrailsAiLogo.src,
   "Lasso Guardrail": lassoLogo.src,
+  AgentGuards: agentguardsLogo.src,
   "Pangea Guardrail": pangeaLogo.src,
   "AIM Guardrail": aimSecurityLogo.src,
   "Cato Networks Guardrail": catoNetworksLogo.src,

@@ -13,6 +13,9 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365GuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.agentguards import (
+    AgentGuardsGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
@@ -120,6 +123,7 @@ class SupportedGuardrailIntegrations(Enum):
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     MCP_SECURITY = "mcp_security"
+    AGENTGUARDS = "agentguards"
     ONYX = "onyx"
     PROMPTGUARD = "promptguard"
     XECGUARD = "xecguard"
@@ -1155,7 +1159,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
+            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'agentguards', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -1316,6 +1320,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
+    AgentGuardsGuardrailConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,

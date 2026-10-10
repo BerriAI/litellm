@@ -13,6 +13,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   cisco_ai_defense: "cisco.png",
   noma: "noma_security.png",
   aporia: "aporia.png",
+  agentguards: "agentguards.jpg",
   aim: "aim_security.jpeg",
   cato_networks: "cato_networks.svg",
   prompt_security: "prompt_security.png",
