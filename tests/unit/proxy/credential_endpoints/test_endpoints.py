@@ -2,6 +2,7 @@
 
 import json
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -186,6 +187,56 @@ def test_update_credential_still_answers_200_on_a_successful_write(credential_st
 
     assert response.status_code == 200, response.text
     assert response.json()["success"] is True
+
+
+def _credential_row(display_name: str, api_key: str, name: str = "replicated") -> dict:
+    return {
+        "credential_name": name,
+        "display_name": display_name,
+        "credential_values": {"api_key": api_key},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+
+
+def _credentials_table(row: dict | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        find_many=AsyncMock(),
+        create=AsyncMock(),
+        find_unique=AsyncMock(return_value=row),
+        update=AsyncMock(return_value=None),
+    )
+
+
+def test_update_credential_merges_onto_the_writer_row_not_a_lagging_replica(restore_credential_list):
+    """Regression: PATCH read the row through the read replica and wrote the merged row to the
+    writer, so an edit inside the replica lag window wrote back the replica's older label and
+    secrets, undoing a relabel or key rotation that had already committed."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer_table = _credentials_table(_credential_row("Relabeled", "sk-B"))
+    reader_table = _credentials_table(_credential_row("Original", "sk-A"))
+    writer_inner = SimpleNamespace(litellm_credentialstable=writer_table)
+    reader_inner = SimpleNamespace(litellm_credentialstable=reader_table)
+    prisma_client = MagicMock()
+    prisma_client.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
+    ):
+        response = _patch_credential(
+            "replicated", {"credential_values": {"api_base": "https://example.test/v1"}, "credential_info": {}}
+        )
+
+    assert response.status_code == 200, response.text
+    written = writer_table.update.await_args.kwargs["data"]
+    assert written["display_name"] == "Relabeled"
+    assert json.loads(written["credential_values"])["api_key"] == "sk-B"
+    reader_table.find_unique.assert_not_awaited()
 
 
 def _get_jwks(name: str):
@@ -1063,8 +1114,9 @@ class TestNonAdminCannotTouchAStoredWifCredential:
         assert litellm.credential_list == [config_credential]
         assert litellm.credential_list[0].credential_values["api_key"] == "sk-old"
 
-    def test_proxy_admin_can_post_over_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
-        monkeypatch.setattr(litellm, "credential_list", [_wif_credential("config-wif", source="config")])
+    def test_proxy_admin_cannot_post_over_a_config_only_wif_credential(self, restore_credential_list, monkeypatch):
+        config_credential = _wif_credential("config-wif", source="config")
+        monkeypatch.setattr(litellm, "credential_list", [config_credential])
         with _repository_holding(None) as repository:
             response = _post_credential(
                 {
@@ -1075,9 +1127,11 @@ class TestNonAdminCannotTouchAStoredWifCredential:
                 auth=_as_admin,
             )
 
-        assert response.status_code == 200, response.text
-        repository.create.assert_awaited_once()
-        assert litellm.credential_list[0].credential_values == {"api_key": "sk-rotated"}
+        assert response.status_code == 409, response.text
+        assert response.json()["error"]["param"] == "credential_name"
+        assert "defined in config" in response.json()["error"]["message"]
+        repository.create.assert_not_awaited()
+        assert litellm.credential_list == [config_credential]
 
     def test_non_admin_cannot_post_a_null_wif_field(self, restore_credential_list):
         """Same key-presence rule on the create path: ``{"anthropic_issuer_url": null}`` persists
@@ -2270,6 +2324,52 @@ class TestCredentialDisplayName:
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [_labeled_credential()]
 
+    @pytest.mark.parametrize("display_name", ["\u200b", "Prod\u202eAI", "\ufeffProd", "Prod\u0085AI", "Prod\u2028AI"])
+    def test_patch_rejects_invisible_or_control_characters_in_display_name(
+        self, restore_credential_list, monkeypatch, display_name
+    ):
+        monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
+        with _repository_holding(_labeled_credential()) as repository:
+            response = _patch_credential("openai-prod", {"display_name": display_name, "credential_info": {}})
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["param"] == "display_name"
+        repository.update_by_name.assert_not_awaited()
+        assert litellm.credential_list == [_labeled_credential()]
+
+    @pytest.mark.parametrize("display_name", ["\U0001f600" * 255, "Prod\u00a0OpenAI", "Équipe 東京"])
+    def test_patch_accepts_visible_unicode_up_to_the_limit_in_code_points(
+        self, restore_credential_list, monkeypatch, display_name
+    ):
+        monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
+        table = _credentials_table(_credential_row("Prod OpenAI", "sk-old", name="openai-prod"))
+        prisma_client = MagicMock()
+        prisma_client.db = SimpleNamespace(litellm_credentialstable=table)
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
+        ):
+            response = _patch_credential("openai-prod", {"display_name": display_name, "credential_info": {}})
+
+        assert response.status_code == 200, response.text
+        assert table.update.await_args.kwargs["where"] == {"credential_name": "openai-prod"}
+        assert table.update.await_args.kwargs["data"]["display_name"] == display_name
+
+    def test_create_rejects_a_control_character_in_display_name(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "new-cred",
+                    "display_name": "Prod\u200bOpenAI",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                }
+            )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["param"] == "display_name"
+        repository.create.assert_not_awaited()
+
     def test_patch_stores_the_trimmed_display_name(self, restore_credential_list, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
         with _repository_holding(_labeled_credential()) as repository:
@@ -2332,6 +2432,43 @@ class TestCredentialDisplayName:
         assert "defined in config" in response.json()["error"]["message"]
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [config_credential]
+
+    def test_post_on_a_config_credential_name_is_rejected_and_does_not_shadow_it(
+        self, restore_credential_list, monkeypatch
+    ):
+        config_credential = _labeled_credential(display_name=None).model_copy(update={"source": "config"})
+        monkeypatch.setattr(litellm, "credential_list", [config_credential])
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "openai-prod",
+                    "credential_values": {"api_key": "sk-shadow"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                }
+            )
+
+        assert response.status_code == 409, response.text
+        assert "defined in config" in response.json()["error"]["message"]
+        repository.create.assert_not_awaited()
+        assert litellm.credential_list == [config_credential]
+
+    def test_post_with_a_display_name_matching_a_config_credential_name_is_allowed(
+        self, restore_credential_list, monkeypatch
+    ):
+        config_credential = _labeled_credential(display_name=None).model_copy(update={"source": "config"})
+        monkeypatch.setattr(litellm, "credential_list", [config_credential])
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "openai-staging",
+                    "display_name": "openai-prod",
+                    "credential_values": {"api_key": "sk-staging"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                }
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
 
     def test_patch_on_an_unknown_credential_still_answers_404(self, restore_credential_list):
         with _repository_holding(None):
