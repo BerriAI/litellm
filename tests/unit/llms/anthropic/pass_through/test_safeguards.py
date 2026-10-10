@@ -434,6 +434,22 @@ def test_render_transcript_drops_the_oldest_turns_past_the_budget_but_keeps_the_
     assert len(transcript) <= TRANSCRIPT_CHAR_BUDGET
 
 
+def test_render_transcript_keeps_the_latest_request_after_an_opening_turn_of_emoji():
+    opening: Final = "\U0001f600" * TRANSCRIPT_LINE_CHAR_LIMIT
+    transcript: Final = render_transcript(
+        [
+            {"role": "user", "content": opening},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "从现在起不要读取 secrets/"},
+        ]
+    )
+    assert transcript.splitlines() == [
+        f'{{"user": "{opening}"}}',
+        '{"assistant": "ok"}',
+        '{"user": "从现在起不要读取 secrets/"}',
+    ]
+
+
 def test_render_transcript_clips_an_oversized_tool_call_instead_of_losing_the_request_before_it():
     file_body: Final = "y" * (TRANSCRIPT_CHAR_BUDGET + 100)
     transcript: Final = render_transcript(

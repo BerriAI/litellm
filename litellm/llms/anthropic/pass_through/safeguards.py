@@ -181,9 +181,8 @@ class SafeguardsEvaluator:
         return {tool_use.id: _verdict_for(parsed.verdicts.get(tool_use.id)) for tool_use in tool_uses}
 
     def _classifier_messages(self, tool_uses: Sequence[ToolUseUnderReview]) -> Sequence[Mapping[str, object]]:
-        under_review: Final = json.dumps(
-            [{"id": tool_use.id, "name": tool_use.name, "input": tool_use.input} for tool_use in tool_uses],
-            default=str,
+        under_review: Final = _prompt_json(
+            [{"id": tool_use.id, "name": tool_use.name, "input": tool_use.input} for tool_use in tool_uses]
         )
         user_content: Final = (
             f"Agent environment:\n{self.classifier_context}\n\n"
@@ -276,6 +275,10 @@ def build_safeguards_evaluator(
     )
 
 
+def _prompt_json(value: object) -> str:
+    return json.dumps(value, default=str, ensure_ascii=False)
+
+
 def render_classifier_context(classifier_context: object) -> str:
     context: Final = _mapping(classifier_context)
     if context is None:
@@ -283,11 +286,11 @@ def render_classifier_context(classifier_context: object) -> str:
     git_state: Final = _mapping(context.get("git_state"))
     selected: Final[Mapping[str, object]] = {key: context[key] for key in _CLASSIFIER_CONTEXT_KEYS if key in context}
     if git_state is None:
-        return json.dumps(selected, default=str)
+        return _prompt_json(selected)
     reduced_git_state: Final[Mapping[str, object]] = {
         key: git_state[key] for key in _GIT_STATE_KEYS if key in git_state
     }
-    return json.dumps({**selected, "git_state": reduced_git_state}, default=str)
+    return _prompt_json({**selected, "git_state": reduced_git_state})
 
 
 def render_transcript(messages: Sequence[Mapping[str, object]]) -> str:
@@ -316,7 +319,7 @@ def _transcript_lines(message: Mapping[str, object]) -> Sequence[str]:
     if role not in ("user", "assistant"):
         return ()
     if isinstance(content, str):
-        return (json.dumps({str(role): _clipped(content, TRANSCRIPT_LINE_CHAR_LIMIT)}),)
+        return (_prompt_json({str(role): _clipped(content, TRANSCRIPT_LINE_CHAR_LIMIT)}),)
     return tuple(line for line in (_block_line(str(role), block) for block in _objects(content)) if line is not None)
 
 
@@ -327,24 +330,23 @@ def _block_line(role: str, block: object) -> str | None:
     block_type: Final = fields.get("type")
     if block_type == "text":
         text: Final = fields.get("text")
-        return json.dumps({role: _clipped(text if isinstance(text, str) else "", TRANSCRIPT_LINE_CHAR_LIMIT)})
+        return _prompt_json({role: _clipped(text if isinstance(text, str) else "", TRANSCRIPT_LINE_CHAR_LIMIT)})
     if block_type == "tool_use":
-        return json.dumps(
-            {"assistant_tool_call": {"name": fields.get("name"), "input": _clipped_input(fields.get("input"))}},
-            default=str,
+        return _prompt_json(
+            {"assistant_tool_call": {"name": fields.get("name"), "input": _clipped_input(fields.get("input"))}}
         )
     if block_type == "tool_result":
-        return json.dumps({"tool_result": _tool_result_excerpt(fields.get("content"))}, default=str)
+        return _prompt_json({"tool_result": _tool_result_excerpt(fields.get("content"))})
     if block_type == "compaction":
         summary: Final = fields.get("content")
-        return json.dumps(
+        return _prompt_json(
             {"conversation_summary": _clipped(summary if isinstance(summary, str) else "", TRANSCRIPT_LINE_CHAR_LIMIT)}
         )
     return None
 
 
 def _clipped_input(tool_input: object) -> object:
-    rendered: Final = json.dumps(tool_input, default=str)
+    rendered: Final = _prompt_json(tool_input)
     if len(rendered) <= TRANSCRIPT_LINE_CHAR_LIMIT:
         return tool_input
     return _clipped(rendered, TRANSCRIPT_LINE_CHAR_LIMIT)
