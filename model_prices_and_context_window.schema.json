@@ -1065,6 +1065,9 @@
         "supports_prompt_caching": {
           "type": "boolean"
         },
+        "supports_raw_reasoning_effort": {
+          "type": "boolean"
+        },
         "supports_reasoning": {
           "type": "boolean"
         },

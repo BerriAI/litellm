@@ -410,6 +410,27 @@ class AmazonConverseConfig(BaseConfig):
     def _requires_min_max_tokens(model: str) -> bool:
         return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
+    @classmethod
+    def _supports_raw_reasoning_effort(cls, model: str) -> bool:
+        """Whether the model takes ``reasoning_effort`` verbatim in
+        ``additionalModelRequestFields`` (the ``supports_raw_reasoning_effort`` flag
+        in model_prices_and_context_window.json), rather than an Anthropic ``thinking``
+        block. Resolves Bedrock regional prefixes (``global.``/``us.``/``eu.``) and
+        inference-profile ARNs via the base model, like ``_supports_sampling_params``.
+        """
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        candidates: Final = (model, *(f"{prefix}{base_model}" for prefix in ("", "global.", "us.", "eu.")))
+        for candidate in candidates:
+            if (
+                flag := AnthropicModelInfo._get_model_capability(  # pyright: ignore[reportPrivateUsage]  # Shared API
+                    candidate, "supports_raw_reasoning_effort"
+                )
+            ) is not None:
+                return flag
+        return False
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -539,13 +560,15 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - GPT-OSS, DeepSeek V3 and models flagged ``supports_raw_reasoning_effort``
+          (e.g. Z.AI GLM on Bedrock): passed through unchanged via
+          additionalModelRequestFields.
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model or "deepseek" in model:
+        if "gpt-oss" in model or "deepseek" in model or self._supports_raw_reasoning_effort(model):
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
@@ -740,6 +763,8 @@ class AmazonConverseConfig(BaseConfig):
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
+            supported_params.append("reasoning_effort")
+        elif self._supports_raw_reasoning_effort(model):
             supported_params.append("reasoning_effort")
         elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
