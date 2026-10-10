@@ -224,6 +224,38 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_drains_batch_line_items_before_closing_clients(monkeypatch):
+    """A running batch line fan-out keeps its claim, so shutdown lets it finish
+    before the database, caches and callback clients it sends through close."""
+    from litellm.constants import MAX_TIME_TO_CLEAR_QUEUE
+
+    calls: list = []  # mutable-ok: records call order, which is the assertion
+
+    async def _record_drain(timeout: float) -> int:
+        calls.append(("drain", timeout))
+        return 0
+
+    monkeypatch.setattr(ps, "drain_batch_line_items", _record_drain, raising=False)
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "flush_gateway_requests", AsyncMock(), raising=False)
+    monkeypatch.setattr(ps, "flush_request_errors", AsyncMock(), raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == [("drain", MAX_TIME_TO_CLEAR_QUEUE), "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch):
     """No prisma client means nothing to drain to, and no attempt is made."""
     flush = AsyncMock()

@@ -73,6 +73,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    MAX_TIME_TO_CLEAR_QUEUE,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -274,6 +275,7 @@ from litellm._logging import redact_string, verbose_proxy_logger, verbose_router
 from litellm.batches.batch_line_item_logging import (
     _LINE_ITEM_CLAIM_TTL_SECONDS,  # pyright: ignore[reportPrivateUsage]  # the claim window is defined next to the cache it expires
     batch_line_item_claim_cache,
+    drain_batch_line_items,
 )
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
@@ -1195,6 +1197,10 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    # Batch line fan-outs run outside the logging queue and keep their batch claim
+    # once started, so let them finish while the claim cache, database and
+    # callback clients are still open.
+    await drain_batch_line_items(timeout=MAX_TIME_TO_CLEAR_QUEUE)
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:

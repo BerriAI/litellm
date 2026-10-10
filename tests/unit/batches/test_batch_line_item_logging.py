@@ -25,6 +25,7 @@ import litellm
 from litellm.batches.batch_line_item_logging import (
     _release_line_item_claim,
     batch_line_item_claim_cache,
+    drain_batch_line_items,
     log_batch_line_items,
     pending_batch_line_item_tasks,
 )
@@ -330,17 +331,7 @@ async def test_a_slow_line_fan_out_does_not_hold_back_the_aggregate_event(record
             "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
         ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
-        await asyncio.wait_for(
-            _parent_logging().async_success_handler(
-                result=_batch(),
-                batch_cost=1.5,
-                batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-                batch_models=["gpt-4o"],
-                batch_successful_requests=1,
-                batch_failed_requests=1,
-            ),
-            timeout=5,
-        )
+        await _log_aggregate_success()
         assert [_payload(e)["response_cost"] for e in gated.aggregate_events] == [1.5]
         assert gated.line_events == []
 
@@ -348,6 +339,69 @@ async def test_a_slow_line_fan_out_does_not_hold_back_the_aggregate_event(record
         await asyncio.gather(*pending_batch_line_item_tasks())
 
     assert sorted(_hidden(e)["batch_custom_id"] for e in gated.line_events) == ["a", "b"]
+
+
+async def _log_aggregate_success() -> None:
+    await asyncio.wait_for(
+        _parent_logging().async_success_handler(
+            result=_batch(),
+            batch_cost=1.5,
+            batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            batch_models=["gpt-4o"],
+            batch_successful_requests=1,
+            batch_failed_requests=1,
+        ),
+        timeout=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_lets_a_running_line_fan_out_finish(recorder, monkeypatch):
+    """A fan-out keeps its batch claim once it starts, so shutdown waits for it
+    instead of closing the clients its remaining lines are sent through."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    gated: Final = _GatedLineLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [gated])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [gated])
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_aggregate_success()
+        asyncio.get_running_loop().call_later(0.05, gated.gate.set)
+        still_running: Final = await drain_batch_line_items(timeout=5)
+
+    assert still_running == 0
+    assert sorted(_hidden(e)["batch_custom_id"] for e in gated.line_events) == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_stops_waiting_at_its_timeout(recorder, monkeypatch):
+    """A fan-out that outlasts the shutdown budget does not hold the shutdown open."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    gated: Final = _GatedLineLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [gated])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [gated])
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_aggregate_success()
+        still_running: Final = await asyncio.wait_for(drain_batch_line_items(timeout=0.05), timeout=5)
+        delivered_before_gate: Final = list(gated.line_events)
+        gated.gate.set()
+        await asyncio.gather(*pending_batch_line_item_tasks())
+
+    assert still_running == 1
+    assert delivered_before_gate == []
 
 
 @pytest.mark.asyncio

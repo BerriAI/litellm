@@ -468,6 +468,25 @@ def pending_batch_line_item_tasks() -> tuple["asyncio.Task[int]", ...]:
     return tuple(_LINE_ITEM_TASKS)
 
 
+async def drain_batch_line_items(timeout: float) -> int:
+    """Wait up to ``timeout`` seconds for this loop's running line fan-outs, so a
+    shutdown lets them finish before it closes the clients they write through.
+    Returns how many are still running when the wait ends."""
+    loop: Final = asyncio.get_running_loop()
+    running: Final = [task for task in pending_batch_line_item_tasks() if task.get_loop() is loop and not task.done()]
+    if not running:
+        return 0
+    _, still_running = await asyncio.wait(running, timeout=timeout)
+    if still_running:
+        verbose_logger.warning(
+            "%d batch line item fan-out(s) still running after waiting %ss at shutdown; lines they have not "
+            "sent yet are skipped until the batch claim expires",
+            len(still_running),
+            timeout,
+        )
+    return len(still_running)
+
+
 def _log_line_item_task_failure(task: "asyncio.Task[int]") -> None:
     if task.cancelled():
         verbose_logger.warning("batch line item logging was cancelled before it finished")

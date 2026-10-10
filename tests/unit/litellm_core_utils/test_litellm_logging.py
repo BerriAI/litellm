@@ -5829,7 +5829,9 @@ def test_handle_anthropic_messages_response_logging_keeps_the_message_id_of_a_pa
 
     assert isinstance(result, ModelResponse)
     assert result.id == "msg_served"
-    assert result.choices[0].message.content == "hi"  # type: ignore[union-attr]
+    choice: Final = result.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert choice.message.content == "hi"
 
 
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
