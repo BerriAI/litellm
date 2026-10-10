@@ -2576,6 +2576,84 @@ def throw_retryable_error(*_, **__):
     raise RuntimeError("BOOM")
 
 
+@pytest.mark.parametrize(
+    ("headers", "retry_strategy", "expected_wait"),
+    [
+        ({"retry-after": "20"}, "constant_retry", 20),
+        ({"retry-after-ms": "1500"}, "exponential_backoff_retry", 1.5),
+        ({"retry-after-ms": "1500", "retry-after": "20"}, "constant_retry", 1.5),
+        ({"retry-after-ms": "invalid", "retry-after": "2.5"}, "constant_retry", 2.5),
+        ({"retry-after": "60"}, "constant_retry", 60),
+        ({"retry-after": "61"}, "exponential_backoff_retry", 1),
+        ({"retry-after": "invalid"}, "constant_retry", 0),
+        ({}, "constant_retry", 0),
+    ],
+)
+def test_completion_retries_respect_provider_wait(
+    headers: dict[str, str], retry_strategy: str, expected_wait: float
+) -> None:
+    response: Final = httpx.Response(
+        status_code=429,
+        headers=headers,
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error: Final = litellm.RateLimitError(
+        message="rate limited",
+        llm_provider="openai",
+        model="test-model",
+        response=response,
+        headers={"x-request-id": "request-1"},
+    )
+    outcomes: Final = iter((error, "recovered"))
+    sleep: Final = MagicMock()
+
+    def completion_stub(**kwargs: object) -> str:
+        outcome: Final = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    with patch("tenacity.nap.time.sleep", sleep):
+        result: Final = litellm_main.completion_with_retries(
+            num_retries=2,
+            retry_strategy=retry_strategy,
+            original_function=completion_stub,
+        )
+
+    assert result == "recovered"
+    sleep.assert_called_once_with(expected_wait)
+
+
+def test_completion_first_retry_respects_provider_wait() -> None:
+    from litellm.utils import client
+
+    response: Final = httpx.Response(
+        status_code=429,
+        headers={"retry-after": "2"},
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error: Final = litellm.RateLimitError(
+        message="rate limited", llm_provider="openai", model="gpt-4o-mini", response=response
+    )
+    errors: Final = iter((error, error))
+    sleep: Final = MagicMock()
+
+    def completion(**kwargs: object) -> None:
+        raise next(errors)
+
+    with patch("tenacity.nap.time.sleep", sleep), pytest.raises(litellm.RateLimitError):
+        client(completion)(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=1,
+            original_function=completion,
+            litellm_logging_obj=_completion_logging_obj("first-retry"),
+        )
+
+    assert next(errors, None) is None
+    sleep.assert_called_once_with(2.0)
+
+
 @pytest.mark.asyncio
 async def test_retrying() -> None:
     litellm.num_retries = 10

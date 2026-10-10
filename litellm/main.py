@@ -162,6 +162,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
+    _get_retry_after_from_exception_header,  # pyright: ignore[reportPrivateUsage]  # shared internal retry parser
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -6183,7 +6184,47 @@ def completion(
         )
 
 
-def completion_with_retries(*args, **kwargs):
+class _CompletionRetryOutcome(Protocol):
+    def exception(self) -> BaseException | None: ...
+
+
+class _CompletionRetryState(Protocol):
+    @property
+    def outcome(self) -> _CompletionRetryOutcome | None: ...
+
+
+def _completion_retry_after(error: Exception) -> float | None:
+    headers: Final = (
+        getattr(getattr(error, "response", None), "headers", None)
+        or getattr(error, "litellm_response_headers", None)
+        or getattr(error, "headers", None)
+    )
+    if headers is None:
+        return None
+    retry_after: Final = _get_retry_after_from_exception_header(
+        headers  # pyright: ignore[reportAny]  # provider exceptions expose untyped headers
+    )
+    return retry_after if 0 < retry_after <= 60 else None
+
+
+def _completion_retry_wait(
+    retry_state: _CompletionRetryState,
+    fallback_wait: Callable[[_CompletionRetryState], float],
+) -> float:
+    outcome: Final = retry_state.outcome
+    error: Final = outcome.exception() if outcome is not None else None
+    if isinstance(error, Exception):
+        retry_after: Final = _completion_retry_after(error)
+        if retry_after is not None:
+            return retry_after
+    return fallback_wait(retry_state)
+
+
+def _completion_constant_wait(_: _CompletionRetryState) -> float:
+    return 0.0
+
+
+def completion_with_retries(*args, _initial_retry_exception: Exception | None = None, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
     """
@@ -6193,19 +6234,24 @@ def completion_with_retries(*args, **kwargs):
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
     num_retries: Final = kwargs.pop("num_retries", 3)
-    # reset retries in .completion()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
     retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
-    if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.Retrying(
-            wait=tenacity.wait_exponential(multiplier=1, max=10),
-            stop=tenacity.stop_after_attempt(num_retries),
-            reraise=True,
-        )
-    else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    fallback_wait: Final[Callable[[_CompletionRetryState], float]] = (
+        tenacity.wait_exponential(multiplier=1, max=10)
+        if retry_strategy == "exponential_backoff_retry"
+        else _completion_constant_wait
+    )
+    retryer: Final = tenacity.Retrying(
+        wait=partial(_completion_retry_wait, fallback_wait=fallback_wait),
+        stop=tenacity.stop_after_attempt(num_retries),
+        reraise=True,
+    )
+    if _initial_retry_exception is not None:
+        initial_retry_after: Final = _completion_retry_after(_initial_retry_exception)
+        if initial_retry_after is not None:
+            time.sleep(initial_retry_after)
     return retryer(original_function, *args, **kwargs)
 
 

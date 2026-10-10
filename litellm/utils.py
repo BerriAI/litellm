@@ -16,6 +16,7 @@ import io
 import itertools
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -1940,7 +1941,7 @@ def client(original_function):
                         or isinstance(e, openai.APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(*args, **kwargs)
+                        return litellm.completion_with_retries(*args, _initial_retry_exception=e, **kwargs)
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -7257,7 +7258,7 @@ _should_retry = should_retry
 
 def _get_retry_after_from_exception_header(
     response_headers: httpx.Headers | None = None,
-):
+) -> float:
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
@@ -7269,24 +7270,33 @@ def _get_retry_after_from_exception_header(
         #
         # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
         # details.
-        if response_headers is not None:
-            retry_header: Final[str] = response_headers.get("retry-after")
-            try:
-                retry_after = int(retry_header)
-            except Exception:
-                retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
-                if retry_date_tuple is None:
-                    retry_after = -1
-                else:
-                    retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
-                    retry_after = int(retry_date - time.time())
-        else:
-            retry_after = -1
+        if response_headers is None:
+            return -1.0
 
-        return retry_after
+        retry_ms_header: Final = response_headers.get("retry-after-ms")
+        try:
+            retry_after_ms: Final = float(retry_ms_header) / 1000
+        except (TypeError, ValueError):
+            pass
+        else:
+            if math.isfinite(retry_after_ms):
+                return retry_after_ms
+
+        retry_header: Final[str | None] = response_headers.get("retry-after")
+        if retry_header is None:
+            return -1.0
+        try:
+            retry_after: Final = float(retry_header)
+        except (TypeError, ValueError):
+            retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
+            if retry_date_tuple is None:
+                return -1.0
+            retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
+            return float(retry_date - time.time())
+        return retry_after if math.isfinite(retry_after) else -1.0
 
     except Exception:
-        retry_after = -1
+        return -1.0
 
 
 def calculate_retry_after(
@@ -7301,7 +7311,7 @@ def calculate_retry_after(
     jitter: Final = JITTER * random.random()
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
-    if retry_after is not None and 0 < retry_after <= 60:
+    if 0 < retry_after <= 60:
         return retry_after + jitter
 
     # Calculate exponential backoff

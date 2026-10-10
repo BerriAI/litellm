@@ -118,6 +118,25 @@ def test_get_base_model_from_metadata_returns_unvalidated_root_value():
     assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    (
+        ((("retry-after", "inf"),), -1.0),
+        ((("retry-after", "nan"),), -1.0),
+        ((("retry-after-ms", "inf"),), -1.0),
+        ((("retry-after-ms", "nan"), ("retry-after", "2")), 2.0),
+        ((("retry-after-ms", "1e309"), ("retry-after", "2")), 2.0),
+        ((("retry-after-ms", "1500"),), 1.5),
+    ),
+)
+def test_retry_after_parser_rejects_nonfinite_values(
+    headers: tuple[tuple[str, str], ...], expected: float
+) -> None:
+    from litellm.utils import _get_retry_after_from_exception_header
+
+    assert _get_retry_after_from_exception_header(httpx.Headers(dict(headers))) == expected
+
+
 # Adds the parent directory to the system path
 
 
