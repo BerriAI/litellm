@@ -4670,8 +4670,8 @@ class TestCaptureMessageContent:
     def test_a_published_presets_capture_mode_is_the_default_for_an_unowned_destination(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """New Relic with record_content on is the proxy's own newrelic mode, so a newrelic destination with no setting
-        keeps the content."""
+        """A destination for a backend the proxy does not export to itself falls back to the published logger's mode,
+        here New Relic with record_content on, so it keeps the content."""
         monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
         tenant: Final = InMemorySpanExporter()
         monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
