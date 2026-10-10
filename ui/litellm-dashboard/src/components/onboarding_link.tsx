@@ -1,8 +1,9 @@
-import React from "react";
-import { Button, Modal, Typography } from "antd";
-import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Text } from "@tremor/react";
-import NotificationsManager from "./molecules/notifications_manager";
+import React, { useId, useRef } from "react";
+import { Copy } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Label } from "@/components/ui/label";
+import { copyToClipboard } from "@/utils/dataUtils";
 
 export interface InvitationLink {
   id: string;
@@ -58,54 +59,55 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
-  const { Paragraph } = Typography;
-  const handleInvitationOk = () => {
-    setIsInvitationLinkModalVisible(false);
-  };
-
-  const handleInvitationCancel = () => {
-    setIsInvitationLinkModalVisible(false);
-  };
-
-  const getInvitationUrl = () =>
-    buildOnboardingUrl({
-      baseUrl,
-      invitationId: invitationLinkData?.id,
-      hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
-      resetPassword: modalType === "resetPassword",
-    });
+  const linkFieldId = useId();
+  const copyButtonRef = useRef<HTMLButtonElement>(null);
+  const isInvitation = modalType === "invitation";
+  const invitationUrl = buildOnboardingUrl({
+    baseUrl,
+    invitationId: invitationLinkData?.id,
+    hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
+    resetPassword: !isInvitation,
+  });
 
   return (
-    <Modal
-      title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
+    <Dialog
       open={isInvitationLinkModalVisible}
-      width={800}
-      footer={null}
-      onOk={handleInvitationOk}
-      onCancel={handleInvitationCancel}
+      onOpenChange={(open) => !open && setIsInvitationLinkModalVisible(false)}
     >
-      <Paragraph>
-        {modalType === "invitation"
-          ? "Copy and send the generated link to onboard this user to the proxy."
-          : "Copy and send the generated link to the user to reset their password."}
-      </Paragraph>
-      <div className="flex justify-between pt-5 pb-2">
-        <Text className="text-base">User ID</Text>
-        <Text>{invitationLinkData?.user_id}</Text>
-      </div>
-      <div className="flex justify-between pt-5 pb-2">
-        <Text>{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</Text>
-        <Text>
-          <Text>{getInvitationUrl()}</Text>
-        </Text>
-      </div>
-      <div className="flex justify-end mt-5">
-        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
-          <Button type="primary">
-            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
-          </Button>
-        </CopyToClipboard>
-      </div>
-    </Modal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl" initialFocus={copyButtonRef}>
+        <DialogHeader>
+          <DialogTitle>{isInvitation ? "Invitation Link" : "Reset Password Link"}</DialogTitle>
+          <DialogDescription>
+            {isInvitation
+              ? "Copy and send the generated link to onboard this user to the proxy."
+              : "Copy and send the generated link to the user to reset their password."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground">User ID</p>
+            <p className="font-mono text-sm break-all">{invitationLinkData?.user_id}</p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={linkFieldId} className="text-xs font-normal text-muted-foreground">
+              {isInvitation ? "Invitation link" : "Reset password link"}
+            </Label>
+            <InputGroup>
+              <InputGroupInput id={linkFieldId} readOnly value={invitationUrl} className="font-mono text-xs" />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  ref={copyButtonRef}
+                  aria-label={isInvitation ? "Copy invitation link" : "Copy password reset link"}
+                  onClick={() => copyToClipboard(invitationUrl)}
+                >
+                  <Copy />
+                  Copy
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

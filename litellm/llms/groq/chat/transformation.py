@@ -2,8 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, Literal, cast, overload
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -16,6 +16,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -26,10 +27,13 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, ServerToolUs
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
 GROQ_COMPOUND_MODELS: Final = frozenset({"compound", "compound-mini"})
 
 
-class GroqExecutedToolIdentity(BaseModel):
+class GroqExecutedToolIdentity(LiteLLMBaseModel):
     name: str | None = None
     type: str | None = None
 
@@ -68,7 +72,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -121,7 +125,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -133,7 +137,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839
@@ -155,6 +159,17 @@ class GroqChatConfig(OpenAILikeChatConfig):
         else:
             return super()._transform_messages(messages=messages, model=model, is_async=False)
 
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
+
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
@@ -162,6 +177,13 @@ class GroqChatConfig(OpenAILikeChatConfig):
         api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("GROQ_API_KEY")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def _should_fake_stream(self, optional_params: dict) -> bool:
         """
@@ -268,7 +290,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         if not any(tool.get("type") == "browser_search" for tool in optional_params.get("tools") or ()):
             optional_params = self._add_tools_to_optional_params(
                 optional_params=optional_params,
-                tools=[{"type": "browser_search"}],  # mutable-ok: request tools must be json dicts in a list
+                tools=[{"type": "browser_search"}],
             )
 
         return optional_params
@@ -283,7 +305,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

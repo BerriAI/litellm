@@ -3,19 +3,18 @@ Test RAGFlow Vector Store helper functions and transformation.
 """
 
 import os
-import sys
 import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import httpx
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 
 from tests.vector_store_tests.base_vector_store_test import BaseVectorStoreTest
 from litellm.llms.ragflow.vector_stores.transformation import RAGFlowVectorStoreConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.vector_stores import VectorStoreCreateOptionalRequestParams
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class TestRAGFlowVectorStore(BaseVectorStoreTest):
@@ -233,7 +232,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
             "message": "Dataset name 'test-dataset' already exists",
         }
 
-        with pytest.raises(Exception):  # Should raise BaseLLMException
+        with pytest.raises(BaseLLMException):
             config.transform_create_vector_store_response(mock_response)
 
     def test_transform_create_vector_store_response_missing_id(self):
@@ -317,7 +316,7 @@ class TestRAGFlowVectorStore(BaseVectorStoreTest):
     @pytest.mark.asyncio
     async def test_basic_create_vector_store(self, sync_mode):
         """Override to handle RAGFlow-specific connection errors."""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_create_vector_store_args()
 

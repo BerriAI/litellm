@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,10 +27,14 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -216,10 +222,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         contents: Final = [{"role": "user", "parts": [{"text": prompt}]}]
 
         # Prepare generation config
-        generation_config: Final[dict[str, Any]] = {"responseModalities": ["IMAGE"]}
+        generation_config: Final[dict[str, object]] = {"responseModalities": ["IMAGE"]}
 
         # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
-        image_config: Final[dict[str, Any]] = dict(optional_params.get("imageConfig") or {})
+        image_config: Final[dict[str, object]] = dict(optional_params.get("imageConfig") or {})
 
         if "aspectRatio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspectRatio"]
@@ -240,7 +246,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         elif "n" in optional_params:
             generation_config["candidateCount"] = optional_params["n"]
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "contents": contents,
             "generationConfig": generation_config,
         }
@@ -282,7 +288,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -320,10 +326,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             )
                         )
 
-        if usage_metadata := response_data.get("usageMetadata", None):
-            model_response.usage = self._transform_image_usage(usage_metadata)
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if usage_metadata := response_object.get("usageMetadata", None):
+            model_response.usage = self._transform_image_usage(_JSON_DICT.validate_python(usage_metadata))
 
-        web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
+        web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
         if web_search_requests and model_response.usage is not None:
             setattr(model_response.usage, "web_search_requests", web_search_requests)
 

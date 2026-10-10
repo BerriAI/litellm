@@ -1,8 +1,10 @@
 import json
-from typing import Any, Final
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from openai.types.image import Image
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -14,11 +16,16 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import Ver
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ImageResponse
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_PREDICTIONS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+
 
 class VertexImageGeneration(VertexLLM):
     def process_image_generation_response(
         self,
-        json_response: dict[str, Any],
+        json_response: Mapping[str, object],
         model_response: ImageResponse,
         model: str | None = None,
     ) -> ImageResponse:
@@ -29,12 +36,11 @@ class VertexImageGeneration(VertexLLM):
                 model=model,
             )
 
-        predictions: Final = json_response["predictions"]
+        predictions: Final = _PREDICTIONS.validate_python(json_response["predictions"])
         response_data: Final[list[Image]] = []
 
         for prediction in predictions:
-            bytes_base64_encoded = prediction["bytesBase64Encoded"]
-            image_object = Image(b64_json=bytes_base64_encoded)
+            image_object = Image.model_validate({"b64_json": prediction["bytesBase64Encoded"]})
             response_data.append(image_object)
 
         model_response.data = response_data
@@ -74,7 +80,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Any | None = None,
         optional_params: dict | None = None,
@@ -173,7 +179,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: AsyncHTTPHandler | None = None,
         optional_params: dict | None = None,

@@ -179,7 +179,7 @@ describe("HealthCheckComponent", () => {
       await user.click(screen.getByTestId("datatable-select-row-id-alpha"));
       await user.click(screen.getByTestId("clear-health-selection"));
 
-      expect(screen.getByTestId("datatable-select-row-id-alpha")).toHaveAttribute("aria-checked", "false");
+      expect(screen.getByTestId("datatable-select-row-id-alpha")).not.toBeChecked();
       expect(screen.getByTestId("run-health-checks")).toHaveTextContent("Run All Checks");
     });
 
@@ -195,7 +195,7 @@ describe("HealthCheckComponent", () => {
       await user.click(screen.getByTestId("pagination-next"));
 
       expect(screen.queryByTestId("clear-health-selection")).not.toBeInTheDocument();
-      expect(screen.getByTestId("datatable-select-row-id-alpha")).toHaveAttribute("aria-checked", "false");
+      expect(screen.getByTestId("datatable-select-row-id-alpha")).not.toBeChecked();
     });
   });
 

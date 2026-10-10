@@ -17,10 +17,15 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    tag_cache_key,
+    tag_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
@@ -53,6 +58,8 @@ if TYPE_CHECKING:
     from litellm.types.router import Deployment
 
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _TagRecord(Protocol):
@@ -133,6 +140,20 @@ def _table(
     return prisma_table
 
 
+async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
+    """
+    Every endpoint that mutates a tag row must call this, or a deleted tag keeps its budget
+    enforced and a newly created one stays invisible to the cached name registry until the TTL
+    expires: auth reads tags cache-first, with no freshness check.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
+
+
 async def _get_internal_user_api_keys(
     prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
@@ -172,7 +193,7 @@ async def _get_tag_list_scope(
     return {"api_key": {"in": scoped_api_keys}}
 
 
-async def _get_tag_daily_activity_api_key_filter(
+async def get_tag_daily_activity_api_key_filter(
     prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
     requested_api_key: str | None,
@@ -294,6 +315,8 @@ async def new_tag(
             }
         )
 
+        await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+
         # Update models with new tag
         if tag.models:
             tasks: Final = []
@@ -349,10 +372,10 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
 
         # Prisma returns litellm_params as dict (already parsed from JSON)
         existing_params = db_model.litellm_params
-        if isinstance(existing_params, str):
+        if isinstance(existing_params, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub is str
             # If it's a string, parse it
             existing_params = json.loads(existing_params)
-        elif not isinstance(existing_params, dict):
+        elif not isinstance(existing_params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub
             raise Exception(f"Unexpected litellm_params type: {type(existing_params)}")
 
         # Add tag to tags array (preserve encryption of other fields)
@@ -418,6 +441,7 @@ async def update_tag(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
+            cleared_budget_fields=frozenset(field for field in tag.model_fields_set if getattr(tag, field) is None),
         )
 
         # Get model names for model_info
@@ -439,6 +463,8 @@ async def update_tag(
             where={"tag_name": tag.name},
             data=update_data,
         )
+
+        await _evict_tag_cache_keys((tag_cache_key(tag.name),))
 
         # Build response
         tag_config: Final = TagConfig(
@@ -500,7 +526,7 @@ async def info_tag(
             model_info: object = {}
             if tag_record.model_info:
                 if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
+                    model_info = _DECODED_JSON.validate_python(json.loads(tag_record.model_info))
                 else:
                     model_info = tag_record.model_info
 
@@ -623,7 +649,7 @@ async def list_tags(
             model_info: object = {}
             if tag_record.model_info:
                 if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
+                    model_info = _DECODED_JSON.validate_python(json.loads(tag_record.model_info))
                 else:
                     model_info = tag_record.model_info
 
@@ -689,6 +715,8 @@ async def delete_tag(
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
 
+        await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
+
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -732,7 +760,7 @@ async def get_tag_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     tag_list: Final = tags.split(",") if tags else None
-    scoped_api_key_filter: Final = await _get_tag_daily_activity_api_key_filter(
+    scoped_api_key_filter: Final = await get_tag_daily_activity_api_key_filter(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         requested_api_key=api_key,

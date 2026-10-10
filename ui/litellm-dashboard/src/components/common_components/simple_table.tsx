@@ -1,11 +1,20 @@
 import React from "react";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table";
 
 export interface SimpleTableColumn<T> {
   header: string;
   accessor?: keyof T;
   cell?: (row: T) => React.ReactNode;
   width?: string;
+  numeric?: boolean;
 }
 
 interface SimpleTableProps<T> {
@@ -19,7 +28,7 @@ interface SimpleTableProps<T> {
 
 /**
  * Simple table component for forms and settings pages
- * For complex tables with sorting/filtering, use DataTable from view_logs
+ * For complex tables with sorting/filtering, use DataTable from shared/DataTable
  */
 export function SimpleTable<T>({
   data,
@@ -34,7 +43,11 @@ export function SimpleTable<T>({
       <TableHeader>
         <TableRow>
           {columns.map((column, index) => (
-            <TableHead key={index} style={{ width: column.width }}>
+            <TableHead
+              key={index}
+              style={{ width: column.width }}
+              className={column.numeric ? NUMERIC_CELL_CLASS : undefined}
+            >
               {column.header}
             </TableHead>
           ))}
@@ -44,14 +57,14 @@ export function SimpleTable<T>({
         {isLoading ? (
           <TableRow>
             <TableCell colSpan={columns.length} className="text-center">
-              <span className="text-gray-500">{loadingMessage}</span>
+              <span className="text-muted-foreground">{loadingMessage}</span>
             </TableCell>
           </TableRow>
         ) : data.length > 0 ? (
           data.map((row, rowIndex) => (
             <TableRow key={getRowKey ? getRowKey(row, rowIndex) : rowIndex}>
               {columns.map((column, colIndex) => (
-                <TableCell key={colIndex}>
+                <TableCell key={colIndex} className={column.numeric ? NUMERIC_CELL_CLASS : undefined}>
                   {column.cell ? column.cell(row) : String(row[column.accessor as keyof T] ?? "")}
                 </TableCell>
               ))}
@@ -60,7 +73,7 @@ export function SimpleTable<T>({
         ) : (
           <TableRow>
             <TableCell colSpan={columns.length} className="text-center">
-              <span className="text-gray-500">{emptyMessage}</span>
+              <span className="text-muted-foreground">{emptyMessage}</span>
             </TableCell>
           </TableRow>
         )}

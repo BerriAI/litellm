@@ -2,16 +2,82 @@
 Helper functions for health check calls.
 """
 
-from collections.abc import Callable
+import base64
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
+from litellm.llms.base_llm.ocr.transformation import DocumentType
+from litellm.rust_bridge import runtime
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ImageResponse
 
-# Minimal PDF for health checks - base64 encoded 1-page PDF with just "test"
-TEST_PDF_URL = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y="
+
+# Minimal image for health checks - base64 encoded 512x512 blue circle on a white background PNG
+TEST_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAJk0lEQVR42u3VQREAIRADwVWCOmTjBVzwSLorCri6nbkAVBpPACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAAAgAAAIAZdY+HgEBgIRr/meeGgGA8EMvDAgAuPh6gACAi68HCAA4+mKAAICjLwYIALj7SoAAgLuvBAgA7r4pAQKAu29KgADg7psSIAA4/SYDCADuvikBAoDTbzKAAOD0mwwgADj9JgMIAE6/yQACgNNvMoAA4PSbDCAAOP0mAwgATr/JAAKA668BIAA4/TKAAOD0mwwgALj+pgEIAE6/yQACgOtvGoAA4PSbDCAAuP6mAQgATr/JAAKA628agADg9JsMIAC4/qYBCACuv2kAAoDrbxqAAOD0mwwgALj+pgEIAK6/aQACgOtvGoAA4PqbBiAArr+ZBiAATr+ZDCAArr+ZBiAArr+ZBiAArr+ZBiAArr+ZBggArr+ZBggArr+ZBggArr+ZBggArr+ZBggArr+ZBggArr+ZBggAAmAmAAKA62+mAQKA62+mAQKA62/m1xYAXH/TAAQA1980AAHA9TcNQAAEwEwAEADX30wDEADX30wDEADX30wDEADX30wDEAABMBMABMD1N9MABMD1N9MABEAAzAQAAXD9zTQAAXD9zTRAABAAMwEQAFx/Mw0QAFx/Mw0QAATATAAEANffTAMEANffTAMEAAEwEwABwPU30wABQADMBEAAXH8z0wABcP3NTAMEQADMTAAEwPU3Mw0QAAEwMwEQANffTAMQAAEwEwAEwPU30wAEQADMBAABcP3NNAABEAAzAUAAXH8zDUAABMBMABAA199MAwQAATATAAHA9TfTAAFAAMwEQABw/c00QAAQADMBEAAEwEwABMD1NzMNEAABMDMBEADX38w0QAAEwMwEQAAEwMwEQABcfzPTAAEQADMTAAEQADMTAAFw/c1MAwRAAMxMAARAAMxMAATA9TczDRAAATATAARAAMwEAAFw/c00AAEQADMBQAAEwEwAEADX30wDBAABMBMAAUAAzARAABAAMwEQAFx/Mw0QAAEwMwEQAAEwMwEQAAEwMwEQANffzDRAAATAzARAAATAzARAAATAzARAAATAzARAAFx/M9MAARAAMxMAARAAMxMAARAAMxMAARAAMxMAAXD9zUwDBEAAzEwABEAAzAQAARAAMwFAAATATAAQAAEwEwABQADMBEAAEAAzARAAXH8zDRAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAA19/MNEAANMDM9UcABMBMABAAATATAAHwBAJgJgACgACYCYAAIABmAiAA+IvMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAANMDMXH8BEAAzEwABEAAzEwABEAAzEwABEAAzEwABEAAzEwABEAAzAUAABMBMABAADTBz/REAATATAAFAAMwEQAAQADMBEAAEwEwABAANMHP9BUAAzEwABEAAzEwABEAAzEwABEAAzEwABEADzMz1FwABMDMBEAABMDMBEAABMDMBEAANMDPXXwAEwMwEQAAEwMwEQAAEwMwEQAA0wMxcfwEQADMTAAEQADMBQAA0wMz1RwAEwEwAEAABMBMABEADzFx/AUAAzARAABAAMwEQADTAzPUXAATATAAEAAEwEwABQAPMXH8BEAAzEwABEAAzEwAB0AAzc/0FQADMTAAEQAPMzPUXAAEwMwEQAAEwMwEQAA0wM9dfAATAzARAADTAzFx/ARAAMwFAADTAzPVHAATATAAQAA0wc/0RAAEwEwAEQAPMXH8EQADMBAAB0AAz118AEAAzARAANMDM9RcABMBMAAQADTBz/QUAATATAAFAA8xcfwFAA8xcfwFAAMwEQADQADPXXwAEwMwEQAA0wMxcfwHQADNz/QVAAMxMAARAA8xcfwRAA8xcfwRAAMwEAAHQADPXHwHQADPXHwEQADMBQAA0wMz1RwA0wMz1RwAEwEwAEAANMHP9BQANMHP9BQANMHP9BQANMHP9BQABMBMAAUADzFx/AUADzFx/AUADzFx/AUADzFx/AUADzFx/AUADzPVHABAAEwAEAA0w1x8BQAPM9UcA0ABz/REANMBcfwQADTDXHwHQADPXHwHQADPXHwHQADPXHwHQADPXHwHQADPXHwGQATOnHwHQADPXHwHQADPXXwDQADPXXwDQADPXXwDQADPXXwCQAXP6EQA0wFx/BAANMNcfAUADzPVHAJABc/oRADTAXH8EABkwpx8BQAPM9UcAkAFz+hEANMBcfwQAGTCnHwFAA8z1RwCQAXP6EQBkwJx+BAANMNcfAUAGzOlHAJABc/oRAGTA6QcBQAacfhAAZMDpRwBABpx+BABkwOlHAEAGnH4EAJTA3UcAQAacfgQAlMDdRwBACdx9BACUwN1HAEAJ3H0EAJTA3UcAQAwcfQQAmmLgsyIA0NIDHw4BgJYe+DQIAISHwVMjAJDQDI+AAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACACAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAIAABNHpialFcmLajuAAAAAElFTkSuQmCC"
+
+
+IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
+    "Add a small yellow star in the top right corner of this simple drawing of a blue circle on a white background"
+)
+
+ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+
+
+def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
+    if custom_llm_provider != "bedrock_mantle":
+        return None
+    from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
+
+    return mantle_health_check_mode(model)
+
+
+def _cost_map_mode(model: str) -> str | None:
+    import litellm
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+
+    return OPTIONAL_STR.validate_python(litellm.model_cost.get(model, {}).get("mode"))
+
+
+def default_health_check_mode(requested_model: str, model: str, custom_llm_provider: str) -> str:
+    return (
+        native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider)
+        or _cost_map_mode(requested_model)
+        or _cost_map_mode(model)
+        or "chat"
+    )
+
+
+def get_image_file_for_health_check() -> bytes:
+    """Return the image used for health checks."""
+    return base64.b64decode(TEST_IMAGE_BASE64)
+
+
+def _decisions_health_check_questions(model: str, custom_llm_provider: str) -> Mapping[str, Mapping[str, object]]:
+    import litellm
+    from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = next((member for member in litellm.LlmProviders if member.value == custom_llm_provider), None)
+    config: Final = (
+        None
+        if provider is None
+        else ProviderConfigManager.get_provider_decisions_config(model=model, provider=provider)
+    )
+    questions: Final = BaseDecisionsConfig.health_check_questions if config is None else config.health_check_questions
+    return {name: dict(question) for name, question in questions.items()}
+
+
+def _ocr_health_check_document(model: str, custom_llm_provider: str) -> DocumentType:
+    native: Final = NATIVE_OCR_HEALTH_CHECK_DOCUMENT.load()
+    if native is None:
+        raise runtime.NoPythonImplementationError(
+            "ocr health check documents are resolved by the Rust extension, which is not available"
+        )
+    return native(model, custom_llm_provider)
 
 
 class HealthCheckHelpers:
@@ -45,7 +111,7 @@ class HealthCheckHelpers:
         return {}
 
     @staticmethod
-    def _update_model_params_with_health_check_tracking_information(
+    def update_model_params_with_health_check_tracking_information(
         model_params: dict,
     ) -> dict:
         """
@@ -69,6 +135,10 @@ class HealthCheckHelpers:
         )
         return model_params
 
+    _update_model_params_with_health_check_tracking_information = (
+        update_model_params_with_health_check_tracking_information
+    )
+
     @staticmethod
     def _get_metadata_for_health_check_call():
         """
@@ -89,10 +159,9 @@ class HealthCheckHelpers:
         """
         Health check for batch mode.
 
-        Calls list_batches for providers that support it (openai, hosted_vllm, azure,
-        vertex_ai). For all other providers (e.g. bedrock) the batch API surface doesn't
-        include list_batches, so we fall back to acompletion to verify connectivity and
-        credential validity instead.
+        Calls list_batches for providers that support it. For all other providers (e.g. bedrock)
+        the batch API surface doesn't include list_batches, so we fall back to acompletion to
+        verify connectivity and credential validity instead.
         """
         import litellm
 
@@ -107,10 +176,20 @@ class HealthCheckHelpers:
                 litellm_params={"api_base": api_base} if api_base else None,
             )
 
-        if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
-            return await litellm.alist_batches(**filtered_model_params)
-        else:
+        if custom_llm_provider not in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.acompletion(**model_params)
+        return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
+
+    @staticmethod
+    async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
+        import litellm
+
+        try:
+            return await edit_request()
+        except litellm.BadRequestError as e:
+            if isinstance(e, litellm.ContentPolicyViolationError) or "moderation_blocked" in str(e):
+                return litellm.ImageResponse()
+            raise
 
     @staticmethod
     def get_mode_handlers(
@@ -127,12 +206,15 @@ class HealthCheckHelpers:
             "audio_speech",
             "audio_transcription",
             "image_generation",
+            "image_edit",
             "video_generation",
             "rerank",
             "realtime",
             "batch",
             "responses",
+            "anthropic_messages",
             "ocr",
+            "evaluation",
         ],
         Callable,
     ]:
@@ -155,8 +237,8 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
-        from litellm.litellm_core_utils.health_check_utils import _filter_model_params
-        from litellm.realtime_api.main import _realtime_health_check
+        from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
+        from litellm.realtime_api.main import realtime_health_check
 
         return {
             "chat": lambda: litellm.acompletion(
@@ -185,6 +267,13 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 prompt=prompt,
             ),
+            "image_edit": lambda: HealthCheckHelpers._image_edit_health_check(
+                edit_request=lambda: litellm.aimage_edit(
+                    **_filter_model_params(model_params=model_params),
+                    image=get_image_file_for_health_check(),
+                    prompt=IMAGE_EDIT_HEALTH_CHECK_PROMPT,
+                ),
+            ),
             "video_generation": lambda: litellm.avideo_generation(
                 **_filter_model_params(model_params=model_params),
                 prompt=prompt or "test video generation",
@@ -194,7 +283,7 @@ class HealthCheckHelpers:
                 query=prompt or "",
                 documents=["my sample text"],
             ),
-            "realtime": lambda: _realtime_health_check(
+            "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=model_params.get("api_base", None),
@@ -211,11 +300,26 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
             ),
+            "anthropic_messages": lambda: litellm.anthropic_messages(
+                **{
+                    "max_tokens": ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": prompt or "test"}],
+                    **model_params,
+                }
+            ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
-                document={
-                    "type": "document_url",
-                    "document_url": TEST_PDF_URL,
-                },
+                document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
+            ),
+            "evaluation": lambda: litellm.adecisions(
+                **DECISIONS_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "questions": _decisions_health_check_questions(
+                            model=model, custom_llm_provider=custom_llm_provider
+                        ),
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
             ),
         }

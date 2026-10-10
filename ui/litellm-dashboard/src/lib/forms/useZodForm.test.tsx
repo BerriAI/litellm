@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { useZodForm } from "./useZodForm";
 
@@ -37,7 +37,7 @@ describe("useZodForm", () => {
     const onSubmit = vi.fn();
     render(<TestForm onSubmit={onSubmit} />);
 
-    await user.type(screen.getByLabelText("Alias"), "acme");
+    fireEvent.change(screen.getByLabelText("Alias"), { target: { value: "acme" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

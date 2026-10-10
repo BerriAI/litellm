@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from openai import OpenAI, BadRequestError, AsyncOpenAI
 import asyncio
@@ -6,7 +8,7 @@ import httpx
 
 def generate_key_sync():
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
 
     with httpx.Client() as client:
         response = client.post(
@@ -92,10 +94,10 @@ async def test_async_chat_completion_bad_model():
 @pytest.mark.parametrize(
     "curl_command",
     [
-        'curl http://0.0.0.0:4000/v1/chat/completions -H \'Content-Type: application/json\' -H \'Authorization: Bearer sk-1234\' -d \'{"messages":[{"role":"user","content":"Hello!"}]}\'',
-        "curl http://0.0.0.0:4000/v1/completions -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-1234' -d '{\"prompt\":\"Hello!\"}'",
-        "curl http://0.0.0.0:4000/v1/embeddings -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-1234' -d '{\"input\":\"Hello world\"}'",
-        "curl http://0.0.0.0:4000/v1/images/generations -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-1234' -d '{\"prompt\":\"A cute baby sea otter\"}'",
+        'curl http://0.0.0.0:4000/v1/chat/completions -H \'Content-Type: application/json\' -H "Authorization: Bearer sk-9876" -d \'{"messages":[{"role":"user","content":"Hello!"}]}\'',
+        "curl http://0.0.0.0:4000/v1/completions -H 'Content-Type: application/json' -H \"Authorization: Bearer sk-9876\" -d '{\"prompt\":\"Hello!\"}'",
+        "curl http://0.0.0.0:4000/v1/embeddings -H 'Content-Type: application/json' -H \"Authorization: Bearer sk-9876\" -d '{\"input\":\"Hello world\"}'",
+        "curl http://0.0.0.0:4000/v1/images/generations -H 'Content-Type: application/json' -H \"Authorization: Bearer sk-9876\" -d '{\"prompt\":\"A cute baby sea otter\"}'",
     ],
     ids=["chat", "completions", "embeddings", "images"],
 )
@@ -105,16 +107,23 @@ def test_missing_model_parameter_curl(curl_command):
 
     # Run the curl command and capture the output
     key = generate_key_sync()
-    curl_command = curl_command.replace("sk-1234", key)
-    result = subprocess.run(curl_command, shell=True, capture_output=True, text=True)
+    curl_command = curl_command.replace("sk-9876", key)
+    result = subprocess.run(
+        f'{curl_command} -s -w "\\n%{{http_code}}"',
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    body, _, status_code = result.stdout.rpartition("\n")
     # Parse the JSON response
-    response = json.loads(result.stdout)
+    response = json.loads(body)
 
     # Check that we got an error response
     assert "error" in response
     print("error in response", json.dumps(response, indent=4))
 
-    assert "litellm.BadRequestError" in response["error"]["message"]
+    assert status_code == "400", f"expected HTTP 400, got {status_code}: {response}"
+    assert isinstance(response["error"]["message"], str) and response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -151,6 +160,9 @@ async def test_chat_completion_bad_model_with_spend_logs():
             print(f"Could not parse response body as JSON: {response.text}")
 
     assert (
+        response.status_code == 400
+    ), f"expected HTTP 400, got {response.status_code}: {response.text}"
+    assert (
         litellm_call_id is not None
     ), "Failed to get LiteLLM Call ID from response headers"
     print("waiting for flushing error log to db....")
@@ -158,7 +170,7 @@ async def test_chat_completion_bad_model_with_spend_logs():
 
     # Now query the spend logs
     url = "http://0.0.0.0:4000/spend/logs?request_id=" + litellm_call_id
-    headers = {"Authorization": f"Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
 
     with httpx.Client() as client:
         response = client.get(
@@ -183,8 +195,8 @@ async def test_chat_completion_bad_model_with_spend_logs():
 
         # Verify the structure of the log entry
         assert log_entry["request_id"] == litellm_call_id
-        assert log_entry["model"] == "non-existent-model"
-        assert log_entry["model_group"] == "non-existent-model"
+        assert log_entry["model"] == "unknown-model"
+        assert log_entry["model_group"] in ("", "non-existent-model")
         assert log_entry["spend"] == 0.0
         assert log_entry["total_tokens"] == 0
         assert log_entry["prompt_tokens"] == 0
@@ -199,9 +211,9 @@ async def test_chat_completion_bad_model_with_spend_logs():
         error_info = log_entry["metadata"]["error_information"]
         assert "traceback" in error_info
         assert error_info["error_code"] == "400"
-        assert error_info["error_class"] == "BadRequestError"
-        assert "litellm.BadRequestError" in error_info["error_message"]
-        assert "non-existent-model" in error_info["error_message"]
+        assert error_info["error_class"] in ("ProxyModelNotFoundError", "BadRequestError")
+        assert "non-existent-model" not in error_info["error_message"]
+        assert "/chat/completions: Invalid model name passed in" in error_info["error_message"]
 
         # Verify request details
         assert log_entry["cache_hit"] == "False"

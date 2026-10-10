@@ -3,7 +3,8 @@ import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
-import { Segmented, Tooltip } from "antd";
+import { Segmented } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
@@ -11,8 +12,34 @@ import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
 
+const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
+const LIMIT_OPTIONS = TOP_KEYS_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
+
+type ViewMode = "table" | "chart";
+const VIEW_OPTIONS = [
+  { value: "table", label: "Table View" },
+  { value: "chart", label: "Chart View" },
+] as const satisfies readonly { value: ViewMode; label: string }[];
+
+const BAR_COLOR = "#2b3fd6";
+const QUIET_HEADER = { headerClassName: "font-normal" };
+
+export interface TopKeyItem {
+  api_key: string;
+  key_alias: string | null;
+  user?: string | null;
+  key_exists?: boolean | null;
+  tags?: TagUsage[] | null;
+  spend: number;
+}
+
+const KEY_NOT_IN_DATABASE_TOOLTIP =
+  "This key is no longer in the database (deleted, or a CLI/SSO session key), so its details can't be opened";
+
+const canOpenKeyInfo = (item: TopKeyItem) => item.key_exists !== false;
+
 interface TopKeyViewProps {
-  topKeys: any[];
+  topKeys: TopKeyItem[];
   teams: any[] | null;
   showTags?: boolean;
   topKeysLimit: number;
@@ -24,7 +51,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
-  const [viewMode, setViewMode] = useState<"chart" | "table">("table");
+  const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
 
   const toggleTagsExpansion = (apiKey: string) => {
@@ -39,8 +66,8 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
-  const handleKeyClick = async (item: any) => {
-    if (!accessToken) return;
+  const handleKeyClick = async (item: TopKeyItem) => {
+    if (!accessToken || !canOpenKeyInfo(item)) return;
 
     try {
       const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
@@ -84,18 +111,36 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     {
       header: "Key ID",
       accessorKey: "api_key",
-      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />,
+      meta: QUIET_HEADER,
+      cell: (info: any) =>
+        canOpenKeyInfo(info.row.original) ? (
+          <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />
+        ) : (
+          <IdCell value={info.getValue()} variant="plain" tooltip={KEY_NOT_IN_DATABASE_TOOLTIP} />
+        ),
     },
     {
       header: "Key Alias",
       accessorKey: "key_alias",
+      meta: QUIET_HEADER,
       cell: (info: any) => info.getValue() || "-",
     },
+    ...(topKeys.some((k) => k.user)
+      ? [
+          {
+            header: "User",
+            accessorKey: "user",
+            meta: QUIET_HEADER,
+            cell: (info: any) => info.getValue() || "-",
+          },
+        ]
+      : []),
   ];
 
   const tagsColumn = {
     header: "Tags",
     accessorKey: "tags",
+    meta: QUIET_HEADER,
     cell: (info: any) => {
       const tags = info.getValue() as TagUsage[] | undefined;
       const apiKey = info.row.original.api_key;
@@ -113,33 +158,35 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <div className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-1">
             {displayTags.map((tag, index) => (
-              <Tooltip
+              <SimpleTooltip
                 key={index}
-                title={
+                content={
                   <div>
                     <div>
-                      <span className="text-gray-300">Tag Name:</span> {tag.tag}
+                      <span className="text-muted-foreground">Tag Name:</span> {tag.tag}
                     </div>
                     <div>
-                      <span className="text-gray-300">Spend:</span>{" "}
+                      <span className="text-muted-foreground">Spend:</span>{" "}
                       {tag.usage > 0 && tag.usage < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(tag.usage, 2)}`}
                     </div>
                   </div>
                 }
               >
-                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
-              </Tooltip>
+                <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                  {tag.tag.slice(0, 7)}...
+                </span>
+              </SimpleTooltip>
             ))}
             {hasMoreTags && (
               <button
                 onClick={() => toggleTagsExpansion(apiKey)}
-                className="ml-1 p-1 hover:bg-gray-200 rounded-full transition-colors"
+                className="ml-0.5 rounded-md p-1 transition-colors hover:bg-accent"
                 title={isExpanded ? "Show fewer tags" : "Show all tags"}
               >
                 {isExpanded ? (
-                  <ChevronUpIcon className="h-3 w-3 text-gray-500" />
+                  <ChevronUpIcon className="h-3 w-3 text-muted-foreground" />
                 ) : (
-                  <ChevronDownIcon className="h-3 w-3 text-gray-500" />
+                  <ChevronDownIcon className="h-3 w-3 text-muted-foreground" />
                 )}
               </button>
             )}
@@ -152,7 +199,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const spendColumn = {
     header: "Spend (USD)",
     accessorKey: "spend",
-    meta: { numeric: true },
+    meta: { ...QUIET_HEADER, numeric: true },
     cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
   };
 
@@ -165,42 +212,25 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
   return (
     <>
-      <div className="mb-4 flex justify-between items-center">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <Segmented
-          options={[
-            { label: "5", value: 5 },
-            { label: "10", value: 10 },
-            { label: "25", value: 25 },
-            { label: "50", value: 50 },
-          ]}
-          value={topKeysLimit}
-          onChange={(value) => setTopKeysLimit(value as number)}
+          label="Number of top keys to show"
+          value={String(topKeysLimit)}
+          options={LIMIT_OPTIONS}
+          onChange={(limit) => setTopKeysLimit(Number(limit))}
         />
-        <div className="flex space-x-2">
-          <button
-            onClick={() => setViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
-          >
-            Table View
-          </button>
-          <button
-            onClick={() => setViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
-          >
-            Chart View
-          </button>
-        </div>
+        <Segmented label="View" value={viewMode} options={VIEW_OPTIONS} onChange={setViewMode} />
       </div>
 
       {viewMode === "chart" ? (
         <div className="relative max-h-[600px] overflow-y-auto">
           <BarChart
-            className="mt-4 cursor-pointer hover:opacity-90"
+            className="cursor-pointer hover:opacity-90"
             style={{ height: Math.min(processedTopKeys.length, topKeysLimit) * 52 }}
             data={processedTopKeys}
             index="display_key_alias"
             categories={["spend"]}
-            colors={["cyan"]}
+            colors={[BAR_COLOR]}
             yAxisWidth={120}
             tickGap={5}
             layout="vertical"
@@ -211,19 +241,21 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             customTooltip={(props) => {
               const item = props.payload?.[0]?.payload;
               return (
-                <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
-                  <div className="space-y-1.5">
-                    <div className="text-sm">
-                      <span className="text-gray-300">Key Alias: </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
+                <div className="relative z-floating max-w-xs rounded-lg border bg-popover px-3 py-2 text-xs shadow-lg">
+                  <div className="grid gap-1">
+                    <div>
+                      <span className="text-muted-foreground">Key Alias: </span>
+                      <span className="break-all font-mono text-foreground">{item?.key_alias}</span>
                     </div>
-                    <div className="text-sm">
-                      <span className="text-gray-300">Key ID: </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
+                    <div>
+                      <span className="text-muted-foreground">Key ID: </span>
+                      <span className="break-all font-mono text-foreground">{item?.api_key}</span>
                     </div>
-                    <div className="text-sm">
-                      <span className="text-gray-300">Spend: </span>
-                      <span className="text-white font-medium">${formatNumberWithCommas(item?.spend, 2)}</span>
+                    <div>
+                      <span className="text-muted-foreground">Spend: </span>
+                      <span className="font-medium tabular-nums text-foreground">
+                        ${formatNumberWithCommas(item?.spend, 2)}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -236,12 +268,15 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       )}
 
       {isModalOpen && selectedKey && keyData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
-          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay"
+          onClick={handleOutsideClick}
+        >
+          <div className="bg-card rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button
               onClick={handleClose}
-              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-hidden"
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground focus:outline-hidden"
               aria-label="Close"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -1,11 +1,14 @@
+import builtins
 from typing import Any, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from pydantic import Field, PrivateAttr
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class VideoObject(BaseModel):
+class VideoObject(LiteLLMBaseModel):
     """Represents a generated video object."""
 
     id: str
@@ -14,14 +17,22 @@ class VideoObject(BaseModel):
     created_at: int | None = None
     completed_at: int | None = None
     expires_at: int | None = None
-    error: dict[str, Any] | None = None
+    error: dict[str, builtins.object] | None = None
     progress: int | None = None
     remixed_from_video_id: str | None = None
     seconds: str | None = None
     size: str | None = None
     model: str | None = None
     usage: dict[str, Any] | None = None
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -31,7 +42,7 @@ class VideoObject(BaseModel):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> builtins.object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -43,11 +54,11 @@ class VideoObject(BaseModel):
             return self.dict()
 
 
-class VideoResponse(BaseModel):
+class VideoResponse(LiteLLMBaseModel):
     """Response object for video generation requests."""
 
     data: list[VideoObject]
-    hidden_params: dict[str, Any] = {}
+    hidden_params: dict[str, object] = Field(default={})
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
@@ -55,7 +66,7 @@ class VideoResponse(BaseModel):
     def get(self, key, default=None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         return getattr(self, key)
 
     def json(self, **kwargs):
@@ -73,9 +84,10 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     """
 
     input_reference: FileTypes | None  # File reference for input image
-    image: Any | None  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
-    parameters: dict[str, Any] | None  # Provider-specific parameters block passed directly to the API
+    image: object | None  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
+    parameters: dict[str, object] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
+    resolution: ReadOnly[str | None]
     seconds: str | None
     size: str | None
     characters: list[dict[str, str]] | None
@@ -102,14 +114,22 @@ class DecodedVideoId(TypedDict, total=False):
     video_id: str
 
 
-class CharacterObject(BaseModel):
+class CharacterObject(LiteLLMBaseModel):
     """Represents a character created from a video."""
 
     id: str
     object: Literal["character"] = "character"
     created_at: int
     name: str
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
@@ -117,7 +137,7 @@ class CharacterObject(BaseModel):
     def get(self, key, default=None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> builtins.object:
         return getattr(self, key)
 
     def json(self, **kwargs):

@@ -10,7 +10,7 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -23,14 +23,14 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.llms.oci.chat.cohere import (
-    _extract_text_content,
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
+    extract_text_content,
     handle_cohere_response,
     handle_cohere_stream_chunk,
 )
@@ -66,6 +66,7 @@ from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -196,7 +197,7 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
 
     if vendor == OCIVendors.COHERE:
         # OCI Cohere has no JSON_SCHEMA type; a schema rides on JSON_OBJECT.
-        payload: Final[dict[str, Any]] = {"type": "JSON_OBJECT"}
+        payload: Final[dict[str, object]] = {"type": "JSON_OBJECT"}
         if json_schema is not None and json_schema.get("schema") is not None:
             payload["schema"] = json_schema["schema"]
         selected_params["responseFormat"] = payload
@@ -211,7 +212,7 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
         # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
         # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
         # other extra key) makes OCI reject the whole request with HTTP 400.
-        oci_schema: Final[dict[str, Any]] = {"name": json_schema.get("name") or "response"}
+        oci_schema: Final[dict[str, object]] = {"name": json_schema.get("name") or "response"}
         if json_schema.get("description") is not None:
             oci_schema["description"] = json_schema["description"]
         if json_schema.get("schema") is not None:
@@ -562,13 +563,13 @@ class OCIChatConfig(BaseConfig):
             system_messages: Final = [m for m in messages if m.get("role") == "system"]
             preamble_override = None
             if system_messages:
-                preamble: Final = "\n".join(_extract_text_content(m["content"]) for m in system_messages)
+                preamble: Final = "\n".join(extract_text_content(m["content"]) for m in system_messages)
                 if preamble:
                     preamble_override = preamble
 
             chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
-                message=_extract_text_content(user_messages[-1]["content"]),
+                message=extract_text_content(user_messages[-1]["content"]),
                 chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
@@ -601,7 +602,7 @@ class OCIChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -625,7 +626,7 @@ class OCIChatConfig(BaseConfig):
         else:
             model_response = handle_generic_response(response_json, model, model_response, raw_response)
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         return model_response
 
     @track_llm_api_timing()
@@ -641,9 +642,12 @@ class OCIChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(
@@ -680,6 +684,9 @@ class OCIChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
@@ -743,13 +750,25 @@ class OCIStreamWrapper(CustomStreamWrapper):
         # single-event case (terminal chunk carries the only copy of the text).
         self._cohere_text_emitted = False
 
-    def chunk_creator(self, chunk: Any) -> ModelResponseStream:
+    def _emit_chunk(self, parsed: ModelResponseStream) -> ModelResponseStream:
+        for choice in parsed.choices:
+            if getattr(choice.delta, "tool_calls", None):
+                self.tool_call = True
+            if choice.finish_reason is not None:
+                self.received_finish_reason = choice.finish_reason
+                self.sent_last_chunk = True
+        return self.model_response_creator(chunk={"choices": parsed.choices})
+
+    def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
+        payload: Final = chunk[5:].strip()
+        if payload == "[DONE]":
+            return None
         try:
-            dict_chunk: Final = json.loads(chunk[5:])
+            dict_chunk: Final = json.loads(payload)
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
@@ -772,8 +791,8 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
-            return result
-        return handle_generic_stream_chunk(dict_chunk)
+            return self._emit_chunk(result)
+        return self._emit_chunk(handle_generic_stream_chunk(dict_chunk))
 
 
 __all__ = [

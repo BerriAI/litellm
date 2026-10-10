@@ -1,9 +1,9 @@
 import React from "react";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const mockUserDailyActivityCall = vi.fn();
+const mockDailyActivityAggregatedCall = vi.fn();
 const { useAuthorizedMock, mockToolSpendResponse } = vi.hoisted(() => ({
   useAuthorizedMock: vi.fn(),
   mockToolSpendResponse: { by_tool: [], daily: [], start_date: null, end_date: null },
@@ -14,7 +14,8 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
+  dailyActivityAggregatedCall: (...args: unknown[]) => mockDailyActivityAggregatedCall(...args),
+  cacheLeakageKeysCall: vi.fn().mockResolvedValue({ api_keys: [] }),
   getToolSpend: vi.fn().mockResolvedValue(mockToolSpendResponse),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   organizationListCall: vi.fn().mockResolvedValue([]),
@@ -30,6 +31,8 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: () => <div />,
   BarChart: () => <div />,
   CustomLegend: () => <div />,
+  chartColorValue: (color: string) => color,
+  DEFAULT_COLOR_CYCLE: ["blue", "cyan", "sky", "indigo", "violet", "purple", "fuchsia", "slate"],
   SEQUENTIAL_COLOR_RAMP: ["indigo"],
 }));
 
@@ -38,6 +41,7 @@ vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => 
 }));
 
 vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div /> }));
+vi.mock("./PromptCachingRequestsTable", () => ({ default: () => <div /> }));
 
 import CostOptimizationView from "./CostOptimizationView";
 
@@ -48,21 +52,36 @@ const singlePage = {
 
 describe("CostOptimizationView daily activity", () => {
   it("fetches daily activity once for the page and shares it with every tab that needs it", async () => {
-    mockUserDailyActivityCall.mockResolvedValue(singlePage);
+    mockDailyActivityAggregatedCall.mockResolvedValue(singlePage);
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { getByRole, getByTestId } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(mockUserDailyActivityCall).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockDailyActivityAggregatedCall).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(getByRole("tab", { name: "Prompt Caching" }));
-    await waitFor(() => expect(getByTestId("caching-settings")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Prompt Caching" }));
+    await screen.findByTestId("caching-settings");
 
-    expect(mockUserDailyActivityCall).toHaveBeenCalledTimes(1);
+    expect(mockDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a failure alert when the aggregated fetch fails", async () => {
+    mockDailyActivityAggregatedCall.mockReset();
+    mockDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
+    useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText(/Fetching spend data failed/)).toBeInTheDocument();
   });
 });

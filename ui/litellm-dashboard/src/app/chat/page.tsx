@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import { getChatRoutes } from "@/components/chat/ChatShell";
@@ -18,6 +18,7 @@ import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api
 import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import type { MCPEvent } from "@/components/chat/types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { useQueryState } from "nuqs";
 
 const SUGGESTIONS = ["Write", "Learn", "Code", "Brainstorm"];
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
@@ -50,6 +51,7 @@ function getProviderFromModelName(modelName: string): string {
 }
 
 export default function ChatConversationPage() {
+  const [, setConversationIdInUrl] = useQueryState("id", { history: "push" });
   const router = useRouter();
   const {
     accessToken,
@@ -111,7 +113,7 @@ export default function ChatConversationPage() {
           localStorage.setItem(LOCALSTORAGE_MODEL_KEY, names[0]);
         }
       })
-      .catch(() => MessageManager.error("Could not load models"))
+      .catch(() => toast.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
@@ -140,7 +142,7 @@ export default function ChatConversationPage() {
       if (!convId) {
         convId = createConversation(model);
         setResponsesSessionId(null); // new conversation starts a fresh session
-        window.history.pushState(null, "", `${window.location.pathname}?id=${convId}`);
+        setConversationIdInUrl(convId);
       }
 
       appendMessage(convId, { role: "user", content: trimmed });
@@ -258,6 +260,7 @@ export default function ChatConversationPage() {
       updateLastAssistantMessage,
       isStreaming,
       responsesSessionId,
+      setConversationIdInUrl,
     ],
   );
 
@@ -512,13 +515,13 @@ export default function ChatConversationPage() {
   return (
     <>
       {storageUnavailable && !storageBannerDismissed && (
-        <div className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 text-[13px] text-amber-800 flex justify-between items-center">
+        <div className="bg-warning/10 border-b border-warning/20 px-5 py-1.5 text-[13px] text-warning flex justify-between items-center">
           <span>Chat history won&apos;t be saved in this browser session</span>
           <Button
             variant="ghost"
             size="icon-xs"
             onClick={() => setStorageBannerDismissed(true)}
-            className="text-amber-800 hover:bg-amber-100 hover:text-amber-800"
+            className="text-warning hover:bg-warning/15 hover:text-warning/80"
           >
             <X className="size-3.5" />
           </Button>
@@ -585,7 +588,7 @@ export default function ChatConversationPage() {
                     }
                   }
                 }}
-                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-10 rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95 hover:text-muted-foreground"
+                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-chrome rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
                 aria-label="Scroll to bottom"
               >
                 <ChevronDown className="h-3 w-3" />

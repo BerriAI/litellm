@@ -1,39 +1,42 @@
 import os
-import sys
+import shutil
+import subprocess
 import time
 import traceback
-from litellm._uuid import uuid
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Final
 
+import redis
 from dotenv import load_dotenv
 
-load_dotenv()
-import os
-import json
+from litellm._redis import _get_redis_env_kwarg_mapping, get_redis_client
+from litellm._redis_credential_provider import _token_cache
+from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+load_dotenv()
 import asyncio
+import datetime
 import hashlib
+import json
 import random
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from redis.asyncio import RedisCluster
 
 import litellm
 from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
-from redis.asyncio import RedisCluster
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from unittest.mock import AsyncMock, patch, MagicMock, call
-import datetime
-from datetime import timedelta
 
 # litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
-import random
 import string
 
 
@@ -105,7 +108,7 @@ async def test_batch_get_cache_with_none_keys(sync_mode):
     """
     from litellm.caching.caching import RedisCache
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     redis_cache = RedisCache(
         host=os.environ.get("REDIS_HOST"),
@@ -134,7 +137,6 @@ async def test_batch_get_cache_with_none_keys(sync_mode):
     assert result == expected_result
 
 
-# @pytest.mark.skip(reason="")
 def test_caching_dynamic_args():  # test in memory cache
     try:
         litellm.set_verbose = True
@@ -169,95 +171,6 @@ def test_caching_dynamic_args():  # test in memory cache
         os.environ["REDIS_HOST"] = _redis_host_env
         os.environ["REDIS_PORT"] = _redis_port_env
         os.environ["REDIS_PASSWORD"] = _redis_password_env
-    except Exception as e:
-        print(f"error occurred: {traceback.format_exc()}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_caching_v2():  # test in memory cache
-    try:
-        litellm.set_verbose = True
-        litellm.cache = Cache()
-        response1 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            caching=True,
-            mock_response="Hello world from cache test",
-        )
-        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        litellm.cache = None  # disable cache
-        litellm.success_callback = []
-        litellm._async_success_callback = []
-        if (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        ):
-            print(f"response1: {response1}")
-            print(f"response2: {response2}")
-            pytest.fail(f"Error occurred:")
-    except Exception as e:
-        print(f"error occurred: {traceback.format_exc()}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_caching_v2()
-
-
-def test_caching_with_ttl():
-    try:
-        litellm.set_verbose = True
-        litellm.cache = Cache()
-        response1 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            caching=True,
-            ttl=0,
-            mock_response="Hello world from cache test 1",
-        )
-        response2 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            caching=True,
-            mock_response="Hello world from cache test 2",
-        )
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        litellm.cache = None  # disable cache
-        litellm.success_callback = []
-        litellm._async_success_callback = []
-        assert (
-            response2["choices"][0]["message"]["content"]
-            != response1["choices"][0]["message"]["content"]
-        )
-    except Exception as e:
-        print(f"error occurred: {traceback.format_exc()}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_caching_with_default_ttl():
-    try:
-        litellm.set_verbose = True
-        litellm.cache = Cache(ttl=0)
-        response1 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            caching=True,
-            mock_response="Hello world from cache test",
-        )
-        response2 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            caching=True,
-            mock_response="Hello world from cache test",
-        )
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        litellm.cache = None  # disable cache
-        litellm.success_callback = []
-        litellm._async_success_callback = []
-        assert response2["id"] != response1["id"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
@@ -348,52 +261,6 @@ async def test_caching_with_cache_controls(sync_flag):
 
 
 # test_caching_with_cache_controls()
-
-
-def test_caching_with_models_v2():
-    messages = [
-        {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
-    ]
-    litellm.cache = Cache()
-    print("test2 for caching")
-    litellm.set_verbose = True
-    response1 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        mock_response="Hello world from cache test",
-    )
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(
-        model="gpt-4.1-nano",
-        messages=messages,
-        caching=True,
-        mock_response="Different model response",
-    )
-    print(f"response1: {response1}")
-    print(f"response2: {response2}")
-    print(f"response3: {response3}")
-    litellm.cache = None
-    litellm.success_callback = []
-    litellm._async_success_callback = []
-    if (
-        response3["choices"][0]["message"]["content"]
-        == response2["choices"][0]["message"]["content"]
-    ):
-        # if models are different, it should not return cached response
-        print(f"response2: {response2}")
-        print(f"response3: {response3}")
-        pytest.fail(f"Error occurred:")
-    if (
-        response1["choices"][0]["message"]["content"]
-        != response2["choices"][0]["message"]["content"]
-    ):
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Error occurred:")
-
-
-# test_caching_with_models_v2()
 
 
 def c():
@@ -500,7 +367,7 @@ def test_embedding_caching():
 
 @pytest.mark.asyncio
 async def test_embedding_caching_individual_items_and_then_list():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.cache = Cache()
     text_to_embed = [
         "hello",
@@ -1038,84 +905,104 @@ def test_redis_cache_completion_stream():
 # test_redis_cache_completion_stream()
 
 
-@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
-@pytest.mark.asyncio
-async def test_redis_cache_cluster_init_unit_test():
-    try:
-        from redis.asyncio import RedisCluster as AsyncRedisCluster
-        from redis.cluster import RedisCluster
-
-        from litellm.caching.caching import RedisCache
-
-        litellm.set_verbose = True
-
-        # List of startup nodes
-        startup_nodes = [
-            {"host": "127.0.0.1", "port": "7001"},
-        ]
-
-        resp = RedisCache(startup_nodes=startup_nodes)
-
-        assert isinstance(resp.redis_client, RedisCluster)
-        assert isinstance(resp.init_async_client(), AsyncRedisCluster)
-
-        resp = litellm.Cache(type="redis", redis_startup_nodes=startup_nodes)
-
-        assert isinstance(resp.cache, RedisCache)
-        assert isinstance(resp.cache.redis_client, RedisCluster)
-        assert isinstance(resp.cache.init_async_client(), AsyncRedisCluster)
-
-    except Exception as e:
-        print(f"{str(e)}\n\n{traceback.format_exc()}")
-        raise e
+@pytest.fixture
+def clean_cluster_iam_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for var in ("REDIS_URL", "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES", *_get_redis_env_kwarg_mapping()):
+        monkeypatch.delenv(var, raising=False)
+    _token_cache.clear()
+    yield
+    _token_cache.clear()
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
-async def test_redis_cache_cluster_init_with_env_vars_unit_test():
-    try:
-        import json
+@pytest.fixture
+def authenticated_redis_cluster(tmp_path: Path, unused_tcp_port_factory: Callable[[], int]) -> Iterator[int]:
+    server: Final = shutil.which("redis-server")
+    if server is None:
+        pytest.skip("redis-server is required for the cluster authentication regression tests")
+    port: Final = unused_tcp_port_factory()
+    bus_port: Final = unused_tcp_port_factory()
+    log_path: Final = tmp_path / "redis.log"
+    config: Final = tmp_path / "redis.conf"
+    config.write_text(
+        f"bind 127.0.0.1\nport {port}\ncluster-port {bus_port}\n"
+        f'cluster-enabled yes\ncluster-config-file "{tmp_path / "nodes.conf"}"\n'
+        f'dir "{tmp_path}"\nsave ""\nappendonly no\n'
+    )
+    with log_path.open("w") as log:
+        process: Final = subprocess.Popen((server, str(config)), stdout=log, stderr=subprocess.STDOUT)
+        try:
+            with redis.Redis(host="127.0.0.1", port=port, socket_timeout=1, socket_connect_timeout=1) as admin:
+                for _ in range(100):
+                    try:
+                        admin.ping()
+                        break
+                    except redis.ConnectionError:
+                        time.sleep(0.1)
+                else:
+                    pytest.fail(f"Redis did not start: {log_path.read_text()}")
+                admin.execute_command("CLUSTER", "ADDSLOTS", *range(16384))
+                for _ in range(100):
+                    if admin.cluster("INFO")["cluster_state"] == "ok":
+                        break
+                    time.sleep(0.1)
+                else:
+                    pytest.fail(f"Redis cluster did not become ready: {log_path.read_text()}")
+                admin.execute_command(
+                    "ACL", "SETUSER", "identity-object-id", "on", ">local-fixture-token", "allcommands", "allkeys"
+                )
+                admin.execute_command("ACL", "SETUSER", "default", "resetpass", ">local-fixture-token")
+            yield port
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
-        from redis.asyncio import RedisCluster as AsyncRedisCluster
-        from redis.cluster import RedisCluster
 
-        from litellm.caching.caching import RedisCache
+def test_sync_cluster_authenticates_with_azure_credentials(
+    clean_cluster_iam_environment: None, monkeypatch: pytest.MonkeyPatch, authenticated_redis_cluster: int
+) -> None:
+    monkeypatch.setenv("REDIS_USERNAME", "identity-object-id")
+    credential: Final = MagicMock()
+    credential.get_token.return_value = SimpleNamespace(token="local-fixture-token")
 
-        litellm.set_verbose = True
+    with patch("azure.identity.DefaultAzureCredential", return_value=credential):
+        with get_redis_client(
+            startup_nodes=[{"host": "127.0.0.1", "port": authenticated_redis_cluster}],
+            azure_redis_ad_token=True,
+            password="stale-password",
+            socket_timeout=1,
+            socket_connect_timeout=1,
+        ) as client:
+            assert client.ping() is True
+            assert client.set("iam-regression", "success") is True
+            assert client.get("iam-regression") == b"success"
 
-        # List of startup nodes
-        startup_nodes = [
-            {"host": "127.0.0.1", "port": "7001"},
-            {"host": "127.0.0.1", "port": "7003"},
-            {"host": "127.0.0.1", "port": "7004"},
-            {"host": "127.0.0.1", "port": "7005"},
-            {"host": "127.0.0.1", "port": "7006"},
-            {"host": "127.0.0.1", "port": "7007"},
-        ]
 
-        # set startup nodes in environment variables
-        os.environ["REDIS_CLUSTER_NODES"] = json.dumps(startup_nodes)
-        print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
+def test_sync_cluster_authenticates_with_gcp_credentials(
+    clean_cluster_iam_environment: None, authenticated_redis_cluster: int
+) -> None:
+    iam_client: Final = MagicMock()
+    iam_client.generate_access_token.return_value = SimpleNamespace(access_token="local-fixture-token")
 
-        # unser REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
-        os.environ.pop("REDIS_HOST", None)
-        os.environ.pop("REDIS_PORT", None)
-        os.environ.pop("REDIS_PASSWORD", None)
+    with patch("google.cloud.iam_credentials_v1.IAMCredentialsClient", return_value=iam_client):
+        with get_redis_client(
+            startup_nodes=[{"host": "127.0.0.1", "port": authenticated_redis_cluster}],
+            gcp_service_account="projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com",
+            username="stale-user",
+            password="stale-password",
+            socket_timeout=1,
+            socket_connect_timeout=1,
+        ) as client:
+            assert client.ping() is True
+            assert client.set("iam-regression", "success") is True
+            assert client.get("iam-regression") == b"success"
 
-        resp = RedisCache()
-        print("response from redis cache", resp)
-        assert isinstance(resp.redis_client, RedisCluster)
-        assert isinstance(resp.init_async_client(), AsyncRedisCluster)
 
-        resp = litellm.Cache(type="redis")
 
-        assert isinstance(resp.cache, RedisCache)
-        assert isinstance(resp.cache.redis_client, RedisCluster)
-        assert isinstance(resp.cache.init_async_client(), AsyncRedisCluster)
 
-    except Exception as e:
-        print(f"{str(e)}\n\n{traceback.format_exc()}")
-        raise e
 
 
 @pytest.mark.asyncio
@@ -1278,7 +1165,6 @@ async def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
-# @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_s3_cache_stream_azure(sync_mode):
@@ -1389,59 +1275,6 @@ async def test_s3_cache_stream_azure(sync_mode):
 # test_s3_cache_acompletion_stream_azure()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_s3_cache_acompletion_azure():
-    import asyncio
-    import logging
-    import tracemalloc
-
-    tracemalloc.start()
-    logging.basicConfig(level=logging.DEBUG)
-
-    try:
-        litellm.set_verbose = True
-        random_word = generate_random_word()
-        messages = [
-            {
-                "role": "user",
-                "content": f"write a one sentence poem about: {random_word}",
-            }
-        ]
-        litellm.cache = Cache(
-            type="s3",
-            s3_bucket_name="litellm-my-test-bucket-2",
-            s3_region_name="us-east-1",
-        )
-        print("s3 Cache: test for caching, streaming + completion")
-
-        response1 = await litellm.acompletion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-        )
-        print(response1)
-
-        time.sleep(2)
-
-        response2 = await litellm.acompletion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-        )
-
-        print(response2)
-
-        assert response1.id == response2.id
-
-        litellm.cache = None
-        litellm.success_callback = []
-        litellm._async_success_callback = []
-    except Exception as e:
-        print(e)
-        raise e
 
 
 # test_redis_cache_acompletion_stream_bedrock()
@@ -1520,35 +1353,6 @@ def test_custom_redis_cache_with_key():
 
 
 # test_custom_redis_cache_with_key()
-
-
-def test_cache_override():
-    # test if we can override the cache, when `caching=False` but litellm.cache = Cache() is set
-    # in this case it should not return cached responses
-    litellm.cache = Cache()
-    print("Testing cache override")
-    litellm.set_verbose = True
-
-    # test embedding
-    response1 = embedding(
-        model="text-embedding-ada-002",
-        input=["hello who are you"],
-        caching=False,
-        mock_response="0.1,0.2,0.3,0.4,0.5",
-    )
-
-    response2 = embedding(
-        model="text-embedding-ada-002",
-        input=["hello who are you"],
-        caching=False,
-        mock_response="0.6,0.7,0.8,0.9,1.0",
-    )
-
-    # When caching=False, responses should have different IDs
-    assert response1.data[0].embedding != response2.data[0].embedding
-
-
-# test_cache_override()
 
 
 @pytest.mark.asyncio
@@ -1669,140 +1473,6 @@ def test_custom_redis_cache_params():
         litellm._async_success_callback = []
     except Exception as e:
         pytest.fail(f"Error occurred: {str(e)}")
-
-
-def test_get_cache_key():
-    from litellm.caching.caching import Cache
-
-    try:
-        print("Testing get_cache_key")
-        cache_instance = Cache()
-        cache_key = cache_instance.get_cache_key(
-            **{
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {"role": "user", "content": "write a one sentence poem about: 7510"}
-                ],
-                "max_tokens": 40,
-                "temperature": 0.2,
-                "stream": True,
-                "litellm_call_id": "ffe75e7e-8a07-431f-9a74-71a5b9f35f0b",
-                "litellm_logging_obj": {},
-            }
-        )
-        cache_key_2 = cache_instance.get_cache_key(
-            **{
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {"role": "user", "content": "write a one sentence poem about: 7510"}
-                ],
-                "max_tokens": 40,
-                "temperature": 0.2,
-                "stream": True,
-                "litellm_call_id": "ffe75e7e-8a07-431f-9a74-71a5b9f35f0b",
-                "litellm_logging_obj": {},
-            }
-        )
-        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]max_tokens: 40temperature: 0.2stream: True"
-        hash_object = hashlib.sha256(cache_key_str.encode())
-        # Hexadecimal representation of the hash
-        hash_hex = hash_object.hexdigest()
-        assert cache_key == hash_hex
-        assert (
-            cache_key_2 == hash_hex
-        ), f"{cache_key} != {cache_key_2}. The same kwargs should have the same cache key across runs"
-
-        embedding_cache_key = cache_instance.get_cache_key(
-            **{
-                "model": "azure/text-embedding-ada-002",
-                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-                "api_key": "",
-                "api_version": "2023-07-01-preview",
-                "timeout": None,
-                "max_retries": 0,
-                "input": ["hi who is ishaan"],
-                "caching": True,
-                "client": "<openai.lib.azure.AsyncAzureOpenAI object at 0x12b6a1060>",
-            }
-        )
-
-        print(embedding_cache_key)
-
-        embedding_cache_key_str = (
-            "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
-        )
-        hash_object = hashlib.sha256(embedding_cache_key_str.encode())
-        # Hexadecimal representation of the hash
-        hash_hex = hash_object.hexdigest()
-        assert (
-            embedding_cache_key == hash_hex
-        ), f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
-
-        # Proxy - embedding cache, test if embedding key, gets model_group and not model
-        embedding_cache_key_2 = cache_instance.get_cache_key(
-            **{
-                "model": "azure/text-embedding-ada-002",
-                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-                "api_key": "",
-                "api_version": "2023-07-01-preview",
-                "timeout": None,
-                "max_retries": 0,
-                "input": ["hi who is ishaan"],
-                "caching": True,
-                "client": "<openai.lib.azure.AsyncAzureOpenAI object at 0x12b6a1060>",
-                "proxy_server_request": {
-                    "url": "http://0.0.0.0:8000/embeddings",
-                    "method": "POST",
-                    "headers": {
-                        "host": "0.0.0.0:8000",
-                        "user-agent": "curl/7.88.1",
-                        "accept": "*/*",
-                        "content-type": "application/json",
-                        "content-length": "80",
-                    },
-                    "body": {
-                        "model": "azure-embedding-model",
-                        "input": ["hi who is ishaan"],
-                    },
-                },
-                "user": None,
-                "metadata": {
-                    "user_api_key": None,
-                    "headers": {
-                        "host": "0.0.0.0:8000",
-                        "user-agent": "curl/7.88.1",
-                        "accept": "*/*",
-                        "content-type": "application/json",
-                        "content-length": "80",
-                    },
-                    "model_group": "EMBEDDING_MODEL_GROUP",
-                    "deployment": "azure/text-embedding-ada-002-ModelID-azure/text-embedding-ada-002https://openai-gpt-4-test-v-1.openai.azure.com/2023-07-01-preview",
-                },
-                "model_info": {
-                    "mode": "embedding",
-                    "base_model": "text-embedding-ada-002",
-                    "id": "20b2b515-f151-4dd5-a74f-2231e2f54e29",
-                },
-                "litellm_call_id": "2642e009-b3cd-443d-b5dd-bb7d56123b0e",
-                "litellm_logging_obj": "<litellm.utils.Logging object at 0x12f1bddb0>",
-            }
-        )
-
-        print(embedding_cache_key_2)
-        embedding_cache_key_str_2 = (
-            "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
-        )
-        hash_object = hashlib.sha256(embedding_cache_key_str_2.encode())
-        # Hexadecimal representation of the hash
-        hash_hex = hash_object.hexdigest()
-        assert embedding_cache_key_2 == hash_hex
-        print("passed!")
-    except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred:", e)
-
-
-# test_get_cache_key()
 
 
 def test_cache_context_managers():
@@ -2060,58 +1730,6 @@ async def test_cache_default_off_acompletion():
     assert response3.id == response4.id
 
 
-@pytest.mark.skip(reason="local test. Requires sentinel setup.")
-@pytest.mark.asyncio
-async def test_redis_sentinel_caching():
-    """
-    Init redis client
-    - write to client
-    - read from client
-    """
-    litellm.set_verbose = False
-
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
-    messages = [
-        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
-    ]
-
-    litellm.cache = Cache(
-        type="redis",
-        # host=os.environ["REDIS_HOST"],
-        # port=os.environ["REDIS_PORT"],
-        # password=os.environ["REDIS_PASSWORD"],
-        service_name="mymaster",
-        sentinel_nodes=[("localhost", 26379)],
-    )
-    response1 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-
-    cache_key = litellm.cache.get_cache_key(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-    print(f"cache_key: {cache_key}")
-    litellm.cache.add_cache(result=response1, cache_key=cache_key)
-    print(f"cache key pre async get: {cache_key}")
-    stored_val = litellm.cache.get_cache(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-
-    print(f"stored_val: {stored_val}")
-    assert stored_val["id"] == response1.id
-
-    stored_val_2 = await litellm.cache.async_get_cache(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-
-    print(f"stored_val: {stored_val}")
-    assert stored_val_2["id"] == response1.id
 
 
 @pytest.mark.asyncio
@@ -2126,7 +1744,7 @@ async def test_redis_proxy_batch_redis_get_cache():
 
     from litellm.caching.caching import Cache, DualCache
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.batch_redis_get import _PROXY_BatchRedisRequests
+    from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
 
     litellm.cache = Cache(
         type="redis",
@@ -2137,7 +1755,7 @@ async def test_redis_proxy_batch_redis_get_cache():
     )
 
     batch_redis_get_obj = (
-        _PROXY_BatchRedisRequests()
+        PROXY_BatchRedisRequests()
     )  # overrides the .async_get_cache method
 
     user_api_key_cache = DualCache()
@@ -2240,18 +1858,19 @@ def test_basic_caching_import():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
 async def test_caching_kwargs_input(sync_mode):
+    from datetime import datetime
+
     from litellm import acompletion
     from litellm.caching.caching_handler import LLMCachingHandler
     from litellm.types.utils import (
         Choices,
+        CompletionTokensDetailsWrapper,
         EmbeddingResponse,
         Message,
         ModelResponse,
-        Usage,
-        CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
+        Usage,
     )
-    from datetime import datetime
 
     llm_caching_handler = LLMCachingHandler(
         original_function=acompletion, request_kwargs={}, start_time=datetime.now()
@@ -2304,33 +1923,6 @@ async def test_caching_kwargs_input(sync_mode):
         await llm_caching_handler.async_set_cache(**input)
 
 
-@pytest.mark.skip(reason="audio caching not supported yet")
-@pytest.mark.parametrize("stream", [False])  # True,
-@pytest.mark.asyncio()
-async def test_audio_caching(stream):
-    litellm.cache = Cache(type="local")
-
-    ## CALL 1 - no cache hit
-    completion = await litellm.acompletion(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": "pcm16"},
-        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
-        stream=stream,
-    )
-
-    assert "cache_hit" not in completion._hidden_params
-
-    ## CALL 2 - cache hit
-    completion = await litellm.acompletion(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": "pcm16"},
-        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
-        stream=stream,
-    )
-
-    assert "cache_hit" in completion._hidden_params
 
 
 def test_redis_caching_default_ttl():
@@ -2457,33 +2049,6 @@ async def test_redis_caching_ttl_sadd():
         assert mock_expire.call_args.args[1] == expected_timedelta
 
 
-@pytest.mark.asyncio()
-async def test_dual_cache_caching_batch_get_cache():
-    """
-    - check redis cache called for initial batch get cache
-    - check redis cache not called for consecutive batch get cache with same keys
-    """
-    from litellm.caching.dual_cache import DualCache
-    from litellm.caching.redis_cache import RedisCache
-
-    dc = DualCache(redis_cache=MagicMock(spec=RedisCache))
-
-    with patch.object(
-        dc.redis_cache,
-        "async_batch_get_cache",
-        new=AsyncMock(
-            return_value={"test_key1": "test_value1", "test_key2": "test_value2"}
-        ),
-    ) as mock_async_get_cache:
-        await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
-
-        assert mock_async_get_cache.call_count == 1
-
-        await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
-
-        assert mock_async_get_cache.call_count == 1
-
-
 @pytest.mark.asyncio
 async def test_redis_increment_pipeline():
     """Test Redis increment pipeline functionality"""
@@ -2491,7 +2056,7 @@ async def test_redis_increment_pipeline():
         from litellm.caching.redis_cache import RedisCache
 
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         redis_cache = RedisCache(
             host=os.environ["REDIS_HOST"],
             port=os.environ["REDIS_PORT"],
@@ -2578,158 +2143,6 @@ async def test_redis_get_ttl():
         raise e
 
 
-def test_redis_caching_multiple_namespaces():
-    """
-    Test that redis caching works with multiple namespaces
-
-    If client side request specifies a namespace, it should be used for caching
-
-    The same request with different namespaces should not be cached under the same key
-    """
-    from litellm._uuid import uuid
-    from unittest.mock import patch, MagicMock
-    import litellm
-    from litellm.caching import Cache
-    from litellm import completion
-
-    # Use a fixed uuid to ensure consistent cache keys
-    test_uuid = "12345678-1234-1234-1234-123456789abc"
-    messages = [{"role": "user", "content": f"what is litellm? {test_uuid}"}]
-
-    # Mock the Redis client creation from the _redis module
-    with (
-        patch("litellm._redis.get_redis_client") as mock_get_redis_client,
-        patch(
-            "litellm._redis.get_redis_connection_pool"
-        ) as mock_get_redis_connection_pool,
-    ):
-        # Create a mock Redis client that simulates real Redis behavior
-        mock_redis_client = MagicMock()
-        mock_get_redis_client.return_value = mock_redis_client
-
-        # Mock the connection pool
-        mock_connection_pool = MagicMock()
-        mock_get_redis_connection_pool.return_value = mock_connection_pool
-
-        # Dictionary to simulate Redis storage with namespace support
-        redis_storage = {}
-
-        def mock_redis_get(key):
-            print(f"Redis GET: {key}")
-            value = redis_storage.get(key, None)
-            # Convert to bytes to match real Redis behavior
-            if value is not None:
-                import json
-
-                return json.dumps(value).encode("utf-8")
-            return None
-
-        def mock_redis_set(name, value, ex=None, **kwargs):
-            print(f"Redis SET: {name} = {value}")
-            redis_storage[name] = value
-            return True
-
-        def mock_redis_ping():
-            return True
-
-        def mock_redis_info():
-            return {"redis_version": "7.0.0"}
-
-        mock_redis_client.get = mock_redis_get
-        mock_redis_client.set = mock_redis_set
-        mock_redis_client.ping = mock_redis_ping
-        mock_redis_client.info = mock_redis_info
-
-        # Initialize the cache
-        litellm.cache = Cache(type="redis")
-
-        namespace_1 = "org-id1"
-        namespace_2 = "org-id2"
-
-        # Use mock_response to ensure deterministic responses without external API calls
-        response_1 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            cache={"namespace": namespace_1},
-            mock_response="Response for namespace 1",
-        )
-
-        response_2 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            cache={"namespace": namespace_2},
-            mock_response="Response for namespace 2",
-        )
-
-        response_3 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            cache={"namespace": namespace_1},
-            mock_response="This should be cached",
-        )
-
-        response_4 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            mock_response="Response without namespace",
-        )
-
-        print(
-            f"Response 1 type: {type(response_1)} - ID: {getattr(response_1, 'id', 'N/A')}"
-        )
-        print(
-            f"Response 2 type: {type(response_2)} - ID: {getattr(response_2, 'id', 'N/A')}"
-        )
-        print(
-            f"Response 3 type: {type(response_3)} - Cache hit: {isinstance(response_3, str)}"
-        )
-        print(
-            f"Response 4 type: {type(response_4)} - ID: {getattr(response_4, 'id', 'N/A')}"
-        )
-
-        print(f"Redis storage keys: {list(redis_storage.keys())}")
-
-        # Verify that different namespaces created different cache keys
-        cache_keys = list(redis_storage.keys())
-        namespace_1_keys = [k for k in cache_keys if k.startswith(f"{namespace_1}:")]
-        namespace_2_keys = [k for k in cache_keys if k.startswith(f"{namespace_2}:")]
-        no_namespace_keys = [
-            k
-            for k in cache_keys
-            if not k.startswith(f"{namespace_1}:")
-            and not k.startswith(f"{namespace_2}:")
-        ]
-
-        print(f"Namespace 1 keys: {namespace_1_keys}")
-        print(f"Namespace 2 keys: {namespace_2_keys}")
-        print(f"No namespace keys: {no_namespace_keys}")
-
-        # Should have at least one key for each namespace
-        assert len(namespace_1_keys) > 0, "Should have cache keys for namespace 1"
-        assert len(namespace_2_keys) > 0, "Should have cache keys for namespace 2"
-        assert len(no_namespace_keys) > 0, "Should have cache keys for no namespace"
-
-        # The main test: response 3 should be a cache hit (string) because it uses same namespace as response 1
-        assert isinstance(
-            response_3, str
-        ), "Response 3 should be a cache hit (string) for same namespace"
-
-        # response 1 & 2 should be ModelResponse objects (cache misses)
-        assert hasattr(response_1, "id"), "Response 1 should be a ModelResponse object"
-        assert hasattr(response_2, "id"), "Response 2 should be a ModelResponse object"
-        assert hasattr(response_4, "id"), "Response 4 should be a ModelResponse object"
-
-        # response 1 & 2 should have different IDs (different namespaces)
-        assert (
-            response_1.id != response_2.id
-        ), f"Expected different response ID for different namespace. Got {response_1.id} and {response_2.id}"
-
-        # response 1 & 4 should have different IDs (different namespaces)
-        assert (
-            response_1.id != response_4.id
-        ), f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
-
-
 def test_caching_with_reasoning_content():
     """
     Test that reasoning content is cached
@@ -2762,7 +2175,7 @@ def test_caching_with_reasoning_content():
 
 def test_caching_reasoning_args_miss():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2788,7 +2201,7 @@ def test_caching_reasoning_args_miss():  # test in memory cache
 
 def test_caching_reasoning_args_hit():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2815,7 +2228,7 @@ def test_caching_reasoning_args_hit():  # test in memory cache
 
 def test_caching_thinking_args_miss():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2841,7 +2254,7 @@ def test_caching_thinking_args_miss():  # test in memory cache
 
 def test_caching_thinking_args_hit():  # test in memory cache
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
@@ -2864,56 +2277,3 @@ def test_caching_thinking_args_hit():  # test in memory cache
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_cache_key_in_hidden_params_acompletion():
-    """
-    Test that cache_key is present in _hidden_params on cache hits for acompletion.
-
-    Validates fix for missing x-litellm-cache-key header on proxy cache hits.
-    """
-    litellm.cache = Cache(
-        type="redis",
-        host=os.environ["REDIS_HOST"],
-        port=os.environ["REDIS_PORT"],
-        password=os.environ["REDIS_PASSWORD"],
-    )
-
-    unique_content = f"test cache key hidden params {uuid.uuid4()}"
-    messages = [{"role": "user", "content": unique_content}]
-
-    # First call - cache miss
-    response1 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        mock_response="test response",
-        caching=True,
-    )
-
-    print(f"Response 1 _hidden_params: {response1._hidden_params}")
-    assert response1._hidden_params.get("cache_hit") is not True
-
-    await asyncio.sleep(0.5)
-
-    # Second call - cache hit
-    response2 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        mock_response="test response",
-        caching=True,
-    )
-
-    print(f"Response 2 _hidden_params: {response2._hidden_params}")
-
-    # Verify cache hit occurred
-    assert response2._hidden_params.get("cache_hit") is True
-
-    # Verify cache_key is present in _hidden_params
-    assert "cache_key" in response2._hidden_params
-    assert response2._hidden_params["cache_key"] is not None
-
-    # Verify both responses have same ID (cache hit)
-    assert response1.id == response2.id
-
-    litellm.cache = None

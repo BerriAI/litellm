@@ -11,12 +11,14 @@ __all__ = ["aingest", "aquery", "ingest", "query"]
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Iterator
+from collections.abc import Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import is_internal_call
@@ -29,6 +31,7 @@ from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 from litellm.rag.ingestion.vertex_ai_ingestion import VertexAIRAGIngestion
 from litellm.rag.rag_query import RAGQuery
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.rag import (
     RAGIngestOptions,
     RAGIngestResponse,
@@ -48,6 +51,32 @@ INGESTION_REGISTRY: Final[dict[str, type[BaseRAGIngestion]]] = {
     "s3_vectors": S3VectorsRAGIngestion,
     "vertex_ai": VertexAIRAGIngestion,
 }
+
+# Only these retrieval_config keys are forwarded to vector_stores.asearch as
+# provider-specific params. The explicit allowlist keeps caller-controlled
+# connection overrides (api_base, api_key, ...) away from the search call,
+# where they could redirect store credentials to an attacker-chosen host.
+_FORWARDABLE_RETRIEVAL_CONFIG_KEYS: Final = frozenset(
+    {
+        "aws_region_name",
+        "vector_bucket_name",
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+    }
+)
+
+_SEARCH_ARGS_SET_BY_PIPELINE: Final = frozenset(
+    {"vector_store_id", "query", "max_num_results", "custom_llm_provider", "router"}
+)
+
+
+_VECTOR_STORE_OPTIONS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _vector_store_provider(ingest_options: Mapping[str, object]) -> object:
+    return _VECTOR_STORE_OPTIONS.validate_python(ingest_options.get("vector_store", {})).get("custom_llm_provider")
 
 
 def get_ingestion_class(provider: str) -> type[BaseRAGIngestion]:
@@ -116,7 +145,7 @@ async def _execute_ingest_pipeline(
 
 @client
 async def aingest(
-    ingest_options: dict[str, Any],
+    ingest_options: Mapping[str, object],
     file_data: tuple[str, bytes, str] | None = None,
     file: dict[str, str] | None = None,
     file_url: str | None = None,
@@ -176,7 +205,7 @@ async def aingest(
     except Exception as e:
         raise litellm.exception_type(
             model=None,
-            custom_llm_provider=ingest_options.get("vector_store", {}).get("custom_llm_provider"),
+            custom_llm_provider=_vector_store_provider(ingest_options),
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -204,10 +233,11 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
 
 async def _execute_query_pipeline(
     model: str,
-    messages: list[Any],
-    retrieval_config: dict[str, Any],
+    messages: list[AllMessageValues],
+    retrieval_config: Mapping[str, object],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
+    vector_store_params: Mapping[str, object] | None = None,
     **kwargs,
 ) -> ModelResponse:
     """
@@ -223,23 +253,47 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
+    top_level_filters: Final = kwargs.pop("filters", None)
+    filters: Final = retrieval_config.get("retrieval_filter") or retrieval_config.get("filters") or top_level_filters
+    filter_search_params: Final = MappingProxyType({"filters": filters} if filters else {})
+    # Forward allowlisted provider retrieval_config extras (region, embedding
+    # model, bucket, credential refs) to the search call; the managed store's
+    # params win on conflict.
+    provider_search_params: Final = MappingProxyType(
+        {k: v for k, v in retrieval_config.items() if k in _FORWARDABLE_RETRIEVAL_CONFIG_KEYS}
+    )
+    store_search_params: Final = MappingProxyType(
+        {
+            k: v
+            for k, v in (vector_store_params.items() if vector_store_params else ())
+            if k not in _SEARCH_ARGS_SET_BY_PIPELINE
+        }
+    )
+    forwarded_search_params: Final = MappingProxyType(
+        {**provider_search_params, **kwargs, **filter_search_params, **store_search_params}
+    )
     with _suppressed_sub_call_billing():
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
             custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-            **kwargs,
+            router=router,
+            **forwarded_search_params,
         )
 
     search_provider: Final = retrieval_config.get("custom_llm_provider", "openai")
     try:
-        search_cost = sum(
-            vector_store_search_cost(
-                model=search_provider if "/" in search_provider else None,
-                custom_llm_provider=search_provider,
-                response=search_response,
+        search_cost = (
+            sum(
+                vector_store_search_cost(
+                    model=search_provider if "/" in search_provider else None,
+                    custom_llm_provider=search_provider,
+                    response=search_response,
+                )
             )
+            if isinstance(search_provider, str)
+            else 0.0
         )
     except Exception:  # noqa: BLE001 - cost accounting must never break the query path
         search_cost = 0.0
@@ -311,10 +365,11 @@ async def _execute_query_pipeline(
 @client
 async def aquery(
     model: str,
-    messages: list[Any],
-    retrieval_config: dict[str, Any],
+    messages: list[AllMessageValues],
+    retrieval_config: Mapping[str, object],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
+    vector_store_params: Mapping[str, object] | None = None,
     **kwargs,
 ) -> ModelResponse:
     """
@@ -332,6 +387,7 @@ async def aquery(
             retrieval_config=retrieval_config,
             rerank=rerank,
             stream=stream,
+            vector_store_params=vector_store_params,
             **kwargs,
         )
 
@@ -358,12 +414,13 @@ async def aquery(
 @client
 def query(
     model: str,
-    messages: list[Any],
-    retrieval_config: dict[str, Any],
+    messages: list[AllMessageValues],
+    retrieval_config: Mapping[str, object],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
+    vector_store_params: Mapping[str, object] | None = None,
     **kwargs,
-) -> ModelResponse | Coroutine[Any, Any, ModelResponse]:
+) -> ModelResponse | Coroutine[None, None, ModelResponse]:
     """
     Query a RAG pipeline.
     """
@@ -378,6 +435,7 @@ def query(
                 retrieval_config=retrieval_config,
                 rerank=rerank,
                 stream=stream,
+                vector_store_params=vector_store_params,
                 **kwargs,
             )
         else:
@@ -388,6 +446,7 @@ def query(
                     retrieval_config=retrieval_config,
                     rerank=rerank,
                     stream=stream,
+                    vector_store_params=vector_store_params,
                     **kwargs,
                 )
             )
@@ -403,14 +462,14 @@ def query(
 
 @client
 def ingest(
-    ingest_options: dict[str, Any],
+    ingest_options: Mapping[str, object],
     file_data: tuple[str, bytes, str] | None = None,
     file: dict[str, str] | None = None,
     file_url: str | None = None,
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> RAGIngestResponse | Coroutine[Any, Any, RAGIngestResponse]:
+) -> RAGIngestResponse | Coroutine[None, None, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
 
@@ -470,7 +529,7 @@ def ingest(
     except Exception as e:
         raise litellm.exception_type(
             model=None,
-            custom_llm_provider=ingest_options.get("vector_store", {}).get("custom_llm_provider"),
+            custom_llm_provider=_vector_store_provider(ingest_options),
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,

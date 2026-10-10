@@ -18,14 +18,21 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
-from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_access_object,
+)
+from litellm.proxy.db.db_span import db_span
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # hashtext collisions only cost two unrelated teams a little serialization, and the
-# lock is never taken by the access-group endpoints, so it cannot join their
-# access-group-then-team lock order to form a cycle.
-_LOCK_TEAM_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+# lock is never taken by the access-group endpoints as a SELECT ... FOR UPDATE row lock,
+# so it cannot join their access-group-then-team lock order to form a cycle. team_endpoints
+# reuses this exact statement to serialize /team/member_add and /team/delete against each
+# other and against this mirror, rather than defining a second, divergent lock on the same key.
+TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
 
 _READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1'
 
@@ -55,11 +62,11 @@ RETURNING access_group_id
 """
 
 
-class _AffectedGroup(BaseModel):
+class _AffectedGroup(LiteLLMBaseModel):
     access_group_id: str
 
 
-class _TeamGroups(BaseModel):
+class _TeamGroups(LiteLLMBaseModel):
     access_group_ids: tuple[str, ...] | None = None
 
 
@@ -95,7 +102,7 @@ async def invalidate_access_group_cache(access_group_id: str) -> None:
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    await _delete_cache_access_object(
+    await delete_cache_access_object(
         access_group_id=access_group_id,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -138,7 +145,7 @@ async def reconcile_team_access_group_membership(tx: AccessGroupSyncTx, team_id:
     concurrent write for a different team cannot be lost the way a read-modify-write of
     the whole array can, and the pair commits together or not at all.
     """
-    await tx.query_raw(_LOCK_TEAM_SQL, team_id)
+    await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
     team_rows: Final = _TeamRows.validate_python(await tx.query_raw(_READ_TEAM_SQL, team_id))
     desired: Final = (team_rows[0].access_group_ids or ()) if team_rows else ()
     affected: Final = _AffectedGroups.validate_python(await tx.query_raw(_AFFECTED_SQL, team_id, desired))
@@ -149,7 +156,7 @@ async def reconcile_team_access_group_membership(tx: AccessGroupSyncTx, team_id:
 
 async def sync_team_access_group_membership(prisma_client: _PrismaClient, team_id: str) -> None:
     """Reconcile the mirror for an already committed team write, in its own transaction."""
-    async with prisma_client.db.tx() as tx:
+    async with db_span("sync_team_access_group_membership", "LiteLLM_AccessGroupTable"), prisma_client.db.tx() as tx:
         affected: Final = await reconcile_team_access_group_membership(tx, team_id)
 
     await invalidate_access_group_caches(affected)

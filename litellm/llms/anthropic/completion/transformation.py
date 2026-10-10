@@ -6,8 +6,8 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -31,6 +31,9 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AnthropicTextError(BaseLLMException):
@@ -70,7 +73,7 @@ class AnthropicTextConfig(BaseConfig):
         top_k: int | None = None,
         metadata: dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -160,7 +163,7 @@ class AnthropicTextConfig(BaseConfig):
             if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
-                _value = litellm.AnthropicConfig()._map_stop_sequences(value)
+                _value = litellm.AnthropicConfig().map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
             if param == "temperature":
@@ -182,7 +185,7 @@ class AnthropicTextConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -202,9 +205,10 @@ class AnthropicTextConfig(BaseConfig):
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
-        prompt_tokens: Final = len(encoding.encode(prompt))  ##[TODO] use the anthropic tokenizer here
+        tokenizer: Final = encoding if encoding is not None else litellm.encoding
+        prompt_tokens: Final = len(tokenizer.encode(prompt))  ##[TODO] use the anthropic tokenizer here
         completion_tokens: Final = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+            tokenizer.encode(model_response["choices"][0]["message"].get("content", ""))
         )  ##[TODO] use the anthropic tokenizer here
 
         model_response.created = int(time.time())
@@ -227,6 +231,13 @@ class AnthropicTextConfig(BaseConfig):
     @staticmethod
     def _is_anthropic_text_model(model: str) -> bool:
         return model == "claude-2" or model == "claude-instant-1"
+
+    @classmethod
+    def is_anthropic_text_model(
+        cls,
+        model: str,
+    ) -> bool:
+        return cls._is_anthropic_text_model(model)
 
     def _get_anthropic_text_prompt_from_messages(self, messages: list[AllMessageValues], model: str) -> str:
         custom_prompt_dict: Final = litellm.custom_prompt_dict

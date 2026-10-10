@@ -19,6 +19,7 @@ export interface UsageViewSelectProps {
   onChange: (value: UsageOption) => void;
   userRole: string | null;
   canViewTagUsage?: boolean;
+  isOrgAdmin?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -108,7 +109,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   onChange,
   userRole,
   canViewTagUsage = false,
-  title = "Usage View",
+  isOrgAdmin = false,
+  title = "Usage",
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
@@ -116,7 +118,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
       if (option.capability) {
-        return hasCapability(userRole, option.capability);
+        return hasCapability(userRole, option.capability, isOrgAdmin);
       }
       if (option.value === "tag" && canViewTagUsage) {
         return true;
@@ -146,51 +148,43 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const filteredOptions = getFilteredOptions();
   const selectedOption = filteredOptions.find((option) => option.value === value);
   return (
-    <div className="w-full" data-id={dataId}>
-      <div className="flex flex-wrap items-center justify-start gap-4">
-        <div className="flex items-stretch gap-2 min-w-0">
-          <div className="shrink-0 flex items-center">
-            <BarChart3 className="size-8" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-gray-900 mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-gray-600 leading-tight">{description}</p>
-          </div>
-        </div>
-        <div className="shrink-0">
-          <Select
-            value={value}
-            onValueChange={(next: UsageOption | null) => {
-              if (next) onChange(next);
-            }}
-          >
-            <SelectTrigger className="w-54 sm:w-64 md:w-72">
-              <SelectValue>
-                {selectedOption && (
-                  <span className="flex items-center gap-2">
-                    {selectedOption.icon}
-                    <span className="text-sm">{selectedOption.label}</span>
-                  </span>
-                )}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {filteredOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  <span className="flex items-center gap-2 py-1">
-                    <span className="shrink-0 mt-0.5">{option.icon}</span>
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-gray-900">{option.label}</span>
-                      <span className="block text-xs text-gray-600 mt-0.5">{option.description}</span>
-                    </span>
-                    {option.badgeText && <Badge>{option.badgeText}</Badge>}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+    <div className="flex items-center gap-3" data-id={dataId}>
+      <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+        <BarChart3 aria-hidden="true" className="size-4" strokeWidth={2} />
+        {title}
+      </h1>
+      <Select
+        value={value}
+        onValueChange={(next: UsageOption | null) => {
+          if (next) onChange(next);
+        }}
+      >
+        <SelectTrigger aria-label={description} className="h-8 w-52">
+          <SelectValue>
+            {selectedOption && (
+              <span className="flex items-center gap-2">
+                {selectedOption.icon}
+                <span className="text-sm">{selectedOption.label}</span>
+              </span>
+            )}
+          </SelectValue>
+        </SelectTrigger>
+        {/* Sized to its content rather than the narrow trigger, so descriptions never clip. */}
+        <SelectContent align="start" className="w-auto min-w-72 p-1">
+          {filteredOptions.map((option) => (
+            <SelectItem key={option.value} value={option.value} className="rounded-md py-2 pr-8 pl-2">
+              <span className="flex items-start gap-2.5">
+                <span className="mt-0.5 shrink-0 text-muted-foreground">{option.icon}</span>
+                <span className="min-w-0">
+                  <span className="block text-sm leading-5 text-foreground">{option.label}</span>
+                  <span className="block text-xs leading-4 text-muted-foreground">{option.description}</span>
+                </span>
+                {option.badgeText && <Badge>{option.badgeText}</Badge>}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 };

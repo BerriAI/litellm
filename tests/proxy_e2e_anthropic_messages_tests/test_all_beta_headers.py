@@ -2,6 +2,7 @@
 This test ensures that the proxy can passthrough anthropic requests
 """
 
+import os
 from pathlib import Path
 import pytest
 import aiohttp
@@ -46,7 +47,7 @@ async def test_anthropic_messages_with_all_beta_headers(model_name, provider_nam
     print("Testing v1/messages with all non-null Anthropic beta headers")
 
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": ",".join(
@@ -101,8 +102,8 @@ async def test_anthropic_messages_with_all_beta_headers(model_name, provider_nam
 @pytest.mark.parametrize(
     "model_name,provider_name",
     [
-        ("bedrock-claude-opus-4.5", "bedrock"),
-        ("bedrock-converse-claude-sonnet-4.5", "bedrock_converse"),
+        ("bedrock-claude-fable-5.1", "bedrock"),
+        ("bedrock-converse-claude-fable-5.1", "bedrock_converse"),
     ],
 )
 async def test_bedrock_invoke_messages_with_all_beta_headers(model_name, provider_name):
@@ -115,7 +116,7 @@ async def test_bedrock_invoke_messages_with_all_beta_headers(model_name, provide
     beta_headers = get_all_supported_anthropic_beta_headers(provider_name)
 
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": ",".join(beta_headers),

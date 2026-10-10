@@ -86,7 +86,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
       role="dialog"
       aria-modal={false}
       aria-labelledby="version-history-title"
-      className="fixed inset-y-0 right-0 z-50 flex w-[400px] max-w-full flex-col gap-4 border-l border-border bg-popover text-popover-foreground shadow-lg"
+      className="fixed inset-y-0 right-0 z-overlay flex w-[400px] max-w-full flex-col gap-4 border-l border-border bg-popover text-popover-foreground shadow-lg"
     >
       <Button type="button" variant="ghost" size="icon-sm" className="absolute top-4 right-4" onClick={onClose}>
         <XIcon />

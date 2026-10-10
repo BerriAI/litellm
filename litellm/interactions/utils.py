@@ -47,6 +47,13 @@ def get_provider_interactions_api_config(
 
         return GoogleAIStudioInteractionsConfig()
 
+    if provider in (LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value):
+        from litellm.llms.vertex_ai.interactions.transformation import (
+            VertexAIInteractionsConfig,
+        )
+
+        return VertexAIInteractionsConfig()
+
     return None
 
 

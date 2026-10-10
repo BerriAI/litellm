@@ -1,8 +1,10 @@
 import math
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 # Defined above the `litellm.proxy.*` imports so the name is bound even when
@@ -22,7 +24,7 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
-def validate_budget_duration(budget_duration: str | None) -> None:
+def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the
     budget reset job.
@@ -32,28 +34,17 @@ def validate_budget_duration(budget_duration: str | None) -> None:
     enough of them exist, they fill each batch and starve every other tenant's
     reset.
     """
-    if budget_duration is None:
-        return
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-    try:
-        if duration_in_seconds(budget_duration) <= 0:
-            raise ValueError("budget_duration must be positive")
-        get_budget_reset_time(budget_duration=budget_duration)
-    except (ValueError, OverflowError):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
-            },
-        )
+    error: Final = budget_duration_error(budget_duration)
+    if error is not None:
+        raise HTTPException(status_code=status_code, detail={"error": error})
 
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.proxy._types import (
+from litellm.proxy._types import (  # re-exported
+    CommonProxyErrors,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
@@ -65,17 +56,74 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
-)
-from litellm.proxy._types import (  # noqa: F401  re-exported
-    user_api_key_has_admin_view as _user_has_admin_view,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.utils import _premium_user_check
+from litellm.proxy.management.teams.authz import is_team_admin
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+    _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    premium_user_check,
+)
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+_user_has_admin_view: Final = user_api_key_has_admin_view
+
+# TODO: drop once the litellm-enterprise pin moves past 0.1.71, which imports this name
+_is_user_team_admin: Final = is_team_admin
+
+
+def validate_team_model_max_budget(
+    model_max_budget: Mapping[str, BudgetConfig] | None,
+    premium_user: bool,
+) -> None:
+    """Reject a team `model_max_budget` the limiter could not enforce (no duration, bad cap, tpm/rpm limits)."""
+    if not model_max_budget:
+        return
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Setting model_max_budget on a team is an enterprise feature. {CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+    for model_name, budget_config in model_max_budget.items():
+        if not model_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model_max_budget keys must be non-empty model names"},
+            )
+        max_budget = budget_config.max_budget
+        if max_budget is None or not math.isfinite(max_budget) or max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}].max_budget must be a non-negative finite number. "
+                        f"Received: {max_budget}"
+                    )
+                },
+            )
+        if budget_config.budget_duration is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"model_max_budget[{model_name!r}] requires a budget_duration, e.g. '1d' or '30d'"},
+            )
+        validate_budget_duration(budget_config.budget_duration)
+        if budget_config.tpm_limit is not None or budget_config.rpm_limit is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}] tpm_limit/rpm_limit are not enforced on a team; "
+                        "set per-model rate limits on the key instead"
+                    )
+                },
+            )
 
 
 def require_caller_user_id_for_non_admin(
@@ -105,77 +153,126 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-def _check_passthrough_routes_caller_permission(
-    data: BaseModel,
+_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+
+
+def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `{field}` on a {entity}."},
+    )
+
+
+def check_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` or `denied_passthrough_routes`
+    (top-level or under `metadata`), since the runtime route checker reads both from key and
+    team metadata.
+    """
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict, entity=entity)
+    check_denied_passthrough_routes_caller_permission(
+        data, user_api_key_dict, entity=entity, existing_metadata=existing_metadata
+    )
+
+
+_check_passthrough_routes_caller_permission: Final = check_passthrough_routes_caller_permission
+
+
+def check_allowed_passthrough_routes_caller_permission(
+    data: BaseModel | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     entity: str = "key",
 ) -> None:
-    """
-    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
-    `metadata`) — it short-circuits the role-based route gate, so keys and teams
-    must be gated identically.
-    """
+    if data is None:
+        return
+    metadata: Final = getattr(data, "metadata", None)
+    if isinstance(metadata, dict):
+        try:
+            _ROUTE_LIST.validate_python(metadata.get("denied_passthrough_routes"))
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "`metadata.denied_passthrough_routes` must be a list of route strings."},
+            ) from e
     # view-only admins excluded by design; blocked upstream from writes anyway
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if getattr(data, "allowed_passthrough_routes", None):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
-        )
-    metadata: Final = getattr(data, "metadata", None)
+        raise _passthrough_routes_permission_error("allowed_passthrough_routes", entity)
     if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},
-        )
+        raise _passthrough_routes_permission_error("metadata.allowed_passthrough_routes", entity)
 
 
-def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
-    for member in team_obj.members_with_roles:
-        if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
-            return True
-
-    return False
-
-
-async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
+def check_denied_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
     """
-    Check if user is an org admin for the team's organization.
-
-    Returns True if:
-    - The team belongs to an organization, AND
-    - The user has org_admin role in that organization
+    A non-admin request must leave an existing deny list as it is: clearing it, or replacing
+    `metadata` without it, would widen access. The outcome depends on the stored deny list, so
+    run this only after the caller is known to be allowed to edit the object.
     """
-    if not team_obj.organization_id or not user_api_key_dict.user_id:
-        return False
+    if data is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    metadata: Final = getattr(data, "metadata", None)
+    existing_denied: Final = (existing_metadata or {}).get("denied_passthrough_routes") or None
+    if (
+        "denied_passthrough_routes" in data.model_fields_set
+        and (getattr(data, "denied_passthrough_routes", None) or None) != existing_denied
+    ):
+        raise _passthrough_routes_permission_error("denied_passthrough_routes", entity)
+    if _metadata_changes_denied_routes(data, metadata, existing_denied):
+        raise _passthrough_routes_permission_error("metadata.denied_passthrough_routes", entity)
 
-    from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
+
+def _metadata_changes_denied_routes(data: BaseModel, metadata: object, existing_denied: object) -> bool:
+    if isinstance(metadata, dict):
+        return (metadata.get("denied_passthrough_routes") or None) != existing_denied
+    return metadata is None and "metadata" in data.model_fields_set and existing_denied is not None
+
+
+def check_disable_global_guardrails_caller_permission(
+    disable_global_guardrails: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may opt a key or team out of default-on guardrails, whether the
+    flag is top-level or under `metadata`. Re-sending a flag that is already stored is
+    not an opt-out, so non-admin edits of an already exempted object still go through.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    requested: Final = bool(disable_global_guardrails) or (
+        metadata is not None and bool(metadata.get("disable_global_guardrails"))
+    )
+    if not requested:
+        return
+    if existing_metadata is not None and existing_metadata.get("disable_global_guardrails") is True:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `disable_global_guardrails` on a {entity}."},
     )
 
-    caller_user: Final = await get_user_object(
-        user_id=user_api_key_dict.user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    if caller_user is None:
-        return False
 
-    for m in caller_user.organization_memberships or []:
-        if m.organization_id == team_obj.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value:
-            return True
-
-    return False
+_check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
 
 
-def _team_member_has_permission(
+def team_member_has_permission(
     user_api_key_dict: UserAPIKeyAuth,
     team_obj: LiteLLM_TeamTable,
     permission: str,
@@ -191,7 +288,10 @@ def _team_member_has_permission(
     return False
 
 
-async def _user_has_admin_privileges(
+_team_member_has_permission: Final = team_member_has_permission
+
+
+async def user_has_admin_privileges(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
     user_api_key_cache: Optional["DualCache"] = None,
@@ -246,7 +346,7 @@ async def _user_has_admin_privileges(
 
             for team in teams:
                 team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
-                if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+                if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
     except Exception as e:
@@ -255,6 +355,9 @@ async def _user_has_admin_privileges(
         return False
 
     return False
+
+
+_user_has_admin_privileges: Final = user_has_admin_privileges
 
 
 def _org_admin_can_invite_user(
@@ -315,7 +418,7 @@ async def _team_admin_can_invite_user(
     admin_team_ids: Final = [
         team.team_id
         for team in teams
-        if _is_user_team_admin(
+        if is_team_admin(
             user_api_key_dict=user_api_key_dict,
             team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
@@ -399,7 +502,7 @@ async def admin_can_invite_user(
         return False
 
 
-def _set_object_metadata_field(
+def set_object_metadata_field(
     object_data: Union[
         LiteLLM_TeamTable,
         KeyRequestBase,
@@ -420,10 +523,13 @@ def _set_object_metadata_field(
         value: Value to set for the field
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value:
-        _premium_user_check(field_name)
+        premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
+
+
+_set_object_metadata_field: Final = set_object_metadata_field
 
 
 _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
@@ -435,10 +541,43 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "model_max_budget",
     "budget_duration",
     "allowed_models",
+    "temp_budget_increase",
+    "temp_budget_expiry",
+)
+
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+
+
+MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
+    {
+        "max_budget_in_team": "max_budget",
+        "tpm_limit": "tpm_limit",
+        "rpm_limit": "rpm_limit",
+        "budget_duration": "budget_duration",
+        "allowed_models": "allowed_models",
+        "temp_budget_increase": "temp_budget_increase",
+        "temp_budget_expiry": "temp_budget_expiry",
+    }
 )
 
 
-def _is_set_budget_value(value: Any) -> bool:
+def _prisma_value(value: object) -> object:
+    return list(value) if isinstance(value, tuple) else value
+
+
+def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
+    """Map the per-member limit fields a request actually set to their budget-table
+    columns (merge-patch: a sent value updates, an explicit null clears, an absent
+    field is left untouched)."""
+    provided: Final = source.model_dump(exclude_unset=True)
+    return {
+        column: _prisma_value(provided[request_field])
+        for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
+        if request_field in provided
+    }
+
+
+def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
@@ -446,22 +585,23 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
-async def _upsert_budget_and_membership(
+async def upsert_budget_and_membership(
     tx,
     *,
     team_id: str,
     user_id: str,
     existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: dict[str, Any],
+    budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
-):
+    shared_budget_ids: frozenset[str] | None = None,
+) -> None:
     """
     Apply a merge-patch of per-member budget fields to a team membership.
 
@@ -475,6 +615,12 @@ async def _upsert_budget_and_membership(
     (from team metadata.team_member_budget_id). When the membership still
     points at it, we clone-on-write so editing one member's budget does not
     mutate the shared default that every other member points at.
+
+    ``shared_budget_ids`` extends that protection to any other row more than one
+    membership points at, which a caller patching several members at once has
+    already counted; a row listed there is cloned rather than written in place.
+    A patch that only touches the temporary budget pair never copies permanent
+    limits into a new row, so the member keeps inheriting the live team default.
     """
     if not budget_patch:
         return
@@ -486,11 +632,10 @@ async def _upsert_budget_and_membership(
             get_budget_reset_time(budget_duration=duration) if duration is not None else None
         )
 
-    is_shared_default: Final = (
-        existing_budget_id is not None
-        and team_default_budget_id is not None
-        and existing_budget_id == team_default_budget_id
+    is_shared_default: Final = existing_budget_id is not None and (
+        existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
+    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -511,29 +656,31 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Final[dict[str, Any]] = {
+    source_row: Final = (
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if is_shared_default and not temp_only
+        else None
+    )
+    source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+
+    create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
+        **write_data,
     }
 
-    if is_shared_default:
-        default_budget_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        if default_budget_row is not None:
-            default_budget_dict: Final = default_budget_row.model_dump()
-            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
-                value = default_budget_dict.get(field)
-                if _is_set_budget_value(value):
-                    create_data[field] = value
-
-    create_data.update(write_data)
-
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    if carried is not None:
+        create_data["budget_reset_at"] = carried
+    if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None:
+        if existing_budget_id is not None and not temp_only:
             await _disconnect()
         return
 
@@ -565,6 +712,9 @@ async def _upsert_budget_and_membership(
     )
 
 
+_upsert_budget_and_membership: Final = upsert_budget_and_membership
+
+
 def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
     """
     Helper function to update metadata fields that require premium user checks in the update endpoint
@@ -579,7 +729,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # only for a truthy value. The falsy value is still persisted below so a
         # previously-set field can be cleared.
         if updated_kv.get(field_name):
-            _premium_user_check()
+            premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
@@ -590,7 +740,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _has_non_empty_value(value: Any) -> bool:
+def _has_non_empty_value(value: object) -> bool:
     """Check if a value has real content (not None, not empty list, not blank string)."""
     if value is None:
         return False
@@ -601,7 +751,7 @@ def _has_non_empty_value(value: Any) -> bool:
     return True
 
 
-def _update_metadata_fields(updated_kv: dict) -> None:
+def update_metadata_fields(updated_kv: dict) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
 
@@ -615,3 +765,6 @@ def _update_metadata_fields(updated_kv: dict) -> None:
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
+
+
+_update_metadata_fields: Final = update_metadata_fields

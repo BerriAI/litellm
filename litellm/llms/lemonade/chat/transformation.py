@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -17,6 +17,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class LemonadeChatConfig(OpenAILikeChatConfig):
@@ -167,7 +170,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Any:
+    ) -> dict[str, object]:
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]
 
@@ -213,6 +216,13 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             key = api_key or litellm.lemonade_key or get_secret_str("LEMONADE_API_KEY") or self._DEFAULT_API_KEY
         return api_base, key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def _get_auth_headers(self, api_key: str | None) -> dict:
         if api_key is None or api_key == self._DEFAULT_API_KEY:
             return {}
@@ -228,7 +238,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

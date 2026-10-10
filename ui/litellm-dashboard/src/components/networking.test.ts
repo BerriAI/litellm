@@ -1,21 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
   storeLoginToken: vi.fn(),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 describe("networking - expired session handling", () => {
@@ -29,25 +20,39 @@ describe("networking - expired session handling", () => {
     global.fetch = originalFetch;
   });
 
-  it("should call clearTokenCookies on expired session", async () => {
-    const errorData = "Authentication Error - Expired Key";
-    const { default: NotificationsManager } = await import("./molecules/notifications_manager");
+  const loadFreshHandleError = async () => {
+    vi.resetModules();
+    const fresh = await import("./networking");
+    return fresh.handleError;
+  };
 
-    if (errorData.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
-      clearTokenCookies();
-    }
+  const stubLocation = (pathname: string, search: string, hash: string) => {
+    const location = { pathname, search, hash, href: "" };
+    vi.stubGlobal("window", { location });
+    return location;
+  };
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the query string and hash on the redirect after session expiry", async () => {
+    const handleError = await loadFreshHandleError();
+    const location = stubLocation("/ui/api-keys/", "?filter_team=t1&page=2", "#row-3");
+
+    await handleError("Authentication Error - Expired Key");
+
+    expect(location.href).toBe("/ui/api-keys/?filter_team=t1&page=2#row-3");
     expect(clearTokenCookies).toHaveBeenCalledOnce();
   });
 
-  it("should not clear cookies for non-authentication errors", () => {
-    const errorData = "Some other error";
+  it("does not navigate or clear cookies for other errors", async () => {
+    const handleError = await loadFreshHandleError();
+    const location = stubLocation("/ui/api-keys/", "?filter_team=t1&page=2", "");
 
-    if (errorData.includes("Authentication Error - Expired Key")) {
-      clearTokenCookies();
-    }
+    await handleError("Some other error");
 
+    expect(location.href).toBe("");
     expect(clearTokenCookies).not.toHaveBeenCalled();
   });
 
@@ -113,22 +118,10 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
-describe("daily activity helpers", () => {
-  const startTime = new Date("2025-02-12T00:00:00.000Z");
-  const endTime = new Date("2025-02-19T00:00:00.000Z");
+describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 
-  const setupSuccessfulFetch = () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ data: [] }),
-    } as any);
-    global.fetch = mockFetch as any;
-    return mockFetch;
-  };
-
   beforeEach(() => {
-    vi.clearAllMocks();
     currentFetch = global.fetch;
   });
 
@@ -136,34 +129,31 @@ describe("daily activity helpers", () => {
     global.fetch = currentFetch;
   });
 
-  it("appends tag list when tags argument is provided", async () => {
-    const mockFetch = setupSuccessfulFetch();
+  it("sends the exact model name as the model query param and leaves search alone", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ data: [] }) } as any);
+    global.fetch = mockFetch as any;
 
-    await Networking.tagDailyActivityCall("token", startTime, endTime, 2, ["alpha", "beta"]);
+    await Networking.modelInfoCall(
+      "token",
+      "user",
+      "Admin",
+      2,
+      25,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      "gpt-4",
+    );
 
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const calledUrl = mockFetch.mock.calls[0][0] as string;
-    const parsed = new URL(calledUrl, "http://example.com");
-
-    expect(parsed.pathname).toBe("/tag/daily/activity");
-    expect(parsed.searchParams.get("tags")).toBe("alpha,beta");
-  });
-
-  it("always includes exclude_team_ids but only adds team_ids when given", async () => {
-    const mockFetchWithoutTeams = setupSuccessfulFetch();
-
-    await Networking.teamDailyActivityCall("token", startTime, endTime, 1, null);
-    const urlWithoutTeams = new URL(mockFetchWithoutTeams.mock.calls[0][0] as string, "http://example.com");
-
-    expect(urlWithoutTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
-    expect(urlWithoutTeams.searchParams.has("team_ids")).toBe(false);
-
-    const mockFetchWithTeams = setupSuccessfulFetch();
-    await Networking.teamDailyActivityCall("token", startTime, endTime, 3, ["team-a", "team-b"]);
-    const urlWithTeams = new URL(mockFetchWithTeams.mock.calls[0][0] as string, "http://example.com");
-
-    expect(urlWithTeams.searchParams.get("team_ids")).toBe("team-a,team-b");
-    expect(urlWithTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://example.com");
+    expect(parsed.pathname).toBe("/v2/model/info");
+    expect(parsed.searchParams.get("model")).toBe("gpt-4");
+    expect(parsed.searchParams.has("search")).toBe(false);
+    expect(parsed.searchParams.get("page")).toBe("2");
+    expect(parsed.searchParams.get("exclude_auto_routers")).toBe("true");
   });
 });
 
@@ -362,7 +352,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
 
     expect(Networking.serverRootPath).toBe("/litellm");
-    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+    expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
   });
 });
 
@@ -468,6 +458,64 @@ describe("teamInfoCall", () => {
   });
 });
 
+describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, page_size: 50, total_pages: 0 }),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const callWith = (params: Parameters<typeof Networking.uiSpendLogsCall>[0]["params"]) =>
+    Networking.uiSpendLogsCall({
+      accessToken: "token",
+      start_date: "2026-01-01 00:00:00",
+      end_date: "2026-01-02 00:00:00",
+      params,
+    });
+
+  const lastUrl = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com");
+  };
+
+  it("appends exclude_internal_health_checks=true when the toggle is on", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ exclude_internal_health_checks: true });
+
+    expect(lastUrl(mockFetch).searchParams.get("exclude_internal_health_checks")).toBe("true");
+  });
+
+  it("omits exclude_internal_health_checks when the toggle is off", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ exclude_internal_health_checks: false });
+
+    expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
+  });
+
+  it("omits exclude_internal_health_checks when the param is absent", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({});
+
+    expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
+  });
+});
+
 describe("sessionSpendLogsCall", () => {
   const originalFetch = global.fetch;
 
@@ -528,6 +576,15 @@ describe("buildModelGroupTestRequest", () => {
     const { path, body } = Networking.buildModelGroupTestRequest("text-embedding-3-small", "embedding");
     expect(path).toBe("/v1/embeddings");
     expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
+  });
+
+  it("adds classifier request parameters to a chat probe", () => {
+    const { body } = Networking.buildModelGroupTestRequest("gpt-5-mini", "chat", { reasoning_effort: "low" });
+    expect(body).toEqual({
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "test from litellm" }],
+      reasoning_effort: "low",
+    });
   });
 });
 
@@ -595,6 +652,30 @@ describe("testMCPToolsListRequest auth headers", () => {
   });
 });
 
+describe("fetchMCPServerHealth", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([{ serverIds: undefined }, { serverIds: [] }, { serverIds: ["server one", "server&two"] }])(
+    "opts into reachability while preserving requested servers: $serverIds",
+    async ({ serverIds }) => {
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response("[]", { status: 200 }));
+      global.fetch = mockFetch;
+
+      await Networking.fetchMCPServerHealth("test-token", serverIds);
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const url = new URL(String(mockFetch.mock.calls[0][0]), "http://localhost");
+      expect(url.pathname).toMatch(/\/v1\/mcp\/server\/health$/);
+      expect(url.searchParams.get("include_reachability")).toBe("true");
+      expect(url.searchParams.getAll("server_ids")).toEqual(serverIds ?? []);
+    },
+  );
+});
+
 describe("getAutoRouterClassifierDefaultPromptCall", () => {
   const originalFetch = global.fetch;
 
@@ -634,5 +715,176 @@ describe("getAutoRouterClassifierDefaultPromptCall", () => {
 
     expect(requestedUrl(mockFetch)).not.toContain("tier_labels");
     expect(String(mockFetch.mock.calls[1][0])).not.toContain("tier_labels");
+  });
+});
+
+describe("userListCall search serialization", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const emptyPage = { users: [], total: 0, page: 1, page_size: 25, total_pages: 0 };
+    const body = JSON.stringify(emptyPage);
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(body, { headers: { "Content-Type": "application/json" } }));
+    global.fetch = mockFetch;
+    return mockFetch;
+  };
+
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL((url as Request).url).searchParams;
+  };
+
+  it("sends the combined search term as search, not user_email", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.userListCall("token", null, 1, 25, null, null, null, null, null, null, null, "a6f5c02b");
+
+    expect(lastParams(mockFetch).get("search")).toBe("a6f5c02b");
+    expect(lastParams(mockFetch).has("user_email")).toBe(false);
+  });
+
+  it("omits search when no search term is given and keeps user_email as before", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.userListCall("token", null, 1, 25, "ada@example.com");
+
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+    expect(lastParams(mockFetch).get("user_email")).toBe("ada@example.com");
+  });
+});
+
+describe("fetchMemoryList search serialization", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const emptyPage = { memories: [], total: 0 };
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(emptyPage) } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com").searchParams;
+  };
+
+  it("sends the search box value as search and omits key_prefix and key", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { search: "mem-abc123", page: 1, pageSize: 50 });
+
+    const params = lastParams(mockFetch);
+    expect(params.get("search")).toBe("mem-abc123");
+    expect(params.has("key_prefix")).toBe(false);
+    expect(params.has("key")).toBe(false);
+    expect(params.get("page")).toBe("1");
+    expect(params.get("page_size")).toBe("50");
+  });
+
+  it("keeps key_prefix and key working when no search is given", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { keyPrefix: "user:" });
+    expect(lastParams(mockFetch).get("key_prefix")).toBe("user:");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+
+    await Networking.fetchMemoryList("token", { key: "user:profile" });
+    expect(lastParams(mockFetch).get("key")).toBe("user:profile");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+  });
+});
+
+describe("userFilterUICall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("forwards the search param to /user/filter/ui", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => "[]" } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userFilterUICall("sk-test", new URLSearchParams({ search: "svc" }));
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://localhost");
+    expect(parsed.pathname).toContain("/user/filter/ui");
+    expect(parsed.searchParams.get("search")).toBe("svc");
+  });
+});
+
+describe("schema-bound dashboard responses", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps null plugin metadata and source maps from the API", async () => {
+    const plugin = {
+      id: "plugin-1",
+      name: "test-skill",
+      enabled: true,
+      version: null,
+      description: null,
+      created_at: null,
+      updated_at: null,
+      keywords: null,
+      author: null,
+      source: { source: "github", repo: "org/repo" },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ plugins: [plugin], count: 1 }))));
+    const result = await Networking.getClaudeCodePluginsList("explicit-token");
+    expect(result.plugins[0]).toEqual(plugin);
+  });
+
+  it("validates agent metadata at the HTTP boundary", async () => {
+    const agent = {
+      agent_id: "agent-1",
+      agent_name: "agent",
+      enabled: true,
+      execution_mode: "autonomous",
+      identity_managed: false,
+      jwt_auth_configured: false,
+      agent_card_params: {},
+      litellm_params: { model: 42 },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([agent]))));
+    await expect(Networking.getAgentsList("explicit-token")).rejects.toThrow();
+  });
+
+  it("keeps nullable user fields without asserting they are strings", async () => {
+    const user = { user_id: "user-1", user_email: null, user_role: null, created_at: null };
+    const page = { users: [user], total: 1, page: 1, page_size: 25, total_pages: 1 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(page))));
+    const result = await Networking.userListCall("explicit-token");
+    expect(result.users[0]).toEqual(user);
+  });
+});
+
+describe("modelCostMap", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the catalog-only map when catalogOnly is set and the full map otherwise", async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({})));
+    vi.stubGlobal("fetch", mockFetch);
+
+    await Networking.modelCostMap(true);
+    await Networking.modelCostMap();
+
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/public\/litellm_model_cost_map\?catalog_only=true$/);
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/public\/litellm_model_cost_map$/);
   });
 });

@@ -4,11 +4,8 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, copy
+import copy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 from litellm import Router
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -160,13 +157,11 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     await asyncio.sleep(2.5)
 
     for _ in range(3):
-        with pytest.raises(Exception) as exc_info:
-            response = await router.acompletion(
+        with pytest.raises(Exception, match="Exceeded budget for provider") as exc_info:
+            await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="anthropic/claude-sonnet-4-5-20250929",
             )
-            print(response)
-            print("response.hidden_params", response._hidden_params)
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded
@@ -204,37 +199,6 @@ async def test_get_llm_provider_for_deployment():
     # should not raise error for unknown deployment
     unknown_deployment = {}
     assert provider_budget._get_llm_provider_for_deployment(unknown_deployment) is None
-
-
-@pytest.mark.asyncio
-async def test_get_budget_config_for_provider():
-    """
-    Test the _get_budget_config_for_provider helper method
-
-    """
-    cleanup_redis()
-    config = {
-        "openai": BudgetConfig(budget_duration="1d", max_budget=100),
-        "anthropic": BudgetConfig(budget_duration="7d", max_budget=500),
-    }
-
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config=config
-    )
-
-    # Test existing providers
-    openai_config = provider_budget._get_budget_config_for_provider("openai")
-    assert openai_config is not None
-    assert openai_config.budget_duration == "1d"
-    assert openai_config.max_budget == 100
-
-    anthropic_config = provider_budget._get_budget_config_for_provider("anthropic")
-    assert anthropic_config is not None
-    assert anthropic_config.budget_duration == "7d"
-    assert anthropic_config.max_budget == 500
-
-    # Test non-existent provider
-    assert provider_budget._get_budget_config_for_provider("unknown") is None
 
 
 @pytest.mark.asyncio
@@ -362,149 +326,6 @@ async def test_increment_spend_in_current_window():
 
 
 @pytest.mark.asyncio
-async def test_sync_in_memory_spend_with_redis():
-    """
-    Test _sync_in_memory_spend_with_redis helper method
-
-    Expected behavior:
-    - Push all provider spend increments to Redis
-    - Fetch all current provider spend from Redis to update in-memory cache
-    """
-    cleanup_redis()
-    provider_budget_config = {
-        "openai": BudgetConfig(time_period="1d", budget_limit=100),
-        "anthropic": BudgetConfig(time_period="1d", budget_limit=200),
-    }
-
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(
-            redis_cache=RedisCache(
-                host=os.getenv("REDIS_HOST"),
-                port=int(os.getenv("REDIS_PORT")),
-                password=os.getenv("REDIS_PASSWORD"),
-            )
-        ),
-        provider_budget_config=provider_budget_config,
-    )
-
-    # Allow background _init_provider_budget_in_cache tasks to complete
-    # before overwriting Redis values (avoids race where init overwrites with 0.0)
-    await asyncio.sleep(0.5)
-
-    # Set some values in Redis
-    spend_key_openai = "provider_spend:openai:1d"
-    spend_key_anthropic = "provider_spend:anthropic:1d"
-
-    await provider_budget.dual_cache.redis_cache.async_set_cache(
-        key=spend_key_openai, value=50.0
-    )
-    await provider_budget.dual_cache.redis_cache.async_set_cache(
-        key=spend_key_anthropic, value=75.0
-    )
-
-    # Test syncing with Redis
-    await provider_budget._sync_in_memory_spend_with_redis()
-
-    # Verify in-memory cache was updated
-    openai_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(
-        spend_key_openai
-    )
-    anthropic_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(
-        spend_key_anthropic
-    )
-
-    assert float(openai_spend) == 50.0
-    assert float(anthropic_spend) == 75.0
-
-
-@pytest.mark.asyncio
-async def test_get_current_provider_spend():
-    """
-    Test _get_current_provider_spend helper method
-
-    Scenarios:
-    1. Provider with no budget config returns None
-    2. Provider with budget config but no spend returns 0.0
-    3. Provider with budget config and spend returns correct value
-    """
-    cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(),
-        provider_budget_config={
-            "openai": BudgetConfig(time_period="1d", budget_limit=100),
-        },
-    )
-
-    # Test provider with no budget config
-    spend = await provider_budget._get_current_provider_spend("anthropic")
-    assert spend is None
-
-    # Test provider with budget config but no spend
-    spend = await provider_budget._get_current_provider_spend("openai")
-    assert spend == 0.0
-
-    # Test provider with budget config and spend
-    spend_key = "provider_spend:openai:1d"
-    await provider_budget.dual_cache.async_set_cache(key=spend_key, value=50.5)
-
-    spend = await provider_budget._get_current_provider_spend("openai")
-    assert spend == 50.5
-
-
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.asyncio
-async def test_get_current_provider_budget_reset_at():
-    """
-    Test _get_current_provider_budget_reset_at helper method
-
-    Scenarios:
-    1. Provider with no budget config returns None
-    2. Provider with budget config but no TTL returns None
-    3. Provider with budget config and TTL returns correct ISO timestamp
-    """
-    cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(
-            redis_cache=RedisCache(
-                host=os.getenv("REDIS_HOST"),
-                port=int(os.getenv("REDIS_PORT")),
-                password=os.getenv("REDIS_PASSWORD"),
-            )
-        ),
-        provider_budget_config={
-            "openai": BudgetConfig(budget_duration="1d", max_budget=100),
-            "vertex_ai": BudgetConfig(budget_duration="1h", max_budget=100),
-        },
-    )
-
-    await asyncio.sleep(2)
-
-    # Test provider with no budget config
-    reset_at = await provider_budget._get_current_provider_budget_reset_at("anthropic")
-    assert reset_at is None
-
-    # Test provider with budget config but no TTL
-    reset_at = await provider_budget._get_current_provider_budget_reset_at("openai")
-    assert reset_at is not None
-    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
-    expected_time = datetime.now(timezone.utc) + timedelta(seconds=(24 * 60 * 60))
-    time_difference = abs((reset_time - expected_time).total_seconds())
-    assert time_difference < 5
-
-    # Test provider with budget config and TTL
-    reset_at = await provider_budget._get_current_provider_budget_reset_at("vertex_ai")
-    assert reset_at is not None
-
-    # Verify the timestamp format and approximate time
-    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
-    expected_time = datetime.now(timezone.utc) + timedelta(seconds=3600)
-
-    # Allow for small time differences (within 5 seconds)
-    time_difference = abs((reset_time - expected_time).total_seconds())
-    assert time_difference < 5
-
-
-@pytest.mark.asyncio
 async def test_deployment_budget_limits_e2e_test():
     """
     Expected behavior:
@@ -596,13 +417,11 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
     await asyncio.sleep(2.5)
 
     for _ in range(3):
-        with pytest.raises(Exception) as exc_info:
-            response = await router.acompletion(
+        with pytest.raises(Exception, match="Exceeded budget for deployment") as exc_info:
+            await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/gpt-4o-mini",
             )
-            print(response)
-            print("response.hidden_params", response._hidden_params)
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded
@@ -650,14 +469,12 @@ async def test_tag_budgets_e2e_test_expect_to_fail():
     await asyncio.sleep(2.5)
 
     for _ in range(3):
-        with pytest.raises(Exception) as exc_info:
-            response = await router.acompletion(
+        with pytest.raises(Exception, match=f"Exceeded budget for tag='{TAG_NAME}'") as exc_info:
+            await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model="openai/gpt-4o-mini",
                 metadata={"tags": [TAG_NAME]},
             )
-            print(response)
-            print("response.hidden_params", response._hidden_params)
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded

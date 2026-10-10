@@ -14,6 +14,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -29,6 +30,13 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")
         dynamic_api_key = api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     @staticmethod
     def _json_mode_convert_tool_response_to_message(
@@ -116,7 +124,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
 
         if base_model is not None:
-            returned_response._hidden_params["model"] = base_model
+            returned_response.hidden_params["model"] = base_model
         return returned_response
 
     def transform_response(
@@ -129,7 +137,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

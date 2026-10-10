@@ -213,18 +213,21 @@ whenever the password contains a URL-reserved character (@, /, ?, %, +,
 
 When `database.writer.useIAMAuth: true`, the chart injects
 IAM_TOKEN_DB_AUTH=true and omits DATABASE_PASSWORD — the entrypoint mints
-the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived IAM token
-instead of a static password.
+the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived AWS RDS IAM
+token instead of a static password. `database.writer.useAzureEntraAuth: true`
+does the same with AZURE_POSTGRESQL_AUTH=true and a Microsoft Entra ID token,
+for Azure Database for PostgreSQL. The two are mutually exclusive.
 
 The read replica is opt-in via `database.reader.host`. The chart emits
 DATABASE_HOST_READ_REPLICA / DATABASE_PORT_READ_REPLICA /
 DATABASE_NAME_READ_REPLICA (+ DATABASE_SCHEMA_READ_REPLICA) for both auth
 modes, plus DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for
-password auth. When `database.reader.useIAMAuth: true` it omits
+password auth. When `database.reader.useIAMAuth: true` (or
+`database.reader.useAzureEntraAuth: true`) it omits
 DATABASE_PASSWORD_READ_REPLICA and the entrypoint mints the reader URL the
-same way. Reader IAM only takes effect when the writer also uses IAM auth
-(the proxy gates URL minting on IAM_TOKEN_DB_AUTH, which only the writer
-sets).
+same way. Reader token auth only takes effect when the writer uses the same
+token source, since the proxy gates URL minting on the single global
+IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 */}}
 {{- define "litellm.serverEnv" -}}
 {{- $root := .root -}}
@@ -254,8 +257,22 @@ sets).
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
+{{- if and .useIAMAuth .useAzureEntraAuth }}
+{{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
+{{- end }}
 {{- if .useIAMAuth }}
 - name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
   value: "true"
 {{- else }}
 - name: DATABASE_PASSWORD
@@ -270,6 +287,9 @@ sets).
 {{- if and .useIAMAuth (not $root.Values.database.writer.useIAMAuth) }}
 {{- fail "database.reader.useIAMAuth requires database.writer.useIAMAuth: true (the proxy gates IAM URL minting on IAM_TOKEN_DB_AUTH, which is only set by the writer)" }}
 {{- end }}
+{{- if and .useAzureEntraAuth (not $root.Values.database.writer.useAzureEntraAuth) }}
+{{- fail "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)" }}
+{{- end }}
 - name: DATABASE_HOST_READ_REPLICA
   value: {{ .host | quote }}
 - name: DATABASE_PORT_READ_REPLICA
@@ -280,7 +300,7 @@ sets).
 - name: DATABASE_SCHEMA_READ_REPLICA
   value: {{ .schema | quote }}
 {{- end }}
-{{- if .useIAMAuth }}
+{{- if or .useIAMAuth .useAzureEntraAuth }}
 {{- if .passwordSecret.name }}
 - name: DATABASE_USER_READ_REPLICA
   valueFrom:
@@ -345,6 +365,20 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end }}
 {{- with $component.extraEnv }}
 {{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+*/}}
+{{- define "litellm.connectionPoolEnv" -}}
+{{- with .Values.database.connectionPool -}}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ required "database.connectionPool.maxDbConnections is required when the pool is enabled" .maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ required "database.connectionPool.maxClientConn is required when the pool is enabled" .maxClientConn | quote }}
 {{- end }}
 {{- end -}}
 
@@ -415,4 +449,146 @@ envFrom:
       name: {{ . }}
 {{- end }}
 {{- end }}
+{{- end -}}
+
+{{/*
+ingress-nginx's admission webhook rejects a dot in an Exact or Prefix path
+(strict-validate-path-type) and serves ImplementationSpecific as a plain
+prefix location, so a dotted path takes that type there.
+*/}}
+{{- define "litellm.ingress.pathType" -}}
+{{- if and (eq .controller "nginx") (contains "." .path) -}}
+ImplementationSpecific
+{{- else -}}
+{{- .pathType -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.lensWorker.image" -}}
+{{- include "lens.image" (dict "Values" .Values.lensWorker "Chart" .Subcharts.lens.Chart) -}}
+{{- end -}}
+
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- $mode := include "litellm.lens.mode" . -}}
+{{- if ne $mode "disabled" }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.serviceTokenSecret.name) -}}
+{{- fail "lensWorker.serviceTokenSecret.name is required for external Lens" -}}
+{{- end }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.gateway.secretName) -}}
+{{- fail "lensWorker.gateway.secretName is required for external Lens" -}}
+{{- end -}}
+- name: LITELLM_LENS_URL
+  value: {{ if eq $mode "external" }}{{ required "lensWorker.externalUrl is required for external Lens" .Values.lensWorker.externalUrl | quote }}{{ else }}{{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}{{ end }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ include "litellm.lensWorker.publicUrl" . | quote }}
+- name: LENS_GATEWAY_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.gatewaySecretName" . | quote }}
+      key: {{ .Values.lensWorker.gateway.secretKey | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.gatewaySecretName" -}}
+{{- .Values.lensWorker.gateway.secretName | default (printf "%s-lens-gateway" (include "litellm.fullname" . | trunc 50 | trimSuffix "-")) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and (eq (include "litellm.lens.mode" .) "bundled") .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if eq (include "litellm.lens.mode" .) "external" -}}
+{{- fail "lensWorker.publicUrl is required for external Lens" -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "litellm.lens.mode" -}}
+{{- $mode := .Values.lensWorker.mode | default (ternary "bundled" "disabled" .Values.lensWorker.enabled) -}}
+{{- if not (has $mode (list "bundled" "external" "disabled")) -}}
+{{- fail "lensWorker.mode must be bundled, external or disabled" -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "litellm.lens.render" -}}
+{{- $root := .root -}}
+{{- $values := mergeOverwrite (deepCopy $root.Subcharts.lens.Values) (deepCopy $root.Values.lensWorker) -}}
+{{- $_ := set $values "fullnameOverride" (printf "%s-lens-worker" (include "litellm.fullname" $root)) -}}
+{{- $_ := set $values "component" "lens-worker" -}}
+{{- $_ := set $values "nameOverride" (printf "%s-lens-worker" (include "litellm.name" $root | trunc 51 | trimSuffix "-")) -}}
+{{- $_ := set $values "imagePullSecrets" $root.Values.imagePullSecrets -}}
+{{- $_ := set $values.gateway "enabled" true -}}
+{{- $_ := set $values.gateway "generatedName" (include "litellm.lensWorker.gatewaySecretName" $root) -}}
+{{- $_ := set $values.clickhouse "nameOverride" (include "litellm.lensWorker.clickhouseName" $root) -}}
+{{- $_ := set $values.serviceTokenSecret "generatedName" (include "litellm.lensWorker.serviceTokenSecretName" $root) -}}
+{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default $root.Subcharts.lens.Values.publicUrl) -}}
+{{- if and (eq .resource "deployment") (or $root.Values.lensWorker.publicUrl $root.Values.lensWorker.ingress.enabled $root.Values.ingress.enabled) -}}
+{{- $ingestion := include "litellm.lensWorker.publicUrl" $root -}}
+{{- $_ := set $values "ingestionUrl" $ingestion -}}
+{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default (trimSuffix "/lens-ingest" $ingestion)) -}}
+{{- end -}}
+{{- include (printf "lens.%s" .resource) (dict "Values" $values "Release" $root.Release "Chart" $root.Subcharts.lens.Chart "Capabilities" $root.Capabilities) -}}
 {{- end -}}

@@ -11,18 +11,22 @@ fails that provider's row here.
 
 The per-provider classes below cover the OpenAI-compatible /chat/completions
 translation for providers customers reach by registering their own deployment
-via /model/new (Cohere, Gemini, hosted_vllm), each deleted on teardown.
+via /model/new (Cohere, Gemini, hosted_vllm, Anthropic), each deleted on teardown.
 """
 
 from __future__ import annotations
 
+import base64
 import os
+from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -42,8 +46,56 @@ pytestmark = pytest.mark.e2e
 
 COHERE_BACKEND = "cohere/command-r-08-2024"
 GEMINI_BACKEND = "gemini/gemini-2.5-flash"
+VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
+AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.4-nano"
+AZURE_OPENAI_API_VERSION: Final = "v1"
+AZURE_FOUNDRY_BACKEND: Final = "azure_ai/claude-haiku-4-5"
 OPENAI_BACKEND = "openai/gpt-5.6"
+ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
+VERTEX_MISTRAL_BACKEND: Final = "vertex_ai/mistral-small-2503"
+VERTEX_GPT_OSS_BACKEND: Final = "vertex_ai/openai/gpt-oss-120b-maas"
+VERTEX_PARTNER_BACKENDS: Final = (
+    pytest.param(
+        VERTEX_MISTRAL_BACKEND,
+        marks=(
+            pytest.mark.skip(
+                reason="the e2e Vertex project has no access to mistral-small-2503 (404 publisher model not found)"
+            ),
+            meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.VERTEX_AI,),
+                    models=(VERTEX_MISTRAL_BACKEND,),
+                    mode=Mode.STREAM,
+                )
+            ),
+        ),
+    ),
+    pytest.param(
+        VERTEX_GPT_OSS_BACKEND,
+        marks=(
+            pytest.mark.skip(reason="never served by the e2e Vertex project (60s read timeout, no headers)"),
+            meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.VERTEX_AI,),
+                    models=(VERTEX_GPT_OSS_BACKEND,),
+                    mode=Mode.STREAM,
+                )
+            ),
+        ),
+    ),
+)
+PDF_DOCUMENT_URL: Final = (
+    "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
+    "@d769e81c90d453240c61fc572cdb27fae06a89d0"
+    "/tests/llm_translation/fixtures/dummy.pdf"
+)
+PDF_DOCUMENT_TEXT: Final = "test pdf file"
 
 
 class _StreamToolCallFunction(BaseModel):
@@ -79,18 +131,22 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
     return name, arguments
 
 
-CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
+_FIXTURES_DIR: Final = Path(__file__).parent / "fixtures"
+CAT_IMAGE: Final = _FIXTURES_DIR / "cat.jpg"
 OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
-# OpenAI caches a shared prompt prefix once it exceeds ~1024 tokens; this is well
-# past that, so a repeat call reports cached prompt tokens.
+
+def _cat_image_data_url() -> str:
+    return "data:image/jpeg;base64," + base64.b64encode(CAT_IMAGE.read_bytes()).decode()
+
+
 def _vision_messages() -> list[ChatMessage]:
     return [
         ChatMessage(
             role="user",
             content=[
                 TextContentPart(text="What animal is in this image? Answer in one word."),
-                ImageContentPart(image_url=ImageUrl(url=CAT_IMAGE_URL)),
+                ImageContentPart(image_url=ImageUrl(url=_cat_image_data_url())),
             ],
         )
     ]
@@ -98,10 +154,11 @@ def _vision_messages() -> list[ChatMessage]:
 
 def _assert_describes_cat(response: ChatResponse) -> None:
     assert response.choices, f"vision returned no choices: {response}"
-    message = response.choices[0].message
-    content = (message.content if message else None) or ""
-    assert "cat" in content.lower() or "feline" in content.lower(), (
-        f"vision response did not describe the image: {content[:200]}"
+    choice = response.choices[0]
+    content = (choice.message.content if choice.message else None) or ""
+    assert any(term in content.lower() for term in ("cat", "feline", "kitten", "kitty")), (
+        f"vision response did not describe the image: {content[:200]!r} "
+        f"(finish_reason={choice.finish_reason!r}, usage={response.usage})"
     )
 
 
@@ -184,23 +241,61 @@ _PERSON_SCHEMA: dict[str, object] = {
     },
 }
 
-CHAT_MODELS: tuple[tuple[str, str], ...] = (
-    ("gpt-5.5", "openai"),
-    ("claude-haiku-4-5", "anthropic"),
-    ("gemini-2.5-flash", "gemini"),
+OPENAI_CHAT_MODEL: Final = "gpt-5.5"
+ANTHROPIC_CHAT_MODEL: Final = "claude-haiku-4-5"
+GEMINI_FLASH_MODEL: Final = "gemini-2.5-flash"
+
+CHAT_MODELS: Final = (
+    pytest.param(
+        OPENAI_CHAT_MODEL,
+        "openai",
+        id=f"{OPENAI_CHAT_MODEL}-openai",
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.CHAT_COMPLETIONS,
+                providers=(Provider.OPENAI,),
+                models=(OPENAI_CHAT_MODEL,),
+                mode=Mode.NONSTREAM,
+            )
+        ),
+    ),
+    pytest.param(
+        ANTHROPIC_CHAT_MODEL,
+        "anthropic",
+        id=f"{ANTHROPIC_CHAT_MODEL}-anthropic",
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.CHAT_COMPLETIONS,
+                providers=(Provider.ANTHROPIC,),
+                models=(ANTHROPIC_CHAT_MODEL,),
+                mode=Mode.NONSTREAM,
+            )
+        ),
+    ),
+    pytest.param(
+        GEMINI_FLASH_MODEL,
+        "gemini",
+        id=f"{GEMINI_FLASH_MODEL}-gemini",
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.CHAT_COMPLETIONS,
+                providers=(Provider.GEMINI,),
+                models=(GEMINI_FLASH_MODEL,),
+                mode=Mode.NONSTREAM,
+            )
+        ),
+    ),
 )
 
 
 class TestChatCompletionsRegression:
-    @pytest.mark.parametrize(
-        ("model", "route"),
-        CHAT_MODELS,
-        ids=[f"{model}-{route}" for model, route in CHAT_MODELS],
-    )
+    @pytest.mark.parametrize(("model", "route"), CHAT_MODELS)
     @pytest.mark.covers(
         "llm.chat_completions.openai.basic.nonstream.works",
         "llm.chat_completions.anthropic.basic.nonstream.works",
-        "llm.chat_completions.vertex.basic.nonstream.works",
         exercised_on=[],
     )
     def test_chat_returns_real_completion(
@@ -240,6 +335,15 @@ class TestCohereChat:
     @pytest.mark.covers(
         "llm.chat_completions.cohere.basic.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.COHERE,),
+            models=(COHERE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_cohere_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -285,6 +389,15 @@ class TestGeminiChatCompletions:
         "llm.chat_completions.gemini.basic.nonstream.cost_logged",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(GEMINI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_gemini_chat_returns_content_and_logs_cost(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -308,7 +421,8 @@ class TestGeminiChatCompletions:
                             content=f"Reply with the single word pong. marker={tag}",
                         )
                     ],
-                    max_tokens=32,
+                    max_tokens=64,
+                    reasoning_effort="none",
                 ),
             )
         )
@@ -327,12 +441,316 @@ class TestGeminiChatCompletions:
         assert row.status == "success", f"gemini chat spend status={row.status!r}"
 
 
+class TestVertexChatCompletions:
+    def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
+        model = f"{prefix}-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=VERTEX_BACKEND,
+                vertex_project="os.environ/VERTEXAI_PROJECT",
+                vertex_location="us-central1",
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return model
+
+    @pytest.mark.covers(
+        "llm.chat_completions.vertex.basic.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_vertex_chat_returns_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-vertex-chat")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"Reply with the single word pong. {unique_marker()}",
+                        )
+                    ],
+                    max_tokens=32,
+                ),
+            )
+        )
+        assert response.choices, f"vertex chat returned no choices: {response}"
+        content = response.choices[0].message.content if response.choices[0].message else None
+        assert content and content.strip(), f"vertex chat returned empty content: {response}"
+
+    @pytest.mark.covers(
+        "llm.chat_completions.vertex.tool_use.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_vertex_chat_returns_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-vertex-tool")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content="What is the weather in San Francisco? Use the get_weather tool.",
+                        )
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    tool_choice="required",
+                    max_tokens=128,
+                ),
+            )
+        )
+        _assert_weather_tool_call(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.vertex.vision.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_vertex_chat_vision_describes_image(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-vertex-vision")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32, reasoning_effort="none")
+            )
+        )
+        _assert_describes_cat(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.vertex.basic.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
+    def test_vertex_chat_streams_real_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-vertex-stream")
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content=f"Count from 1 to 5, one number per line. {unique_marker()}",
+                    )
+                ],
+                max_tokens=64,
+                stream=True,
+            ),
+        )
+        _assert_streamed_completion(result)
+
+
+class TestAzureOpenAIChatCompletions:
+    def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
+        model = f"{prefix}-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=AZURE_OPENAI_BACKEND,
+                api_base="os.environ/AZURE_API_BASE",
+                api_key="os.environ/AZURE_API_KEY",
+                api_version=AZURE_OPENAI_API_VERSION,
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return model
+
+    @pytest.mark.covers(
+        "llm.chat_completions.azure_openai.basic.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_azure_openai_chat_returns_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-azure-openai-chat")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"Reply with the single word pong. {unique_marker()}",
+                        )
+                    ],
+                    max_tokens=32,
+                ),
+            )
+        )
+        assert response.choices, f"azure openai chat returned no choices: {response}"
+        content = response.choices[0].message.content if response.choices[0].message else None
+        assert content and content.strip(), f"azure openai chat returned empty content: {response}"
+
+    @pytest.mark.covers(
+        "llm.chat_completions.azure_openai.tool_use.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_azure_openai_chat_returns_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-azure-openai-tool")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content="What is the weather in San Francisco? Use the get_weather tool.",
+                        )
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    tool_choice="required",
+                    max_tokens=128,
+                ),
+            )
+        )
+        _assert_weather_tool_call(response)
+
+
+class TestAzureFoundryChatCompletions:
+    @pytest.mark.covers(
+        "llm.chat_completions.azure_foundry.basic.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_azure_foundry_chat_returns_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-azure-foundry-chat-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=AZURE_FOUNDRY_BACKEND,
+                api_base="os.environ/AZURE_AI_API_BASE",
+                api_key="os.environ/AZURE_AI_API_KEY",
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"Reply with the single word pong. {unique_marker()}",
+                        )
+                    ],
+                    max_tokens=32,
+                ),
+            )
+        )
+        assert response.choices, f"azure foundry chat returned no choices: {response}"
+        content = response.choices[0].message.content if response.choices[0].message else None
+        assert content and content.strip(), f"azure foundry chat returned empty content: {response}"
+
+
 class TestHostedVllmChat:
     """hosted_vllm (self-hosted OpenAI-compatible server) via /chat/completions."""
 
     @pytest.mark.covers(
         "llm.chat_completions.hosted_vllm.basic.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.HOSTED_VLLM,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_hosted_vllm_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
@@ -389,6 +807,15 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.basic.stream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_openai_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -415,6 +842,15 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.basic.nonstream.cost_logged",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_chat_logs_cost(
         self, client: PassthroughClient, resources: ResourceManager
@@ -449,6 +885,16 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_openai_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -479,6 +925,16 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.structured_output.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_chat_structured_output_conforms_to_schema(
         self, client: PassthroughClient, resources: ResourceManager
@@ -512,6 +968,16 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.thinking.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_chat_reasoning_reports_reasoning_tokens(
         self, client: PassthroughClient, resources: ResourceManager
@@ -563,6 +1029,16 @@ class TestOpenAIChatCompletions:
         "llm.chat_completions.openai.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_VISION_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_openai_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -579,6 +1055,16 @@ class TestOpenAIChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
     )
     def test_openai_chat_streams_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -627,6 +1113,15 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.basic.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_converse_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -651,6 +1146,15 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.basic.stream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_bedrock_converse_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -673,6 +1177,16 @@ class TestBedrockConverseChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.tool_use.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_converse_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
@@ -699,6 +1213,16 @@ class TestBedrockConverseChatCompletions:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.thinking.nonstream.works",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_converse_chat_returns_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
@@ -730,6 +1254,16 @@ class TestBedrockConverseChatCompletions:
         "llm.chat_completions.bedrock_converse.vision.nonstream.works",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_converse_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -738,3 +1272,337 @@ class TestBedrockConverseChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_NOVA_BACKEND,),
+            capabilities=(Capability.PDF_INPUT,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_converse_reads_a_pdf_sent_by_url(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-bedrock-document-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, _bedrock_params().model_copy(update={"model": BEDROCK_NOVA_BACKEND})
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=[
+                                TextContentPart(text="What title text is in this document? Reply with it only."),
+                                ImageContentPart(image_url=ImageUrl(url=PDF_DOCUMENT_URL)),
+                            ],
+                        )
+                    ],
+                    max_tokens=64,
+                ),
+            )
+        )
+        message = response.choices[0].message if response.choices else None
+        content = (message.content if message else "") or ""
+        assert PDF_DOCUMENT_TEXT in content.lower(), f"model did not read the PDF document block: {response}"
+
+
+class _PartnerDelta(BaseModel):
+    role: str | None = None
+    content: str | None = None
+
+
+class _PartnerChoice(BaseModel):
+    delta: _PartnerDelta = _PartnerDelta()
+    finish_reason: str | None = None
+
+
+class _PartnerChunk(BaseModel):
+    choices: list[_PartnerChoice] = []
+
+
+class TestVertexPartnerChatCompletions:
+    @pytest.mark.parametrize("backend", VERTEX_PARTNER_BACKENDS)
+    def test_vertex_partner_model_streams_openai_shaped_chunks(
+        self, client: PassthroughClient, resources: ResourceManager, backend: str
+    ) -> None:
+        model = f"e2e-vertex-partner-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=backend, vertex_project="os.environ/VERTEXAI_PROJECT", vertex_location="us-central1"
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=256,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.is_streaming, f"stream was not established: {result}"
+        assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
+        assert result.stream_done, "stream must terminate with [DONE]"
+        chunks = tuple(_PartnerChunk.model_validate_json(event) for event in result.stream_events)
+        choices = tuple(choice for chunk in chunks for choice in chunk.choices)
+        assert choices and choices[0].delta.role == "assistant", (
+            f"first chunk must carry the assistant role: {chunks[:2]}"
+        )
+        terminal = tuple(index for index, choice in enumerate(choices) if choice.finish_reason is not None)
+        assert len(terminal) == 1, f"expected exactly one terminal choice: {[c.finish_reason for c in choices]}"
+        text = "".join(choice.delta.content or "" for choice in choices[: terminal[0] + 1])
+        assert "5" in text, f"streamed text lost the requested content: {text!r}"
+
+
+class TestAnthropicChatCompletions:
+    """Anthropic via the OpenAI-compatible /chat/completions path, the translation
+    customers on the OpenAI SDK rely on when they route to Claude. The streamed call
+    must deliver real content deltas, and a tool-forced call must come back as a
+    well-formed tool_call on both the non-streamed and streamed paths.
+    """
+
+    def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
+        model = f"{prefix}-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return model
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.structured_output.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_chat_structured_output_conforms_to_schema(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-schema")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content="Extract the person. John Doe is 42 years old.",
+                        )
+                    ],
+                    response_format=_PERSON_SCHEMA,
+                    max_tokens=128,
+                ),
+            )
+        )
+        assert response.choices, f"anthropic structured output returned no choices: {response}"
+        message = response.choices[0].message
+        content = message.content if message else None
+        assert content, f"anthropic structured output returned empty content: {response}"
+        person = _Person.model_validate_json(content)
+        assert person.name.strip() and person.age == 42, f"anthropic schema output was wrong: {person}"
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.thinking.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_chat_returns_thinking_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-thinking")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=(
+                                "Prove that the sum of two odd integers is even, then find the smallest prime "
+                                "greater than 100 such that p+2 is also prime."
+                            ),
+                        )
+                    ],
+                    thinking=ThinkingParam(type="enabled", budget_tokens=1024),
+                    max_tokens=2048,
+                ),
+            )
+        )
+        assert response.choices, f"anthropic thinking returned no choices: {response}"
+        message = response.choices[0].message
+        assert message and message.content and message.content.strip(), (
+            f"anthropic thinking returned no answer content: {response}"
+        )
+        assert message.reasoning_content and message.reasoning_content.strip(), (
+            f"anthropic thinking returned no reasoning content: {response}"
+        )
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.vision.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_chat_vision_describes_image(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-vision")
+        key = resources.key()
+
+        response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
+        _assert_describes_cat(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.basic.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
+    def test_anthropic_chat_streams_real_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-stream")
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=64,
+                stream=True,
+            ),
+        )
+        _assert_streamed_completion(result)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.tool_use.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_anthropic_chat_returns_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-tool")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    tool_choice="required",
+                    max_tokens=128,
+                ),
+            )
+        )
+        _assert_weather_tool_call(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.tool_use.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
+    )
+    def test_anthropic_chat_streams_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-tool-stream")
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                ],
+                tools=[_WEATHER_TOOL],
+                tool_choice="required",
+                max_tokens=128,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.is_streaming, f"tool stream was not established: {result}"
+        assert result.stream_error is None, f"tool stream carried an error event: {result.stream_error}"
+        name, arguments = _streamed_tool_call(result.stream_events)
+        assert name == "get_weather", f"streamed tool call named {name!r}: {result.stream_events[:5]}"
+        args = _WeatherArgs.model_validate_json(arguments)
+        assert args.location.strip(), f"streamed tool call arguments missing location: {arguments!r}"

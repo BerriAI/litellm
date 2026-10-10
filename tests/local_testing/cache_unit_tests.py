@@ -1,7 +1,5 @@
 from abc import ABC, abstractmethod
 from litellm.caching import LiteLLMCacheType
-import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -9,11 +7,7 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random
@@ -34,7 +28,7 @@ class LLMCachingUnitTests(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_cache_completion(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         random_number = random.randint(
             1, 100000
@@ -148,7 +142,7 @@ class LLMCachingUnitTests(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_disk_cache_embedding(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         random_number = random.randint(
             1, 100000

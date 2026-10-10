@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderWithProviders as render } from "@/../tests/test-utils";
 import ChatLayout from "./layout";
 
-const { mockUseAuthorized, mockUseUISettings, mockReplace, mockMigratedHref, state } = vi.hoisted(() => {
+const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } = vi.hoisted(() => {
   const state = {
     enableChatUI: false,
     isUISettingsLoading: false,
@@ -10,7 +11,7 @@ const { mockUseAuthorized, mockUseUISettings, mockReplace, mockMigratedHref, sta
   return {
     state,
     mockReplace: vi.fn(),
-    mockMigratedHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
+    mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseAuthorized: vi.fn(() => ({
       accessToken: "token-123",
       userRole: "Internal User",
@@ -30,7 +31,7 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
-vi.mock("@/utils/migratedPages", () => ({ migratedHref: mockMigratedHref }));
+vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
 vi.mock("@/components/navbar", () => ({ default: () => <div data-testid="navbar" /> }));
 vi.mock("@/contexts/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -47,7 +48,7 @@ describe("ChatLayout", () => {
     state.enableChatUI = false;
     state.isUISettingsLoading = false;
     mockReplace.mockClear();
-    mockMigratedHref.mockClear();
+    mockUiHref.mockClear();
   });
 
   it("renders the chat shell when enable_chat_ui is on", () => {

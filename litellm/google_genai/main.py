@@ -5,7 +5,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.constants import request_timeout
@@ -17,6 +17,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
@@ -46,16 +47,16 @@ def _mark_async_entrypoint(logging_obj: LiteLLMLoggingObj | None, marker: str, i
         logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
 
 
-class GenerateContentSetupResult(BaseModel):
+class GenerateContentSetupResult(LiteLLMBaseModel):
     """Internal Type - Result of setting up a generate content call"""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     model: str
-    request_body: dict[str, Any]
+    request_body: dict[str, object]
     custom_llm_provider: str
     generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig | None
-    generate_content_config_dict: dict[str, Any]
+    generate_content_config_dict: dict[str, object]
     native_request_fields: dict[str, object]
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
@@ -68,7 +69,7 @@ class GenerateContentHelper:
     @staticmethod
     def mock_generate_content_response(
         mock_response: str = "This is a mock response from Google GenAI generate_content.",
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Mock response for generate_content for testing purposes"""
         return {
             "text": mock_response,
@@ -239,9 +240,9 @@ async def agenerate_content(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -307,9 +308,9 @@ def generate_content(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -397,9 +398,9 @@ async def agenerate_content_stream(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -492,9 +493,9 @@ def generate_content_stream(
     tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,

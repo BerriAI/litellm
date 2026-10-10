@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Eye, EyeOff } from "lucide-react";
-import NotificationManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
@@ -78,9 +78,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
     };
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationManager.success("Email settings updated successfully");
+      toast.success("Email settings updated successfully");
     } catch (error) {
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 
@@ -161,9 +161,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                 if (!accessToken) return;
                 try {
                   await serviceHealthCheck(accessToken, "email");
-                  NotificationManager.success("Email test triggered. Check your configured email inbox/logs.");
+                  toast.success("Email test triggered. Check your configured email inbox/logs.");
                 } catch (error) {
-                  NotificationManager.fromBackend(error);
+                  toast.fromError(error);
                 }
               }}
             >

@@ -1,7 +1,14 @@
 import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { loggingOnlyContinueFromParams, loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
+import type { LoggingOnlyScope, LoggingOnlyScopeChoice } from "../guardrail_info_helpers";
+import {
+  CustomCodeLoggingOnlyScopeSelect,
+  getCustomCodeLoggingOnlyScopeCreate,
+  getCustomCodeLoggingOnlyScopeUpdate,
+} from "./CustomCodeLoggingOnlyScope";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -30,153 +37,33 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-
-// Code templates
-const CODE_TEMPLATES = {
-  empty: {
-    name: "Empty Template",
-    code: `async def apply_guardrail(inputs, request_data, input_type):
-    # inputs: {texts, images, tools, tool_calls, structured_messages, model}
-    # request_data: {model, user_id, team_id, end_user_id, metadata}
-    # input_type: "request" or "response"
-    return allow()`,
-  },
-  blockSSN: {
-    name: "Block SSN",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    for text in inputs["texts"]:
-        if regex_match(text, r"\\d{3}-\\d{2}-\\d{4}"):
-            return block("SSN detected")
-    return allow()`,
-  },
-  redactEmail: {
-    name: "Redact Emails",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
-    modified = []
-    for text in inputs["texts"]:
-        modified.append(regex_replace(text, pattern, "[EMAIL REDACTED]"))
-    return modify(texts=modified)`,
-  },
-  blockSQL: {
-    name: "Block SQL Injection",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    if input_type != "request":
-        return allow()
-    for text in inputs["texts"]:
-        if contains_code_language(text, ["sql"]):
-            return block("SQL code not allowed")
-    return allow()`,
-  },
-  validateJSON: {
-    name: "Validate JSON",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    if input_type != "response":
-        return allow()
-    
-    schema = {"type": "object", "required": ["name", "value"]}
-    
-    for text in inputs["texts"]:
-        obj = json_parse(text)
-        if obj is None:
-            return block("Invalid JSON response")
-        if not json_schema_valid(obj, schema):
-            return block("Response missing required fields")
-    return allow()`,
-  },
-  externalAPI: {
-    name: "External API Check (async)",
-    code: `async def apply_guardrail(inputs, request_data, input_type):
-    # Call an external moderation API (async for non-blocking)
-    for text in inputs["texts"]:
-        response = await http_post(
-            "https://api.example.com/moderate",
-            body={"text": text, "user_id": request_data["user_id"]},
-            headers={"Authorization": "Bearer YOUR_API_KEY"},
-            timeout=10
-        )
-        
-        if not response["success"]:
-            # API call failed, allow by default or block
-            return allow()
-        
-        if response["body"].get("flagged"):
-            return block(response["body"].get("reason", "Content flagged"))
-    
-    return allow()`,
-  },
-};
-
-// Available primitives organized by category
-const PRIMITIVES = {
-  "Return Values": [
-    { name: "allow()", desc: "Let request/response through" },
-    { name: "block(reason)", desc: "Reject with message" },
-    { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content" },
-  ],
-  "HTTP Requests (async)": [
-    { name: "await http_request(url, method, headers, body)", desc: "Make async HTTP request" },
-    { name: "await http_get(url, headers)", desc: "Async GET request" },
-    { name: "await http_post(url, body, headers)", desc: "Async POST request" },
-  ],
-  "Regex Functions": [
-    { name: "regex_match(text, pattern)", desc: "Returns True if pattern found" },
-    { name: "regex_replace(text, pattern, replacement)", desc: "Replace all matches" },
-    { name: "regex_find_all(text, pattern)", desc: "Return list of matches" },
-  ],
-  "JSON Functions": [
-    { name: "json_parse(text)", desc: "Parse JSON string, returns None on error" },
-    { name: "json_stringify(obj)", desc: "Convert to JSON string" },
-    { name: "json_schema_valid(obj, schema)", desc: "Validate against JSON schema" },
-  ],
-  "URL Functions": [
-    { name: "extract_urls(text)", desc: "Extract all URLs from text" },
-    { name: "is_valid_url(url)", desc: "Check if URL is valid" },
-    { name: "all_urls_valid(text)", desc: "Check all URLs in text are valid" },
-  ],
-  "Code Detection": [
-    { name: "detect_code(text)", desc: "Returns True if code detected" },
-    { name: "detect_code_languages(text)", desc: "Returns list of detected languages" },
-    { name: 'contains_code_language(text, ["sql"])', desc: "Check for specific languages" },
-  ],
-  "Text Utilities": [
-    { name: "contains(text, substring)", desc: "Check if substring exists" },
-    { name: "contains_any(text, [substr1, substr2])", desc: "Check if any substring exists" },
-    { name: "word_count(text)", desc: "Count words" },
-    { name: "char_count(text)", desc: "Count characters" },
-    { name: "lower(text) / upper(text) / trim(text)", desc: "String transforms" },
-  ],
-};
-
-const MODE_OPTIONS = [
-  { value: "pre_call", label: "pre_call (Request)" },
-  { value: "post_call", label: "post_call (Response)" },
-  { value: "during_call", label: "during_call (Parallel)" },
-  { value: "logging_only", label: "logging_only" },
-  { value: "pre_mcp_call", label: "pre_mcp_call (Before MCP Tool Call)" },
-  { value: "post_mcp_call", label: "post_mcp_call (After MCP Tool Call)" },
-  { value: "during_mcp_call", label: "during_mcp_call (During MCP Tool Call)" },
-];
-
-const TEMPLATE_ITEMS = Object.entries(CODE_TEMPLATES).map(([key, template]) => ({
-  value: key,
-  label: template.name,
-}));
-
-type ModeOption = (typeof MODE_OPTIONS)[number];
-
-const MODE_OPTION_BY_VALUE: Record<string, ModeOption> = Object.fromEntries(
-  MODE_OPTIONS.map((option) => [option.value, option]),
-);
+import { StreamScopeFields } from "../StreamScopeFields";
+import {
+  formatGuardrailMode,
+  streamScopeByModeFromConfig,
+  streamScopeForUpdate,
+  streamScopePayload,
+  type GuardrailStreamScope,
+} from "../guardrail_info_helpers";
+import {
+  CODE_TEMPLATES,
+  MODE_OPTION_BY_VALUE,
+  MODE_OPTIONS,
+  PRIMITIVES,
+  TEMPLATE_ITEMS,
+  type ModeOption,
+} from "./custom_code_catalog";
 
 // Data for editing an existing guardrail
+
 export interface EditGuardrailData {
   guardrail_id: string;
   guardrail_name: string;
   litellm_params: {
-    mode?: string | string[];
+    mode?: string | string[] | Record<string, unknown>;
     default_on?: boolean;
     custom_code?: string;
+    logging_only_scope?: LoggingOnlyScope | null;
     [key: string]: any;
   };
 }
@@ -195,6 +82,9 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
+  const [streamScopeByMode, setStreamScopeByMode] = useState<Record<string, GuardrailStreamScope>>({});
+  const [loggingOnlyScopeChoice, setLoggingOnlyScopeChoice] = useState<LoggingOnlyScopeChoice>("default");
+  const [loggingOnlyContinue, setLoggingOnlyContinue] = useState(false);
   const [defaultOn, setDefaultOn] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
@@ -305,11 +195,14 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
-  // Normalize mode from API (string or string[]) to string[]
-  const normalizeMode = (m: string | string[] | undefined): string[] => {
+  // Normalize mode from API (string or string[]) to string[].
+  // A tag-scoped mode dict ({ tags, default }) is managed outside this editor, so it
+  // contributes no editable modes and is displayed read-only instead.
+  const normalizeMode = (m: string | string[] | Record<string, unknown> | undefined): string[] => {
     if (m === undefined || m === null) return ["pre_call"];
     if (Array.isArray(m)) return m.length ? m : ["pre_call"];
-    return [m];
+    if (typeof m === "string") return [m];
+    return [];
   };
 
   // Reset form when modal opens or editData changes
@@ -319,6 +212,14 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         // Edit mode: populate with existing data
         setGuardrailName(editData.guardrail_name || "");
         setMode(normalizeMode(editData.litellm_params?.mode));
+        setStreamScopeByMode(
+          streamScopeByModeFromConfig(
+            editData.litellm_params?.stream_scope,
+            normalizeMode(editData.litellm_params?.mode),
+          ),
+        );
+        setLoggingOnlyScopeChoice(loggingOnlyScopeToChoice(editData.litellm_params?.logging_only_scope));
+        setLoggingOnlyContinue(loggingOnlyContinueFromParams(editData.litellm_params));
         setDefaultOn(editData.litellm_params?.default_on || false);
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
@@ -326,6 +227,9 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         // Create mode: reset to defaults
         setGuardrailName("");
         setMode(["pre_call"]);
+        setStreamScopeByMode({});
+        setLoggingOnlyScopeChoice("default");
+        setLoggingOnlyContinue(false);
         setDefaultOn(false);
         setSelectedTemplate("empty");
         setCode(CODE_TEMPLATES.empty.code);
@@ -364,15 +268,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   // Save guardrail (create or update)
   const handleSave = async () => {
     if (!guardrailName.trim()) {
-      NotificationsManager.fromBackend("Please enter a guardrail name");
+      toast.fromError("Please enter a guardrail name");
       return;
     }
     if (!code.trim()) {
-      NotificationsManager.fromBackend("Please enter custom code");
+      toast.fromError("Please enter custom code");
       return;
     }
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -383,6 +287,12 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         const updateData: any = {
           litellm_params: {
             custom_code: code,
+            ...getCustomCodeLoggingOnlyScopeUpdate(
+              mode,
+              editData.litellm_params,
+              loggingOnlyScopeChoice,
+              loggingOnlyContinue,
+            ),
           },
         };
 
@@ -398,11 +308,21 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         if (defaultOn !== editData.litellm_params?.default_on) {
           updateData.litellm_params.default_on = defaultOn;
         }
+        const nextStreamScope = streamScopeForUpdate(
+          mode,
+          streamScopeByMode,
+          editData.litellm_params?.stream_scope,
+          existingMode,
+        );
+        if (nextStreamScope !== undefined) {
+          updateData.litellm_params.stream_scope = nextStreamScope;
+        }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
-        NotificationsManager.success("Custom code guardrail updated successfully");
+        toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
+        const streamScope = streamScopePayload(mode, streamScopeByMode);
         const guardrailData = {
           guardrail_name: guardrailName,
           litellm_params: {
@@ -410,18 +330,20 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             mode: mode,
             default_on: defaultOn,
             custom_code: code,
+            ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
+            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice, loggingOnlyContinue),
           },
           guardrail_info: {},
         };
 
         await createGuardrailCall(accessToken, guardrailData);
-        NotificationsManager.success("Custom code guardrail created successfully");
+        toast.success("Custom code guardrail created successfully");
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to save guardrail:", error);
-      NotificationsManager.fromBackend(
+      toast.fromError(
         `Failed to ${isEditMode ? "update" : "create"} guardrail: ` +
           (error instanceof Error ? error.message : String(error)),
       );
@@ -497,6 +419,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
 
   const lineCount = code.split("\n").length;
   const selectedModeOptions = mode.map((value) => MODE_OPTION_BY_VALUE[value]).filter(Boolean);
+  const rawEditMode = editData?.litellm_params?.mode;
+  const tagScopedModeLabel =
+    rawEditMode !== null && typeof rawEditMode === "object" && !Array.isArray(rawEditMode)
+      ? formatGuardrailMode(rawEditMode) || "-"
+      : null;
 
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && onClose()}>
@@ -509,8 +436,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         </DialogHeader>
 
         {/* Top Controls */}
-        <div className="flex items-center gap-4 border-b border-border py-4">
-          <div className="max-w-[200px] flex-1">
+        <div className="flex flex-wrap items-center gap-4 border-b border-border py-4">
+          <div className="min-w-[160px] max-w-[200px] flex-1">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Guardrail Name</label>
             <Input
               value={guardrailName}
@@ -519,33 +446,55 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             />
           </div>
           <div className="w-[280px]">
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">Mode (can select multiple)</label>
-            <Combobox
-              items={MODE_OPTIONS}
-              value={selectedModeOptions}
-              onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
-              multiple
-            >
-              <ComboboxChips render={<div ref={anchor} />} className="w-full">
-                {selectedModeOptions.map((option) => (
-                  <ComboboxChip key={option.value} aria-label={option.label}>
-                    {option.label}
-                  </ComboboxChip>
-                ))}
-                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
-              </ComboboxChips>
-              <ComboboxContent anchor={anchor}>
-                <ComboboxEmpty>No matching modes</ComboboxEmpty>
-                <ComboboxList>
-                  {(option: ModeOption) => (
-                    <ComboboxItem key={option.value} value={option}>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              {tagScopedModeLabel ? "Mode (tag-scoped, read-only)" : "Mode (can select multiple)"}
+            </label>
+            {tagScopedModeLabel ? (
+              <Input value={tagScopedModeLabel} disabled aria-label="Mode (tag-scoped)" />
+            ) : (
+              <Combobox
+                items={MODE_OPTIONS}
+                value={selectedModeOptions}
+                onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
+                multiple
+              >
+                <ComboboxChips render={<div ref={anchor} />} className="w-full">
+                  {selectedModeOptions.map((option) => (
+                    <ComboboxChip key={option.value} aria-label={option.label}>
                       {option.label}
-                    </ComboboxItem>
-                  )}
-                </ComboboxList>
-              </ComboboxContent>
-            </Combobox>
+                    </ComboboxChip>
+                  ))}
+                  <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
+                </ComboboxChips>
+                <ComboboxContent anchor={anchor}>
+                  <ComboboxEmpty>No matching modes</ComboboxEmpty>
+                  <ComboboxList>
+                    {(option: ModeOption) => (
+                      <ComboboxItem key={option.value} value={option}>
+                        {option.label}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            )}
           </div>
+          {mode.includes("logging_only") && (
+            <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
+          )}
+          {mode.includes("logging_only") && (
+            <div className="flex shrink-0 items-center gap-2 pt-5">
+              <span className="text-sm text-muted-foreground">
+                Continue observing the response after a flagged request
+              </span>
+              <Switch
+                checked={loggingOnlyScopeChoice === "default" && loggingOnlyContinue}
+                disabled={loggingOnlyScopeChoice !== "default"}
+                onCheckedChange={setLoggingOnlyContinue}
+                aria-label="Continue observing the response after a flagged request"
+              />
+            </div>
+          )}
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>
             <Select
@@ -556,7 +505,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               <SelectTrigger className="w-full" aria-label="Template">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 <SelectGroup>
                   <SelectLabel>STANDARD</SelectLabel>
                   {TEMPLATE_ITEMS.map((template) => (
@@ -583,6 +532,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             <Switch checked={defaultOn} onCheckedChange={setDefaultOn} aria-label="Default On" />
           </div>
         </div>
+        {mode.length > 0 && (
+          <div className="border-b border-border py-4">
+            <StreamScopeFields modes={mode} value={streamScopeByMode} onChange={setStreamScopeByMode} />
+          </div>
+        )}
 
         {/* Main Content */}
         <div className="mt-4 flex gap-6">
@@ -606,7 +560,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 }}
               >
                 {Array.from({ length: Math.max(lineCount, 20) }, (_, i) => (
-                  <div key={i + 1} className="text-gray-500 h-[22.4px]">
+                  <div key={i + 1} className="text-muted-foreground h-[22.4px]">
                     {i + 1}
                   </div>
                 ))}
@@ -649,21 +603,21 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded-sm border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-warning/20 bg-warning/10 text-warning hover:bg-warning/15 transition-colors"
                         >
                           Pre-call
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_mcp_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded-sm border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors dark:border-purple-800 dark:bg-purple-950 dark:text-purple-300 dark:hover:bg-purple-900"
                         >
                           Pre MCP
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.post_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded-sm border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-success/20 bg-success/10 text-success hover:bg-success/15 transition-colors"
                         >
                           Post-call
                         </button>
@@ -678,16 +632,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                           <strong>images</strong>: Base64 images (vision)
                         </div>
                         <div>
-                          <strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span>,
-                          MCP as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span>
+                          <strong>tools</strong>: Tool definitions <span className="text-warning">(pre_call)</span>, MCP
+                          as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span>
                         </div>
                         <div>
-                          <strong>tool_calls</strong>: LLM tool calls{" "}
-                          <span className="text-green-600">(post_call)</span>
+                          <strong>tool_calls</strong>: LLM tool calls <span className="text-success">(post_call)</span>
                         </div>
                         <div>
                           <strong>structured_messages</strong>: Full messages{" "}
-                          <span className="text-orange-600">(pre_call)</span>
+                          <span className="text-warning">(pre_call)</span>
                         </div>
                         <div>
                           <strong>model</strong>: Model name (always)
@@ -711,12 +664,12 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                       <div
                         className={`flex items-center gap-2 text-sm ${
                           testResult.error
-                            ? "text-red-600"
+                            ? "text-destructive"
                             : testResult.action === "allow"
-                              ? "text-green-600"
+                              ? "text-success"
                               : testResult.action === "block"
-                                ? "text-orange-600"
-                                : "text-blue-600"
+                                ? "text-warning"
+                                : "text-info"
                         }`}
                       >
                         {testResult.error ? (
@@ -757,10 +710,10 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               </CollapsibleContent>
             </Collapsible>
             {/* Contribution CTA Banner */}
-            <div className="mt-3 flex shrink-0 items-center justify-between rounded-lg border border-blue-200 bg-linear-to-r from-blue-50 to-indigo-50 p-4">
+            <div className="mt-3 flex shrink-0 items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-indigo-50 p-4 dark:from-blue-950 dark:to-indigo-950">
               <div className="flex items-center gap-3">
-                <div className="rounded-full bg-blue-100 p-2">
-                  <Users className="size-5 text-blue-600" />
+                <div className="rounded-full bg-info/15 p-2">
+                  <Users className="size-5 text-info" />
                 </div>
                 <div>
                   <div className="text-sm font-medium">Built a useful guardrail?</div>

@@ -2,22 +2,16 @@ import asyncio
 import httpx
 import json
 import pytest
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
-from litellm.types.utils import ModelResponse
 
 # test_example.py
-from abc import ABC, abstractmethod
+from abc import ABC
 
 
 class BaseLoggingCallbackTest(ABC):
@@ -89,12 +83,3 @@ class BaseLoggingCallbackTest(ABC):
             ),
             service_tier=None,
         )
-
-    @abstractmethod
-    def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
-        """
-        Check if parallel tool calls are correctly logged by Logging callback
-
-        Relevant issue - https://github.com/BerriAI/litellm/issues/6677
-        """
-        pass

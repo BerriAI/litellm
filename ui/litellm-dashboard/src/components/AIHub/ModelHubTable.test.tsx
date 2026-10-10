@@ -1,4 +1,7 @@
 import * as networking from "@/components/networking";
+import userEvent from "@testing-library/user-event";
+import { act } from "@testing-library/react";
+import type { MCPServerData } from "./MCPHubTableColumns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
@@ -14,11 +17,12 @@ vi.mock("@/components/networking", () => ({
   modelHubPublicModelsCall: vi.fn(),
   modelHubCall: vi.fn(),
   getConfigFieldSetting: vi.fn(),
+  getGlobalLitellmHeaderName: vi.fn(() => "X-Litellm-Key"),
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
+  makeMCPPublicCall: vi.fn(),
   getUiSettings: vi.fn(),
-  getClaudeCodeMarketplace: vi.fn(),
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
 }));
 
@@ -112,7 +116,15 @@ describe("ModelHubTable", () => {
     it(description, async () => {
       setupAuthRedirectTest(requireAuth, tokenValue, isTokenValid);
 
-      renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
+      renderWithProviders(
+        <ModelHubTable
+          accessToken={null}
+          publicPage={true}
+          premiumUser={false}
+          userRole={null}
+          canOpenPlayground={false}
+        />,
+      );
 
       await waitFor(() => {
         if (shouldRedirect) {
@@ -145,7 +157,13 @@ describe("ModelHubTable", () => {
     });
 
     renderWithProviders(
-      <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole={null} />,
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser={false}
+        userRole={null}
+        canOpenPlayground
+      />,
     );
 
     await waitFor(() => {
@@ -162,7 +180,9 @@ describe("ModelHubTable", () => {
       isLoading: false,
     });
 
-    renderWithProviders(<ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} />);
+    renderWithProviders(
+      <ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} canOpenPlayground />,
+    );
 
     expect(await screen.findByText("No models yet")).toBeInTheDocument();
     expect(networking.modelHubCall).not.toHaveBeenCalled();
@@ -188,7 +208,15 @@ describe("ModelHubTable", () => {
       isLoading: false,
     });
 
-    renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
+    renderWithProviders(
+      <ModelHubTable
+        accessToken={null}
+        publicPage={true}
+        premiumUser={false}
+        userRole={null}
+        canOpenPlayground={false}
+      />,
+    );
 
     await waitFor(() => {
       expect(getUiConfigMock).toHaveBeenCalled();
@@ -199,6 +227,161 @@ describe("ModelHubTable", () => {
     const modelHubPublicModelsCallOrder = modelHubPublicModelsCallMock.mock.invocationCallOrder[0];
 
     expect(getUiConfigCallOrder).toBeLessThan(modelHubPublicModelsCallOrder);
+  });
+
+  describe("model details usage example", () => {
+    const openDetails = async (
+      model: { model_group: string; providers: string[]; mode: string },
+      canOpenPlayground = true,
+    ) => {
+      vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [model] });
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser={false}
+          userRole="Admin"
+          canOpenPlayground={canOpenPlayground}
+        />,
+      );
+      await user.click(await screen.findByRole("button", { name: model.model_group }));
+      return screen.findByRole("dialog");
+    };
+
+    it("shows a decision model how to call it on /v1/systemone, with the docs and the playground", async () => {
+      const dialog = await openDetails({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" });
+
+      expect(dialog).toHaveTextContent('"http://localhost:4000/v1/systemone"');
+      expect(dialog).toHaveTextContent('headers={"X-Litellm-Key": "Bearer your_api_key"}');
+      expect(dialog).not.toHaveTextContent("chat.completions");
+      expect(screen.getByRole("link", { name: "How to call decision models" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions",
+      );
+      expect(screen.getByRole("link", { name: "Try it in the Playground" })).toHaveAttribute(
+        "href",
+        "/ui/playground?tab=system-one",
+      );
+    });
+
+    it("does not link a view-only session to the Playground it cannot open", async () => {
+      const dialog = await openDetails(
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        false,
+      );
+
+      expect(dialog).toHaveTextContent('"http://localhost:4000/v1/systemone"');
+      expect(screen.getByRole("link", { name: "How to call decision models" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Try it in the Playground" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the chat completions example for a chat model", async () => {
+      const dialog = await openDetails({ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" });
+
+      expect(dialog).toHaveTextContent("client.chat.completions.create(");
+      expect(screen.queryByRole("link", { name: "How to call decision models" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("hub tabs", () => {
+    const renderHub = async (agents: object[] = [], mcpServers: Promise<MCPServerData[]> = Promise.resolve([])) => {
+      vi.mocked(networking.modelHubCall).mockResolvedValue({
+        data: [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }],
+      });
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents });
+      vi.mocked(networking.fetchMCPServers).mockReturnValue(mcpServers);
+      vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser={false}
+          userRole="Admin"
+          canOpenPlayground
+        />,
+      );
+      return { user, search: await screen.findByPlaceholderText("Search model names...") };
+    };
+
+    it("requires a fresh MCP publication list before and after saving", async () => {
+      const servers = Promise.withResolvers<MCPServerData[]>();
+      const { user } = await renderHub([], servers.promise);
+      await user.click(screen.getByRole("tab", { name: "MCP Hub" }));
+
+      const manageVisibility = screen.getByRole("button", { name: "Manage MCP Hub Visibility" });
+      expect(manageVisibility).toBeDisabled();
+      await act(async () => servers.resolve([]));
+      expect(manageVisibility).toBeEnabled();
+
+      const refresh = Promise.withResolvers<MCPServerData[]>();
+      vi.mocked(networking.makeMCPPublicCall).mockResolvedValueOnce({});
+      vi.mocked(networking.fetchMCPServers).mockReturnValueOnce(refresh.promise);
+      await user.click(manageVisibility);
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await user.click(screen.getByRole("button", { name: "Save Publication List" }));
+
+      expect(networking.makeMCPPublicCall).toHaveBeenCalledWith("test-token", []);
+      expect(manageVisibility).toBeDisabled();
+      await act(async () => refresh.reject(new Error("Unable to reload the publication list")));
+      expect(manageVisibility).toBeDisabled();
+    });
+
+    it("keeps the model filter typed on the Model Hub tab after visiting another hub", async () => {
+      const { user, search } = await renderHub();
+
+      await user.type(search, "opus");
+      await user.click(screen.getByRole("tab", { name: "Agent Hub" }));
+      await user.click(screen.getByRole("tab", { name: "Model Hub" }));
+
+      expect(await screen.findByPlaceholderText("Search model names...")).toHaveValue("opus");
+    });
+
+    it("filters the Agent Hub table by name or description and shows the no-match state", async () => {
+      const { user } = await renderHub([
+        {
+          agent_id: "a1",
+          agent_card_params: { name: "Billing Router", description: "routes billing questions" },
+          litellm_params: { is_public: false },
+        },
+        {
+          agent_id: "a2",
+          agent_card_params: { name: "Support Bot", description: "handles support tickets" },
+          litellm_params: { is_public: false },
+        },
+      ]);
+      const agentCount = (expected: string) =>
+        screen.getByText((_, el) => el?.tagName === "P" && el.textContent === expected);
+
+      await user.click(screen.getByRole("tab", { name: "Agent Hub" }));
+      expect(await screen.findByText("Billing Router")).toBeInTheDocument();
+
+      const search = screen.getByPlaceholderText("Search agent names or descriptions...");
+      await user.type(search, "support tickets");
+      expect(screen.queryByText("Billing Router")).not.toBeInTheDocument();
+      expect(screen.getByText("Support Bot")).toBeInTheDocument();
+      expect(agentCount("Showing 1 of 2 agents")).toBeInTheDocument();
+
+      await user.clear(search);
+      await user.type(search, "zzzz");
+      expect(screen.getByText("No matching agents")).toBeInTheDocument();
+      expect(agentCount("Showing 0 of 2 agents")).toBeInTheDocument();
+    });
+
+    it("renders the hub strip as underlined tabs rather than a segmented pill", async () => {
+      await renderHub();
+
+      expect(screen.getByRole("tablist")).toHaveAttribute("data-variant", "line");
+    });
   });
 
   describe("authentication redirect behavior", () => {

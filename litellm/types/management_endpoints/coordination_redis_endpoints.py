@@ -4,14 +4,14 @@ Types and field definitions for coordination Redis settings management endpoints
 
 from typing import Final, Literal
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CoordinationRedisSection = Literal["connection", "cluster", "sentinel"]
 
 CoordinationRedisSource = Literal["coordination_redis", "cache_backend", "environment"]
 
 
-class CoordinationRedisSettingsField(BaseModel):
+class CoordinationRedisSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
     field_value: object | None = None
@@ -101,5 +101,42 @@ COORDINATION_REDIS_SETTINGS_FIELDS: Final[list[CoordinationRedisSettingsField]] 
         field_description="Master service name for Redis Sentinel",
         ui_field_name="Service Name",
         section="sentinel",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_auth",
+        field_type="Boolean",
+        field_description="Enable AWS ElastiCache IAM authentication",
+        field_default=False,
+        ui_field_name="AWS IAM Authentication",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_user_name",
+        field_type="String",
+        field_description="AWS ElastiCache IAM user name",
+        ui_field_name="AWS IAM User Name",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_cache_name",
+        field_type="String",
+        field_description="AWS ElastiCache cache name",
+        ui_field_name="AWS IAM Cache Name",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_region",
+        field_type="String",
+        field_description="AWS region for ElastiCache IAM authentication",
+        ui_field_name="AWS IAM Region",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_serverless",
+        field_type="Boolean",
+        field_description="The ElastiCache cache is serverless rather than a self-designed cluster",
+        field_default=False,
+        ui_field_name="AWS IAM Serverless Cache",
+        section="connection",
     ),
 ]

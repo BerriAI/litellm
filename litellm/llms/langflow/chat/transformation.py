@@ -15,6 +15,7 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.utils import CustomStreamWrapper
 
@@ -51,6 +52,13 @@ class LangFlowConfig(BaseConfig):
         api_base = api_base or get_secret_str("LANGFLOW_API_BASE") or "http://localhost:7860"
         api_key = api_key or get_secret_str("LANGFLOW_API_KEY")
         return api_base, api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return ["stream"]
@@ -158,7 +166,7 @@ class LangFlowConfig(BaseConfig):
 
         input_value: Final = self._get_last_user_message(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "input_value": input_value,
             "input_type": optional_params.get("input_type", "chat"),
             "output_type": optional_params.get("output_type", "chat"),
@@ -223,7 +231,7 @@ class LangFlowConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

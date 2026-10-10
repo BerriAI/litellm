@@ -6,9 +6,11 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
-from typing import Any, Final
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final
 
 from httpx import URL, Response
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -21,6 +23,12 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 from litellm.types.utils import ModelInfo
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_BILLED_UNITS: Final = TypeAdapter(RerankBilledUnits)
+_TOKENS: Final = TypeAdapter(RerankTokens)
+_STR: Final = TypeAdapter(str)
 
 
 class JinaAIRerankConfig(BaseRerankConfig):
@@ -38,7 +46,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -99,13 +107,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
         logging_obj.post_call(original_response=raw_response.text)
 
-        _json_response: Final = raw_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        _billed_units: Final = RerankBilledUnits(**_json_response.get("usage", {}))
-        _tokens: Final = RerankTokens(**_json_response.get("usage", {}))
-        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        usage: Final = _JSON_OBJECT.validate_python(_json_response.get("usage", {}))
 
-        _results: Final[list[dict] | None] = _json_response.get("results")
+        _results: Final = _json_response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
@@ -114,7 +120,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         # Jina AI returns: {"index": 0, "relevance_score": 0.72, "document": "hello"}
         # LiteLLM expects: {"index": 0, "relevance_score": 0.72, "document": {"text": "hello"}}
         transformed_results: Final = []
-        for result in _results:
+        for result in _JSON_OBJECTS.validate_python(_results):
             transformed_result = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
@@ -127,8 +133,12 @@ class JinaAIRerankConfig(BaseRerankConfig):
                 transformed_result["document"] = result["document"]
             transformed_results.append(transformed_result)
 
+        _billed_units: Final = _BILLED_UNITS.validate_python(usage)
+        _tokens: Final = _TOKENS.validate_python(usage)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+
         return RerankResponse(
-            id=_json_response.get("id") or str(uuid.uuid4()),
+            id=_STR.validate_python(_json_response.get("id") or str(uuid.uuid4())),
             results=transformed_results,
             meta=rerank_meta,
         )  # Return response
@@ -139,6 +149,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
@@ -155,9 +166,6 @@ class JinaAIRerankConfig(BaseRerankConfig):
         billed_units: RerankBilledUnits | None = None,
         model_info: ModelInfo | None = None,
     ) -> tuple[float, float]:
-        """
-        Jina AI reranker is priced at $0.000000018 per token.
-        """
         if (
             model_info is None
             or "input_cost_per_token" not in model_info

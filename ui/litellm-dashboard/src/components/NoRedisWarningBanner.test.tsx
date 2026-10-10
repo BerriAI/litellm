@@ -20,6 +20,7 @@ describe("NoRedisWarningBanner", () => {
     renderWithProviders(<NoRedisWarningBanner accessToken="token" />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/No Redis configured\. Redis is highly recommended/i)).toBeInTheDocument();
+    expect(screen.getByText(/more than one worker/i)).toBeInTheDocument();
   });
 
   it("should link to the docs page listing what breaks without Redis", () => {

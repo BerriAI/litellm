@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Final
 
 import httpx
 import pytest
+from openai.types import ModerationCreateResponse
 
 from tests.fake_openai_endpoint import (
     _LOCAL_DEFAULT,
@@ -29,7 +31,6 @@ _MIGRATED_FILES = (
     "tests/llm_translation/test_triton.py",
     "tests/local_testing/test_router.py",
     "tests/local_testing/test_router_custom_routing.py",
-    "tests/local_testing/test_router_fallback_handlers.py",
     "tests/local_testing/test_router_fallbacks.py",
     "tests/local_testing/test_secret_detect_hook.py",
     "tests/local_testing/test_lowest_latency_routing.py",
@@ -54,6 +55,20 @@ def test_chat_completion_shape():
     body = response.json()
     assert body["choices"][0]["message"]["content"]
     assert body["usage"]["total_tokens"] == 40
+
+
+def test_moderations_route_parses_as_an_openai_response():
+    base: Final = ensure_fake_openai_endpoint()
+    response: Final = httpx.post(
+        f"{base}/v1/moderations",
+        json={"input": ["I want to harm someone", "hello"], "model": "omni-moderation-latest"},
+        timeout=10,
+    )
+    assert response.status_code == 200
+    parsed: Final = ModerationCreateResponse.model_validate(response.json())
+    assert parsed.model == "omni-moderation-latest"
+    assert len(parsed.results) == 2
+    assert parsed.results[0].categories.violence is False
 
 
 def test_triton_embeddings_route():

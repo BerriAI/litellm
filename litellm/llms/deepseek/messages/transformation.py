@@ -5,7 +5,7 @@ DeepSeek Anthropic-compatible messages transformation config.
 from typing import Any, Final
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -66,6 +66,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
             optional_params=optional_params,
             custom_llm_provider=self.custom_llm_provider or "deepseek",
+            messages=messages,
         )
 
         return headers, api_base
@@ -93,7 +94,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         return f"{base_url}/v1/messages"
 
     @staticmethod
-    def _sanitize_tools_for_deepseek(tools: Any) -> Any:
+    def _sanitize_tools_for_deepseek(tools: Any) -> object:
         if not isinstance(tools, list):
             return tools
 

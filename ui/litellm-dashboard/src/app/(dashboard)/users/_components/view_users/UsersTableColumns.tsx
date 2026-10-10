@@ -141,7 +141,11 @@ export const getUsersTableColumns = ({
       header: ({ column }) => <DataTableSortHeader column={column} title="Global Proxy Role" variant="header-cycle" />,
       size: 160,
       enableSorting: true,
-      cell: ({ row }) => <span className="text-sm">{possibleUIRoles?.[row.original.user_role]?.ui_label || "-"}</span>,
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {(row.original.user_role && possibleUIRoles?.[row.original.user_role]?.ui_label) || "-"}
+        </span>
+      ),
     },
     {
       id: "user_alias",
@@ -208,14 +212,17 @@ export const getUsersTableColumns = ({
           return (
             <Badge
               variant="outline"
-              className="whitespace-nowrap border-indigo-200 bg-indigo-50 font-normal text-indigo-600"
+              className="whitespace-nowrap border-indigo-200 bg-indigo-50 font-normal text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300"
             >
               {keyCount} {keyCount === 1 ? "Key" : "Keys"}
             </Badge>
           );
         }
         return (
-          <Badge variant="outline" className="whitespace-nowrap border-gray-200 bg-gray-50 font-normal text-gray-600">
+          <Badge
+            variant="outline"
+            className="whitespace-nowrap border-border bg-muted font-normal text-muted-foreground"
+          >
             No Keys
           </Badge>
         );

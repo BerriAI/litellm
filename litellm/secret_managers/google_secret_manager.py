@@ -7,8 +7,9 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.proxy._types import CommonProxyErrors
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 class GoogleSecretManager(GCSBucketBase):
@@ -34,7 +35,7 @@ class GoogleSecretManager(GCSBucketBase):
             raise ValueError(
                 "Google Secret Manager requires a project ID, please set 'GOOGLE_SECRET_MANAGER_PROJECT_ID' in your .env"
             )
-        self.sync_httpx_client = _get_httpx_client()
+        self.sync_httpx_client = get_httpx_client()
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.GOOGLE_SECRET_MANAGER
         _refresh_interval = os.environ.get("GOOGLE_SECRET_MANAGER_REFRESH_INTERVAL", refresh_interval)

@@ -1,8 +1,17 @@
+import reprlib
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass, fields
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
+from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -16,8 +25,19 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_external_id",
+        "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
+    }
+)
+
+PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
+    {
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+        "token_exchange_audience",
     }
 )
 
@@ -34,37 +54,104 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "azure_password",
             "azure_scope",
             "timeout",
+            "client_side_timeout",
             "gcs_bucket_name",
             "bucket_name",
+            "s3_endpoint_url",
+            "s3_region_name",
+            "s3_access_key_id",
+            "s3_secret_access_key",
             "vertex_credentials",
             "vertex_project",
             "vertex_location",
             "vertex_ai_project",
             "vertex_ai_location",
             "vertex_ai_credentials",
+            "gigachat_scope",
+            "gigachat_auth_url",
+            "gigachat_access_token",
             "tpm",
             "rpm",
             "itpm",
             "otpm",
             "use_xai_oauth",
+            "github_copilot_auth_type",
+            "github_copilot_user_session",
+            "fireworks_forward_user_id",
+            PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
+    | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
+    | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 
+_CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
+_CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
+_MAX_SHOWN_INT_BITS: Final = 64
+_EXPECTED: Final = f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits"
 
-def _get_base_model_from_litellm_call_metadata(
-    metadata: dict | None,
+
+class _BoundedRepr(reprlib.Repr):
+    def repr_int(self, x: int, level: int) -> str:
+        if x.bit_length() > _MAX_SHOWN_INT_BITS:
+            return f"<int of {x.bit_length()} bits>"
+        return super().repr_int(x, level)
+
+
+_BOUNDED_REPR: Final = _BoundedRepr()
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidControlOption:
+    param: str
+    message: str
+
+
+def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
+    try:
+        return _CONTROL_OPTIONS.validate_python(given)
+    except ValidationError as e:
+        param: Final = str(e.errors(include_url=False)[0]["loc"][0])
+        return InvalidControlOption(
+            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED}"
+        )
+
+
+def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:
+    control: Final = litellm_params.get(CONTROL_OPTIONS_KEY)
+    return control if isinstance(control, ControlOptions) else ControlOptions()
+
+
+def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
+    if control == ControlOptions():
+        return dict(litellm_params)
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
+
+
+def get_base_model_from_litellm_call_metadata(
+    metadata: Mapping[str, object] | None,
 ) -> str | None:
     if metadata is None:
         return None
     model_info: Final = metadata.get("model_info")
     if model_info:
-        return model_info.get("base_model")
+        model_info_mapping: Final = cast(  # cast-ok: model metadata is caller-provided and preserves its mapping shape
+            Mapping[str, object], model_info
+        )
+        return cast(  # cast-ok: model metadata values are caller-provided
+            str | None, model_info_mapping.get("base_model")
+        )
     return None
+
+
+_get_base_model_from_litellm_call_metadata = get_base_model_from_litellm_call_metadata
 
 
 def get_litellm_params(
@@ -89,6 +176,7 @@ def get_litellm_params(
     allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
+    cost_per_second: float | None = None,
     input_cost_per_second=None,
     input_cost_per_token=None,
     output_cost_per_token=None,
@@ -105,7 +193,7 @@ def get_litellm_params(
     custom_prompt_dict: dict | None = None,
     litellm_metadata: dict | None = None,
     disable_add_transform_inline_image_block: bool | None = None,
-    drop_params: bool | None = None,
+    drop_params: bool | str | None = None,
     prompt_id: str | None = None,
     prompt_variables: dict | None = None,
     async_call: bool | None = None,
@@ -150,6 +238,7 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "cost_per_second": cost_per_second,
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
@@ -160,14 +249,14 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or (_get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
+        or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
         "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
-        "drop_params": drop_params,
+        "drop_params": normalize_drop_params(drop_params),
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
         "async_call": async_call,

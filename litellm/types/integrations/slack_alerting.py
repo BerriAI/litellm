@@ -1,12 +1,14 @@
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime as dt
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from pydantic import Field
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 DEFAULT_DIGEST_INTERVAL: Final = 86400  # 24 hours in seconds
@@ -91,6 +93,40 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=False,
         description="If true, the alerting payload will be printed to the console.",
     )
+    daily_spend_per_user_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Alert when a user's spend for the current day (UTC) crosses this USD amount. Off by default.",
+    )
+    monthly_spend_per_user_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Alert when a user's spend for the current calendar month (UTC) crosses this USD amount. Off by default.",
+    )
+    spend_anomaly_multiplier: float = Field(
+        default=3.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Flag a user's spend as anomalous when today's spend exceeds this multiple of their trailing daily average.",
+    )
+    spend_anomaly_baseline_days: int = Field(
+        default=7,
+        ge=1,
+        description="Number of trailing days used to compute a user's daily average spend for anomaly detection.",
+    )
+    spend_anomaly_min_spend: float = Field(
+        default=10.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Minimum spend (USD) a user must reach today before an anomaly alert can fire. Reduces false positives.",
+    )
+    user_spend_check_interval: int = Field(
+        default=3600,
+        ge=60,
+        description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
@@ -121,6 +157,7 @@ class SlackAlertingCacheKeys(Enum):
     failed_requests_key = "failed_requests_daily_metrics"
     latency_key = "latency_daily_metrics"
     report_sent_key = "daily_metrics_report_sent"
+    deprecation_alert_sent_key = "model_deprecation_alert_sent"
 
 
 class AlertType(str, Enum):
@@ -137,6 +174,8 @@ class AlertType(str, Enum):
     budget_alerts = "budget_alerts"
     spend_reports = "spend_reports"
     failed_tracking_spend = "failed_tracking_spend"
+    user_spend_thresholds = "user_spend_thresholds"
+    user_spend_anomalies = "user_spend_anomalies"
 
     # Database alerts
     db_exceptions = "db_exceptions"
@@ -147,6 +186,7 @@ class AlertType(str, Enum):
     # Deployment alerts
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
+    model_deprecation_warnings = "model_deprecation_warnings"
 
     # Outage alerts
     outage_alerts = "outage_alerts"
@@ -170,6 +210,10 @@ class AlertType(str, Enum):
     internal_user_updated = "internal_user_updated"
     internal_user_deleted = "internal_user_deleted"
 
+    # MCP tool catalog events
+    mcp_tool_description_blocked = "mcp_tool_description_blocked"
+    mcp_pinned_tools_changed = "mcp_pinned_tools_changed"
+
 
 DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # LLM related alerts
@@ -180,6 +224,7 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     AlertType.budget_alerts,
     AlertType.spend_reports,
     AlertType.failed_tracking_spend,
+    AlertType.user_spend_thresholds,
     # Database alerts
     AlertType.db_exceptions,
     # Report alerts
@@ -187,15 +232,31 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # Deployment alerts
     AlertType.cooldown_deployment,
     AlertType.new_model_added,
+    AlertType.model_deprecation_warnings,
     # Outage alerts
     AlertType.outage_alerts,
     AlertType.region_outage_alerts,
     # Fallback alerts
     AlertType.fallback_reports,
+    # MCP tool catalog alerts
+    AlertType.mcp_tool_description_blocked,
+    AlertType.mcp_pinned_tools_changed,
 ]
 
 
-class HangingRequestData(BaseModel):
+class AlertText(TypedDict):
+    text: ReadOnly[str]
+
+
+class AlertQueueItem(TypedDict):
+    url: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+    payload: ReadOnly[AlertText]
+    alert_type: ReadOnly[AlertType | str]
+    format: NotRequired[ReadOnly[str]]
+
+
+class HangingRequestData(LiteLLMBaseModel):
     request_id: str
     model: str
     api_base: str | None = None

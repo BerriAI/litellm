@@ -3,14 +3,22 @@
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { CacheLeakageDimension, CacheLeakageRow, computeCacheLeakage, pct, usd } from "./costOptimizationUtils";
+import {
+  CacheLeakageDimension,
+  CacheLeakageRow,
+  computeCacheLeakage,
+  leakageRowsFromKeyRows,
+  netSavingsPerCachedToken,
+  pct,
+  usd,
+} from "./costOptimizationUtils";
 import { DailyActivityRange } from "./useDailyActivityRange";
+import { useCacheLeakageKeys } from "./useCacheLeakageKeys";
 
 interface CacheLeakageCardProps {
   activity: DailyActivityRange;
@@ -40,7 +48,7 @@ const compareRows = (a: CacheLeakageRow, b: CacheLeakageRow, sort: SortState): n
 const InfoTooltip = ({ info }: { info: string }) => (
   <Tooltip>
     <TooltipTrigger render={<span className="inline-flex" aria-label={info} />}>
-      <Info className="h-3 w-3 text-gray-400" />
+      <Info className="h-3 w-3 text-muted-foreground" />
     </TooltipTrigger>
     <TooltipContent className="max-w-xs">{info}</TooltipContent>
   </Tooltip>
@@ -72,7 +80,7 @@ const SortableHead = ({
           className="inline-flex items-center gap-1 font-medium hover:text-foreground"
         >
           {label}
-          <Arrow className={`h-3 w-3 ${active ? "text-foreground" : "text-gray-400"}`} />
+          <Arrow className={`h-3 w-3 ${active ? "text-foreground" : "text-muted-foreground"}`} />
         </button>
         <InfoTooltip info={info} />
       </span>
@@ -81,11 +89,20 @@ const SortableHead = ({
 };
 
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { results, loading } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
   const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
-  const leakage = useMemo(() => computeCacheLeakage(results, dimension), [results, dimension]);
-  const rows = useMemo(() => [...leakage.rows].sort((a, b) => compareRows(a, b, sort)), [leakage.rows, sort]);
+  const leakageRate = useMemo(() => netSavingsPerCachedToken(results), [results]);
+  const keyLeakage = useCacheLeakageKeys(activity, dimension === "key");
+  const unsortedRows = useMemo(
+    () =>
+      dimension === "key"
+        ? leakageRowsFromKeyRows(keyLeakage.rows, leakageRate)
+        : computeCacheLeakage(results, "model").rows,
+    [dimension, keyLeakage.rows, leakageRate, results],
+  );
+  const rows = useMemo(() => [...unsortedRows].sort((a, b) => compareRows(a, b, sort)), [unsortedRows, sort]);
+  const rowsLoading = dimension === "key" ? keyLeakage.loading : loading;
 
   const onSort = (column: SortColumn) =>
     setSort((prev) =>
@@ -97,6 +114,10 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
   const subject = dimension === "model" ? "Models" : "Keys";
   const firstColumn = dimension === "model" ? "Model" : "Key";
   const emptyNoun = dimension === "model" ? "model" : "key";
+  const emptyMessage =
+    dimension === "key" && keyLeakage.failed
+      ? "Could not load key usage for this range."
+      : `No ${emptyNoun} usage in this range.`;
 
   return (
     <TooltipProvider delay={300}>
@@ -111,9 +132,6 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
                 cached token, after cache-write premiums.
               </p>
             </div>
-            <div className="shrink-0">
-              <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
-            </div>
           </div>
           <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
             <TabsList>
@@ -125,7 +143,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
         <CardContent>
           {rows.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              {loading || isFetchingMore ? "Loading..." : `No ${emptyNoun} usage in this range.`}
+              {rowsLoading ? "Loading..." : emptyMessage}
             </p>
           ) : (
             <Table>

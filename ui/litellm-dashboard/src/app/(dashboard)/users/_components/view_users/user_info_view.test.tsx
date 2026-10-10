@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
@@ -48,7 +48,6 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-// entityLinks -> migratedPages imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("@/components/networking", () => {
   return {
     serverRootPath: "/",
@@ -129,6 +128,42 @@ describe("UserInfoView", () => {
 
     const aliases = await screen.findAllByText("Test Alias");
     expect(aliases.length).toBeGreaterThan(0);
+  });
+
+  it("seeds the user rate limits when opening the edit form", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      tpm_limit: 100000,
+      rpm_limit: 50,
+    });
+
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+    expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(100000);
+    expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(50);
+  });
+
+  it("keeps the updated TPM and stored RPM when reopening the edit form", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      tpm_limit: 100000,
+      rpm_limit: 50,
+    });
+
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+    fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+      target: { value: "" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => {
+      expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1);
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+    expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(null);
+    expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(50);
   });
 
   it("should render overview spend and budget with two decimal places", async () => {
@@ -277,6 +312,20 @@ describe("UserInfoView", () => {
         user_id: "user-123",
       });
     });
+  });
+
+  it("should keep the Details panel state while the Overview tab is shown", async () => {
+    const user = userEvent.setup();
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} />);
+
+    await user.click(await screen.findByText("GitHub MCP (srv-1)"));
+    expect(await screen.findByText("list_issues")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText(/of \$100\.00/)).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Details" }));
+
+    expect(screen.getByText("list_issues")).toBeVisible();
   });
 
   describe("MCP permissions", () => {

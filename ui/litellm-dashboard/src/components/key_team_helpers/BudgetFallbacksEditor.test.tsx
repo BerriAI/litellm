@@ -9,8 +9,8 @@ describe("BudgetFallbacksEditor", () => {
   it("renders empty state with add button", () => {
     const onChange = vi.fn();
     render(<BudgetFallbacksEditor value={{}} onChange={onChange} availableModels={MODELS} />);
-    expect(screen.getByText("Add Budget Fallback")).toBeTruthy();
-    expect(screen.getByText(/reroute to fallback models/)).toBeTruthy();
+    expect(screen.getByText("Add Budget Fallback")).toBeInTheDocument();
+    expect(screen.getByText(/reroute to fallback models/)).toBeInTheDocument();
   });
 
   it("renders existing entries from value prop", () => {
@@ -22,9 +22,9 @@ describe("BudgetFallbacksEditor", () => {
         availableModels={MODELS}
       />,
     );
-    expect(screen.getByText("IF BUDGET EXCEEDED, TRY")).toBeTruthy();
-    expect(screen.getByText("Primary Model")).toBeTruthy();
-    expect(screen.getByText("Fallback Models")).toBeTruthy();
+    expect(screen.getByText("IF BUDGET EXCEEDED, TRY")).toBeInTheDocument();
+    expect(screen.getByText("Primary Model")).toBeInTheDocument();
+    expect(screen.getByText("Fallback Models")).toBeInTheDocument();
   });
 
   it("adds a new empty entry when clicking add button", async () => {
@@ -33,7 +33,7 @@ describe("BudgetFallbacksEditor", () => {
     render(<BudgetFallbacksEditor value={{}} onChange={onChange} availableModels={MODELS} />);
 
     await user.click(screen.getByText("Add Budget Fallback"));
-    expect(screen.getByText("Primary Model")).toBeTruthy();
+    expect(screen.getByText("Primary Model")).toBeInTheDocument();
     expect(onChange).toHaveBeenCalledWith({});
   });
 
@@ -81,8 +81,8 @@ describe("BudgetFallbacksEditor", () => {
     expect(screen.getAllByText("Primary Model").length).toBe(1);
 
     rerender(<BudgetFallbacksEditor key={2} value={{}} onChange={onChange} availableModels={MODELS} />);
-    expect(screen.queryByText("Primary Model")).toBeNull();
-    expect(screen.getByText("Add Budget Fallback")).toBeTruthy();
+    expect(screen.queryByText("Primary Model")).not.toBeInTheDocument();
+    expect(screen.getByText("Add Budget Fallback")).toBeInTheDocument();
   });
 
   it("shows ordering hint when multiple fallback models are configured", () => {
@@ -94,6 +94,6 @@ describe("BudgetFallbacksEditor", () => {
         availableModels={MODELS}
       />,
     );
-    expect(screen.getByText(/first model still within its own budget/)).toBeTruthy();
+    expect(screen.getByText(/first model still within its own budget/)).toBeInTheDocument();
   });
 });

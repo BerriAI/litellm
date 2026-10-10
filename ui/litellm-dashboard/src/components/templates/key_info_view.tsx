@@ -1,18 +1,33 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EntityLink } from "@/components/shared/EntityLink";
+import { modelOrAccessGroupHref, teamDetailHref } from "@/utils/entityLinks";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
+import KeySavingsTab from "./KeySavingsTab";
+import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import {
+  hasProxyWideSpendView,
+  isProxyAdminRole,
+  isUserTeamAdminForSingleTeam,
+  rolesWithWriteAccess,
+} from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -21,7 +36,7 @@ import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
@@ -33,7 +48,13 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
+
+export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
+  return (totalSpend ?? 0) < spend;
+}
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -75,11 +96,15 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const accessGroupNames = useModelAccessGroupNames();
+  const activityDateRange = useActivityDateRange();
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
+  const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -94,6 +119,9 @@ export default function KeyInfoView({
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
+  const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
+    null,
+  );
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -162,7 +190,7 @@ export default function KeyInfoView({
     );
   }
 
-  const handleKeyUpdate = async (formValues: Record<string, any>) => {
+  const handleKeyUpdate = async (formValues: Record<string, any>, dirtyFields: readonly string[] = []) => {
     try {
       if (!accessToken) return;
 
@@ -200,6 +228,23 @@ export default function KeyInfoView({
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
+      // soft_budget is a budget change server-side (admin-gated); only send it when it changed
+      // so a non-admin edit of unrelated fields isn't blocked by that gate.
+      const previousSoftBudget =
+        (currentKeyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ??
+        null;
+      const nextSoftBudget =
+        formValues.soft_budget === "" || formValues.soft_budget == null ? null : Number(formValues.soft_budget);
+      if (nextSoftBudget !== null && !Number.isFinite(nextSoftBudget)) {
+        toast.error("Soft Budget must be a finite number");
+        return;
+      }
+      if (nextSoftBudget === previousSoftBudget) {
+        delete formValues.soft_budget;
+      } else {
+        formValues.soft_budget = nextSoftBudget;
+      }
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
@@ -220,9 +265,7 @@ export default function KeyInfoView({
             (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
           );
         if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
-          NotificationManager.error(
-            "MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.",
-          );
+          toast.error("MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.");
           return;
         }
         formValues.object_permission = {
@@ -244,9 +287,18 @@ export default function KeyInfoView({
         delete formValues.agents_and_groups;
       }
 
+      if (formValues.skills !== undefined) {
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          skills: formValues.skills || [],
+        };
+        delete formValues.skills;
+      }
+
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
       formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       // Convert metadata back to an object if it exists and is a string
@@ -272,7 +324,7 @@ export default function KeyInfoView({
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
-          NotificationManager.error("Invalid metadata JSON");
+          toast.error("Invalid metadata JSON");
           return;
         }
       } else {
@@ -310,19 +362,38 @@ export default function KeyInfoView({
         formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
       }
 
+      const memberKeyEditContext = {
+        userRole: userRole || "",
+        userId: userID || "",
+        keyUserId: currentKeyData.user_id,
+        keyTeamId: currentKeyData.team_id,
+        teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
+      };
+      const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
+      if (editingMemberKeyAsTeamAdmin) {
+        const trimmed = teamAdminMemberKeyPayload(formValues, dirtyFields);
+        if (trimmed.kind === "blocked") {
+          toast.error(
+            `Team admins can only change budget fields on other members' keys, not ${trimmed.fields.join(", ")}`,
+          );
+          return;
+        }
+        formValues = trimmed.payload;
+      }
+
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
 
-      // Update local state
       setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined));
+      void queryClient.invalidateQueries({ queryKey: keyKeys.all });
 
       if (onKeyDataUpdate) {
         onKeyDataUpdate(newKeyValues);
       }
-      NotificationManager.success("Key updated successfully");
+      toast.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
     } catch (error) {
-      NotificationManager.fromBackend(parseErrorMessage(error));
+      toast.fromError(parseErrorMessage(error));
       console.error("Error updating key:", error);
     }
   };
@@ -332,7 +403,7 @@ export default function KeyInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
-      NotificationManager.success("Key deleted successfully");
+      toast.success("Key deleted successfully");
       await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
       if (onDelete) {
         onDelete();
@@ -340,7 +411,7 @@ export default function KeyInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
@@ -348,6 +419,7 @@ export default function KeyInfoView({
   };
 
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
+    const regeneratedAt = new Date();
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
       if (!prevData) return undefined;
@@ -355,20 +427,26 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: new Date().toLocaleString(),
+        created_at: regeneratedAt.toLocaleString(),
       };
       return newData;
     });
 
     // Track regeneration timestamp
-    setLastRegeneratedAt(new Date());
+    setLastRegeneratedAt(regeneratedAt);
     setIsRecentlyRegenerated(true);
 
-    if (onKeyDataUpdate) {
-      onKeyDataUpdate({
-        ...updatedKeyData,
-        created_at: new Date().toLocaleString(),
-      });
+    setKeyDataUpdateHeldUntilModalClose({
+      ...updatedKeyData,
+      created_at: regeneratedAt.toLocaleString(),
+    });
+  };
+
+  const handleRegenerateModalClose = () => {
+    setIsRegenerateModalOpen(false);
+    if (keyDataUpdateHeldUntilModalClose) {
+      setKeyDataUpdateHeldUntilModalClose(null);
+      onKeyDataUpdate?.(keyDataUpdateHeldUntilModalClose);
     }
   };
 
@@ -417,11 +495,11 @@ export default function KeyInfoView({
         if (onKeyDataUpdate) {
           onKeyDataUpdate({ spend: 0 });
         }
-        NotificationManager.success("Key spend reset to $0");
+        toast.success("Key spend reset to $0");
         setIsResetSpendModalOpen(false);
       },
       onError: (error) => {
-        NotificationManager.fromBackend(parseErrorMessage(error));
+        toast.fromError(parseErrorMessage(error));
         console.error("Error resetting key spend:", error);
       },
     });
@@ -439,11 +517,11 @@ export default function KeyInfoView({
           if (onKeyDataUpdate) {
             onKeyDataUpdate({ blocked });
           }
-          NotificationManager.success(blocked ? "Key blocked" : "Key unblocked");
+          toast.success(blocked ? "Key blocked" : "Key unblocked");
           setIsBlockModalOpen(false);
         },
         onError: (error) => {
-          NotificationManager.fromBackend(parseErrorMessage(error));
+          toast.fromError(parseErrorMessage(error));
           console.error("Error updating key blocked state:", error);
         },
       },
@@ -453,13 +531,13 @@ export default function KeyInfoView({
   const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
+  const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
+  const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
-  const budgetDisplay =
-    currentKeyData.max_budget !== null
-      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-      : parentTeam?.max_budget != null
-        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
-        : "Unlimited";
+  const hasOwnBudget = currentKeyData.max_budget !== null;
+  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
+  const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -470,11 +548,16 @@ export default function KeyInfoView({
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
           userAlias: currentKeyData.user?.user_alias ?? null,
+          teamId: currentKeyData.team_id || "",
+          teamAlias: parentTeam?.team_alias ?? null,
+          orgId,
+          orgAlias: parentOrg?.organization_alias ?? null,
           createdBy:
             currentKeyData.created_by_user?.user_alias ||
             currentKeyData.created_by_user?.user_email ||
             currentKeyData.created_by ||
             "",
+          createdById: currentKeyData.created_by_user?.user_id || currentKeyData.created_by || "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
@@ -498,7 +581,7 @@ export default function KeyInfoView({
       <RegenerateKeyModal
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
-        onClose={() => setIsRegenerateModalOpen(false)}
+        onClose={handleRegenerateModalClose}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
@@ -592,9 +675,21 @@ export default function KeyInfoView({
       </Dialog>
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
+            Savings
+          </TabsTrigger>
+          {hasProxyWideSpendView(userRole) && (
+            <TabsTrigger value="auto-router-usage" className="flex-none rounded-none px-4 py-2">
+              Auto-router usage
+            </TabsTrigger>
+          )}
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+            Settings
+          </TabsTrigger>
         </TabsList>
 
         <div>
@@ -605,10 +700,36 @@ export default function KeyInfoView({
                 <p className="text-sm">Spend</p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
-                  <p className="text-sm">of {budgetDisplay}</p>
+                  <p className="text-sm">
+                    of {budgetDisplay}
+                    <InheritedBudgetHint gates={inheritedGates} />
+                  </p>
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
+                  <p className="text-sm mt-2" data-testid="key-lifetime-spend">
+                    Lifetime spend: ${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)}
+                    {needsLifetimeSpendBackfill(currentKeyData.spend, currentKeyData.total_spend) && (
+                      <HoverCard>
+                        <HoverCardTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Why lifetime spend is below current spend"
+                              className="inline-flex align-middle ml-1 cursor-help"
+                              data-testid="key-lifetime-spend-backfill-hint"
+                            />
+                          }
+                        >
+                          <Info className="size-3 text-muted-foreground" />
+                        </HoverCardTrigger>
+                        <HoverCardContent className="w-80">
+                          Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026 and was not backfilled,
+                          so this key&apos;s lifetime spend only counts usage since that upgrade.
+                        </HoverCardContent>
+                      </HoverCard>
+                    )}
+                  </p>
                 </div>
               </Card>
 
@@ -621,6 +742,7 @@ export default function KeyInfoView({
                   <p className="text-sm">
                     RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                   </p>
+                  <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
                   {Boolean(currentKeyData.metadata?.throttle_on_budget_exceeded) && (
                     <p className="text-sm">Throttle on budget exceeded: Yes</p>
                   )}
@@ -632,9 +754,13 @@ export default function KeyInfoView({
                 <div className="mt-2 flex flex-wrap gap-2">
                   {currentKeyData.models && currentKeyData.models.length > 0 ? (
                     currentKeyData.models.map((model, index) => (
-                      <Badge key={index} variant="secondary" className="min-w-0 break-words">
+                      <BadgeLink
+                        key={index}
+                        href={modelOrAccessGroupHref(model, accessGroupNames)}
+                        className="min-w-0 break-words"
+                      >
                         {model}
-                      </Badge>
+                      </BadgeLink>
                     ))
                   ) : (
                     <p className="text-sm">No models specified</p>
@@ -661,11 +787,11 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No guardrails configured</p>
+                  <p className="text-sm text-muted-foreground">No guardrails configured</p>
                 )}
                 {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
                   currentKeyData.metadata.disable_global_guardrails === true && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="mt-3 pt-3 border-t border-border">
                       <Badge variant="destructive">Global Guardrails Disabled</Badge>
                     </div>
                   )}
@@ -681,11 +807,11 @@ export default function KeyInfoView({
                           <Badge variant="secondary" className="min-w-0 break-words">
                             {policy}
                           </Badge>
-                          {loadingPolicies && <p className="text-xs text-gray-400">Loading guardrails...</p>}
+                          {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
                         </div>
                         {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
-                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                            <p className="text-xs text-gray-500 mb-1">Resolved Guardrails:</p>
+                          <div className="ml-4 pl-3 border-l-2 border-border">
+                            <p className="text-xs text-muted-foreground mb-1">Resolved Guardrails:</p>
                             <div className="flex flex-wrap gap-1">
                               {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
                                 <Badge key={gIndex} variant="secondary" className="min-w-0 break-words">
@@ -699,7 +825,7 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No policies configured</p>
+                  <p className="text-sm text-muted-foreground">No policies configured</p>
                 )}
               </Card>
 
@@ -723,6 +849,28 @@ export default function KeyInfoView({
               />
             </div>
           </TabsContent>
+
+          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted
+              would fire that request on every key page open for people who never look at it. */}
+          <TabsContent value="savings">
+            <KeySavingsTab
+              accessToken={accessToken}
+              keyToken={currentKeyData.token}
+              userId={userID}
+              userRole={userRole}
+              activity={activityDateRange}
+            />
+          </TabsContent>
+
+          {hasProxyWideSpendView(userRole) && (
+            <TabsContent value="auto-router-usage">
+              <KeyAutoRouterUsageTab
+                accessToken={accessToken}
+                keyToken={currentKeyData.token}
+                activity={activityDateRange}
+              />
+            </TabsContent>
+          )}
 
           {/* Settings Panel */}
           <TabsContent value="settings" keepMounted>
@@ -766,7 +914,15 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Team ID</p>
-                    <p className="text-sm">{currentKeyData.team_id || "Not Set"}</p>
+                    <p className="text-sm">
+                      {currentKeyData.team_id ? (
+                        <EntityLink href={teamDetailHref(currentKeyData.team_id)} className="font-normal">
+                          {currentKeyData.team_id}
+                        </EntityLink>
+                      ) : (
+                        "Not Set"
+                      )}
+                    </p>
                   </div>
 
                   {enableProjectsUI && (
@@ -828,12 +984,17 @@ export default function KeyInfoView({
                     keyRotationAt={currentKeyData.key_rotation_at}
                     nextRotationAt={currentKeyData.next_rotation_at}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
 
                   <div>
                     <p className="text-sm font-medium">Spend</p>
                     <p className="text-sm">${formatNumberWithCommas(currentKeyData.spend, 4)} USD</p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-medium">Lifetime Spend</p>
+                    <p className="text-sm">${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)} USD</p>
                   </div>
 
                   <div>
@@ -847,7 +1008,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Budget Reset</p>
-                    <p className="text-sm">
+                    <p data-testid="budget-reset-value" className="text-sm">
                       {currentKeyData.budget_reset_at
                         ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
                         : "Never"}
@@ -859,9 +1020,9 @@ export default function KeyInfoView({
                       <p className="text-sm font-medium">Budget Fallbacks</p>
                       <div className="mt-1 space-y-1">
                         {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
-                          <div key={model} className="text-xs text-gray-600">
+                          <div key={model} className="text-xs text-muted-foreground">
                             <span className="font-medium">{model}</span>
-                            <span className="mx-1 text-gray-400">-&gt;</span>
+                            <span className="mx-1 text-muted-foreground">-&gt;</span>
                             {fallbacks.join(", ")}
                           </div>
                         ))}
@@ -883,7 +1044,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {tag}
                             </span>
                           ))
@@ -896,7 +1057,7 @@ export default function KeyInfoView({
                     <p className="text-sm">
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {prompt}
                             </span>
                           ))
@@ -909,7 +1070,7 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
                         currentKeyData.allowed_routes.map((route, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {route}
                           </span>
                         ))
@@ -925,7 +1086,7 @@ export default function KeyInfoView({
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
                       currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {route}
                             </span>
                           ))
@@ -949,9 +1110,13 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <BadgeLink
+                            key={index}
+                            href={modelOrAccessGroupHref(model, accessGroupNames)}
+                            className="min-w-0 break-words"
+                          >
                             {model}
-                          </span>
+                          </BadgeLink>
                         ))
                       ) : (
                         <p className="text-sm">No models specified</p>
@@ -967,6 +1132,7 @@ export default function KeyInfoView({
                     <p className="text-sm">
                       RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                     </p>
+                    <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
                     <p className="text-sm">
                       Max Parallel Requests:{" "}
                       {currentKeyData.max_parallel_requests !== null
@@ -1008,7 +1174,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Metadata</p>
-                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
+                    <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                       {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
@@ -1016,7 +1182,7 @@ export default function KeyInfoView({
                   <ObjectPermissionsView
                     objectPermission={currentKeyData.object_permission}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                     accessToken={accessToken}
                   />
 
@@ -1028,7 +1194,7 @@ export default function KeyInfoView({
                         : []
                     }
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
                 </div>
               )}
