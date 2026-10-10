@@ -29,6 +29,15 @@ def set_verbose_logger_level() -> Iterator[None]:
     verbose_logger.setLevel(original_level)
 
 
+async def _wait_for_events_and_flush(generic_logger: GenericAPILogger, expected: int) -> None:
+    async def _poll() -> None:
+        while len(generic_logger.log_queue) < expected:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=10)
+    await generic_logger.flush_queue()
+
+
 @pytest.mark.asyncio
 async def test_generic_api_callback():
     """
@@ -48,7 +57,7 @@ async def test_generic_api_callback():
     os.environ["GENERIC_LOGGER_ENDPOINT"] = test_endpoint
 
     # Initialize the GenericAPILogger and set the mock
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=1)
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
@@ -60,8 +69,8 @@ async def test_generic_api_callback():
         user="test_user",
     )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    # Wait for this test's event to reach the queue, then flush it
+    await _wait_for_events_and_flush(generic_logger, 1)
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -127,7 +136,7 @@ async def test_generic_api_callback_multiple_logs():
     os.environ["GENERIC_LOGGER_ENDPOINT"] = test_endpoint
 
     # Initialize the GenericAPILogger and set the mock
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=5)
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
@@ -141,7 +150,7 @@ async def test_generic_api_callback_multiple_logs():
         )
 
     # Wait for async flush
-    await asyncio.sleep(6)
+    await _wait_for_events_and_flush(generic_logger, 10)
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -205,7 +214,7 @@ async def test_generic_api_callback_ndjson_format():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,
+        flush_interval=3600,
         log_format="ndjson",  # Set NDJSON format
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -221,7 +230,7 @@ async def test_generic_api_callback_ndjson_format():
         )
 
     # Wait for async flush
-    await asyncio.sleep(3)
+    await _wait_for_events_and_flush(generic_logger, 3)
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -274,7 +283,7 @@ async def test_generic_api_callback_single_format():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,  # Quick flush to trigger batch send
+        flush_interval=3600,
         log_format="single",  # Set single format
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -290,7 +299,7 @@ async def test_generic_api_callback_single_format():
         )
 
     # Wait for async flush
-    await asyncio.sleep(3)
+    await _wait_for_events_and_flush(generic_logger, 3)
 
     # Assert httpx post was called 3 times (once per log in batch)
     assert mock_post.call_count == 3, f"Expected 3 calls, got {mock_post.call_count}"
@@ -333,7 +342,7 @@ async def test_generic_api_callback_json_array_format_explicit():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,
+        flush_interval=3600,
         log_format="json_array",  # Explicitly set json_array
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -349,7 +358,7 @@ async def test_generic_api_callback_json_array_format_explicit():
         )
 
     # Wait for async flush
-    await asyncio.sleep(3)
+    await _wait_for_events_and_flush(generic_logger, 5)
 
     # Assert httpx post was called once (batched)
     mock_post.assert_called_once()
@@ -383,7 +392,7 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     os.environ["SUMOLOGIC_WEBHOOK_URL"] = "https://collectors.sumologic.com/receiver/v1/http/test123"
 
     # Initialize using callback_name (loads from JSON config)
-    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=1)
+    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
@@ -400,7 +409,7 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
         )
 
     # Wait for async flush
-    await asyncio.sleep(3)
+    await _wait_for_events_and_flush(generic_logger, 2)
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -415,6 +424,50 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     this_test_messages: Final = [[{"role": "user", "content": f"Test {i}"}] for i in range(2)]
     mine: Final = [record for record in records if record.get("messages") in this_test_messages]
     assert len(mine) == 2, f"Expected this test's 2 calls as NDJSON lines, got {len(mine)} of {len(records)}"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
+    """
+    Test that GenericAPILogger's periodic flush sends queued events without an explicit flush.
+    """
+    # Create a mock for the async_httpx_client's post method
+    mock_post = AsyncMock()
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.text = "OK"
+
+    # Set up an endpoint for testing
+    test_endpoint = "https://example.com/api/logs"
+    test_headers = {"Authorization": "Bearer test_token"}
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", test_endpoint)
+
+    # Short flush interval so periodic_flush fires during the test
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=0.05)
+    generic_logger.async_httpx_client.post = mock_post
+    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
+
+    # Make multiple completion calls
+    for i in range(3):
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+            mock_response="hi",
+            user="test_user",
+        )
+
+    async def _poll() -> None:
+        while sum(len(json.loads(call.kwargs["data"])) for call in mock_post.call_args_list) < 3:
+            await asyncio.sleep(0.01)
+
+    # Wait for the periodic flush to post all 3 events; never call flush_queue ourselves
+    await asyncio.wait_for(_poll(), timeout=10)
+
+    posted_bodies: Final = [json.loads(call.kwargs["data"]) for call in mock_post.call_args_list]
+    for body in posted_bodies:
+        assert isinstance(body, list), "Each posted body should be a JSON array"
+    posted_items: Final = sum(posted_bodies, [])
+    contents: Final = sorted(item["messages"][0]["content"] for item in posted_items)
+    assert contents == [f"Hello, world! {i}" for i in range(3)]
 
 
 @pytest.mark.asyncio
