@@ -589,6 +589,35 @@ class ResponsesStreamBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+class ResponsesFunctionTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["function"] = "function"
+    name: str
+    description: str | None = None
+    parameters: ToolInputSchema
+
+
+class ResponsesToolBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model: str
+    input: str
+    tools: list[ResponsesFunctionTool]
+    tool_choice: Literal["required"] | None = None
+    guardrails: list[str]
+    max_output_tokens: int = 128
+
+
+class ResponsesOutputItem(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: str
+    name: str | None = None
+
+
+class ResponsesToolOutput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    output: list[ResponsesOutputItem]
+
+
 class CountTokensBody(BaseModel):
     """POST /v1/messages/count_tokens body: the /v1/messages shape minus
     max_tokens (the endpoint only counts the prompt)."""
