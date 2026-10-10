@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
+from botocore.exceptions import ClientError, ConnectionClosedError
+
+from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder, client_error_details
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
 
@@ -274,3 +276,40 @@ class TestSagemakerTransform:
 
         # The function should properly map max_tokens if max_completion_tokens is not provided
         assert result == {"temperature": 0.7, "max_new_tokens": 200}
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_text"),
+    [
+        (
+            ClientError(
+                {"Error": {"Code": "ValidationError", "Message": "bad input"}, "ResponseMetadata": {"HTTPStatusCode": 400}},
+                "InvokeEndpoint",
+            ),
+            400,
+            "bad input",
+        ),
+        (
+            ClientError(
+                {"Error": {"Code": "InternalFailure", "Message": None}, "ResponseMetadata": {"HTTPStatusCode": 500}},
+                "InvokeEndpoint",
+            ),
+            500,
+            "InternalFailure",
+        ),
+        (ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x"), 500, "Connection was closed"),
+        (
+            httpx.HTTPStatusError(
+                "boom", request=httpx.Request("POST", "https://runtime.sagemaker.test/x"), response=httpx.Response(400)
+            ),
+            500,
+            "boom",
+        ),
+        (RuntimeError("plain failure"), 500, "plain failure"),
+    ],
+)
+def test_client_error_details_reads_every_error_shape(error, expected_status, expected_text):
+    status_code, message = client_error_details(error)
+
+    assert status_code == expected_status
+    assert expected_text in message

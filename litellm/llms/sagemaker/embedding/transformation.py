@@ -19,6 +19,9 @@ from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import SagemakerError
 from .cohere_transformation import SagemakerCohereEmbeddingConfig
+from .openai_transformation import SagemakerOpenAIEmbeddingConfig
+
+OPENAI_COMPATIBLE_ROUTE: Final = "openai/"
 
 
 class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
@@ -35,11 +38,14 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Factory method to get the appropriate embedding config based on model type
 
         Args:
-            model: The model name
+            model: The model name, optionally prefixed with the `openai/` route for
+                endpoints whose container serves the OpenAI embeddings API
 
         Returns:
             Appropriate embedding config instance
         """
+        if model.startswith(OPENAI_COMPATIBLE_ROUTE):
+            return SagemakerOpenAIEmbeddingConfig()
         model_lower: Final = model.lower()
         if "voyage" in model_lower:
             return VoyageEmbeddingConfig()
@@ -47,7 +53,13 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             return SagemakerCohereEmbeddingConfig()
         return cls()
 
+    @staticmethod
+    def get_endpoint_name(model: str) -> str:
+        return model.removeprefix(OPENAI_COMPATIBLE_ROUTE)
+
     def get_supported_openai_params(self, model: str) -> list[str]:
+        if model.startswith(OPENAI_COMPATIBLE_ROUTE):
+            return SagemakerOpenAIEmbeddingConfig().get_supported_openai_params(model)
         model_lower: Final = model.lower()
         if "voyage" in model_lower:
             return VoyageEmbeddingConfig().get_supported_openai_params(model)

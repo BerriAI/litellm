@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -41,6 +41,38 @@ def get_sagemaker_response_stream_shape():
     decoding is actually needed.
     """
     return _load_sagemaker_response_stream_shape()
+
+
+def with_inference_component_hint(error_message: str) -> str:
+    if "Inference Component Name header is required" in error_message:
+        return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"
+    if "Inference Component Name header is not allowed" in error_message:
+        return f"{error_message}\n remove `model_id` from this deployment, the endpoint has no inference components"
+    return error_message
+
+
+class _ClientErrorBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    message: str | None = Field(default=None, alias="Message")
+
+
+class _ClientErrorMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    http_status_code: int = Field(default=500, alias="HTTPStatusCode")
+
+
+class _ClientErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    error: _ClientErrorBody = Field(default_factory=_ClientErrorBody, alias="Error")
+    response_metadata: _ClientErrorMetadata = Field(default_factory=_ClientErrorMetadata, alias="ResponseMetadata")
+
+
+def client_error_details(error: Exception) -> tuple[int, str]:
+    try:
+        response: Final = _ClientErrorResponse.model_validate(getattr(error, "response", None))
+    except ValidationError:
+        return 500, str(error)
+    return response.response_metadata.http_status_code, response.error.message or str(error)
 
 
 class SagemakerError(BaseLLMException):
