@@ -11140,6 +11140,10 @@ def test_is_internal_litellm_proxy_callback():
     # Test string callback
     assert logging._is_internal_litellm_proxy_callback("callback_string") == False
 
+    # The response cache puts the literal "cache" on success_callback, which is an
+    # internal mechanism and not a user callback
+    assert logging._is_internal_litellm_proxy_callback("cache")
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_should_run_sync_callbacks_for_async_calls():
     """

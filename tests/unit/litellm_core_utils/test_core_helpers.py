@@ -9,6 +9,7 @@ import pytest
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
+    add_missing_spend_metadata_to_litellm_metadata,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
@@ -586,3 +587,32 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+def test_shared_spend_metadata_is_read_from_a_snapshot():
+    """The request path shares one metadata dict with the logging thread, which writes
+    hidden_params onto it while the request path is still collecting spend fields."""
+    metadata: dict = {}
+
+    class SpendTrackingKey(str):
+        """A key that grows the shared dict when spend tracking inspects it, standing in
+        for the logging thread adding hidden_params mid-iteration."""
+
+        def __contains__(self, item: object) -> bool:
+            metadata.setdefault("hidden_params", {"response_cost": 0.0})
+            return super().__contains__(item)
+
+    metadata = {
+        SpendTrackingKey("user_api_key_user_id"): "user-1",
+        SpendTrackingKey("user_api_key_team_id"): "team-1",
+        SpendTrackingKey("user_api_key_end_user_id"): "end-user-1",
+    }
+
+    litellm_metadata: Final = add_missing_spend_metadata_to_litellm_metadata({}, metadata)
+
+    assert litellm_metadata == {
+        "user_api_key_user_id": "user-1",
+        "user_api_key_team_id": "team-1",
+        "user_api_key_end_user_id": "end-user-1",
+    }
+    assert metadata["hidden_params"] == {"response_cost": 0.0}

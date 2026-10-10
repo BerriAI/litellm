@@ -4137,7 +4137,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "sync_deployment_callback_on_success",
         ]
         if isinstance(cb, str):
-            return False
+            return cb == "cache"
 
         if not callable(cb):
             return True
