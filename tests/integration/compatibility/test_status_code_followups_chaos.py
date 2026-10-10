@@ -154,12 +154,12 @@ def _worker_pids(log: Path) -> tuple[int, ...]:
     return tuple(int(found[1]) for found in _STARTED_WORKER.finditer(log.read_text()))
 
 
-def _call(chaos: _Chaos, kind: str, marker: str, *, key: str | None = None, model: str | None = None) -> _Outcome:
+def _call(chaos: _Chaos, kind: str, marker: str, *, key: str | None = None, without_model: bool = False) -> _Outcome:
     endpoint, stream, model_name, _target, _response = _KINDS[kind]
     body: Final[dict[str, JsonValue]] = {
         **ENDPOINT_BODIES[endpoint],
         **({"stream": True} if stream else {}),
-        "model": model_name if model is None else model,
+        "model": None if without_model else model_name,
         **({"input": marker} if endpoint == "responses" else {"messages": [{"role": "user", "content": marker}]}),
     }
     headers: Final = {
@@ -187,7 +187,7 @@ def _burst(chaos: _Chaos, phase: str) -> tuple[_Outcome, ...]:
 
 
 def _missing_model_cells(chaos: _Chaos) -> tuple[_Outcome, ...]:
-    return tuple(_call(chaos, kind, f"missing-{kind}-{uuid.uuid4().hex}", model="") for kind in _KINDS)
+    return tuple(_call(chaos, kind, f"missing-{kind}-{uuid.uuid4().hex}", without_model=True) for kind in _KINDS)
 
 
 def _upstream_hits(slot: UpstreamSlot, markers: frozenset[str]) -> Mapping[str, int]:

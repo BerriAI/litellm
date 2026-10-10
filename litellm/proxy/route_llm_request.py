@@ -11,7 +11,10 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
-from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+from litellm.router_utils.fallback_event_handlers import (
+    check_non_standard_fallback_format,
+    get_fallback_model_group,
+)
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -333,7 +336,8 @@ def _router_falls_back_for_model(llm_router: LitellmRouter, data: Mapping[str, o
     """The router swaps an unknown model for its own `*` fallback whatever the request
     says; past that, it reads `fallbacks` from the request kwargs before its own, and key
     and team `router_settings` fill that kwarg at dispatch when the body leaves it out,
-    except on the client-credential branch, which dispatches before the override."""
+    except on the client-credential branch, which dispatches before the override. A
+    client-style list (`["gpt-4o"]` or `[{"model": "gpt-4o"}]`) is tried for any model."""
     if llm_router._has_default_fallbacks():  # pyright: ignore[reportPrivateUsage]  # the router's own test for the swap this mirrors
         return True
     override: Final = data.get("router_settings_override") if "api_key" not in data and "api_base" not in data else None
@@ -351,6 +355,8 @@ def _router_falls_back_for_model(llm_router: LitellmRouter, data: Mapping[str, o
     )
     if not isinstance(fallbacks, list) or not fallbacks:
         return False
+    if check_non_standard_fallback_format(fallbacks=fallbacks):  # pyright: ignore[reportUnknownArgumentType]  # Router.fallbacks is an untyped list
+        return True
     chain, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)  # pyright: ignore[reportUnknownArgumentType]  # Router.fallbacks is an untyped list
     return bool(chain)
 
@@ -375,7 +381,8 @@ _MATCHED_DEPLOYMENTS_ADAPTER: Final[TypeAdapter[tuple[_MatchedDeployment, ...]]]
 def _wildcard_forwards_missing_model(llm_router: LitellmRouter) -> bool:
     """Whether the router would pick a wildcard deployment for a request with no model
     and every such deployment copies the requested name into its target (`openai/*`), so
-    the provider would get a made-up model instead of a fixed one like `openai/gpt-4o`."""
+    the provider would get a made-up model instead of a fixed one like `openai/gpt-4o`.
+    An empty model is not "no model": it reaches the provider as `""`."""
     matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
         llm_router.pattern_router.get_deployments_by_pattern(model=None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for a missing model; it returns untyped dicts
     )
@@ -908,7 +915,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             elif llm_router.default_deployment is not None or (
                 len(llm_router.pattern_router.patterns) > 0
                 and not (
-                    not data["model"]
+                    data["model"] is None
                     and route_type in _ROUTE_TYPES_REQUIRING_MODEL
                     and _wildcard_forwards_missing_model(llm_router)
                 )

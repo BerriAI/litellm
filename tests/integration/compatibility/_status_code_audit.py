@@ -232,13 +232,20 @@ def deployment(
 
 
 @contextmanager
-def owned_gateway(directory: Path, config: Mapping[str, JsonValue], *, workers: int = 1) -> Iterator[Gateway]:
-    """A proxy booted from this checkout with `config`, sharing the rig's database, Redis and upstream."""
+def owned_gateway(
+    directory: Path,
+    config: Mapping[str, JsonValue],
+    *,
+    workers: int = 1,
+    environment: Mapping[str, str] | None = None,
+) -> Iterator[Gateway]:
+    """A proxy booted from this checkout with `config` and extra `environment`, sharing the rig's database, Redis
+    and upstream."""
     path: Final = directory / "config.yaml"
     path.write_text(json.dumps(dict(config)), encoding="utf-8")
     with (
         gateway_from_environment() as gateway,
-        owned_proxy_process(gateway, directory, {}, config=path, workers=workers) as owned,
+        owned_proxy_process(gateway, directory, environment or {}, config=path, workers=workers) as owned,
     ):
         yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
 

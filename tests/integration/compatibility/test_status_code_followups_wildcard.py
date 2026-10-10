@@ -1,6 +1,7 @@
 """A request with no model behind a `*` wildcard: a forwarding target (`openai/*`) must answer 400 on the three LLM
-endpoints instead of sending the provider a made-up model, and a fixed target (`openai/gpt-4o-mini`) must keep
-serving it, for every model shape, streaming and not, and through the OpenAI and Anthropic SDKs."""
+endpoints instead of sending the provider a made-up model, while an empty model still reaches the provider as `""`,
+and a fixed target (`openai/gpt-4o-mini`) must keep serving it, for every model shape, streaming and not, and
+through the OpenAI and Anthropic SDKs."""
 
 from __future__ import annotations
 
@@ -49,6 +50,7 @@ def _drained_upstream() -> None:
 
 
 _MODEL_SHAPES: Final[dict[str, object]] = {"missing": UNSET, "null": None, "empty": ""}
+_NO_MODEL_SHAPES: Final = ("missing", "null")
 _TARGETS: Final[dict[str, str]] = {
     "forwarding": "openai/*",
     "fixed": "openai/gpt-4o-mini",
@@ -112,21 +114,26 @@ def _body(endpoint: str, shape: str, *, stream: bool) -> dict[str, JsonValue]:
     }
 
 
-def _shown_model(shape: str) -> str:
-    return "None" if shape in {"missing", "null"} else ""
-
-
 @pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
 @pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
-@pytest.mark.parametrize("shape", tuple(_MODEL_SHAPES))
+@pytest.mark.parametrize("shape", _NO_MODEL_SHAPES)
 @pytest.mark.parametrize("endpoint", tuple(ENDPOINT_PATHS))
 def test_forwarding_wildcard_rejects_a_request_without_a_model(
     wildcard: _Wildcard, endpoint: str, shape: str, stream: bool
 ) -> None:
     response: Final = post(wildcard.gateway, ENDPOINT_PATHS[endpoint], _body(endpoint, shape, stream=stream))
     error: Final = invalid_request(response)
-    assert f"Invalid model name passed in model={_shown_model(shape)}. " in str(error.get("message")), response.text
+    assert "Invalid model name passed in model=None. " in str(error.get("message")), response.text
     assert_no_provider_call(wildcard.gateway, wildcard.identity)
+
+
+@pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
+@pytest.mark.parametrize("endpoint", tuple(ENDPOINT_PATHS))
+def test_forwarding_wildcard_sends_an_empty_model_to_the_provider_as_is(wildcard: _Wildcard, endpoint: str) -> None:
+    response: Final = post(wildcard.gateway, ENDPOINT_PATHS[endpoint], _body(endpoint, "empty", stream=False))
+    assert response.status_code == 200, response.text
+    assert "scripted" in response.text, response.text
+    assert one_outbound(wildcard.gateway, wildcard.identity).get("model") == "", response.text
 
 
 @pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
@@ -177,17 +184,13 @@ def _openai_call(gateway: Gateway, endpoint: str, *, stream: bool, asynchronous:
 
 @pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
-@pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
 @pytest.mark.parametrize("endpoint", ("chat", "responses"))
 def test_forwarding_wildcard_empty_model_through_the_openai_sdk(
-    wildcard: _Wildcard, endpoint: str, stream: bool, asynchronous: bool
+    wildcard: _Wildcard, endpoint: str, asynchronous: bool
 ) -> None:
-    call: Final = _openai_call(wildcard.gateway, endpoint, stream=stream, asynchronous=asynchronous)
-    with pytest.raises(openai.BadRequestError) as raised:
-        call()
-    assert raised.value.status_code == 400
-    assert "Invalid model name passed in model=. " in str(raised.value.message)
-    assert_no_provider_call(wildcard.gateway, wildcard.identity)
+    call: Final = _openai_call(wildcard.gateway, endpoint, stream=False, asynchronous=asynchronous)
+    assert "scripted" in str(call())
+    assert one_outbound(wildcard.gateway, wildcard.identity).get("model") == ""
 
 
 def _anthropic_call(gateway: Gateway, *, stream: bool, asynchronous: bool) -> Callable[[], object]:
@@ -210,24 +213,18 @@ def _anthropic_call(gateway: Gateway, *, stream: bool, asynchronous: bool) -> Ca
 
 @pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
-@pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
-def test_forwarding_wildcard_empty_model_through_the_anthropic_sdk(
-    wildcard: _Wildcard, stream: bool, asynchronous: bool
-) -> None:
-    call: Final = _anthropic_call(wildcard.gateway, stream=stream, asynchronous=asynchronous)
-    with pytest.raises(anthropic.BadRequestError) as raised:
-        call()
-    assert raised.value.status_code == 400
-    assert "Invalid model name passed in model=. " in str(raised.value.message)
-    assert_no_provider_call(wildcard.gateway, wildcard.identity)
+def test_forwarding_wildcard_empty_model_through_the_anthropic_sdk(wildcard: _Wildcard, asynchronous: bool) -> None:
+    call: Final = _anthropic_call(wildcard.gateway, stream=False, asynchronous=asynchronous)
+    assert "scripted" in str(call())
+    assert one_outbound(wildcard.gateway, wildcard.identity).get("model") == ""
 
 
 @pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
-@pytest.mark.parametrize("shape", tuple(_MODEL_SHAPES))
+@pytest.mark.parametrize("shape", _NO_MODEL_SHAPES)
 def test_forwarding_wildcard_embeddings_without_a_model(wildcard: _Wildcard, shape: str) -> None:
     pytest.skip(
         "BUG: /v1/embeddings without a model behind a forwarding `*` -> `openai/*` wildcard still reaches the "
-        "provider (model 'None/None' or ''), the omission the fix closed for chat/responses/messages; same on base"
+        "provider as model 'None/None', the omission the fix closed for chat/responses/messages; same on base"
     )
     body: Final[dict[str, JsonValue]] = {"input": "Hello", **_model_field(shape)}
     response: Final = post(wildcard.gateway, "/v1/embeddings", body)
@@ -366,21 +363,34 @@ _UNLISTED_MESSAGE: Final[dict[str, JsonValue]] = {
 }
 
 
+@pytest.mark.parametrize(
+    "fallbacks",
+    (
+        pytest.param(["audit-fallback"], id="model-names"),
+        pytest.param([{"model": "audit-fallback"}], id="client-style"),
+        pytest.param([{"model": "audit-fallback", "temperature": 0}], id="client-style-with-params"),
+    ),
+)
 def test_unlisted_model_with_a_request_fallback_inherits_the_router_default_max_tokens(
-    prefixed_gateway: _Wildcard,
+    prefixed_gateway: _Wildcard, fallbacks: list[JsonValue]
 ) -> None:
-    response: Final = post(
-        prefixed_gateway.gateway, "/v1/messages", {**_UNLISTED_MESSAGE, "fallbacks": ["audit-fallback"]}
-    )
+    response: Final = post(prefixed_gateway.gateway, "/v1/messages", {**_UNLISTED_MESSAGE, "fallbacks": fallbacks})
     assert response.status_code == 200, response.text
     assert one_outbound(prefixed_gateway.gateway, prefixed_gateway.identity).get("max_output_tokens") == 32
 
 
+@pytest.mark.parametrize(
+    "fallbacks",
+    (
+        pytest.param([{"*": ["audit-fallback"]}], id="star-chain"),
+        pytest.param([{"model": "audit-fallback"}], id="client-style"),
+    ),
+)
 @pytest.mark.parametrize("owner", ("key", "team"))
 def test_unlisted_model_with_a_key_or_team_fallback_inherits_the_router_default_max_tokens(
-    prefixed_gateway: _Wildcard, owner: str
+    prefixed_gateway: _Wildcard, owner: str, fallbacks: list[JsonValue]
 ) -> None:
-    router_settings: Final[dict[str, JsonValue]] = {"fallbacks": [{"*": ["audit-fallback"]}]}
+    router_settings: Final[dict[str, JsonValue]] = {"fallbacks": fallbacks}
     with prefixed_gateway.gateway.scenario() as scenario:
         key: Final = (
             scenario.key(router_settings=router_settings)

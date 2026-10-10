@@ -318,6 +318,84 @@ class TestStreamUsageAiChat:
             assert "Engineering" in chunk_events[0]["content"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("start_date", "end_date", "reason"),
+        [
+            ("2025-01-31", "2025-01-01", "end_date must be on or after start_date"),
+            ("2025-13-01", "2025-01-31", "start_date and end_date must be valid YYYY-MM-DD dates"),
+        ],
+        ids=["reversed", "invalid-month"],
+    )
+    @pytest.mark.parametrize(
+        "tool_name", ["get_usage_data", "get_team_usage_data", "get_tag_usage_data"]
+    )
+    async def test_invalid_tool_dates_are_reported_to_the_model(
+        self, tool_name, start_date, end_date, reason
+    ):
+        arguments = json.dumps({"start_date": start_date, "end_date": end_date})
+        mock_tool_call = MagicMock()
+        mock_tool_call.id = "call_dates"
+        mock_tool_call.function.name = tool_name
+        mock_tool_call.function.arguments = arguments
+
+        mock_first_response = MagicMock()
+        mock_first_response.choices = [MagicMock()]
+        mock_first_response.choices[0].message.tool_calls = [mock_tool_call]
+        mock_first_response.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_dates",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": arguments},
+                }
+            ],
+        }
+
+        async def mock_stream():
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = "Those dates are reversed."
+            yield chunk
+
+        fetch = AsyncMock()
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch.dict(TOOL_HANDLERS[tool_name], {"fetch": fetch}),
+        ):
+            mock_litellm.acompletion = AsyncMock(
+                side_effect=[mock_first_response, mock_stream()]
+            )
+
+            events = [
+                json.loads(event.replace("data: ", "").strip())
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "How much did we spend?"}],
+                    model="gpt-4o-mini",
+                    is_admin=True,
+                )
+            ]
+
+            final_messages = mock_litellm.acompletion.call_args_list[1].kwargs[
+                "messages"
+            ]
+
+        fetch.assert_not_called()
+        tool_messages = [m for m in final_messages if m["role"] == "tool"]
+        assert tool_messages == [
+            {
+                "role": "tool",
+                "tool_call_id": "call_dates",
+                "content": f"Invalid date range: {reason}",
+            }
+        ]
+        statuses = [e["status"] for e in events if e["type"] == "tool_call"]
+        assert statuses == ["running", "complete"]
+
+    @pytest.mark.asyncio
     async def test_stream_handles_error(self):
         with patch(
             "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"

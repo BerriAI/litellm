@@ -497,8 +497,17 @@ async def _execute_tool_call(
     user_id: str | None,
     is_admin: bool,
 ) -> str:
-    """Run a single tool and return the summarised result text."""
+    """Run a single tool and return the summarised result text, or the reason its dates
+    are invalid so the model can correct them."""
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        InvalidDateRange,
+        parse_canonical_date_range,
+    )
+
     kwargs: Final = _resolve_fetch_kwargs(fn_name, fn_args, user_id, is_admin)
+    date_range: Final = parse_canonical_date_range(kwargs["start_date"], kwargs["end_date"])
+    if isinstance(date_range, InvalidDateRange):
+        return f"Invalid date range: {date_range.reason}"
     raw_data: Final = await handler["fetch"](**kwargs)
     return handler["summarise"](raw_data)
 
