@@ -1,9 +1,11 @@
+import json
 import os
 from typing import Final
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.xai.chat.transformation import (
@@ -165,6 +167,102 @@ class TestXAIUsageNormalization:
         XAIChatConfig.normalize_openai_compatible_usage_totals(usage)
 
         assert usage["total_tokens"] == 200
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_strips_message_names_from_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{XAI_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-xai",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "grok-4.20-beta-latest",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="xai/grok-4.20-beta-latest",
+        messages=[
+            {"role": "system", "content": "Be concise", "name": "system_prompt"},
+            {"role": "user", "content": "Say OK", "name": "caller"},
+        ],
+        api_key="xai-test-key",
+        api_base=XAI_API_BASE,
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["messages"] == [
+        {"role": "system", "content": "Be concise"},
+        {"role": "user", "content": "Say OK", "name": "caller"},
+    ]
+    assert response.choices[0].message.content == "OK"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_streaming_include_usage_surfaces_xai_final_usage_chunk(respx_mock: respx.MockRouter) -> None:
+    frames: Final = (
+        {
+            "id": "chatcmpl-xai-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "grok-4.20-beta-latest",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-xai-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "grok-4.20-beta-latest",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-xai-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "grok-4.20-beta-latest",
+            "choices": [],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        },
+    )
+    sse_body: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
+    respx_mock.post(f"{XAI_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_body.encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="xai/grok-4.20-beta-latest",
+            messages=[{"role": "user", "content": "Say OK"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            api_key="xai-test-key",
+            api_base=XAI_API_BASE,
+        )
+    )
+
+    usage_chunks: Final = [chunk for chunk in chunks if getattr(chunk, "usage", None) is not None]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "OK"
+    assert len(usage_chunks) == 1
+    assert (
+        usage_chunks[0].usage.prompt_tokens,
+        usage_chunks[0].usage.completion_tokens,
+        usage_chunks[0].usage.total_tokens,
+    ) == (2, 1, 3)
 
 
 class TestXAIChatWebSearchBilling:

@@ -1,11 +1,13 @@
 import asyncio
 import json
 import sys
-from typing import Any, Dict, List
+from types import ModuleType, SimpleNamespace
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._version import version
@@ -19,6 +21,21 @@ try:
     databricks_sdk_installed = databricks_sdk is not None
 except ImportError:
     databricks_sdk_installed = False
+
+
+def _install_databricks_sdk(monkeypatch: pytest.MonkeyPatch, host: str, token: str) -> None:
+    config: Final = SimpleNamespace(
+        host=host,
+        authenticate=lambda: {"Authorization": f"Bearer {token}"},
+    )
+    sdk_module: Final = ModuleType("databricks.sdk")
+    package_module: Final = ModuleType("databricks")
+    package_module.__path__ = []
+    setattr(sdk_module, "WorkspaceClient", lambda: SimpleNamespace(config=config))
+    setattr(sdk_module, "useragent", SimpleNamespace(with_partner=lambda _: None))
+    setattr(package_module, "sdk", sdk_module)
+    monkeypatch.setitem(sys.modules, "databricks", package_module)
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk_module)
 
 
 def mock_chat_response() -> Dict[str, Any]:
@@ -536,6 +553,62 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
         )
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_chat_completion_uses_databricks_sdk_credentials(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    host: Final = "https://my.workspace.cloud.databricks.com"
+    token: Final = "sdk-test-token"
+    _install_databricks_sdk(monkeypatch, host, token)
+    messages: Final = [{"role": "user", "content": "How are you?"}]
+    route: Final = respx_mock.post(f"{host}/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(200, json=mock_chat_response())
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-gpt-5-6-sol",
+        messages=messages,
+        temperature=0.5,
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert str(route.calls.last.request.url) == f"{host}/serving-endpoints/chat/completions"
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {token}"
+    assert request_body["messages"] == messages
+    assert request_body["temperature"] == 0.5
+    assert response.choices[0].message.content == mock_chat_response()["choices"][0]["message"]["content"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_embedding_uses_databricks_sdk_credentials(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    host: Final = "https://my.workspace.cloud.databricks.com"
+    token: Final = "sdk-test-token"
+    _install_databricks_sdk(monkeypatch, host, token)
+    inputs: Final = ["hello"]
+    route: Final = respx_mock.post(f"{host}/serving-endpoints/embeddings").mock(
+        return_value=httpx.Response(200, json=mock_embedding_response())
+    )
+
+    response: Final = litellm.embedding(
+        model="databricks/databricks-qwen3-embedding-0-6b",
+        input=inputs,
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert str(route.calls.last.request.url) == f"{host}/serving-endpoints/embeddings"
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {token}"
+    assert request_body["input"] == inputs
+    assert response.to_dict()["data"] == mock_embedding_response()["data"]
 
 
 def test_completion_with_prompt_caching_anthropic_model(monkeypatch):
