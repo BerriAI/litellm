@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import (
+    MockTestingParamsDisabledError,
+    ProxyMissingRequiredParamError,
+    ProxyModelNotFoundError,
+    route_request,
+)
 
 
 @pytest.mark.parametrize(
@@ -1745,6 +1750,48 @@ async def test_raise_if_model_not_routable_raises_for_unknown_model(monkeypatch)
 
     assert exc_info.value.status_code == 400
     assert "does-not-exist" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("data", "route_type", "expected_error"),
+    [
+        pytest.param(
+            {"model": "does-not-exist"},
+            "atext_completion",
+            ProxyMissingRequiredParamError,
+            id="missing-prompt",
+        ),
+        pytest.param(
+            {"model": "does-not-exist", "messages": [{"role": "user", "content": "hi"}], "mock_timeout": True},
+            "acompletion",
+            MockTestingParamsDisabledError,
+            id="mock-params-disallowed",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_raise_if_model_not_routable_reports_body_errors_before_the_model(
+    monkeypatch, data, route_type, expected_error
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_utils import registry_read_through
+    from litellm.proxy.route_llm_request import raise_if_model_not_routable
+
+    monkeypatch.setattr(
+        registry_read_through,
+        "model_registry_read_through",
+        SimpleNamespace(attempt=AsyncMock(return_value=False)),
+    )
+
+    with pytest.raises(expected_error):
+        await raise_if_model_not_routable(
+            data=data,
+            llm_router=_router_with_gpt4o_mini(),
+            user_model=None,
+            route_type=route_type,
+        )
 
 
 @pytest.mark.parametrize(

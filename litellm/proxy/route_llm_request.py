@@ -820,30 +820,68 @@ def _router_model_group_routable(
     return _is_a2a_agent_model(model)
 
 
-async def raise_if_model_not_routable(
-    data: dict[str, object],
+def _router_can_route_unless_blocked(
+    data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: str,
-) -> None:
-    """Raise ProxyModelNotFoundError when route_request would reject the model.
+) -> bool:
+    try:
+        return _router_can_route(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type)
+    except litellm.PermissionDeniedError:
+        return False
 
-    Lets pre-call steps (e.g. guardrails) skip work for requests that can never
-    route, and mirrors route_request's registry read-through retry.
+
+async def is_model_routable(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: str,
+    read_through: bool = True,
+) -> bool:
+    """Whether route_request would dispatch this request, including its registry read-through retry.
+
+    A fully blocked model counts as not routable. read_through=False skips the registry retry.
     """
-    if _router_can_route(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type):
-        return
+    if _router_can_route_unless_blocked(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type):
+        return True
     requested_model: Final = data.get("model")
-    if isinstance(requested_model, str) and requested_model:
-        from litellm.proxy import proxy_server
-        from litellm.proxy.common_utils.registry_read_through import (
-            model_registry_read_through,
-        )
+    if not read_through or not isinstance(requested_model, str) or not requested_model:
+        return False
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.registry_read_through import (
+        model_registry_read_through,
+    )
 
-        if await model_registry_read_through.attempt(requested_model) and _router_can_route(
-            data=data, llm_router=proxy_server.llm_router, user_model=user_model, route_type=route_type
-        ):
-            return
+    return await model_registry_read_through.attempt(requested_model) and _router_can_route_unless_blocked(
+        data=data, llm_router=proxy_server.llm_router, user_model=user_model, route_type=route_type
+    )
+
+
+async def raise_if_model_not_routable(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: str,
+    read_through: bool = True,
+) -> None:
+    """Raise the error route_request would raise for a model it cannot dispatch.
+
+    The body checks route_request runs first come first: a missing required param, then
+    disallowed mock testing params. After them, PermissionDeniedError (403) for a fully blocked
+    model and ProxyModelNotFoundError (400) otherwise. read_through=False skips the registry retry.
+    """
+    if await is_model_routable(
+        data=data, llm_router=llm_router, user_model=user_model, route_type=route_type, read_through=read_through
+    ):
+        return
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
+    raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
+    requested_model: Final = data.get("model")
+    if llm_router is not None:
+        _raise_if_model_fully_blocked(
+            llm_router=llm_router, model_name=requested_model, team_id=get_team_id_from_data(dict(data))
+        )
     raise ProxyModelNotFoundError(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
         model_name=requested_model if isinstance(requested_model, str) else "",

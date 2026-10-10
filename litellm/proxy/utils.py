@@ -2426,6 +2426,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        skip_content_enforcers: bool = False,
     ) -> None:
         pass
 
@@ -2438,6 +2439,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        skip_content_enforcers: bool = False,
     ) -> dict:
         pass
 
@@ -2449,6 +2451,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        skip_content_enforcers: bool = False,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2461,11 +2464,16 @@ class ProxyLogging:
         With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
         limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
+
+        ``skip_content_enforcers`` also skips the non-guardrail callbacks that set
+        ``enforces_request_content``, the ones ``guardrails_only`` keeps.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
         if guardrails_only and skip_guardrails:
             raise ValueError("guardrails_only and skip_guardrails are mutually exclusive")
+        if guardrails_only and skip_content_enforcers:
+            raise ValueError("guardrails_only and skip_content_enforcers are mutually exclusive")
 
         if not guardrails_only:
             self._init_response_taking_too_long_task(data=data)
@@ -2581,6 +2589,7 @@ class ProxyLogging:
                         _callback is not None
                         and isinstance(_callback, CustomLogger)
                         and (not guardrails_only or _callback.enforces_request_content)
+                        and not (skip_content_enforcers and _callback.enforces_request_content)
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):

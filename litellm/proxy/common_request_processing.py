@@ -43,6 +43,7 @@ from litellm.constants import (
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
+    REDACTED_BY_LITELLM,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -118,6 +119,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
+    is_model_routable,
     raise_if_model_not_routable,
     route_request,
 )
@@ -254,6 +256,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
+    CallTypesLiteral,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -1736,7 +1739,7 @@ def _timing_values(
 
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
-        self.data = data
+        self.data: dict[str, Any] = data  # mutable-ok: the request body every later step mutates in place
         self._tags_before_guardrails: frozenset[str] | None = None
 
     @property
@@ -2252,7 +2255,7 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
-        await raise_if_model_not_routable(
+        model_routable: Final = llm_router is None or await is_model_routable(
             data=self.data,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # loosely typed
             llm_router=llm_router,
             user_model=user_model,
@@ -2261,11 +2264,14 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             llm_router.arm_routing_read_prefetch(prefetch_model, self.data)
-        self.data = await proxy_logging_obj.pre_call_hook(
+        await self._run_pre_call_hooks(
+            proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,
-            data=self.data,
             call_type=route_type,
             skip_guardrails=skip_guardrails,
+            model_routable=model_routable,
+            llm_router=llm_router,
+            user_model=user_model,
         )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
@@ -2292,6 +2298,81 @@ class ProxyBaseLLMRequestProcessing:
             logging_obj.update_messages(self.data["messages"])
 
         return self.data, logging_obj
+
+    async def _run_pre_call_hooks(
+        self,
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+        skip_guardrails: bool,
+        model_routable: bool,
+        llm_router: Router | None,
+        user_model: str | None,
+    ) -> None:
+        """Run the pre-call hooks on self.data, with guardrails last when the requested model cannot route yet.
+
+        For such a model, hooks other than guardrails and content enforcers run first and may
+        rewrite the model. A model that still cannot route raises the routing error before any
+        guardrail runs; otherwise the guardrails run on the rewritten request. The registry
+        read-through is retried only for a model those hooks changed.
+        """
+        if model_routable:
+            self.data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=self.data,
+                call_type=call_type,
+                skip_guardrails=skip_guardrails,
+            )
+            return
+        model_before_hooks: Final = self.data.get("model")
+        self.data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+            call_type=call_type,
+            skip_guardrails=True,
+            skip_content_enforcers=True,
+        )
+        try:
+            await raise_if_model_not_routable(
+                data=self.data,
+                llm_router=llm_router,
+                user_model=user_model,
+                route_type=call_type,
+                read_through=self.data.get("model") != model_before_hooks,
+            )
+        except Exception:
+            if not skip_guardrails:
+                self._redact_request_rejected_before_guardrails(proxy_logging_obj=proxy_logging_obj)
+            raise
+        if not skip_guardrails:
+            self.data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=self.data,
+                call_type=call_type,
+                guardrails_only=True,
+            )
+
+    def _redact_request_rejected_before_guardrails(self, proxy_logging_obj: ProxyLogging) -> None:
+        """Redact the content of a request rejected before the pre-call guardrails that apply to it ran.
+
+        The request body, its proxy_server_request snapshot and message logging all carry the
+        redaction marker, so failure callbacks, post-call failure hooks and spend rows never see
+        content a masking guardrail would have rewritten.
+        """
+        request_metadata: Final = dict[str, object]()
+        for bucket in _request_metadata_buckets(self.data):
+            request_metadata.update(bucket)
+        if not proxy_logging_obj.has_pre_call_guardrails(request_metadata):
+            return
+        if "messages" in self.data:
+            self.data["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
+        for content_key in ("prompt", "input"):
+            if content_key in self.data:
+                self.data[content_key] = ""
+        refresh_proxy_server_request_body_snapshot(self.data)
+        logging_obj: Final = self.data.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.standard_callback_dynamic_params["turn_off_message_logging"] = True
 
     async def _pre_call_with_fallbacks(
         self,
@@ -2520,7 +2601,7 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                (list(self.data.keys()) if isinstance(self.data, dict) else type(self.data).__name__),
+                list(self.data.keys()),
             )
         else:
             verbose_proxy_logger.debug(
