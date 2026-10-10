@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -537,22 +537,35 @@ class MistralConfig(OpenAIGPTConfig):
                     # Only process if content is a list
                     if isinstance(content, list):
                         thinking_content = ""
-                        text_content = ""
+                        text_segments: list[str] = []  # mutable-ok: matches response_data dict typing
 
                         # Process each content block
-                        for block in content:
-                            if block.get("type") == "thinking":
-                                thinking_blocks = block.get("thinking", [])
-                                thinking_texts = []
-                                for thinking_block in thinking_blocks:
-                                    if thinking_block.get("type") == "text":
-                                        thinking_texts.append(thinking_block.get("text", ""))
-                                thinking_content = "\n".join(thinking_texts)
-                            elif block.get("type") == "text":
-                                text_content = block.get("text", "")
+                        for raw_block in content:
+                            block = cast(Mapping[str, object], raw_block)  # cast-ok: mistral content block
+                            block_type = block.get("type")
+                            if block_type == "thinking":
+                                thinking_blocks = block.get("thinking")
+                                if isinstance(thinking_blocks, list):
+                                    thinking_texts = []
+                                    for tb_raw in thinking_blocks:
+                                        tb = cast(Mapping[str, object], tb_raw)  # cast-ok: thinking block
+                                        if tb.get("type") == "text":
+                                            thinking_texts.append(str(tb.get("text", "")))
+                                    thinking_content = "\n".join(thinking_texts)
+                            elif block_type == "text":
+                                text_segments.append(str(block.get("text", "")))
+                            elif block_type == "reference":
+                                ref_ids = block.get("reference_ids")
+                                if isinstance(ref_ids, list):
+                                    text_segments.extend(
+                                        f"[{rid}]"
+                                        for rid in cast(  # cast-ok: reference_ids from json response
+                                            Sequence[object], ref_ids
+                                        )
+                                    )
 
                         # Set the extracted content
-                        choice["message"]["content"] = text_content
+                        choice["message"]["content"] = "".join(text_segments)
                         if thinking_content:
                             choice["message"]["reasoning_content"] = thinking_content
 
@@ -676,26 +689,36 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
         thinking_blocks: Final[list[dict]] = []
         reasoning_segments: Final[list[str]] = []
 
-        for block in content_blocks:
+        for raw_block in content_blocks:
+            block = cast(Mapping[str, object], raw_block)  # cast-ok: mistral content block
             block_type = block.get("type")
             if block_type == "thinking":
-                mistral_thinking = block.get("thinking", [])
-                thinking_text_parts: list[str] = []
-                for thinking_block in mistral_thinking:
-                    if thinking_block.get("type") == "text":
-                        thinking_text_parts.append(thinking_block.get("text", ""))
-                thinking_text = "".join(thinking_text_parts)
-                if thinking_text:
-                    reasoning_segments.append(thinking_text)
-                    thinking_blocks.append(
-                        {
-                            "type": "thinking",
-                            "thinking": thinking_text,
-                            "signature": "mistral",
-                        }
-                    )
+                mistral_thinking = block.get("thinking")
+                if isinstance(mistral_thinking, list):
+                    thinking_text_parts: list[str] = []
+                    for tb_raw in mistral_thinking:
+                        tb = cast(Mapping[str, object], tb_raw)  # cast-ok: thinking block
+                        if tb.get("type") == "text":
+                            thinking_text_parts.append(str(tb.get("text", "")))
+                    thinking_text = "".join(thinking_text_parts)
+                    if thinking_text:
+                        reasoning_segments.append(thinking_text)
+                        thinking_blocks.append(
+                            {
+                                "type": "thinking",
+                                "thinking": thinking_text,
+                                "signature": "mistral",
+                            }
+                        )
             elif block_type == "text":
-                text_segments.append(block.get("text", ""))
+                text_segments.append(str(block.get("text", "")))
+            elif block_type == "reference":
+                ref_ids = block.get("reference_ids")
+                if isinstance(ref_ids, list):
+                    text_segments.extend(
+                        f"[{rid}]"
+                        for rid in cast(Sequence[object], ref_ids)  # cast-ok: reference_ids from json response
+                    )
 
         normalized_text: Final = "".join(text_segments) if text_segments else None
         reasoning_content: Final = "\n".join(reasoning_segments) if reasoning_segments else None

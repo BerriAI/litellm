@@ -916,3 +916,41 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+def test_mistral_content_list_multiple_text_and_reference_chunks():
+    raw_response_data = {
+        "id": "test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "mistral-medium-2604",
+        "choices": [{
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "The sky is blue during the day"},
+                    {"type": "reference", "reference_ids": ["doc1"]},
+                    {"type": "text", "text": "."},
+                ],
+            },
+        }],
+    }
+    result = MistralConfig._handle_content_list_to_str_conversion(raw_response_data)
+    assert result["choices"][0]["message"]["content"] == "The sky is blue during the day[doc1]."
+
+
+def test_mistral_streaming_normalize_content_blocks_with_reference():
+    content_blocks = [
+        {"type": "text", "text": "Hello "},
+        {"type": "reference", "reference_ids": ["ref1", "ref2"]},
+        {"type": "text", "text": " world"},
+    ]
+    normalized_text, thinking_blocks, reasoning_content = (
+        MistralChatResponseIterator._normalize_content_blocks(content_blocks)
+    )
+    assert normalized_text == "Hello [ref1][ref2] world"
+    assert thinking_blocks == []
+    assert reasoning_content is None
+
