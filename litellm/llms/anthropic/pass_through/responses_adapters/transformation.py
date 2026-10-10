@@ -209,6 +209,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     "arguments": json.dumps(first.get("input", {})),
                 },
             )
+        if btype == "text":
+            return (
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": first.get("text", "")}],
+                },
+            )
         return ()
 
     def translate_messages_to_responses_input(
@@ -367,19 +375,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
                         for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
-                    asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
-                        {"type": "output_text", "text": block.get("text", "")}
-                        for block in blocks
-                        if block.get("type") == "text"
-                    ]
-                    if asst_parts:
-                        input_items.append(
-                            {
-                                "type": "message",
-                                "role": "assistant",
-                                "content": asst_parts,
-                            }
-                        )
 
         return input_items
 

@@ -5,7 +5,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import pytest
@@ -665,6 +665,51 @@ class TestTranslateMessagesToResponsesInput:
         assert [item["type"] for item in result] == ["reasoning", "function_call", "reasoning"]
         assert result[0]["summary"] == [{"type": "summary_text", "text": "Before the call."}]
         assert result[2]["summary"] == [{"type": "summary_text", "text": "After the call."}]
+
+    def test_assistant_text_before_and_after_tool_use_preserves_order(self):
+        """Text around tool_use stays in block order, not replayed after (#45470)."""
+        messages: Final = [
+            {"role": "user", "content": "weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Let me check."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "get_weather",
+                        "input": {"city": "Paris"},
+                    },
+                    {"type": "text", "text": "(after)"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny"}
+                ],
+            },
+        ]
+        result: Final = _translate_messages(messages)
+        assert [item["type"] for item in result] == [
+            "message",
+            "message",
+            "function_call",
+            "message",
+            "function_call_output",
+        ]
+        assert result[1] == {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Let me check."}],
+        }
+        assert result[2]["type"] == "function_call"
+        assert result[2]["call_id"] == "toolu_1"
+        assert result[3] == {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "(after)"}],
+        }
 
     def test_thinking_and_text_stay_separate(self):
         """The visible answer stays the only thing in the assistant message."""
