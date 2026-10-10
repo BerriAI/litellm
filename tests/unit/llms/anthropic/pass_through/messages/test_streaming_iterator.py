@@ -1,8 +1,9 @@
 import asyncio
 import json
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 
@@ -22,6 +23,8 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     is_provider_error_chunk,
     parse_anthropic_error_event,
 )
+from litellm.proxy.pass_through_endpoints import success_handler
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 
 
 class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
@@ -1523,3 +1526,30 @@ async def test_relay_teardown_dispatches_deferred_billing_when_sentinel_never_co
     assert len(worker.enqueued) == 1, "teardown billing enqueued alongside the deferred dispatch"
     await worker.enqueued[0]
     assert deferred_fired.is_set()
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_response_iterator_relays_bytes_and_bills_through_proxy_success_handler():
+    body = b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+    response = httpx.Response(200, content=body)
+    logging_obj = _make_logging_obj("test_async_streaming_response_iterator_relays_bytes")
+    iterator = BaseAnthropicMessagesStreamingIterator(litellm_logging_obj=logging_obj, request_body={})
+
+    with patch.object(PassThroughStreamingHandler, "route_streaming_logging_to_handler", new=AsyncMock()) as route:
+        relayed = [
+            chunk
+            async for chunk in iterator.get_async_streaming_response_iterator(
+                httpx_response=response, request_body={}, litellm_logging_obj=logging_obj
+            )
+        ]
+        for _ in range(100):
+            if route.await_count:
+                break
+            await asyncio.sleep(0.01)
+
+    assert b"".join(relayed) == body
+    route.assert_awaited_once()
+    assert route.await_args.kwargs["passthrough_success_handler_obj"] is (
+        success_handler.GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ
+    )
+    assert route.await_args.kwargs["url_route"] == "/v1/messages"
