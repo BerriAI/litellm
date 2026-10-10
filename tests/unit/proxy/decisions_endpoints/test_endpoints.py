@@ -257,6 +257,51 @@ def test_proxy_decisions_dispatches_strands_decider(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+def test_proxy_systemone_dispatches_databricks_serving_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "databricks-decider",
+                "litellm_params": {
+                    "model": "databricks/databricks-openjev-qwen35-4b",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "api_key": "dapi-deployment",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post(
+        "https://workspace.example/serving-endpoints/databricks-openjev-qwen35-4b/invocations"
+    ).respond(json={**_RESPONSE, "model": "/mosaicml/local_model"})
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "databricks-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "databricks-openjev-qwen35-4b",
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer dapi-deployment"
+
+
 def test_proxy_systemone_dispatches_databricks_ai_decide(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

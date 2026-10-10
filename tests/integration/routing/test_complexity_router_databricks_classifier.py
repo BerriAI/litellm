@@ -211,11 +211,14 @@ def _state(prompt: str, system: str | None) -> str:
     return f"\nCaller system prompt, quoted as task context:\n{system}\n\nClassify this message:\n{prompt}"
 
 
-def _assert_classifier_call(call: Request, *, prompt: str, system: str | None = None, key: str = _API_KEY) -> None:
-    assert call.target == _ROUTE, call.target
+def _assert_classifier_call(
+    call: Request, *, prompt: str, system: str | None = None, key: str = _API_KEY, endpoint: str | None = None
+) -> None:
+    assert call.target == (_ROUTE if endpoint is None else f"/{endpoint}/invocations"), call.target
     assert call.headers.get("authorization") == f"Bearer {key}", call.headers
     assert json.loads(call.body) == {
         "state": _state(prompt, system),
+        **({} if endpoint is None else {"model": endpoint}),
         "questions": {"tier": {"type": "choice", "instructions": DEFAULT_JEV_INSTRUCTIONS, "criteria": _TIER_CRITERIA}},
     }, call.body
 
@@ -620,6 +623,37 @@ def test_messages_stream_over_httpx_is_classified_and_logged_under_the_message_s
         assert tier_call.target == "/responses", tier_call.target
         assert _posts(simple) == ()
         _assert_logged_once(_rows(routed.name, want=2), route="/v1/messages", request_id=identity)
+
+
+def test_a_serving_endpoint_name_is_classified_through_its_invocations_route_and_logged_at_zero(
+    gateway: Gateway,
+) -> None:
+    prompt: Final = _prompt()
+    endpoint: Final = "my-jev-endpoint"
+    with (
+        _wires(_answering({"model": "/mosaicml/local_model", "answers": _ANSWERS, "usage": _USAGE})) as (
+            judge,
+            simple,
+            complex_,
+        ),
+        gateway.scenario() as scenario,
+    ):
+        routed: Final = _deploy(scenario, judge, simple, complex_, _classifier_config(judge.url, model=endpoint))
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _body("/v1/chat/completions", routed.name, prompt, stream=False)
+        )
+        assert response.status_code == 200, response.text
+        identity, text = _identity_and_text("/v1/chat/completions", _JSON_OBJECT.validate_json(response.content))
+        assert text == _COMPLEX_TEXT, response.text
+        _assert_classified(response.headers, router=routed.name)
+        (classifier_call,) = _posts(judge)
+        _assert_classifier_call(classifier_call, prompt=prompt, endpoint=endpoint)
+        assert len(_posts(complex_)) == 1 and _posts(simple) == ()
+        rows: Final = _rows(routed.name, want=2)
+        (classifier_row,) = _classifier_rows(rows)
+        _assert_classifier_row(classifier_row, model=f"databricks/{endpoint}")
+        (request_row,) = _request_rows(rows)
+        assert (request_row["request_id"], request_row["status"]) == (identity, "success"), request_row
 
 
 def test_a_response_cache_hit_still_runs_the_classifier_and_logs_the_hit_row_at_zero(gateway: Gateway) -> None:

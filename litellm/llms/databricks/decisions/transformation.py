@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -9,15 +10,23 @@ from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
 DATABRICKS_AI_DECIDE_MODEL: Final = "ai_decide"
+_AI_DECIDE_PATH: Final = "/api/2.0/ai-functions/ai-decide"
+_SERVING_ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 _MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
-def validate_ai_decide_model(model: str) -> str:
-    if model != DATABRICKS_AI_DECIDE_MODEL:
-        raise ValueError(
-            f"Databricks decisions model must be {DATABRICKS_AI_DECIDE_MODEL!r} (the ai_decide AI Function)"
-        )
-    return model
+def is_ai_decide_model(model: str) -> bool:
+    return model == DATABRICKS_AI_DECIDE_MODEL
+
+
+def validate_databricks_decisions_model(model: str) -> str:
+    if is_ai_decide_model(model) or _SERVING_ENDPOINT_NAME.fullmatch(model) is not None:
+        return model
+    raise ValueError(
+        f"Databricks decisions model must be {DATABRICKS_AI_DECIDE_MODEL!r} (the ai_decide AI Function) or a bare "
+        "serving endpoint name (letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), "
+        "e.g. databricks-openjev-qwen35-4b"
+    )
 
 
 def databricks_workspace_host(api_base: str) -> str:
@@ -61,21 +70,22 @@ class DatabricksDecisionsConnection:
 
 
 class DatabricksDecisionsConfig(BaseDecisionsConfig):
-    path = "/api/2.0/ai-functions/ai-decide"
     api_key_env = ("DATABRICKS_API_KEY", "DATABRICKS_TOKEN")
     api_base_env = ("DATABRICKS_API_BASE",)
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return (
             f"api_base is required for Decisions provider '{custom_llm_provider}': set DATABRICKS_API_BASE to "
-            "https://<workspace-host>"
+            "https://<workspace-host>/serving-endpoints"
         )
 
     def canonical_model(self, model: str) -> str:
-        return validate_ai_decide_model(model)
+        return validate_databricks_decisions_model(model)
 
     def get_complete_url(self, api_base: str, model: str) -> str:
-        return f"{databricks_workspace_host(api_base)}{self.path}"
+        if is_ai_decide_model(model):
+            return f"{databricks_workspace_host(api_base)}{_AI_DECIDE_PATH}"
+        return f"{api_base.rstrip('/')}/{validate_databricks_decisions_model(model)}/invocations"
 
     def transform_decisions_request(
         self,
@@ -84,7 +94,7 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
         body: Final = super().transform_decisions_request(model, request, custom_llm_provider)
-        if isinstance(body, UnsupportedDecisionsRequest):
+        if isinstance(body, UnsupportedDecisionsRequest) or not is_ai_decide_model(model):
             return body
         return MappingProxyType({key: value for key, value in body.items() if key != "model"})
 
@@ -101,9 +111,9 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
         if not base or not key:
             raise ValueError(
                 "Databricks requires api_key or DATABRICKS_API_KEY (or DATABRICKS_TOKEN) and api_base or "
-                "DATABRICKS_API_BASE pointing to https://<workspace-host>"
+                "DATABRICKS_API_BASE pointing to https://<workspace-host>/serving-endpoints"
             )
-        return DatabricksDecisionsConnection(api_base=databricks_workspace_host(base), api_key=key)
+        return DatabricksDecisionsConnection(api_base=base.rstrip("/"), api_key=key)
 
 
 DATABRICKS_DECISIONS_CONFIG: Final[DatabricksDecisionsConfig] = DatabricksDecisionsConfig()

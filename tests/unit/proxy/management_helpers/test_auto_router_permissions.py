@@ -168,7 +168,13 @@ def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
 
 @pytest.mark.parametrize(
     ("provider", "model"),
-    [("typesafe", "jev-preview"), ("laya", "english"), ("bespoke", "nimble-latest"), ("databricks", "ai_decide")],
+    [
+        ("typesafe", "jev-preview"),
+        ("laya", "english"),
+        ("bespoke", "nimble-latest"),
+        ("databricks", "ai_decide"),
+        ("databricks", "my-openjev"),
+    ],
 )
 @pytest.mark.parametrize("legacy", [False, True])
 def test_members_can_still_tune_the_jev_classifier(provider: str, model: str, legacy: bool) -> None:

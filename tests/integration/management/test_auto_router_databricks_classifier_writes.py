@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply
@@ -13,12 +14,18 @@ from pydantic import JsonValue
 
 _MODEL: Final = "ai_decide"
 _ROUTE: Final = "/api/2.0/ai-functions/ai-decide"
+_ENDPOINT: Final = "databricks-openjev-qwen35-4b"
 _SECOND_WORKSPACE: Final = "/second-workspace"
 _API_KEY: Final = "synthetic-databricks-key"
-_MODEL_RULE: Final = "Databricks decisions model must be 'ai_decide' (the ai_decide AI Function)"
+_MODEL_RULE: Final = (
+    "Databricks decisions model must be 'ai_decide' (the ai_decide AI Function) or a bare serving endpoint name "
+    "(letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. "
+    "databricks-openjev-qwen35-4b"
+)
 _REJECTED_AT_LOAD: Final = "The router would drop this deployment at load time, so the write is rejected instead."
 _MODEL_REQUIRED: Final = (
-    "opensource_classifier_config.model is required for provider 'databricks': set it to 'ai_decide'"
+    "opensource_classifier_config.model is required for provider 'databricks': 'ai_decide' or a serving endpoint "
+    "name, e.g. databricks-openjev-qwen35-4b"
 )
 _BASE_NEEDS_KEY: Final = (
     "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: DATABRICKS_API_KEY or "
@@ -27,18 +34,19 @@ _BASE_NEEDS_KEY: Final = (
 _BLANK_KEY: Final = (
     "opensource_classifier_config.api_key must be non-empty; omit it to use the provider environment key"
 )
-_CLASSIFIER_ANSWER: Final[dict[str, JsonValue]] = {
-    "response": {
-        "answers": {
-            "tier": {
-                "type": "choice",
-                "choice": "COMPLEX",
-                "confidence": 0.91,
-                "probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
-            }
-        }
-    },
-    "metadata": {"version": "1.0"},
+_ANSWERS: Final[dict[str, JsonValue]] = {
+    "tier": {
+        "type": "choice",
+        "choice": "COMPLEX",
+        "confidence": 0.91,
+        "probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
+    }
+}
+_AI_DECIDE_ANSWER: Final[dict[str, JsonValue]] = {"response": {"answers": _ANSWERS}, "metadata": {"version": "1.0"}}
+_ENDPOINT_ANSWER: Final[dict[str, JsonValue]] = {
+    "model": "/mosaicml/local_model",
+    "answers": _ANSWERS,
+    "usage": {"input_tokens": 12, "output_tokens": 1},
 }
 _ROWS_QUERY: Final = (
     "SELECT request_id, status, metadata->>'internal_call_origin' AS origin "
@@ -47,7 +55,8 @@ _ROWS_QUERY: Final = (
 
 
 def _classifier(request: Request) -> Reply:
-    return Reply(body=json.dumps(_CLASSIFIER_ANSWER).encode())
+    answer: Final = _ENDPOINT_ANSWER if request.target.endswith("/invocations") else _AI_DECIDE_ANSWER
+    return Reply(body=json.dumps(answer).encode())
 
 
 def _tier(text: str) -> Callable[[Request], Reply]:
@@ -155,6 +164,16 @@ def test_validate_accepts_a_databricks_ai_decide_classifier_with_or_without_the_
         assert _validate(gateway, config) == {"valid": True, "error": None}, api_base
 
 
+def test_validate_accepts_a_databricks_classifier_with_a_bare_endpoint_name_of_any_length(gateway: Gateway) -> None:
+    for model in (_ENDPOINT, "e" * 5000):
+        config: Final = _router_config(
+            _classifier_config("https://dbc-example.cloud.databricks.com/serving-endpoints", model=model),
+            "simple",
+            "complex",
+        )
+        assert _validate(gateway, config) == {"valid": True, "error": None}, model[:40]
+
+
 def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gateway) -> None:
     base: Final = _classifier_config("https://dbc-example.cloud.databricks.com/serving-endpoints")
     cases: Final[tuple[tuple[str, dict[str, JsonValue], str], ...]] = (
@@ -164,12 +183,9 @@ def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gat
             _without(base, "api_key"),
             f"at opensource_classifier_config: Value error, {_BASE_NEEDS_KEY}",
         ),
-        (
-            "serving endpoint name",
-            {**base, "model": "databricks-openjev-qwen35-4b"},
-            _MODEL_RULE,
-        ),
-        ("dash", {**base, "model": "ai-decide"}, _MODEL_RULE),
+        ("slash in the name", {**base, "model": "a/b"}, _MODEL_RULE),
+        ("space in the name", {**base, "model": "a b"}, _MODEL_RULE),
+        ("leading dot", {**base, "model": ".hidden"}, _MODEL_RULE),
         ("empty name", {**base, "model": ""}, _MODEL_RULE),
         (
             "blank api_key",
@@ -193,8 +209,13 @@ def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gat
         assert error.endswith(_REJECTED_AT_LOAD), (label, error)
 
 
-def test_test_routing_classifies_through_databricks_ai_decide_without_calling_the_tier_it_picked(
-    gateway: Gateway,
+@pytest.mark.parametrize(
+    ("model", "target", "cost"),
+    [(_MODEL, _ROUTE, {}), (_ENDPOINT, f"/{_ENDPOINT}/invocations", {"classifier_cost": 0.0})],
+    ids=["ai_decide", "serving_endpoint"],
+)
+def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_picked(
+    gateway: Gateway, model: str, target: str, cost: dict[str, JsonValue]
 ) -> None:
     prompt: Final = f"design a distributed cache {uuid.uuid4().hex}"
     with (
@@ -205,7 +226,7 @@ def test_test_routing_classifies_through_databricks_ai_decide_without_calling_th
     ):
         simple_model: Final = scenario.model(model="openai/simple-tier", api_base=simple.url)
         complex_model: Final = scenario.model(model="openai/complex-tier", api_base=complex_tier.url)
-        config: Final = _router_config(_classifier_config(judge.url), simple_model, complex_model)
+        config: Final = _router_config(_classifier_config(judge.url, model=model), simple_model, complex_model)
         response: Final = gateway.request(
             "POST", "/auto_router/test_routing", {"prompt": prompt, "complexity_router_config": config}
         )
@@ -226,17 +247,18 @@ def test_test_routing_classifies_through_databricks_ai_decide_without_calling_th
                     "tier-probability:MEDIUM=0.060000",
                     "tier-probability:COMPLEX=0.910000",
                 ],
-                "classifier_model": f"databricks/{_MODEL}",
+                "classifier_model": f"databricks/{model}",
+                **cost,
                 "classifier_probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
                 "classifier_confidence": 0.91,
                 "conversation_continuing": False,
             },
         }, response.text
         (call,) = [request for request in judge.drain() if request.method == "POST"]
-        assert call.target == _ROUTE, call.target
+        assert call.target == target, call.target
         assert call.headers.get("authorization") == f"Bearer {_API_KEY}", call.headers
         body: Final = json.loads(call.body)
-        assert "model" not in body, body
+        assert body.get("model") == (None if model == _MODEL else model), body
         assert body["state"] == f"\nClassify this message:\n{prompt}", body
         assert _judge_targets(simple) == () and _judge_targets(complex_tier) == ()
 
