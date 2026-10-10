@@ -75,6 +75,8 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
+        "sagemaker_nova": "SAGEMAKER_NOVA_ENDPOINT",
+        "sagemaker_nova2_lite": "SAGEMAKER_NOVA2_LITE_ENDPOINT",
     }
 )
 
@@ -115,6 +117,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "provider_live: requires actual provider timing, limits, state, or a response that echoes this"
         " run's own unique value; bypass shared cache",
     )
+    config.addinivalue_line("markers", "sagemaker_nova: requires a configured SageMaker Nova endpoint")
+    config.addinivalue_line("markers", "sagemaker_nova2_lite: requires a configured SageMaker Nova 2 Lite endpoint")
     config.addinivalue_line(
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",

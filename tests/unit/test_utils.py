@@ -1,4 +1,5 @@
 import asyncio, importlib, re
+import ast
 import base64
 import copy
 import contextlib
@@ -12,7 +13,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Final, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2046,6 +2047,141 @@ class TestProxyFunctionCalling:
             f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
             f"(without config context). Description: {description}"
         )
+
+
+@pytest.mark.usefixtures("isolated_openai_model_sets")
+def test_register_model_price_is_used_for_completion_cost(monkeypatch: pytest.MonkeyPatch):
+    model: Final = "migration-custom-pricing-model"
+    price: Final = {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.register_model({model: price}, persist_across_reloads=False)
+    response: Final = ModelResponse(
+        model=model,
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(0.02)
+
+
+@respx.mock
+@pytest.mark.usefixtures("isolated_openai_model_sets")
+def test_completion_registers_test_owned_model_prices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "migration-owned-pricing-model"
+    messages: Final = [{"role": "user", "content": "price control"}]
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": 0.0001,
+                "output_cost_per_token": 0.0002,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+    )
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-priced",
+                "object": "chat.completion",
+                "created": 123,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=messages,
+        api_key="test-api-key",
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.002,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {"model": model, "messages": messages}
+    assert litellm.model_cost[model]["input_cost_per_token"] == 0.001
+    assert litellm.model_cost[model]["output_cost_per_token"] == 0.002
+    assert response._hidden_params["response_cost"] == pytest.approx(0.018)
+
+
+@pytest.mark.usefixtures("isolated_openai_model_sets")
+def test_register_model_preserves_unrelated_model_prices(monkeypatch: pytest.MonkeyPatch):
+    model: Final = "migration-unrelated-pricing-model"
+    price: Final = {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+
+    litellm.register_model({model: price}, persist_across_reloads=False)
+    before: Final = dict(litellm.model_cost[model])
+    litellm.register_model({"migration-collateral-check-model": price}, persist_across_reloads=False)
+
+    assert litellm.model_cost[model] == before
+
+
+@pytest.mark.usefixtures("isolated_openai_model_sets")
+def test_add_known_models_indexes_models_from_the_supplied_cost_map(monkeypatch: pytest.MonkeyPatch):
+    model: Final = "migration-test-model"
+    model_cost_map: Final = {
+        model: {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        }
+    }
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+
+    litellm.add_known_models(model_cost_map=model_cost_map)
+
+    assert model in litellm.models_by_provider["openai"]
+
+
+def test_utils_defines_tests_without_invoking_them_at_module_scope() -> None:
+    tree: Final = ast.parse(Path(__file__).read_text())
+    defined: Final = frozenset(
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    invoked: Final = tuple(
+        node.value.func.id
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in defined
+    )
+
+    assert invoked == ()
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
@@ -8402,7 +8538,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     litellm.turn_on_debug()
 
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
-    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example.invalid/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
 

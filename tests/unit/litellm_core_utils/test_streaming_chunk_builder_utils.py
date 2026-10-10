@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock
@@ -5,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 
+import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
@@ -1851,3 +1853,180 @@ def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
 
     assert response is not None
     assert "service_tier" not in response.model_dump()
+
+
+def _legacy_stream_chunk(
+    model: str,
+    *,
+    content: str | None = None,
+    tool_calls: tuple[ChatCompletionDeltaToolCall, ...] = (),
+    usage: Usage | None = None,
+    finish_reason: str | None = None,
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-legacy",
+        created=1,
+        model=model,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=finish_reason,
+                index=0,
+                delta=Delta(content=content, role="assistant", tool_calls=list(tool_calls)),
+            )
+        ],
+        usage=usage,
+    )
+
+
+def test_stream_chunk_builder_empty_initial_chunk() -> None:
+    chunks: Final = ({"id": ""}, {"id": "1"}, {"id": "1"})
+
+    assert ChunkProcessor._get_chunk_id(chunks) == "1"
+
+
+def test_stream_chunk_builder_litellm_empty_chunks() -> None:
+    with pytest.raises(litellm.APIError):
+        stream_chunk_builder(chunks=None)
+
+    assert stream_chunk_builder(chunks=[]) is None
+
+
+def test_stream_chunk_builder_litellm_mixed_calls() -> None:
+    chunks: Final = (
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            content="To answer your question, ",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    id="call_sql",
+                    index=0,
+                    type="function",
+                    function=Function(
+                        name="sql_query",
+                        arguments='{"query": "SELECT COUNT(*) FROM users;"}',
+                    ),
+                ),
+            ),
+        ),
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            content="I will run a query.",
+            finish_reason="stop",
+        ),
+    )
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.content == "To answer your question, I will run a query."
+    assert response.choices[0].message.tool_calls[0].to_dict() == {
+        "function": {
+            "arguments": '{"query": "SELECT COUNT(*) FROM users;"}',
+            "name": "sql_query",
+        },
+        "id": "call_sql",
+        "type": "function",
+    }
+
+
+def test_stream_chunk_builder_litellm_tool_call() -> None:
+    chunks: Final = (
+        _legacy_stream_chunk(
+            "openai/gpt-4.1-mini",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    id="call_weather",
+                    index=0,
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Boston"}'),
+                ),
+            ),
+        ),
+        _legacy_stream_chunk(
+            "openai/gpt-4.1-mini",
+            finish_reason="stop",
+            usage=Usage(completion_tokens=3, prompt_tokens=5, total_tokens=8),
+        ),
+    )
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.tool_calls[0].function.arguments == '{"city":"Boston"}'
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+def test_stream_chunk_builder_litellm_tool_call_regular_message() -> None:
+    chunk: Final = _legacy_stream_chunk(
+        "openai/gpt-4.1-mini",
+        content="Hello there.",
+        finish_reason="stop",
+        usage=Usage(completion_tokens=2, prompt_tokens=4, total_tokens=6),
+    )
+    chunk._hidden_params = {"custom_llm_provider": "openai"}
+
+    response: Final = stream_chunk_builder(chunks=[chunk])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello there."
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+
+
+def test_grok_bug() -> None:
+    chunks: Final = (
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    id="call_weather",
+                    index=0,
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"location":'),
+                ),
+            ),
+        ),
+        _legacy_stream_chunk(
+            "groq/openai/gpt-oss-120b",
+            tool_calls=(
+                ChatCompletionDeltaToolCall(
+                    index=0,
+                    type="function",
+                    function=Function(arguments='"Boston"}'),
+                ),
+            ),
+            finish_reason="tool_calls",
+        ),
+    )
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {
+        "location": "Boston"
+    }
+
+
+def test_stream_chunk_builder_openai_audio_output_usage() -> None:
+    usage: Final = Usage(
+        completion_tokens=4,
+        prompt_tokens=7,
+        total_tokens=11,
+        completion_tokens_details={"audio_tokens": 2, "text_tokens": 2},
+        prompt_tokens_details=PromptTokensDetails(audio_tokens=3),
+    )
+    response: Final = stream_chunk_builder(
+        chunks=[
+            _legacy_stream_chunk(
+                "openai/gpt-audio-1.5",
+                content="Yes.",
+                finish_reason="stop",
+                usage=usage,
+            )
+        ]
+    )
+
+    assert response is not None
+    assert response.usage.completion_tokens_details.audio_tokens == 2
+    assert response.usage.prompt_tokens_details.audio_tokens == 3

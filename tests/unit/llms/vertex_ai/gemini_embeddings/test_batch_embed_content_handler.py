@@ -2,12 +2,17 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import GoogleBatchEmbeddings
 
 FILES_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
 FILE_METADATA_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+GEMINI_BATCH_EMBEDDINGS_URL: Final = (
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+)
 
 
 def _files_api_metadata(request: httpx.Request) -> httpx.Response:
@@ -24,6 +29,28 @@ def test_resolve_file_references_fetches_the_file_metadata_for_both_reference_fo
         sync_handler=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_files_api_metadata))),
     )
     assert resolved == {reference: {"mime_type": "video/mp4", "uri": FILES_URI}}
+
+
+def test_gemini_embedding_sends_batch_request_and_parses_vectors(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(GEMINI_BATCH_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embeddings": [{"values": [0.1, 0.2, 0.3]}],
+                "usageMetadata": {"promptTokenCount": 2, "totalTokenCount": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello"],
+        api_key="gemini-test-key",
+    )
+
+    request_body: Final = route.calls.last.request.read().decode()
+    assert "hello" in request_body
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 
 @pytest.mark.asyncio

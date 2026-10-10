@@ -489,6 +489,34 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     assert "anthropic-beta" not in headers
 
 
+def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header():
+    config: Final = VertexAIAnthropicConfig()
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Cache this request",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+    headers: Final = {}
+
+    result: Final = config.transform_request(
+        model="claude-3-5-sonnet-v2@20241022",
+        messages=messages,
+        optional_params={"max_tokens": 20, "is_vertex_request": True},
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "anthropic_beta" not in result
+    assert "anthropic-beta" not in headers
+
+
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
     """
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05

@@ -12,14 +12,24 @@ inflating TTFT and turning a steady provider stream into gap-then-burst delivery
 import binascii
 import json
 import struct
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Final, Iterator
 from unittest.mock import MagicMock
 
 import httpx
+import litellm
 import pytest
+import respx
 
 from litellm.llms.sagemaker.common_utils import SagemakerError
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 def _encode_header(name: str, value: str) -> bytes:
@@ -293,3 +303,269 @@ def test_installed_botocore_signs_the_completion_request():
     )
     assert request.body == b'{"inputs": "ping"}'
     assert "/us-west-2/sagemaker/aws4_request" in request.headers["Authorization"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+async def test_acompletion_sagemaker_non_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    url: Final = (
+        "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/"
+        "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    response: Final = await litellm.acompletion(
+        model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        max_tokens=80,
+        cost_per_second=0.000420,
+        num_retries=0,
+    )
+
+    assert route.called
+    assert str(route.calls[0].request.url) == url
+    assert json.loads(route.calls[0].request.content) == {
+        "inputs": "hi",
+        "parameters": {"temperature": 0.2, "max_new_tokens": 80},
+    }
+    assert response.choices[0].message.content == "SageMaker reply"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_completion_sagemaker_non_stream(respx_mock: respx.MockRouter) -> None:
+    url: Final = (
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/"
+        "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    response: Final = litellm.completion(
+        model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        max_tokens=80,
+        cost_per_second=0.000420,
+        num_retries=0,
+    )
+
+    assert route.called
+    assert str(route.calls[0].request.url) == url
+    assert json.loads(route.calls[0].request.content) == {
+        "inputs": "hi",
+        "parameters": {"temperature": 0.2, "max_new_tokens": 80},
+    }
+    assert response.choices[0].message.content == "SageMaker reply"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_completion_sagemaker_non_stream_with_aws_params(respx_mock: respx.MockRouter) -> None:
+    url: Final = (
+        "https://runtime.sagemaker.us-west-5.amazonaws.com/endpoints/"
+        "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    response: Final = litellm.completion(
+        model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        max_tokens=80,
+        cost_per_second=0.000420,
+        aws_access_key_id="unit-test-access-key",
+        aws_secret_access_key="unit-test-secret",
+        aws_region_name="us-west-5",
+        num_retries=0,
+    )
+
+    assert route.called
+    assert str(route.calls[0].request.url) == url
+    assert json.loads(route.calls[0].request.content) == {
+        "inputs": "hi",
+        "parameters": {"temperature": 0.2, "max_new_tokens": 80},
+    }
+    assert response.choices[0].message.content == "SageMaker reply"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_completion_sagemaker_prompt_template_non_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "custom_prompt_dict",
+        {
+            "deepseek-ai/deepseek-coder-6.7b-instruct": {
+                "roles": {},
+                "initial_prompt_value": "Question: ",
+                "final_prompt_value": " Answer:",
+            }
+        },
+    )
+    url: Final = (
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/deepseek_coder_6.7_instruct/invocations"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    response: Final = litellm.completion(
+        model="sagemaker/deepseek_coder_6.7_instruct",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        max_tokens=80,
+        hf_model_name="deepseek-ai/deepseek-coder-6.7b-instruct",
+        aws_region_name="us-east-1",
+        num_retries=0,
+    )
+
+    assert route.called
+    assert json.loads(route.calls[0].request.content) == {
+        "inputs": "Question: hi Answer:",
+        "parameters": {"temperature": 0.2, "max_new_tokens": 80},
+    }
+    assert response.choices[0].message.content == "SageMaker reply"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_sagemaker(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    url: Final = (
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/"
+        "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    rate: Final = 0.000420
+    response: Final = (
+        litellm.completion(
+            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.2,
+            max_tokens=80,
+            cost_per_second=rate,
+            aws_region_name="us-east-1",
+            num_retries=0,
+        )
+        if sync_mode
+        else await litellm.acompletion(
+            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.2,
+            max_tokens=80,
+            cost_per_second=rate,
+            aws_region_name="us-east-1",
+            num_retries=0,
+        )
+    )
+    response._response_ms = 1000.0
+
+    assert route.called
+    assert response.choices[0].message.content == "SageMaker reply"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(rate)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_sagemaker_stream(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    url: Final = (
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/"
+        "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations-response-stream"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, content=_token_frame("hello") + _token_frame(" world"))
+    )
+    stream: Final = (
+        litellm.completion(
+            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            messages=[{"role": "user", "content": "hi - what is ur name"}],
+            stream=True,
+            temperature=0.2,
+            max_tokens=80,
+            cost_per_second=0.000420,
+            aws_region_name="us-east-1",
+            num_retries=0,
+        )
+        if sync_mode
+        else await litellm.acompletion(
+            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            messages=[{"role": "user", "content": "hi - what is ur name"}],
+            stream=True,
+            temperature=0.2,
+            max_tokens=80,
+            cost_per_second=0.000420,
+            aws_region_name="us-east-1",
+            num_retries=0,
+        )
+    )
+    chunks: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+    content: Final = tuple(
+        chunk.choices[0].delta.content
+        for chunk in chunks
+        if chunk.choices[0].delta.content is not None
+    )
+
+    assert route.called
+    assert content == ("hello", " world")
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_sagemaker_streaming_bad_request(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    url: Final = (
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/"
+        "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations-response-stream"
+    )
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            400,
+            json={"Message": "The request payload failed validation.", "__type": "ValidationException"},
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            aws_region_name="us-east-1",
+            num_retries=0,
+        ) if sync_mode else await litellm.acompletion(
+            model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            aws_region_name="us-east-1",
+            num_retries=0,
+        )
+
+    assert route.called
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "sagemaker"

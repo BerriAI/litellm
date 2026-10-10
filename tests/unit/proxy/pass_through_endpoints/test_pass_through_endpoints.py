@@ -9254,7 +9254,7 @@ async def test_pass_through_request_logging_failure(mock_request, mock_user_api_
         request: Final = mock_request(headers={}, method="POST", request_body=athropic_request_body)
         response: Final = await pass_through_request(
             request=request,
-            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            target="https://exampleopenaiendpoint.example.invalid/v1/messages",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )
@@ -9298,7 +9298,7 @@ async def test_pass_through_request_logging_failure_with_stream(mock_request, mo
         request: Final = mock_request(headers={}, method="POST", request_body=athropic_request_body)
         response: Final = await pass_through_request(
             request=request,
-            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            target="https://exampleopenaiendpoint.example.invalid/v1/messages",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )

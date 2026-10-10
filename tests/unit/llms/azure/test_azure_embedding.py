@@ -1,8 +1,13 @@
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
+
+import litellm
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
@@ -92,3 +97,83 @@ class TestAzureV1AsyncEmbedding:
         )
 
         assert isinstance(client, AsyncOpenAI)
+
+
+@respx.mock
+def test_azure_embedding_forwards_optional_args_in_the_request_body():
+    route = respx.post(url__regex=r"https://azure-optional-args\.openai\.azure\.com/.*/embeddings.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+                "model": "text-embedding-ada-002",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+    response = litellm.embedding(
+        model="azure/text-embedding-ada-002",
+        input=["hello"],
+        api_base="https://azure-optional-args.openai.azure.com",
+        api_version="2023-05-15",
+        api_key="test-key",
+        azure_ad_token="test-token",
+    )
+
+    request_body = json.loads(route.calls.last.request.read())
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert request_body["azure_ad_token"] == "test-token"
+
+
+@pytest.mark.asyncio
+async def test_aembedding_azure_returns_an_azure_embedding_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx_mock.post(
+        url__regex=r"https://azure-async-embedding\.openai\.azure\.com/.*/embeddings.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.4, 0.5, 0.6]}],
+                "model": "text-embedding-ada-002",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+
+    response = await litellm.aembedding(
+        model="azure/text-embedding-ada-002",
+        input=["good morning", "another item"],
+        api_base="https://azure-async-embedding.openai.azure.com",
+        api_version="2023-05-15",
+        api_key="test-key",
+    )
+
+    assert response._hidden_params["custom_llm_provider"] == "azure"
+    assert isinstance(response.usage, litellm.Usage)
+    assert response.data[0]["embedding"] == [0.4, 0.5, 0.6]
+    assert len(route.calls) == 1
+
+
+def test_azure_embedding_maps_a_scripted_request_timeout(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post(
+        url__regex=r"https://azure-timeout\.openai\.azure\.com/.*/embeddings.*"
+    ).mock(side_effect=httpx.ReadTimeout("scripted timeout"))
+
+    with pytest.raises(litellm.Timeout):
+        litellm.embedding(
+            model="azure/text-embedding-ada-002",
+            input=["hello"],
+            api_base="https://azure-timeout.openai.azure.com",
+            api_version="2023-05-15",
+            api_key="test-key",
+            timeout=0.5,
+            max_retries=0,
+        )
+
+    assert route.call_count == 1

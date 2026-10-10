@@ -1,6 +1,12 @@
 
+import json
+from typing import Final
+
 import httpx
 import pytest
+import respx
+
+import litellm
 
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -620,3 +626,132 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+@respx.mock
+def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> None:
+    chunks: Final = (
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"content": "The Supreme Court"}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"content": " hears federal cases."}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "How does a case reach the Supreme Court?"},
+    ]
+    stream: Final = litellm.completion(
+        model="openrouter/openai/gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        max_tokens=50,
+        api_key="test-openrouter-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in stream_chunks if chunk.choices
+    ) == "The Supreme Court hears federal cases."
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.content == "The Supreme Court hears federal cases."
+    assert assembled.choices[0].finish_reason == "stop"
+
+
+@respx.mock
+def test_openrouter_streaming_reasoning_is_preserved() -> None:
+    chunks: Final = (
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "reasoning": "Consider the evidence. "},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "The decision is reasoned.", "reasoning": "Apply the rule."},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    parsed_reasoning_chunk: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunks[0])
+    assert parsed_reasoning_chunk.choices[0]["delta"]["reasoning_content"] == "Consider the evidence. "
+    messages: Final = [{"role": "user", "content": "Explain the decision briefly."}]
+    stream: Final = litellm.completion(
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        messages=messages,
+        stream=True,
+        api_key="test-openrouter-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    reasoning_deltas: Final = tuple(
+        getattr(chunk.choices[0].delta, "reasoning_content", None)
+        for chunk in stream_chunks
+        if chunk.choices
+    )
+    assert reasoning_deltas == ("Consider the evidence. ", "Apply the rule.", None)
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."

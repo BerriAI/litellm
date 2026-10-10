@@ -1,6 +1,10 @@
 
 
 import pytest
+import httpx
+import respx
+
+import litellm
 
 
 class TestPerplexityWebSearch:
@@ -19,3 +23,21 @@ class TestPerplexityWebSearch:
         assert (
             "web_search_options" in supported_params
         ), f"web_search_options should be supported for {model}"
+
+
+def test_perplexity_401_maps_to_authentication_error(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post("https://api.perplexity.ai/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": {"message": "invalid API key"}})
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        litellm.completion(
+            model="perplexity/mistral-7b-instruct",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="bad-perplexity-key",
+            max_retries=0,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "invalid API key" in str(exc_info.value)
+    assert route.calls.last.request.headers["Authorization"] == "Bearer bad-perplexity-key"

@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -192,3 +193,23 @@ def test_transform_embedding_response_invalid_field_is_reported_by_name(field: s
 
     assert exc_info.value.title == "EmbeddingResponse"
     assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
+
+
+def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs():
+    config: Final = JinaAIEmbeddingConfig()
+    image: Final = "data:image/png;base64,aGVsbG8="
+
+    request: Final = config.transform_embedding_request(
+        model="jina-embeddings-v4",
+        input=["describe this", image],
+        optional_params={},
+        headers={},
+    )
+
+    assert request == {
+        "model": "jina-embeddings-v4",
+        "input": [
+            {"text": "describe this"},
+            {"image": "aGVsbG8="},
+        ],
+    }

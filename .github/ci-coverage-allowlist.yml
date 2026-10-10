@@ -35,14 +35,6 @@ test_paths:
       - tests/local_testing/test_disk_cache_unit_tests.py
       - tests/local_testing/test_gcs_cache_unit_tests.py
   - reason: >-
-      Mixed file that no job has ever run in full. Every CircleCI job that globs
-      tests/local_testing deselects it by name ("caching") or keeps only another keyword, so only
-      its router test ran, and that test now lives in tests/unit/router_utils/pre_call_checks.
-      Its two offline tests now live in tests/unit/llms/anthropic/chat, and the five left all need
-      ANTHROPIC_API_KEY or Vertex credentials
-    paths:
-      - tests/local_testing/test_anthropic_prompt_caching.py
-  - reason: >-
       The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
       from a pull request; it needs a live gateway and provider credentials no PR job holds
     paths:

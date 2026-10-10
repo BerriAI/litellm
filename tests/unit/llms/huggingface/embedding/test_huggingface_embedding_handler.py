@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
@@ -154,3 +155,33 @@ class TestHuggingFaceEmbedding:
         assert "sentences" in request_data["inputs"]
         assert request_data["inputs"]["source_sentence"] == input_text[0]
         assert request_data["inputs"]["sentences"] == input_text[1:]
+
+    def test_hf_embedding_sentence_sim_builds_the_expected_payload(self):
+        self.mock_http.return_value.json.return_value = {"similarities": [[0.0, 0.9]]}
+        input_text: Final = ["source sentence", "candidate sentence"]
+
+        litellm.embedding(model=self.model, input=input_text)
+
+        request_data: Final = json.loads(self.mock_http.call_args.kwargs["data"])
+        assert request_data == {
+            "inputs": {
+                "source_sentence": "source sentence",
+                "sentences": ["candidate sentence"],
+            }
+        }
+
+    def test_hf_sentence_similarity_transform_keeps_provider_options(self):
+        from litellm.llms.huggingface.embedding.handler import HuggingFaceEmbedding
+
+        request_data: Final = HuggingFaceEmbedding()._transform_input(
+            input=["source sentence", "candidate sentence"],
+            model="BAAI/bge-m3",
+            call_type="sync",
+            optional_params={"input_type": "sentence-similarity", "min_length": 2},
+            embed_url="https://huggingface.example/embeddings",
+        )
+
+        assert request_data == {
+            "inputs": {"source_sentence": "source sentence", "sentences": ["candidate sentence"]},
+            "parameters": {"min_length": 2},
+        }

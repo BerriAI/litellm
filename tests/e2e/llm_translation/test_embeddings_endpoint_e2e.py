@@ -10,17 +10,21 @@ SDK refuses to build stay on the shared transport.
 
 from __future__ import annotations
 
+import base64
 import math
-from typing import Final
+import struct
+import zlib
+from typing import Final, Literal
 
 import pytest
+from pydantic import BaseModel, ConfigDict
+
 from e2e_config import provider_edge_base, unique_marker
-from e2e_http import assert_client_error
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_http import assert_client_error, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from pydantic import BaseModel
 from sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
 
 pytestmark = pytest.mark.e2e
@@ -28,6 +32,7 @@ pytestmark = pytest.mark.e2e
 OPENAI_EMBEDDING: Final = "openai/text-embedding-3-small"
 BEDROCK_TITAN_EMBEDDING: Final = "bedrock/amazon.titan-embed-text-v2:0"
 COHERE_EMBEDDING: Final = "cohere/embed-v4.0"
+COHERE_IMAGE_EMBEDDING: Final = "cohere/embed-english-v3.0"
 MISTRAL_EMBEDDING: Final = "mistral/mistral-embed"
 VERTEX_TEXT_EMBEDDING: Final = "vertex_ai/text-embedding-005"
 VERTEX_MULTIMODAL_EMBEDDING: Final = "vertex_ai/multimodalembedding@001"
@@ -40,6 +45,48 @@ TOKENS: Final = (791, 4062, 14198, 39935, 35308, 927, 279, 16053, 5679)
 class _OptionalEmbeddingsBody(BaseModel):
     model: str | None = None
     input: str | list[str] | None = None
+
+
+class CohereImageEmbeddingBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input: tuple[str, ...]
+
+
+class CohereImageTokenDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    image_tokens: int | None = None
+    text_tokens: int | None = None
+
+
+class CohereImageUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    prompt_tokens_details: CohereImageTokenDetails | None = None
+
+
+class CohereImageEmbeddingResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    usage: CohereImageUsage | None = None
+
+
+def _tiny_png_data_uri() -> str:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        encoded: Final = kind + data
+        return struct.pack(">I", len(data)) + encoded + struct.pack(">I", zlib.crc32(encoded))
+
+    red: Final = b"\x00" + bytes((255, 0, 0, 255)) * 4
+    mixed: Final = b"\x00" + bytes((255, 0, 0, 255)) + bytes((0, 0, 255, 255)) * 2 + bytes((255, 0, 0, 255))
+    image: Final = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(red + mixed * 2 + red))
+        + chunk(b"IEND", b"")
+    )
+    return f"data:image/png;base64,{base64.b64encode(image).decode('ascii')}"
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
@@ -155,6 +202,55 @@ class TestEmbeddingsEndpoint:
             "e2e-embeddings-cohere",
             LiteLLMParamsBody(model=COHERE_EMBEDDING, api_key="os.environ/COHERE_API_KEY"),
         )
+
+    @pytest.mark.covers("llm.embeddings.cohere.vision.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.COHERE,),
+            models=(COHERE_IMAGE_EMBEDDING,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    @pytest.mark.parametrize(
+        ("input_values", "token_type"),
+        (
+            pytest.param((_tiny_png_data_uri(),), "image_tokens", id="image"),
+            pytest.param((TOKENS_TEXT,), "text_tokens", id="text"),
+        ),
+    )
+    def test_cohere_image_embeddings_report_image_tokens(
+        self,
+        proxy: ProxyClient,
+        resources: ResourceManager,
+        input_values: tuple[str, ...],
+        token_type: Literal["image_tokens", "text_tokens"],
+    ) -> None:
+        model: Final = f"e2e-cohere-image-{unique_marker()}"
+        model_id: Final = proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=COHERE_IMAGE_EMBEDDING, api_key="os.environ/COHERE_API_KEY"),
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        key: Final = resources.key()
+        response: Final = unwrap(
+            proxy.transport.post(
+                "/embeddings",
+                headers=proxy.transport.bearer(key),
+                json=CohereImageEmbeddingBody(model=model, input=input_values),
+                response_type=CohereImageEmbeddingResponse,
+            )
+        )
+        assert response.usage is not None
+        assert response.usage.prompt_tokens_details is not None
+        if token_type == "image_tokens":
+            assert response.usage.prompt_tokens_details.image_tokens is not None
+            assert response.usage.prompt_tokens_details.image_tokens > 0
+        else:
+            assert response.usage.prompt_tokens_details.text_tokens is not None
+            assert response.usage.prompt_tokens_details.text_tokens > 0
 
     @pytest.mark.covers("llm.embeddings.vertex.basic.nonstream.works")
     @meta(

@@ -82,7 +82,7 @@ def router() -> Router:
                 "model_name": "fake-model",
                 "litellm_params": {
                     "model": "openai/fake",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "https://exampleopenaiendpoint.example.invalid/",
                     "api_key": "sk-98765",
                 },
             }

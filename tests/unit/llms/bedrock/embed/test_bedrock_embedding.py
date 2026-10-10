@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import httpx
+import respx
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
@@ -125,6 +127,59 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_api_key}"
+
+
+def test_bedrock_titan_embedding_cache_hit_avoids_a_second_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache())
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-text-v1/invoke"
+    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+
+    response_1 = litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v1",
+        input=test_input,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        caching=True,
+    )
+    response_2 = litellm.embedding(
+        model="bedrock/amazon.titan-embed-text-v1",
+        input=test_input,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        caching=True,
+    )
+
+    assert response_1.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert response_2._hidden_params["cache_hit"] is True
+    assert route.call_count == 1
+
+
+def test_bedrock_cohere_embedding_returns_the_scripted_vector(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-multilingual-v3/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": [[0.3, 0.2, 0.1]], "inputTextTokenCount": 4},
+        )
+    )
+
+    response = litellm.embedding(
+        model="bedrock/cohere.embed-multilingual-v3",
+        input=["hello"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+    )
+
+    request_body = json.loads(route.calls.last.request.read())
+    assert request_body["texts"] == ["hello"]
+    assert response.data[0]["embedding"] == [0.3, 0.2, 0.1]
 
 
 @pytest.mark.asyncio

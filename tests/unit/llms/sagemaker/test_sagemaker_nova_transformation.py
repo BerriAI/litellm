@@ -2,12 +2,52 @@
 Unit tests for SageMaker Nova transformation config.
 """
 
+import binascii
 import json
+import struct
+from typing import Final
+
 import pytest
 
+from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.nova.transformation import SagemakerNovaConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import convert_to_model_response_object
+
+
+def _event_frame(payload: bytes) -> bytes:
+    headers: Final = {
+        ":event-type": "PayloadPart",
+        ":content-type": "application/json",
+        ":message-type": "event",
+    }
+    encoded_headers: Final = b"".join(
+        struct.pack("B", len(name.encode()))
+        + name.encode()
+        + struct.pack("B", 7)
+        + struct.pack(">H", len(value.encode()))
+        + value.encode()
+        for name, value in headers.items()
+    )
+    prelude: Final = struct.pack(">I", 16 + len(encoded_headers) + len(payload)) + struct.pack(
+        ">I", len(encoded_headers)
+    )
+    prefix: Final = prelude + struct.pack(">I", binascii.crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prefix + encoded_headers + payload
+    return message + struct.pack(">I", binascii.crc32(message) & 0xFFFFFFFF)
+
+
+def _nova_stream_frame(content: str, finish_reason: str | None) -> bytes:
+    chunk: Final = {
+        "id": "chatcmpl-nova-stream",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "nova-endpoint",
+        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": finish_reason}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+    }
+    return _event_frame(f"data: {json.dumps(chunk)}\n\n".encode())
 
 
 class TestSagemakerNovaConfig:
@@ -394,6 +434,23 @@ class TestSagemakerNovaTransformRequest:
         assert "messages" in request
         assert request["temperature"] == 0.7
 
+    def test_should_preserve_system_and_multi_turn_messages_in_request(self):
+        messages: Final[list[AllMessageValues]] = [
+            {"role": "system", "content": "Remember the user's name"},
+            {"role": "user", "content": "My name is Alice"},
+            {"role": "assistant", "content": "I will remember"},
+            {"role": "user", "content": "What is my name?"},
+        ]
+        request = self.config.transform_request(
+            model="my-nova-endpoint",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert request["messages"] == messages
+
     def test_should_include_all_nova_params_in_request(self):
         """Nova-specific params should appear in the request body."""
         request = self.config.transform_request(
@@ -411,3 +468,24 @@ class TestSagemakerNovaTransformRequest:
         assert request["top_k"] == 40
         assert request["max_tokens"] == 512
         assert request["reasoning_effort"] == "low"
+
+    def test_should_parse_streamed_nova_chunks_and_final_usage(self):
+        config: Final = SagemakerNovaConfig()
+        chunks: Final = tuple(
+            chunk
+            for chunk in AWSEventStreamDecoder(model="nova-endpoint", is_messages_api=True).iter_bytes(
+                iter(
+                    [
+                        _nova_stream_frame("Nova ", None),
+                        _nova_stream_frame("stream", "stop"),
+                    ]
+                )
+            )
+            if chunk is not None
+        )
+
+        assert config.supports_stream_param_in_request_body
+        assert tuple(chunk.choices[0].delta.content for chunk in chunks) == ("Nova ", "stream")
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert chunks[-1].usage is not None
+        assert chunks[-1].usage.total_tokens == 3
