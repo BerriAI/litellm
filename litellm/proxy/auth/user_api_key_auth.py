@@ -676,7 +676,38 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+async def user_api_key_auth_websocket_for_model(
+    websocket: WebSocket, model: str | None, presented_api_key: str | None = None
+) -> UserAPIKeyAuth:
+    valid_token, _ = await _user_api_key_auth_websocket(websocket, model, presented_api_key)
+    return valid_token
+
+
+_WEBSOCKET_MODEL_REROUTED_REASON: Final = (
+    "Auth would reroute this model (a budget fallback), which a live session cannot do: it keeps the model it names"
+)
+
+
+async def user_api_key_auth_websocket_for_verbatim_model(
+    websocket: WebSocket, model: str, presented_api_key: str | None = None
+) -> UserAPIKeyAuth:
+    """
+    Key auth for a WebSocket route that forwards the client's own frames, so the model the client named is the one
+    upstream serves. Auth can reroute a request to another model (``budget_fallbacks``), which such a route cannot
+    honor, so a session auth would reroute is refused instead of reaching upstream on the exhausted model
+    """
+    valid_token, request = await _user_api_key_auth_websocket(websocket, model, presented_api_key)
+    authorized_body: Final[object] = await request.json()
+    authorized_model: Final = authorized_body.get("model") if isinstance(authorized_body, dict) else None
+    if authorized_model != model:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_WEBSOCKET_MODEL_REROUTED_REASON)
+        raise HTTPException(status_code=403, detail=_WEBSOCKET_MODEL_REROUTED_REASON)
+    return valid_token
+
+
+async def _user_api_key_auth_websocket(
+    websocket: WebSocket, model: str | None, presented_api_key: str | None
+) -> tuple[UserAPIKeyAuth, Request]:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -705,9 +736,9 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     request.body = return_body
 
     authorization: Final = websocket.headers.get("authorization")
-    # If no Authorization header, try the api-key header
+    # If no Authorization header, try the key the route resolved, then the api-key header
     if not authorization:
-        api_key = websocket.headers.get("api-key")
+        api_key = presented_api_key or websocket.headers.get("api-key")
         if not api_key:
             # Try extracting from WebSocket subprotocol (browser clients)
             for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
@@ -729,7 +760,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
-        return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}"), request
     except Exception as e:
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)

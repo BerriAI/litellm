@@ -7051,6 +7051,82 @@ async def test_websocket_passthrough_vertex_live_setup_ack_names_the_model_but_i
     assert success_call["logging_obj"].model_call_details["custom_llm_provider"] == "vertex_ai_language_models"
 
 
+
+GEMINI_LIVE_TARGET = (
+    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+)
+
+
+class _GeminiLiveUpstream(FakeUpstreamWebSocket):
+    """Serves its frames, then closes normally once the client has sent ``closes_after``"""
+
+    def __init__(self, *frames: str | bytes, closes_after: str):
+        super().__init__()
+        self._served = list(frames)
+        self._closes_after = closes_after
+        self._last_client_frame_seen = asyncio.Event()
+        self.send = AsyncMock(side_effect=self._record_send)
+
+    async def _record_send(self, frame: str | bytes) -> None:
+        if frame == self._closes_after:
+            self._last_client_frame_seen.set()
+
+    async def recv(self, decode: bool | None = None):
+        if self._served:
+            return self._served.pop(0)
+        await self._last_client_frame_seen.wait()
+        return await super().recv(decode)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_sends_the_route_read_setup_frame_first_and_logs_the_authorized_model():
+    """The Gemini Live route reads the setup frame to authorize its model, so the relay must put that exact frame on
+    the upstream socket ahead of anything else the client sends, and bill the session to the model and provider the
+    route authorized instead of "unknown"."""
+    setup_frame = json.dumps({"setup": {"model": "models/gemini-live-2.5-flash-preview"}})
+    client_audio = json.dumps({"realtimeInput": {"audio": {"data": "AAAA", "mimeType": "audio/pcm;rate=16000"}}})
+    usage_frame = json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 9}})
+    upstream_ws = _GeminiLiveUpstream(json.dumps({"setupComplete": {}}), usage_frame, closes_after=client_audio)
+    client_frames = iter(({"type": "websocket.receive", "text": client_audio},))
+
+    async def receive():
+        frame = next(client_frames, None)
+        if frame is None:
+            await _pending_receive()
+        return frame
+
+    websocket = _client_websocket(receive)
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=GEMINI_LIVE_TARGET,
+            custom_headers={"x-goog-api-key": "gemini-server-key"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/gemini/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent",
+            accept_websocket=False,
+            initial_client_frame=setup_frame,
+            model="gemini-live-2.5-flash-preview",
+            custom_llm_provider="gemini",
+        )
+
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == [setup_frame, client_audio]
+    success_call = success_handler.call_args.kwargs
+    assert success_call["model"] == "gemini-live-2.5-flash-preview"
+    assert success_call["custom_llm_provider"] == "gemini"
+    assert success_call["logging_obj"].model == "gemini-live-2.5-flash-preview"
+    assert success_call["logging_obj"].model_call_details["custom_llm_provider"] == "gemini"
+    assert json.loads(usage_frame) in success_call["response_body"]
+
+
 def _passthrough_kwargs_for_reservation(
     user_api_key_dict: UserAPIKeyAuth,
     parsed_body: dict | None = None,

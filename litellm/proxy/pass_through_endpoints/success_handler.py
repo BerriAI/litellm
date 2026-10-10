@@ -112,8 +112,9 @@ class PassThroughEndpointLogging:
             "/v0/repositories",
         ]
 
-        # Vertex AI Live API WebSocket
-        self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+        self.TRACKED_LIVE_API_ROUTES = MappingProxyType(
+            {"/vertex_ai/live": "vertex_ai", "/gemini/ws/google.ai.generativelanguage.": "gemini"}
+        )
 
     @property
     def _log_dispatch(self) -> PassThroughLogDispatch:
@@ -361,7 +362,7 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = typesafe_handler_result["result"]
             kwargs = typesafe_handler_result["kwargs"]
 
-        elif self.is_vertex_ai_live_route(url_route):
+        elif (live_api_provider := self.live_api_provider(url_route)) is not None:
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
             )
@@ -380,6 +381,7 @@ class PassThroughEndpointLogging:
                 start_time=start_time,
                 end_time=end_time,
                 request_body=request_body,
+                custom_llm_provider=live_api_provider,
                 **kwargs,
             )
 
@@ -575,14 +577,11 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
-    def is_vertex_ai_live_route(self, url_route: str):
-        """Check if the URL route is a Vertex AI Live API WebSocket route."""
+    def live_api_provider(self, url_route: str) -> str | None:
+        """The provider a Vertex AI or Google AI Studio Live API WebSocket route bills under, None for other routes."""
         if not url_route:
-            return False
-        for route in self.TRACKED_VERTEX_AI_LIVE_ROUTES:
-            if route in url_route:
-                return True
-        return False
+            return None
+        return next((provider for route, provider in self.TRACKED_LIVE_API_ROUTES.items() if route in url_route), None)
 
     def is_cursor_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Cursor Cloud Agents API route."""

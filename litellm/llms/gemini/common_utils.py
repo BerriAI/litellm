@@ -2,11 +2,14 @@ import base64
 import datetime
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -521,3 +524,46 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             )
 
         return None
+
+
+GEMINI_LIVE_SETUP_MODEL: Final = re.compile(r"(?:models/)?([A-Za-z0-9._-]+)")
+_WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws"})
+
+
+class _GeminiLiveSetup(TypedDict):
+    model: ReadOnly[str]
+
+
+class _GeminiLiveSetupFrame(TypedDict):
+    setup: ReadOnly[_GeminiLiveSetup]
+
+
+_GEMINI_LIVE_SETUP_FRAME: Final = TypeAdapter(_GeminiLiveSetupFrame)
+
+
+def gemini_live_setup_model(frame: str | bytes) -> str | None:
+    """
+    The bare model id a Live API ``setup`` frame names, as the HTTP ``/gemini`` route reads it from the URL.
+
+    Anything else, including a model id with characters a Gemini model name never has, is not a setup frame
+    the proxy can authorize, so it yields None
+    """
+    try:
+        setup_frame: Final = _GEMINI_LIVE_SETUP_FRAME.validate_json(frame)
+    except ValidationError:
+        return None
+    model_match: Final = GEMINI_LIVE_SETUP_MODEL.fullmatch(setup_frame["setup"]["model"])
+    return model_match.group(1) if model_match is not None else None
+
+
+def gemini_live_websocket_target(api_base: str, api_version: str) -> str:
+    base_url: Final = httpx.URL(api_base)
+    return str(
+        base_url.copy_with(
+            scheme=_WEBSOCKET_SCHEMES.get(base_url.scheme, base_url.scheme),
+            path=(
+                f"{base_url.path.rstrip('/')}/ws/google.ai.generativelanguage.{api_version}"
+                ".GenerativeService.BidiGenerateContent"
+            ),
+        )
+    )

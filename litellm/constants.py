@@ -372,6 +372,7 @@ REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = int(_max_size_env) if _max_si
 REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
     os.getenv("REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", "20.0")
 )
+GEMINI_LIVE_SETUP_TIMEOUT_SECONDS: Final = 10.0
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
