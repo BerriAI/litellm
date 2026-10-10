@@ -17,12 +17,34 @@ from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
 
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
+
+
+def test_authenticated_proxy_callers_get_distinct_exact_cache_keys() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="qa")
+    caller_a: Final = UserAPIKeyAuth(api_key="hashed-key-a", team_id="team-a", user_id="user-a")
+    caller_b: Final = UserAPIKeyAuth(api_key="hashed-key-b", team_id="team-a", user_id="user-b")
+    common: Final = {
+        "model": "gpt-4.1-mini",
+        "messages": messages,
+        "metadata": {"user_api_key_auth": caller_a, "redis_namespace": "client-selected"},
+    }
+
+    key_a: Final = cache.get_cache_key(**common)
+    key_b: Final = cache.get_cache_key(
+        **{
+            **common,
+            "metadata": {"user_api_key_auth": caller_b, "redis_namespace": "client-selected"},
+        }
+    )
+
+    assert key_a != key_b
 
 
 @pytest.fixture

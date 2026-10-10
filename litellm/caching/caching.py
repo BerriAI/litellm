@@ -585,8 +585,47 @@ class Cache:
             str: The final hashed cache key with the redis namespace.
         """
         dynamic_cache_control: Final[DynamicCacheControl] = kwargs.get("cache", {})
-        metadata: Final = kwargs.get("metadata") or {}
-        namespace: Final = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
+        metadata_sources: Final = tuple(
+            source
+            for source in (
+                kwargs.get("metadata"),
+                kwargs.get("litellm_metadata"),
+                (kwargs.get("litellm_params") or {}).get("metadata")
+                if isinstance(kwargs.get("litellm_params"), Mapping)
+                else None,
+                (kwargs.get("litellm_params") or {}).get("litellm_metadata")
+                if isinstance(kwargs.get("litellm_params"), Mapping)
+                else None,
+            )
+            if isinstance(source, Mapping)
+        )
+        authenticated_namespace: str | None = None
+        try:
+            from litellm.proxy._types import UserAPIKeyAuth
+        except ImportError:
+            UserAPIKeyAuth = None  # type: ignore[assignment,misc]
+        for metadata in metadata_sources:
+            auth_object: object | None = metadata.get("user_api_key_auth")
+            if UserAPIKeyAuth is not None and isinstance(auth_object, UserAPIKeyAuth):
+                identity_fields: Final = {
+                    "api_key": getattr(auth_object, "api_key", None),
+                    "team_id": getattr(auth_object, "team_id", None),
+                    "project_id": getattr(auth_object, "project_id", None),
+                    "org_id": getattr(auth_object, "org_id", None),
+                    "user_id": getattr(auth_object, "user_id", None),
+                    "end_user_id": getattr(auth_object, "end_user_id", None),
+                    "user_role": getattr(auth_object, "user_role", None),
+                }
+                identity = json.dumps(identity_fields, sort_keys=True, default=str, separators=(",", ":"))
+                authenticated_namespace = "caller:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+                break
+        if authenticated_namespace is not None:
+            namespace: str | None = ":".join(
+                value for value in (self.namespace, authenticated_namespace) if isinstance(value, str) and value
+            )
+        else:
+            metadata: Final = next(iter(metadata_sources), {})
+            namespace = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
