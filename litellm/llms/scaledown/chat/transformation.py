@@ -49,7 +49,7 @@ STATE_DOCUMENT_KEYS: Final = ("document", "document_mime_type")
 SCORE_MIN_LEVELS: Final = 2
 SCORE_MAX_LEVELS: Final = 10
 
-MAX_REF_DEPTH: Final = 16
+MAX_ENTITIES: Final = 1000
 
 
 class ScaleDownError(BaseLLMException):
@@ -295,37 +295,64 @@ def _child(node: object, key: str) -> object:
     return node.get(key) if isinstance(node, Mapping) else None
 
 
-def _resolve_ref(prop: Mapping[str, object], root: Mapping[str, object], depth: int = 0) -> Mapping[str, object]:
-    """Follow a local `$ref` (`#/$defs/X`, `#/definitions/X`) to the schema it names."""
+def _deref(
+    prop: Mapping[str, object], root: Mapping[str, object], path: tuple[str, ...]
+) -> tuple[Mapping[str, object], tuple[str, ...], bool]:
+    """Follow local `$ref`s (`#/$defs/X`, `#/definitions/X`) to the schema they name.
+
+    Returns the schema, the refs followed so far, and whether a ref repeated (a cycle).
+    """
     ref: Final = prop.get("$ref")
-    if not isinstance(ref, str) or not ref.startswith("#/") or depth >= MAX_REF_DEPTH:
-        return prop
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return prop, path, False
+    if ref in path:
+        return prop, path, True
     target: Final = reduce(_child, ref[2:].split("/"), root)
-    return _resolve_ref(target, root, depth + 1) if isinstance(target, Mapping) else prop
+    if not isinstance(target, Mapping):
+        return prop, path, False
+    return _deref(target, root, (*path, ref))
 
 
-def _schema_to_entities(
-    properties: Mapping[str, object], root: Mapping[str, object], depth: int = 0
-) -> Mapping[str, object]:
-    """Turn JSON-schema properties into the /extract entity map.
+def _build_properties(
+    properties: Mapping[str, object], root: Mapping[str, object], path: tuple[str, ...], budget: int
+) -> tuple[Mapping[str, object], int]:
+    """Turn JSON-schema properties into the /extract entity map, spending one budget unit per entity.
 
     Each property becomes an entity whose value is its description (or its name when there is
-    none). Nested objects stay nested, local `$ref`s are followed, and arrays of objects
-    become a one-element list holding the item's entity map.
+    none). Nested objects stay nested, arrays of objects become a one-element list holding the
+    item's entity map, local `$ref`s are followed, and a ref that points back into itself is cut
+    off at that point instead of expanded.
     """
-    return {name: _entity(name, prop, root, depth) for name, prop in properties.items()}
+    built: Final[dict[str, object]] = {}  # mutable-ok: filled once while threading the budget through
+    remaining = budget  # rebind-ok: the budget is threaded through the loop
+    for name, prop in properties.items():
+        if remaining <= 0:
+            _reject(
+                f"The response_format schema expands to more than {MAX_ENTITIES} entities; "
+                "remove recursive or heavily repeated $refs."
+            )
+        built[name], remaining = _build_entity(name, prop, root, path, remaining - 1)
+    return built, remaining
 
 
-def _entity(name: str, prop: object, root: Mapping[str, object], depth: int) -> object:
-    schema: Final = _resolve_ref(prop, root) if isinstance(prop, Mapping) else {}
+def _build_entity(
+    name: str, prop: object, root: Mapping[str, object], path: tuple[str, ...], budget: int
+) -> tuple[object, int]:
+    schema, followed, cyclic = _deref(prop, root, path) if isinstance(prop, Mapping) else ({}, path, False)
+    leaf: Final = schema.get("description") or name
     nested: Final = schema.get("properties")
-    if isinstance(nested, Mapping) and depth < MAX_REF_DEPTH:
-        return _schema_to_entities(nested, root, depth + 1)
-    items: Final = _resolve_ref(schema["items"], root) if isinstance(schema.get("items"), Mapping) else {}
-    item_properties: Final = items.get("properties")
-    if schema.get("type") == "array" and isinstance(item_properties, Mapping) and depth < MAX_REF_DEPTH:
-        return [_schema_to_entities(item_properties, root, depth + 1)]
-    return schema.get("description") or name
+    if cyclic:
+        return leaf, budget
+    if isinstance(nested, Mapping):
+        return _build_properties(nested, root, followed, budget)
+    raw_items: Final = schema.get("items")
+    if schema.get("type") == "array" and isinstance(raw_items, Mapping):
+        items, item_path, item_cyclic = _deref(raw_items, root, followed)
+        item_properties: Final = items.get("properties")
+        if not item_cyclic and isinstance(item_properties, Mapping):
+            built, remaining = _build_properties(item_properties, root, item_path, budget)
+            return [built], remaining
+    return leaf, budget
 
 
 def _extract_request(
@@ -334,7 +361,7 @@ def _extract_request(
     response_format: Final = optional_params.get("response_format")
     json_schema: Final = response_format.get("json_schema") if isinstance(response_format, Mapping) else None
     schema: Final = json_schema.get("schema") if isinstance(json_schema, Mapping) else None
-    properties: Final = _resolve_ref(schema, schema).get("properties") if isinstance(schema, Mapping) else None
+    properties: Final = _deref(schema, schema, ())[0].get("properties") if isinstance(schema, Mapping) else None
     if not isinstance(properties, Mapping) or not properties:
         _reject(
             "ScaleDown extract needs response_format={'type': 'json_schema', ...} with a non-empty "
@@ -342,7 +369,7 @@ def _extract_request(
         )
     return {
         **_text_and_document("extract", messages),
-        "entities": _schema_to_entities(properties, schema),
+        "entities": _build_properties(properties, schema, (), MAX_ENTITIES)[0],
         **{key: optional_params[key] for key in ("threshold", "top_n") if key in optional_params},
     }
 

@@ -515,14 +515,8 @@ def test_extract_schema_follows_local_refs(config):
     assert body["entities"] == {"address": {"city": "city name"}, "name": "name"}
 
 
-def test_self_referencing_schema_does_not_recurse_forever(config):
-    schema = {
-        "type": "object",
-        "$defs": {"Node": {"type": "object", "properties": {"child": {"$ref": "#/$defs/Node"}}}},
-        "properties": {"root": {"$ref": "#/$defs/Node"}},
-    }
-
-    body = config.transform_request(
+def _extract_body(config: ScaleDownChatConfig, schema: dict) -> dict:
+    return config.transform_request(
         model="scaledown/extract",
         messages=[{"role": "user", "content": "text"}],
         optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "n", "schema": schema}}},
@@ -530,7 +524,30 @@ def test_self_referencing_schema_does_not_recurse_forever(config):
         headers={},
     )
 
-    assert "root" in body["entities"]
+
+def test_recursive_schema_is_cut_at_the_cycle_instead_of_expanded(config):
+    children = {name: {"$ref": "#/$defs/Node"} for name in ("a", "b", "c", "d")}
+    schema = {
+        "type": "object",
+        "$defs": {"Node": {"type": "object", "properties": children}},
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+    }
+
+    entities = _extract_body(config, schema)["entities"]
+
+    assert entities == {"root": {"a": "a", "b": "b", "c": "c", "d": "d"}}
+
+
+def test_heavily_repeated_acyclic_refs_are_rejected_by_the_entity_budget(config):
+    defs = {
+        f"L{level}": {"type": "object", "properties": {name: {"$ref": f"#/$defs/L{level + 1}"} for name in "abcd"}}
+        for level in range(10)
+    }
+    defs["L10"] = {"type": "string", "description": "leaf"}
+    schema = {"type": "object", "$defs": defs, "properties": {"root": {"$ref": "#/$defs/L0"}}}
+
+    with pytest.raises(ScaleDownError, match="expands to more than"):
+        _extract_body(config, schema)
 
 
 def test_summarize_response_is_the_native_payload(config):
