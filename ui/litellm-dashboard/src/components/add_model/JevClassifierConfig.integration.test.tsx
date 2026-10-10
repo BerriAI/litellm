@@ -101,9 +101,11 @@ describe("JEV classifier editor", () => {
     ["jev", "Jev", "jev-test"],
     ["laya", "Laya", "multilingual"],
     ["bespoke", "Bespoke Nimble", "bespokelabs/Bespoke-Nimble-9B"],
+    ["databricks", "Databricks", "databricks-openjev-qwen35-4b"],
   ] as const)(
     "preserves %s, custom tiers and context through save, reload and probe",
     async (provider, label, model) => {
+      const typesTheModel = provider === "jev" || provider === "databricks";
       renderWithProviders(<Form />);
       expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
       expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
@@ -123,10 +125,11 @@ describe("JEV classifier editor", () => {
       expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
       fireEvent.click(screen.getByRole("radio", { name: label }));
       if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
-      if (provider !== "jev") {
-        await chooseSelectOption(userEvent, screen.getByLabelText("Classifier Model"), model);
-      } else {
+      if (provider === "databricks") expect(screen.getByLabelText("Classifier Model")).toHaveValue("");
+      if (typesTheModel) {
         fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
+      } else {
+        await chooseSelectOption(userEvent, screen.getByLabelText("Classifier Model"), model);
       }
       fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4200" } });
       fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "6" } });
@@ -136,8 +139,8 @@ describe("JEV classifier editor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
       expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
       expect(screen.getByRole("radio", { name: label })).toBeChecked();
-      if (provider !== "jev") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
-      else expect(screen.getByLabelText("Classifier Model")).toHaveValue(model);
+      if (typesTheModel) expect(screen.getByLabelText("Classifier Model")).toHaveValue(model);
+      else expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
       expect(screen.getByLabelText("Classifier Timeout (ms)")).toHaveValue(4200);
       expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");
       expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).not.toBeChecked();

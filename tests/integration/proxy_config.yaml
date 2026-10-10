@@ -110,6 +110,12 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
+  - model_name: bedrock/global.xai.grok-4.7
+    litellm_params:
+      model: bedrock/global.xai.grok-4.7
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
   - model_name: openai/gpt-5.4
     litellm_params:
       model: openai/gpt-5.4
@@ -350,6 +356,13 @@ model_list:
     litellm_params:
       model: hosted_vllm/Qwen/Qwen3-0.6B
       api_base: http://127.0.0.1:8191
+  - model_name: azure_ai/decision-1
+    litellm_params:
+      model: azure_ai/decision-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+    model_info:
+      base_model: azure_ai/Microsoft-Decision-1
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL

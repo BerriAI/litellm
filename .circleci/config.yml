@@ -3378,38 +3378,14 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows:
-          filters:
-            branches:
-              only: main
-      - windows_release_wheel:
-          filters:
-            branches:
-              only: main
-      - provider_replay_harness:
-          filters:
-            branches:
-              only: main
-      - base_sdk_install:
-          filters:
-            branches:
-              only: main
-      - local_testing_part1:
-          filters:
-            branches:
-              only: main
-      - local_testing_part2:
-          filters:
-            branches:
-              only: main
-      - langfuse_logging_unit_tests:
-          filters:
-            branches:
-              only: main
-      - litellm_router_testing:
-          filters:
-            branches:
-              only: main
+      - using_litellm_on_windows
+      - windows_release_wheel
+      - provider_replay_harness
+      - base_sdk_install
+      - local_testing_part1
+      - local_testing_part2
+      - langfuse_logging_unit_tests
+      - litellm_router_testing
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3429,65 +3405,26 @@ workflows:
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-      - proxy_build_from_pip_tests:
-          filters:
-            branches:
-              only: main
+      - proxy_build_from_pip_tests
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-      - llm_translation_testing:
-          filters:
-            branches:
-              only: main
-      - realtime_translation_testing:
-          filters:
-            branches:
-              only: main
+      - llm_translation_testing
+      - realtime_translation_testing
       - guardrails_testing
-      - google_generate_content_endpoint_testing:
-          filters:
-            branches:
-              only: main
-      - ocr_testing:
-          filters:
-            branches:
-              only: main
-      - search_testing:
-          filters:
-            branches:
-              only: main
-      - batches_testing:
-          filters:
-            branches:
-              only: main
-      - litellm_utils_testing:
-          filters:
-            branches:
-              only: main
-      - pass_through_unit_testing:
-          filters:
-            branches:
-              only: main
-      - image_gen_testing:
-          filters:
-            branches:
-              only: main
-      - logging_testing:
-          filters:
-            branches:
-              only: main
-      - audio_testing:
-          filters:
-            branches:
-              only: main
+      - google_generate_content_endpoint_testing
+      - ocr_testing
+      - search_testing
+      - batches_testing
+      - litellm_utils_testing
+      - pass_through_unit_testing
+      - image_gen_testing
+      - logging_testing
+      - audio_testing
       - upload-coverage:
-          filters:
-            branches:
-              only: main
           requires:
             - realtime_translation_testing
             - google_generate_content_endpoint_testing
@@ -3505,27 +3442,12 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-      - installing_litellm_on_python:
-          filters:
-            branches:
-              only: main
-      - installing_litellm_on_python_3_13:
-          filters:
-            branches:
-              only: main
-      - installing_litellm_on_python_v2_migration_resolver:
-          filters:
-            branches:
-              only: main
+      - installing_litellm_on_python
+      - installing_litellm_on_python_3_13
+      - installing_litellm_on_python_v2_migration_resolver
       - helm_chart_testing:
-          filters:
-            branches:
-              only: main
           requires:
             - build_docker_database_image
       - test_bad_database_url:
-          filters:
-            branches:
-              only: main
           requires:
             - build_docker_database_image

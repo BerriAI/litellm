@@ -1266,6 +1266,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       <TeamAdminSettingsForm
         initialValues={{ tpm_limit: info.tpm_limit, rpm_limit: info.rpm_limit, max_budget: info.max_budget }}
         editableFields={teamEditAccess.editableFields}
+        mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
         isSaving={isTeamSaving}
         onCancel={() => setIsEditing(false)}
         onSave={saveTeamAdminSettings}

@@ -711,6 +711,7 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+microsoft_365_copilot_models: Set[str] = set()
 chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
@@ -992,6 +993,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "microsoft_365_copilot":
+            microsoft_365_copilot_models.add(key)
         elif value.get("litellm_provider") == "chatgpt":
             chatgpt_models.add(key)
         elif value.get("litellm_provider") == "minimax":
@@ -1248,6 +1251,7 @@ def _build_models_by_provider() -> dict:
         "amazon_nova": amazon_nova_models,
         "stability": stability_models,
         "github_copilot": github_copilot_models,
+        "microsoft_365_copilot": microsoft_365_copilot_models,
         "chatgpt": chatgpt_models,
         "minimax": minimax_models,
         "aws_polly": aws_polly_models,
@@ -1392,6 +1396,8 @@ from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
     AuthenticationError,
+    CallerCredentialAuthenticationError as CallerCredentialAuthenticationError,
+    CallerCredentialRateLimitError as CallerCredentialRateLimitError,
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
@@ -1681,11 +1687,17 @@ if TYPE_CHECKING:
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
     )
+    from .llms.databricks.decisions.transformation import (
+        DatabricksDecisionsConfig as DatabricksDecisionsConfig,
+    )
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure_ai.decisions.transformation import (
+        AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,
