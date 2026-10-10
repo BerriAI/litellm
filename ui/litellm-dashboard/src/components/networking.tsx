@@ -141,6 +141,7 @@ import type {
   DailyActivityKeyPageResponse,
   DailyActivityKeySearchResponse,
   DailyActivityRequest,
+  DailyActivityUserPageResponse,
   ExportFormat,
   ExportType,
   ModelTopKeysResponse,
@@ -1125,9 +1126,12 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
+export const teamInfoCall = async (accessToken: string, teamID: string | null, options?: { keyLimit?: number }) => {
   try {
-    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
+    return await apiClient.get(`/team/info`, {
+      accessToken,
+      query: { team_id: teamID || undefined, key_limit: options?.keyLimit },
+    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1381,6 +1385,16 @@ export const dailyActivityExportCall = (
   apiClient.getBlob(`/${entity}/daily/activity/export`, {
     accessToken: req.accessToken,
     query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+  });
+
+export const userDailyActivityUserPageCall = (
+  req: DailyActivityRequest,
+  offset: number,
+  limit: number,
+): Promise<DailyActivityUserPageResponse> =>
+  apiClient.get<DailyActivityUserPageResponse>(`/user/daily/activity/aggregated/users`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery("user", req, { offset, limit }),
   });
 
 export const cacheLeakageKeysCall = (req: DailyActivityRequest, limit?: number): Promise<CacheLeakageKeysResponse> =>

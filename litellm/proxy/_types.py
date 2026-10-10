@@ -21,7 +21,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
+from typing_extensions import (
+    NotRequired,
+    ReadOnly,
+    Required,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the before-validator input without copying it
+)
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
@@ -61,6 +67,7 @@ from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.proxy.auth.user_api_key_auth import is_jwt
 from litellm.types.proxy.carried_budget_state import (
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -186,30 +193,12 @@ class LitellmTableNames(str, enum.Enum):
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
 
 
-class Litellm_EntityType(enum.Enum):
-    """
-    Enum for types of entities on litellm
-
-    This enum allows specifying the type of entity that is being tracked in the database.
-    """
-
-    KEY = "key"
-    USER = "user"
-    END_USER = "end_user"
-    TEAM = "team"
-    TEAM_MEMBER = "team_member"
-    ORGANIZATION = "organization"
-    ORGANIZATION_MEMBER = "organization_member"
-    PROJECT = "project"
-    TAG = "tag"
-    AGENT = "agent"
-    MODEL_ACCESS_GROUP = "model_access_group"
-
-    # global proxy level entity
-    PROXY = "proxy"
+from litellm.types.integrations.slack_alerting import (
+    Litellm_EntityType as Litellm_EntityType,  # noqa: E402, PLC0414  # public re-export
+)
 
 
-def hash_token(token: str):
+def hash_token(token: str) -> str:
     import hashlib
 
     # Hash the string using SHA-256
@@ -426,11 +415,7 @@ class LiteLLMRoutes(enum.Enum):
     #########################################################
     passthrough_routes_wildcard = [f"{route}/*" for route in mapped_pass_through_routes]
 
-    litellm_native_routes = [
-        "/rag/ingest",
-        "/v1/rag/ingest",
-        "/rag/query",
-        "/v1/rag/query",
+    trace_telemetry_routes = (
         "/v1/traces",
         "/v1/logs",
         "/v1/traces/query",
@@ -438,6 +423,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
         "/v1/traces/{trace_id}/spans/{span_id}/error",
+    )
+
+    litellm_native_routes = [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+        *trace_telemetry_routes,
     ]
 
     anthropic_routes = [
@@ -633,6 +626,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity/aggregated/model_top_keys",
             "/user/daily/activity/export",
             "/user/daily/activity/aggregated/cache_leakage_keys",
+            "/user/daily/activity/aggregated/users",
             # team
             "/team/new",
             "/team/update",
@@ -862,6 +856,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/daily/activity/aggregated/model_top_keys",
         "/user/daily/activity/export",
         "/user/daily/activity/aggregated/cache_leakage_keys",
+        "/user/daily/activity/aggregated/users",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -957,6 +952,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity/aggregated/model_top_keys",
             "/user/daily/activity/export",
             "/user/daily/activity/aggregated/cache_leakage_keys",
+            "/user/daily/activity/aggregated/users",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
             "/team/daily/activity/aggregated/keys",
@@ -1993,6 +1989,7 @@ class NewTeamRequest(TeamBase):
     allowed_passthrough_routes: list | None = None
     denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
+    require_trace_id: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput"] | None = (
@@ -2067,6 +2064,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     policies: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     disable_global_guardrails: bool | None = None
+    require_trace_id: bool | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
     team_member_rpm_limit: int | None = None
@@ -2299,22 +2297,9 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
     assume_role_aws_session_name: str | None = None
 
 
-class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings for a specific guardrail on a passthrough endpoint.
-
-    Allows field-level targeting for guardrail execution.
-    """
-
-    request_fields: list[str] | None = Field(
-        default=None,
-        description="JSONPath expressions for input field targeting (pre_call). Examples: 'query', 'documents[*].text', 'messages[*].content'. If not specified, guardrail runs on entire request payload.",
-    )
-    response_fields: list[str] | None = Field(
-        default=None,
-        description="JSONPath expressions for output field targeting (post_call). Examples: 'results[*].text', 'output'. If not specified, guardrail runs on entire response payload.",
-    )
-
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (  # noqa: E402  # public re-export
+    PassThroughGuardrailSettings as PassThroughGuardrailSettings,  # noqa: PLC0414  # public re-export
+)
 
 # Type alias for the guardrails dict: guardrail_name -> settings (or None for defaults)
 PassThroughGuardrailsConfig = dict[str, PassThroughGuardrailSettings | None]
@@ -2908,6 +2893,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
     )
+    disable_fallbacks_on_per_model_rate_limits: bool | None = Field(
+        None,
+        description=(
+            "If true, a request rejected by a key/team/org/project per-model rate limit "
+            "(model_rpm_limit / model_tpm_limit) returns 429 instead of retrying on the "
+            "configured fallbacks"
+        ),
+    )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
         description=(
@@ -3172,6 +3165,12 @@ from litellm.models.verification_token import (  # noqa: E402
     LiteLLM_VerificationToken as LiteLLM_VerificationToken,
 )
 
+_UntypedDict: TypeAlias = dict[Any, Any]
+
+
+def _is_str_keyed_dict(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: pydantic input and JSON keys are str
+    return isinstance(value, dict)
+
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
@@ -3186,12 +3185,12 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_model_max_budget: dict[str, object] | None = None
-    team_models: list = []
+    team_models: list[Any] = []
     team_blocked: bool = False
     soft_budget: float | None = None
-    team_model_aliases: dict | None = None
+    team_model_aliases: _UntypedDict | None = None
     team_member: Member | None = None
-    team_metadata: dict | None = None
+    team_metadata: _UntypedDict | None = None
     team_object_permission_id: str | None = None
 
     # Team Member Specific Params
@@ -3205,23 +3204,23 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_rpm_limit: int | None = None
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
-    end_user_model_max_budget: dict | None = None
+    end_user_model_max_budget: _UntypedDict | None = None
 
     # Organization Params
     organization_alias: str | None = None
     organization_max_budget: float | None = None
     organization_tpm_limit: int | None = None
     organization_rpm_limit: int | None = None
-    organization_metadata: dict | None = None
+    organization_metadata: _UntypedDict | None = None
 
     # Project Params
     project_alias: str | None = None
-    project_metadata: dict | None = None
+    project_metadata: _UntypedDict | None = None
 
     # Time stamps
     last_refreshed_at: float | None = None  # last time joint view was pulled from db
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         # Handle litellm_budget_table_* keys (budget table overrides when key value is None or empty)
         for key, value in list(kwargs.items()):
             if key.startswith("litellm_budget_table_") and value is not None:
@@ -3233,7 +3232,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                     current = getattr(self, attr_name, None)
                 # Apply budget value when key has no value, or for model_max_budget when key has empty dict
                 should_apply = current is None or (
-                    attr_name == "model_max_budget" and isinstance(current, dict) and len(current) == 0
+                    attr_name == "model_max_budget" and _is_str_keyed_dict(current) and len(current) == 0
                 )
                 if should_apply:
                     kwargs[attr_name] = value
@@ -3243,7 +3242,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
         if kwargs.get("organization_id") is not None:
             kwargs["org_id"] = kwargs.pop("organization_id")
         # Initialize the superclass
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # pydantic validates raw values
 
 
 class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response object for user api key auth
@@ -3331,15 +3330,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     team_object_permission: LiteLLM_ObjectPermissionTable | None = None
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
-    jwt_claims: dict | None = None
+    jwt_claims: _UntypedDict | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @model_validator(mode="before")
     @classmethod
-    def check_api_key(cls, values):
+    def check_api_key(cls, values: object) -> object:
         # If values is already an instance (not a dict), return it as-is
-        if not isinstance(values, dict):
+        if not _is_str_keyed_dict(values):
             return values
         # mcp_admitted_user_subject is a server-only marker, set ONLY by the MCP gateway admission
         # path via post-construction assignment. Strip it from any validated input (constructor
@@ -3359,10 +3358,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
-        if values.get("api_key") is not None:
-            values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str):
-                values.update({"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+        api_key: Final = values.get("api_key")
+        if api_key is not None:
+            values.update({"token": cls._safe_hash_litellm_api_key(api_key)})  # pyright: ignore[reportArgumentType]  # non-str fails in the hasher
+            if isinstance(api_key, str):
+                values.update({"api_key": cls._safe_hash_litellm_api_key(api_key)})
         return values
 
     @classmethod
@@ -3378,9 +3378,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             normalized = normalized[7:]
         if normalized.startswith("sk-"):
             return hash_token(normalized)
-        from litellm.proxy.auth.handle_jwt import JWTHandler
-
-        if JWTHandler.is_jwt(token=normalized):
+        if is_jwt(token=normalized):
             return f"hashed-jwt-{hash_token(token=normalized)}"
         return normalized
 
@@ -3439,8 +3437,8 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         return (
             self.user_id is None
             and self.team_id is not None
-            and bool(self.metadata)
-            and self.metadata.get("service_account_id") is not None
+            and bool(self.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped base field
+            and self.metadata.get("service_account_id") is not None  # pyright: ignore[reportUnknownMemberType]  # untyped base field
         )
 
 
@@ -3776,47 +3774,10 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     system: Any | None = None
 
 
-class CallInfo(LiteLLMPydanticObjectBase):
-    """Used for slack budget alerting"""
-
-    spend: float
-    max_budget: float | None = None
-    soft_budget: float | None = None
-    token: str | None = Field(default=None, description="Hashed value of that key")
-    customer_id: str | None = None
-    user_id: str | None = None
-    team_id: str | None = None
-    team_alias: str | None = None
-    organization_id: str | None = None
-    user_email: str | None = None
-    key_alias: str | None = None
-    projected_exceeded_date: str | None = None
-    projected_spend: float | None = None
-    event_group: Litellm_EntityType
-    alert_emails: list[str] | None = Field(
-        default=None,
-        description="Additional email addresses to send alerts to (e.g., from team metadata)",
-    )
-    max_budget_alert_emails: dict[str, list[str]] | None = Field(
-        default=None,
-        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
-    )
-
-
-class WebhookEvent(CallInfo):
-    event: Literal[
-        "budget_crossed",
-        "max_budget_alert",
-        "soft_budget_crossed",
-        "threshold_crossed",
-        "projected_limit_exceeded",
-        "key_created",
-        "key_rotated",
-        "internal_user_created",
-        "spend_tracked",
-    ]
-    event_message: str  # human-readable description of event
-    event_group: Litellm_EntityType
+from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
+from litellm.types.integrations.slack_alerting import (
+    WebhookEvent as WebhookEvent,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class SpecialModelNames(enum.Enum):
@@ -3833,8 +3794,9 @@ class SpecialProxyStrings(enum.Enum):
     default_user_id = "default_user_id"  # global proxy admin
 
 
-class InvitationNew(LiteLLMPydanticObjectBase):
-    user_id: str
+from litellm.types.integrations.slack_alerting import (
+    InvitationNew as InvitationNew,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class InvitationUpdate(LiteLLMPydanticObjectBase):
@@ -3846,16 +3808,9 @@ class InvitationDelete(LiteLLMPydanticObjectBase):
     invitation_id: str
 
 
-class InvitationModel(LiteLLMPydanticObjectBase):
-    id: str
-    user_id: str
-    is_accepted: bool
-    accepted_at: datetime | None
-    expires_at: datetime
-    created_at: datetime
-    created_by: str
-    updated_at: datetime
-    updated_by: str
+from litellm.types.integrations.slack_alerting import (
+    InvitationModel as InvitationModel,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class InvitationClaim(LiteLLMPydanticObjectBase):
@@ -4222,18 +4177,9 @@ class ModelAccessDeniedProxyException(ProxyException):
         return self.internal_message.replace("\r", "").replace("\n", "")
 
 
-class CommonProxyErrors(str, enum.Enum):
-    db_not_connected_error = (
-        "DB not connected. This endpoint needs a database; set DATABASE_URL to a "
-        "PostgreSQL connection string (postgresql://...) to enable it. "
-        "See https://docs.litellm.ai/docs/proxy/virtual_keys"
-    )
-    no_llm_router = "No models configured on proxy"
-    not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/enterprise#trial. \nPricing: https://www.litellm.ai/#pricing"
-    max_parallel_request_limit_reached = "Crossed TPM / RPM / Max Parallel Request Limit"
-    missing_enterprise_package = "Missing litellm-enterprise package. Please install it to use this feature. Run `pip install litellm-enterprise`"
-    missing_enterprise_package_docker = "This uses the enterprise folder - only available on the Docker image."
+from litellm.types.proxy.common_proxy_errors import (  # noqa: E402  # public re-export
+    CommonProxyErrors as CommonProxyErrors,  # noqa: PLC0414  # public re-export
+)
 
 
 class SpendCalculateRequest(LiteLLMPydanticObjectBase):
@@ -4457,11 +4403,9 @@ class SSOUserDefinedValues(TypedDict):
     budget_duration: str | None
 
 
-class VirtualKeyEvent(LiteLLMPydanticObjectBase):
-    created_by_user_id: str
-    created_by_user_role: str
-    created_by_key_alias: str | None
-    request_kwargs: dict
+from litellm.types.integrations.slack_alerting import (
+    VirtualKeyEvent as VirtualKeyEvent,  # noqa: E402, PLC0414  # public re-export
+)
 
 
 class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):
@@ -4918,6 +4862,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "throttle_on_budget_exceeded",
     "enable_prompt_caching",
     "end_user_budget_id",
+    "require_trace_id",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [

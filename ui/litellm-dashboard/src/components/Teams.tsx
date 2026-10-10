@@ -60,6 +60,7 @@ interface TeamProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  isViewOnly?: boolean;
   premiumUser?: boolean;
 }
 
@@ -90,6 +91,7 @@ const teamCreateFieldsSchema = z.object({
   secret_manager_settings: z.string().optional(),
   guardrails: z.array(z.string()).optional(),
   disable_global_guardrails: z.boolean().optional(),
+  require_trace_id: z.boolean().optional(),
   policies: z.array(z.string()).optional(),
   access_group_ids: z.array(z.string()).optional(),
   allowed_vector_store_ids: z.array(z.string()).optional(),
@@ -127,6 +129,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   secret_manager_settings: undefined,
   guardrails: undefined,
   disable_global_guardrails: undefined,
+  require_trace_id: undefined,
   policies: undefined,
   access_group_ids: undefined,
   allowed_vector_store_ids: undefined,
@@ -147,6 +150,7 @@ const ADDITIONAL_SETTINGS_FIELDS = [
   "secret_manager_settings",
   "guardrails",
   "disable_global_guardrails",
+  "require_trace_id",
   "policies",
   "access_group_ids",
   "allowed_vector_store_ids",
@@ -210,7 +214,7 @@ const getAdminOrganizations = (
 };
 
 // @deprecated
-const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
+const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly = false, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
@@ -264,6 +268,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
+  const canEditAsProxyAdmin = !isViewOnly && isProxyAdminRole(userRole || "");
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
@@ -545,7 +550,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }
         }
 
-        await teamCreateCall(accessToken, { ...formValues, models: normalizeTeamModelSelection(formValues.models) });
+        const { require_trace_id: requireTraceId, ...teamCreateValues } = formValues;
+        await teamCreateCall(accessToken, {
+          ...teamCreateValues,
+          ...(requireTraceId === undefined ? {} : { require_trace_id: requireTraceId }),
+          models: normalizeTeamModelSelection(formValues.models),
+        });
         toast.success("Team created");
         await refreshTeams();
         resetCreateForm();
@@ -1002,6 +1012,21 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                                 checked={value === true}
                                 onCheckedChange={onChange}
                               />
+                            )}
+                          </FormField>
+                        )}
+                        {canEditAsProxyAdmin && (
+                          <FormField
+                            control={form.control}
+                            name="require_trace_id"
+                            className="mt-4"
+                            label={labelWithHint(
+                              "Require Trace ID",
+                              "Reject LLM, MCP and agent requests from this team that do not send a trace ID (x-litellm-trace-id header, LLM requests can also use traceparent or metadata.trace_id)",
+                            )}
+                          >
+                            {({ id, value, onChange }) => (
+                              <Switch id={id} checked={value === true} onCheckedChange={onChange} />
                             )}
                           </FormField>
                         )}

@@ -105,7 +105,7 @@ def owned_redis(directory: Path) -> Iterator[OwnedRedis]:
         prefix = ("docker", "exec", "redis-cache", "redis-server")
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
-    with (output / "owned-redis-recovery.log").open("w") as log:
+    with (output / f"owned-redis-{uuid.uuid4().hex}.log").open("w") as log:
         pid_file: Final = str(directory / "owned-redis.pid") if binary else f"/tmp/integration-redis-{uuid.uuid4().hex}.pid"
         server: Final = OwnedRedis(host, port, (*prefix, "--port", str(port), "--set-proc-title", "no", "--pidfile", pid_file, "--bind", "0.0.0.0" if not binary else "127.0.0.1", "--protected-mode", "no", "--save", "", "--appendonly", "no"), log, pid_file)
         try:
