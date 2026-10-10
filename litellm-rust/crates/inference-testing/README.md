@@ -32,7 +32,9 @@ Vertex AI cases live in `inference-messages/tests/live/vertex_ai.rs`. They cover
 For EdenAI, set `LITELLM_LIVE_MESSAGES_EDENAI_MODEL` and `EDENAI_API_KEY`, and select `edenai`. EdenAI requires a production token for live coverage, because sandbox tokens return dummy responses
 
 EdenAI cases live in `inference-messages/tests/live/edenai.rs`. They cover system messages, portable cache hints, provider-reported cost handoff, text streaming, and complete and streaming tool round trips. The cost assertion compares the public response with the execution facts instead of pinning a vendor price
-Tool cases require a model that supports forced `tool_choice`, except where a provider's section says otherwise. A provider rejection fails the selected case instead of skipping it
+EdenAI tool cases use automatic selection because current Claude models reject forced `tool_choice`. The test still requires a tool call and verifies its arguments and follow-up response
+
+Other tool cases require a model that supports forced `tool_choice`, except where a provider's section says otherwise. A provider rejection fails the selected case instead of skipping it
 
 Select one behavior by its test name, for example `completion::case_1_basic`. To list every available cell without contacting any provider
 

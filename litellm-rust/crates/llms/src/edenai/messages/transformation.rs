@@ -30,6 +30,35 @@ pub struct EdenAIAnthropicMessagesConfig;
 pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
+    fn validate_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        _model: &str,
+        _params: &LitellmParams,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error> {
+        let key = resolve_non_empty(api_key, env, &[API_KEY_ENV]).ok_or(Error::Auth(
+            litellm_auth::Error::MissingApiKey {
+                provider: "Eden AI",
+                environment_variable: API_KEY_ENV,
+            },
+        ))?;
+        if has_anthropic_credential(&headers) {
+            return Ok(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Forwarded,
+            });
+        }
+        Ok(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                secret: SecretValue::new(key),
+            },
+        })
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -62,35 +91,6 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
 
     fn secret_names(&self) -> &'static [&'static str] {
         &[API_KEY_ENV, API_BASE_ENV]
-    }
-
-    fn validate_environment(
-        &self,
-        headers: Headers,
-        api_key: Option<&str>,
-        _model: &str,
-        _params: &LitellmParams,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ValidatedEnvironment, Error> {
-        let key = resolve_non_empty(api_key, env, &[API_KEY_ENV]).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
-                provider: "Eden AI",
-                environment_variable: API_KEY_ENV,
-            },
-        ))?;
-        if has_anthropic_credential(&headers) {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
-        }
-        Ok(ValidatedEnvironment {
-            headers,
-            auth: AuthScheme::Credential {
-                placement: CredentialPlacement::Bearer,
-                secret: SecretValue::new(key),
-            },
-        })
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
