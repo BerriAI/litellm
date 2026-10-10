@@ -616,8 +616,8 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
 def image_variation(
     image: FileTypes,
     model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
-    n: int = 1,
-    response_format: Literal["url", "b64_json"] = "url",
+    n: int | None = None,
+    response_format: Literal["url", "b64_json"] | None = None,
     size: str | None = None,
     user: str | None = None,
     **kwargs,
@@ -662,6 +662,33 @@ def image_variation(
     api_key: Final = provider_config.get_api_key(litellm_params.get("api_key", None))
     api_base = provider_config.get_api_base(litellm_params.get("api_base", None))
 
+    # Map the OpenAI-style arguments onto the provider's request. Without this
+    # every provider was called with an empty dict, so `n`, `response_format`,
+    # `size` and `user` never left this function.
+    image_variation_config: Final = ProviderConfigManager.get_provider_image_variation_config(
+        model=model,
+        provider=llm_provider,
+    )
+    non_default_params: Final = {
+        key: value
+        for key, value in {
+            "n": n,
+            "response_format": response_format,
+            "size": size,
+            "user": user,
+        }.items()
+        if value is not None
+    }
+    optional_params: dict = {}
+    if image_variation_config is not None and non_default_params:
+        drop_params: Final = kwargs.get("drop_params")
+        optional_params = image_variation_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=bool(litellm.drop_params if drop_params is None else drop_params),
+        )
+
     if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
         if api_key is None:
             raise ValueError("API key is required for OpenAI image variations")
@@ -677,7 +704,7 @@ def image_variation(
             timeout=litellm_params.get("timeout", None),
             custom_llm_provider=custom_llm_provider,
             logging_obj=litellm_logging_obj,
-            optional_params={},
+            optional_params=optional_params,
             litellm_params=litellm_params,
         )
     elif image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.TOPAZ:
@@ -695,7 +722,7 @@ def image_variation(
             timeout=litellm_params.get("timeout", None) or DEFAULT_REQUEST_TIMEOUT,
             custom_llm_provider=custom_llm_provider,
             logging_obj=litellm_logging_obj,
-            optional_params={},
+            optional_params=optional_params,
             litellm_params=litellm_params,
             client=client,
         )
