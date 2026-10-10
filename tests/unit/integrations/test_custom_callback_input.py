@@ -15,6 +15,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.utils import StandardLoggingPayload
 
 
 def _provider_response(request: httpx.Request) -> httpx.Response:
@@ -453,6 +454,25 @@ async def test_async_custom_handler_embedding_optional_param(
     await _assert_success_payload(callback_capture, "text-embedding-3-small", None, "optional embedding marker")
     call: Final = callback_capture.async_success.call_args
     assert call.kwargs["kwargs"]["optional_params"]["user"] == "user-123"
+    assert json.loads(provider_router.calls.last.request.content)["user"] == "user-123"
+
+
+@pytest.mark.asyncio
+async def test_async_embedding_failure_reaches_failure_callback(
+    provider_router: respx.MockRouter, callback_capture: _CallbackCapture
+) -> None:
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.aembedding(model="text-embedding-3-small", input=["failed embedding marker"], api_key="bad-key")
+    await _drain_logging_worker()
+    failure_events: Final = tuple(
+        call.kwargs["kwargs"]
+        for call in callback_capture.async_failure.call_args_list
+        if call.kwargs["kwargs"].get("input") == ["failed embedding marker"]
+    )
+    assert len(failure_events) == 1
+    assert failure_events[0]["model"] == "text-embedding-3-small"
+    assert isinstance(failure_events[0]["exception"], litellm.AuthenticationError)
+    assert callback_capture.async_success.call_args_list == []
 
 
 @pytest.mark.asyncio
@@ -543,6 +563,10 @@ async def test_standard_logging_payload(
     assert event["standard_logging_object"]["response"]["choices"][0]["message"]["content"] == "Hello"
     assert event["standard_logging_object"]["metadata"]["requester_metadata"] == {"marker": "standard"}
     assert response.choices[0].message.content == "Hello"
+    standard: Final = event["standard_logging_object"]
+    assert sorted(StandardLoggingPayload.__required_keys__ - standard.keys()) == []
+    assert json.loads(json.dumps(standard))["id"] == standard["id"]
+    assert standard["response_cost"] > 0
 
 
 @pytest.mark.asyncio

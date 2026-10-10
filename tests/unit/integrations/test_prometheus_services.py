@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import Final, cast
@@ -8,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from litellm._service_logger import ServiceLogging
+from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.prometheus_services import (
     PrometheusServicesLogger,
     ServiceMetrics,
@@ -250,16 +252,18 @@ async def test_completion_with_caching_bad_call(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     service_logger: Final = ServiceLogging(mock_testing=True)
     service_logger.prometheusServicesLogger.mock_testing = True
-    await service_logger.async_service_failure_hook(
-        service=ServiceTypes.REDIS,
-        duration=0.1,
-        error=ConnectionError("Redis connection failed"),
-        call_type="get_cache",
-    )
+    cache: Final = RedisCache(host="redis.invalid", port=6379, service_logger_obj=service_logger)
 
-    assert service_logger.mock_testing_async_failure_hook == 1
+    await cache.async_set_cache("bad-call-key", "value")
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+    assert service_logger.mock_testing_async_failure_hook >= 1
+    assert (
+        service_logger.prometheusServicesLogger.mock_testing_failure_calls
+        == service_logger.mock_testing_async_failure_hook
+    )
     assert service_logger.mock_testing_async_success_hook == 0
-    assert service_logger.prometheusServicesLogger.mock_testing_failure_calls == 1
     assert service_logger.prometheusServicesLogger.mock_testing_success_calls == 0
 
 

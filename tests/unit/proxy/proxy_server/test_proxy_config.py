@@ -59,7 +59,7 @@ def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespa
         model_id=model_id,
         model_name=model_name,
         model_info={"id": model_id},
-        litellm_params={"model": "openai/gpt-3.5-turbo"},
+        litellm_params={"model": encrypt_value_helper("openai/gpt-3.5-turbo")},
         blocked=False,
     )
 
@@ -70,7 +70,7 @@ async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, mo
 
     router = litellm.Router(model_list=[])
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "decrypt_value_helper", lambda value, key, return_original_value: value)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
     config_path = tmp_path / "config.json"
     config_path.write_text('{"model_list": []}')
     monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
@@ -78,6 +78,7 @@ async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, mo
 
     assert ProxyConfig()._add_deployment(db_models=[model]) == 1
     assert router.get_model_ids() == ["db-deployment"]
+    assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
     await ProxyConfig()._delete_deployment(db_models=[])
     assert router.get_model_ids() == []
 
@@ -87,7 +88,7 @@ def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeyp
 
     router = litellm.Router(model_list=[_deployment("existing-deployment").to_json(exclude_none=True)])
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "decrypt_value_helper", lambda value, key, return_original_value: value)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
 
     ProxyConfig()._add_deployment(db_models=[_db_model("existing-deployment")])
     assert len(router.model_list) == 1
@@ -119,6 +120,7 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
     config_path = tmp_path / "config.json"
     config_path.write_text('{"model_list": []}')
     monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))

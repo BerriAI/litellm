@@ -1409,8 +1409,7 @@ async def test_embedding_caching_redis_ttl(
     )
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
-    assert mock_set.call_count > 0
-    assert all(call.kwargs["ex"] == timedelta(seconds=2) for call in mock_set.call_args_list)
+    assert [call.kwargs["ex"] for call in mock_set.call_args_list] == [timedelta(seconds=2)]
 
 
 @pytest.mark.asyncio
