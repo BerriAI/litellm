@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
@@ -27,6 +28,7 @@ _BUILD_LOCK_ID: Final = "mcp_semantic_tool_index_build"
 _BUILD_LOCK_TTL_S: Final = 300
 _VECTOR_TTL_S: Final = 30 * 24 * 60 * 60
 _PUT_CHUNK_SIZE: Final = 50
+_CACHE_TARGET: Final = "mcp_semantic_tool_index"
 
 
 def tool_vector_key(embedding_identity: str, text: str) -> str:
@@ -56,6 +58,7 @@ class RedisToolVectorStore:
         self._lock_manager = lock_manager
         self._degraded = False
 
+    @with_service_target(_CACHE_TARGET)
     async def get_many(self, keys: Sequence[str]) -> Mapping[str, tuple[float, ...]]:
         try:
             raw: Final = TypeAdapter(Mapping[str, object]).validate_python(
@@ -67,6 +70,7 @@ class RedisToolVectorStore:
             return {}
         return {key: vector for key in keys if (vector := _decode_vector(raw.get(key))) is not None}
 
+    @with_service_target(_CACHE_TARGET)
     async def put_many(self, vectors: Mapping[str, Sequence[float]]) -> None:
         try:
             entries: Final = tuple((key, _encode_vector(vector)) for key, vector in vectors.items())
