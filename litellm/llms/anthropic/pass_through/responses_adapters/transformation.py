@@ -8,12 +8,13 @@ path used for OpenAI and Azure models.
 import json
 from collections.abc import Iterable, Mapping
 from itertools import groupby
-from typing import Any, Final, cast
+from typing import Any, Final, TypeVar, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
+    prompt_cache_breakpoint_for_wire,
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
@@ -51,6 +52,9 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+
+
+_PartT: Final = TypeVar("_PartT", bound=Mapping[str, object])
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -139,8 +143,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return [*text_parts, *file_parts]
 
     @staticmethod
+    def _user_part_with_marker(part: _PartT, block: Mapping[str, object], drop_params: bool) -> _PartT:
+        marker: Final = prompt_cache_breakpoint_for_wire(block.get("prompt_cache_breakpoint"), drop_params)
+        return with_prompt_cache_breakpoint(part, marker)
+
+    @staticmethod
     def _translate_midturn_system_content_to_responses(
         content: str | Iterable[AnthropicSystemMessageContent],
+        *,
+        drop_params: bool = False,
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
         """Convert in-sequence system content to Responses input-text parts."""
         if isinstance(content, str):
@@ -148,7 +159,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(content, list):
             return []
         return [
-            with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
+            with_prompt_cache_breakpoint(
+                {"type": "input_text", "text": text},
+                prompt_cache_breakpoint_for_wire(block.get("prompt_cache_breakpoint"), drop_params),
+            )
             for block in content
             if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
         ]
@@ -214,6 +228,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_messages_to_responses_input(
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
+        *,
+        drop_params: bool = False,
     ) -> list[dict[str, object]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
@@ -232,7 +248,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         for m in messages:
             if m["role"] == "system":
-                system_parts = self._translate_midturn_system_content_to_responses(m.get("content"))
+                system_parts = self._translate_midturn_system_content_to_responses(
+                    m.get("content"), drop_params=drop_params
+                )
                 if system_parts:
                     input_items.append(
                         {
@@ -264,25 +282,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         btype = block.get("type")
                         if btype == "text":
                             user_parts.append(
-                                with_prompt_cache_breakpoint(
-                                    {"type": "input_text", "text": block.get("text", "")},
-                                    block.get("prompt_cache_breakpoint"),
+                                self._user_part_with_marker(
+                                    {"type": "input_text", "text": block.get("text", "")}, block, drop_params
                                 )
                             )
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
                             if url:
                                 user_parts.append(
-                                    with_prompt_cache_breakpoint(
-                                        {"type": "input_image", "image_url": url}, block.get("prompt_cache_breakpoint")
+                                    self._user_part_with_marker(
+                                        {"type": "input_image", "image_url": url}, block, drop_params
                                     )
                                 )
                         elif btype == "document":
                             file_part = self._translate_anthropic_document_block_to_file_part(block)
                             if file_part:
-                                user_parts.append(
-                                    with_prompt_cache_breakpoint(file_part, block.get("prompt_cache_breakpoint"))
-                                )
+                                user_parts.append(self._user_part_with_marker(file_part, block, drop_params))
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
@@ -499,6 +514,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        *,
+        drop_params: bool = False,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -508,6 +525,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         on every call, so a reasoning model's items can be replayed intact next turn even
         when the client sent no ``thinking`` block; pass False for a provider whose
         Responses API rejects ``include``.
+
+        ``drop_params`` drops a malformed ``prompt_cache_breakpoint`` marker from the
+        Responses input instead of forwarding it for the provider to reject.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -515,14 +535,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             anthropic_request["messages"],
         )
 
-        input_items: Final = self.translate_messages_to_responses_input(messages_list)
+        input_items: Final = self.translate_messages_to_responses_input(messages_list, drop_params=drop_params)
         system: Final = anthropic_request.get("system")
-        developer_parts: Final = (
-            self._translate_midturn_system_content_to_responses(system)
+        system_parts: Final = (
+            self._translate_midturn_system_content_to_responses(system, drop_params=drop_params)
             if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
             else ()
         )
+        developer_parts: Final = system_parts if any("prompt_cache_breakpoint" in part for part in system_parts) else ()
         if developer_parts:
             input_items.insert(
                 0,

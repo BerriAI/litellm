@@ -39,14 +39,6 @@ _CASES: Final[tuple[tuple[str, Mode, JsonValue, JsonValue], ...]] = (
 )
 _CASE_IDS: Final = tuple(case[0] for case in _CASES)
 _CASE_VALUES: Final = tuple(case[1:] for case in _CASES)
-_ADAPTER_CASES: Final[tuple[tuple[str, Mode, JsonValue, JsonValue], ...]] = (
-    ("valid-on", "on", pcb.EXPLICIT, pcb.EXPLICIT),
-    ("valid-off", "off", pcb.EXPLICIT, pcb.EXPLICIT),
-    ("malformed-on", "on", "yes", "yes"),
-    ("malformed-off", "off", "yes", "yes"),
-)
-_ADAPTER_CASE_IDS: Final = tuple(case[0] for case in _ADAPTER_CASES)
-_ADAPTER_CASE_VALUES: Final = tuple(case[1:] for case in _ADAPTER_CASES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +323,7 @@ def _anthropic_text(message: anthropic.types.Message, marker: str) -> None:
     assert content.type == "text" and content.text == rv.answer(marker), message
 
 
-@pytest.mark.parametrize(("mode", "breakpoint", "expected"), _ADAPTER_CASE_VALUES, ids=_ADAPTER_CASE_IDS)
+@pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
 def test_anthropic_sdk_marker_on_user_text(
     bridge: _Bridge, mode: Mode, breakpoint: JsonValue, expected: JsonValue
 ) -> None:
@@ -345,6 +337,60 @@ def test_anthropic_sdk_marker_on_user_text(
         )
     _anthropic_text(raw.parse(), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
+    bridge.spend.landed(bridge.model(mode), raw.headers["x-litellm-call-id"], None)
+
+
+@pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
+def test_anthropic_sdk_marker_on_a_system_list(
+    bridge: _Bridge, mode: Mode, breakpoint: JsonValue, expected: JsonValue
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with _anthropic(bridge) as client:
+        raw: Final = client.messages.with_raw_response.create(
+            model=bridge.model(mode),
+            max_tokens=64,
+            system=[pcb.marked(pcb.text("Answer briefly"), breakpoint)],
+            messages=[{"role": "user", "content": pcb.prompt(marker)}],
+            extra_body=dict(pcb.NO_CACHE),
+        )
+    _anthropic_text(raw.parse(), marker)
+    request: Final = pcb.posted(bridge.wire, marker)
+    body: Final = _wire_body(request)
+    if expected is None:
+        assert body["instructions"] == "Answer briefly", body
+        assert "prompt_cache_breakpoint" not in request.body.decode(), body
+    else:
+        instruction: Final = pcb.instruction_block(pcb.input_items(request))
+        assert instruction == {"type": "input_text", "text": "Answer briefly", "prompt_cache_breakpoint": expected}
+    bridge.spend.landed(bridge.model(mode), raw.headers["x-litellm-call-id"], None)
+
+
+@pytest.mark.parametrize(("mode", "expected"), (("off", "yes"), ("on", None)), ids=("verbatim-off", "dropped-on"))
+def test_anthropic_sdk_upstream_400_reaches_the_caller_once(bridge: _Bridge, mode: Mode, expected: JsonValue) -> None:
+    marker: Final = uuid.uuid4().hex
+    failing: Final = pcb.marked(pcb.text(f"{pcb.prompt(marker)} fail-400"), "yes")
+    with _anthropic(bridge) as client, pytest.raises(anthropic.BadRequestError) as caught:
+        client.messages.create(
+            model=bridge.model(mode),
+            max_tokens=64,
+            messages=[{"role": "user", "content": [failing]}],
+            extra_body=dict(pcb.NO_CACHE),
+        )
+    assert f"scripted 400 marker-{marker}" in caught.value.response.text, caught.value.response.text
+    (request,) = pcb.with_marker(pcb.drained_posts(bridge.wire), marker)
+    pcb.assert_marker(pcb.single_block(pcb.input_items(request), "user"), expected)
+    call_id: Final = caught.value.response.headers["x-litellm-call-id"]
+    bridge.spend.landed(bridge.model(mode), call_id, None, status="failure")
+    follow_up: Final = uuid.uuid4().hex
+    with _anthropic(bridge) as client:
+        raw: Final = client.messages.with_raw_response.create(
+            model=bridge.model(mode),
+            max_tokens=64,
+            messages=[{"role": "user", "content": [pcb.marked(pcb.text(pcb.prompt(follow_up)), "yes")]}],
+            extra_body=dict(pcb.NO_CACHE),
+        )
+    _anthropic_text(raw.parse(), follow_up)
+    pcb.assert_marker(_user_block_on_wire(bridge, follow_up), expected)
     bridge.spend.landed(bridge.model(mode), raw.headers["x-litellm-call-id"], None)
 
 
