@@ -522,7 +522,8 @@ def test_a_member_of_two_teams_sees_the_union_and_each_route_stays_narrowed_to_i
 def test_owned_proxy_loss_retains_exit_status_and_first_http_failure(gateway: Gateway, tmp_path: Path) -> None:
     with pytest.raises(httpx.TransportError) as failure:  # noqa: PT012  # HTTP failure must propagate through proxy cleanup
         with owned_proxy_process(gateway, tmp_path, {}) as owned:
-            assert owned.gateway.client.get("/health/readiness").status_code == 200
+            response: Final = owned.gateway.client.get("/health/readiness")
+            assert response.status_code == 200, response.text
             owned.process.kill()
             owned.process.wait(timeout=3)
             owned.gateway.client.get("/health/readiness")

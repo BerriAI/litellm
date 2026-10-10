@@ -364,6 +364,9 @@ def test_owned_entrypoints_record_exit_and_reap_the_process_group(
         refused: Final = process_support.refused_boot_log(gateway, tmp_path, {}, config=config)
         assert refused
     else:
+        rejected_config: Final = tmp_path / "rejected.yaml"
+        rejected_config.write_text("model_list: [\n")
+        assert process_support.refused_boot_log(gateway, tmp_path, {}, config=rejected_config)
         config.write_text(
             "model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
             "  database_url: os.environ/DATABASE_URL\n"
@@ -371,9 +374,16 @@ def test_owned_entrypoints_record_exit_and_reap_the_process_group(
         with process_support.owned_gateway_image(gateway, tmp_path, {}, config=config, workers=1) as owned:
             response: Final = owned.gateway.request("GET", "/health/readiness")
             assert response.status_code == 200, response.text
-    records: Final = tuple(tmp_path.glob("*.exit.json"))
-    assert len(records) == 1
-    record: Final = TypeAdapter(ExitRecord).validate_json(records[0].read_text())
-    assert record["exit_after_stop"] is not None
-    assert record["exception_at_record"] is None
-    assert not process_support.group_members(record["root_pid"])
+        completed: Final = TypeAdapter(ExitRecord).validate_json(owned.log.with_suffix(".exit.json").read_text())
+        assert completed["root_pid"] == owned.process.pid
+        assert completed["exit_after_stop"] == owned.process.returncode
+    records: Final = tuple(
+        TypeAdapter(ExitRecord).validate_json(path.read_text()) for path in tmp_path.glob("*.exit.json")
+    )
+    assert records
+    if entrypoint == "refused":
+        assert len(records) == 1 and records[0]["exit_after_stop"] != 0
+    for record in records:
+        assert record["exit_after_stop"] is not None
+        assert record["exception_at_record"] is None
+        assert not process_support.group_members(record["root_pid"])
