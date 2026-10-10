@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
@@ -39,10 +39,9 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
-from integration._support.process import owned_proxy, owned_proxy_process
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -698,42 +697,107 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
         )
 
 
-def test_anonymous_oauth_mcp_cold_start_does_not_log_malformed_key_at_error(
+@pytest.mark.parametrize(
+    "path_template,server_auth_type,auth_headers,expected_status,expect_www_authenticate,"
+    "expected_challenge_fragment,expected_error_lines",
+    [
+        pytest.param(
+            "/{alias}/mcp",
+            "oauth2",
+            (),
+            401,
+            True,
+            "resource_metadata=",
+            0,
+            id="per-server-oauth-no-credentials",
+        ),
+        pytest.param("/mcp", "oauth2", (), 401, True, None, 0, id="aggregate-oauth-no-credentials"),
+        pytest.param(
+            "/{alias}/mcp",
+            "oauth2",
+            (("Authorization", ""),),
+            401,
+            True,
+            None,
+            1,
+            id="oauth-empty-authorization",
+        ),
+        pytest.param(
+            "/{alias}/mcp",
+            "api_key",
+            (),
+            401,
+            False,
+            None,
+            1,
+            id="non-oauth-api-key",
+        ),
+    ],
+)
+def test_mcp_cold_start_malformed_key_log_level(
     gateway: Gateway,
     tmp_path: Path,
+    path_template: str,
+    server_auth_type: Literal["oauth2", "api_key"],
+    auth_headers: tuple[tuple[str, str], ...],
+    expected_status: int,
+    expect_www_authenticate: bool,
+    expected_challenge_fragment: str | None,
+    expected_error_lines: int,
 ) -> None:
     with mcp_peer() as peer, oauth_server() as auth, owned_proxy_process(gateway, tmp_path, {}) as owned:
         with owned.gateway.scenario() as scenario:
             alias: Final = "cold" + uuid.uuid4().hex[:8]
-            _register_oauth(
-                scenario,
-                peer,
-                auth,
-                alias,
-                auth_type="oauth2",
-                oauth2_flow="authorization_code",
-                credentials={"client_id": "cold-client", "client_secret": "cold-secret"},
-            )
+            if server_auth_type == "oauth2":
+                _register_oauth(
+                    scenario,
+                    peer,
+                    auth,
+                    alias,
+                    auth_type="oauth2",
+                    oauth2_flow="authorization_code",
+                    credentials={"client_id": "cold-client", "client_secret": "cold-secret"},
+                )
+            else:
+                register_mcp(
+                    scenario,
+                    peer,
+                    alias,
+                    auth_type="api_key",
+                    credentials={"auth_value": "static-" + uuid.uuid4().hex},
+                    extra_headers=["x-api-key"],
+                )
             baseline_log: Final = owned.log.read_text()
-            response: Final = owned.gateway.client.post(
-                f"/{alias}/mcp",
-                headers=ACCEPT,
+            request_path: Final = path_template.format(alias=alias)
+            request_headers: Final = [*ACCEPT.items(), *auth_headers]
+            request: Final = owned.gateway.client.build_request(
+                "POST",
+                request_path,
+                headers=request_headers,
                 json=INITIALIZE,
             )
+            expected_authorization: Final = tuple(
+                value for name, value in auth_headers if name.lower() == "authorization"
+            )
+            assert tuple(request.headers.get_list("authorization")) == expected_authorization
+            response: Final = owned.gateway.client.send(request)
 
-            assert response.status_code == 401, response.text
-            assert "www-authenticate" in response.headers, response.headers
-            assert "resource_metadata=" in response.headers["www-authenticate"]
+            assert response.status_code == expected_status, response.text
+            challenge_header: Final = response.headers.get("www-authenticate")
+            assert (challenge_header is not None) is expect_www_authenticate
+            assert expected_challenge_fragment is None or (
+                challenge_header is not None and expected_challenge_fragment in challenge_header
+            )
             request_log: Final = eventually(
                 owned.log.read_text,
-                lambda value: f"POST /{alias}/mcp" in value[len(baseline_log) :],
+                lambda value: f"POST {request_path}" in value[len(baseline_log) :],
             )
             error_lines: Final = tuple(
                 line
                 for line in request_log[len(baseline_log) :].splitlines()
                 if "Malformed API Key" in line and "ERROR" in line
             )
-            assert error_lines == ()
+            assert len(error_lines) == expected_error_lines, error_lines
 
 
 def test_authorization_request_without_pkce_is_refused_before_reaching_the_authorization_server(
