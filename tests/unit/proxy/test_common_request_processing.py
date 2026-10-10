@@ -7107,6 +7107,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
     @staticmethod
     def _otel_key(
         rpm_limit: int | None = None,
+        api_key: str = "hashed-key",
         model_rpm_limit: dict[str, int] | None = None,
         disable_fallbacks: bool | None = None,
         team_model_rpm_limit: dict[str, int] | None = None,
@@ -7117,7 +7118,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         span: Final = TracerProvider().get_tracer("test").start_span("proxy-request")
         return ProxyUserAPIKeyAuth(
-            api_key="hashed-key",
+            api_key=api_key,
             parent_otel_span=span,
             rpm_limit=rpm_limit,
             metadata={
@@ -7278,6 +7279,72 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert exc_info.value.descriptor_key == "model_per_key"
         assert exc_info.value.headers["retry-after"]
         assert processor.data["model"] == primary_model
+
+    @pytest.mark.asyncio
+    async def test_v3_limiter_team_cap_shared_by_two_keys_returns_429_when_per_model_limits_are_hard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        first_key: Final = self._otel_key(team_model_rpm_limit={primary_model: 1})
+        second_key: Final = self._otel_key(api_key="hashed-key-2", team_model_rpm_limit={primary_model: 1})
+        rig: Final = self._v3_limiter_rig(monkeypatch, first_key, [{primary_model: [fallback_model]}])
+        request: Final = {"model": primary_model, "messages": [{"role": "user", "content": "hi"}]}
+
+        _, (first_data, _) = await self._pre_call(dict(request), first_key, rig, self.HARD_PER_MODEL_LIMITS)
+        processor: Final = ProxyBaseLLMRequestProcessing(data=dict(request))
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await self._run(processor, second_key, rig, self.HARD_PER_MODEL_LIMITS)
+
+        assert first_data["model"] == primary_model
+        assert rig[3] == [primary_model, primary_model]
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.descriptor_key == "model_per_team"
+        assert exc_info.value.headers["retry-after"]
+        assert processor.data["model"] == primary_model
+
+    @pytest.mark.parametrize("setting_value", [True, "true", "True", "1"])
+    @pytest.mark.asyncio
+    async def test_per_model_limits_are_hard_for_true_and_a_true_string(
+        self, setting_value: object, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        key: Final = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig: Final = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request: Final = {"model": primary_model, "messages": [{"role": "user", "content": "hi"}]}
+        general_settings: Final = {"disable_fallbacks_on_per_model_rate_limits": setting_value}
+
+        await self._pre_call(dict(request), key, rig, general_settings)
+        processor: Final = ProxyBaseLLMRequestProcessing(data=dict(request))
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await self._run(processor, key, rig, general_settings)
+
+        assert exc_info.value.descriptor_key == "model_per_key"
+        assert rig[3] == [primary_model, primary_model]
+        assert processor.data["model"] == primary_model
+
+    @pytest.mark.parametrize("setting_value", [False, "false", "", None, "not-a-bool"])
+    @pytest.mark.asyncio
+    async def test_per_model_limits_stay_soft_for_every_other_setting_value(
+        self, setting_value: object, monkeypatch: pytest.MonkeyPatch
+    ):
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        key: Final = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig: Final = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request: Final = {"model": primary_model, "messages": [{"role": "user", "content": "hi"}]}
+        general_settings: Final = {"disable_fallbacks_on_per_model_rate_limits": setting_value}
+
+        await self._pre_call(dict(request), key, rig, general_settings)
+        _, (data, _) = await self._pre_call(dict(request), key, rig, general_settings)
+
+        assert data["model"] == fallback_model
+        assert rig[3] == [primary_model, primary_model, fallback_model]
 
     @pytest.mark.parametrize(
         ("cap_owner", "expected_descriptor"),

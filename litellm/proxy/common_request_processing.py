@@ -2285,17 +2285,18 @@ class ProxyBaseLLMRequestProcessing:
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
             ProxyRateLimitError,
+            per_model_rate_limits_disable_fallbacks,
         )
 
         general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
             Mapping[str, object], general_settings
         )
-        per_model_limits_are_hard: Final = (
-            general_settings_view.get("disable_fallbacks_on_per_model_rate_limits") is True
-        )
 
         def is_hard_per_model_limit(exc: ProxyRateLimitError) -> bool:
-            return per_model_limits_are_hard and exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+            return (
+                exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+                and per_model_rate_limits_disable_fallbacks(general_settings_view)
+            )
 
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)

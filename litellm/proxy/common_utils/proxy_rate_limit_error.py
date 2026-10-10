@@ -40,7 +40,9 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
 
 PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
@@ -53,6 +55,21 @@ PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
         "model_per_project_otpm",
     }
 )
+DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
+_DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING)
+    try:
+        return _DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING,
+            raw_value,
+        )
+        return False
 
 
 def map_v3_rate_limit_type(
