@@ -108,15 +108,6 @@ _PROVIDERS: Final = (
         True,
         "cloudflare/@cf/cloudflare/clef",
     ),
-    _Provider(
-        "databricks",
-        "databricks/databricks-openjev-qwen35-4b",
-        "/databricks-openjev-qwen35-4b/invocations",
-        "databricks-openjev-qwen35-4b",
-        _API_KEY,
-        False,
-        None,
-    ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
 _OPENROUTER: Final = _PROVIDERS[2]

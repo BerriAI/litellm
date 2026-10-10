@@ -21147,17 +21147,17 @@
         "output_vector_size": 1024,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-openjev-qwen35-4b": {
+    "databricks/ai_decide": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 0.0,
         "litellm_provider": "databricks",
         "metadata": {
-            "notes": "Pay-per-token Foundation Model API decision endpoint (OpenJev, Qwen 3.5 4B) queried through the System One API. Databricks published no DBU rate for it as of 2026-10-07, so a deployment's model_info prices set the billed cost."
+            "notes": "The ai_decide AI Function (Beta), called through POST /api/2.0/ai-functions/ai-decide. Its response carries no token usage, so LiteLLM records no spend for it."
         },
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
+        "source": "https://docs.databricks.com/api/ai-functions/v1/ai-decide"
     },
     "dataforseo/search": {
         "input_cost_per_query": 0.003,
