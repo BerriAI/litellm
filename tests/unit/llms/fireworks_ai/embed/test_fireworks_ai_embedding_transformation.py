@@ -2,6 +2,7 @@ import json
 from typing import Final
 
 import httpx
+import pytest
 import respx
 
 import litellm
@@ -42,7 +43,7 @@ def test_fireworks_embeddings_forwards_supported_dimensions():
                 "object": "list",
                 "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
                 "model": "nomic-ai/nomic-embed-text-v1.5",
-                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                "usage": {"prompt_tokens": 4, "total_tokens": 4},
             },
         )
     )
@@ -55,10 +56,13 @@ def test_fireworks_embeddings_forwards_supported_dimensions():
         dimensions=2,
     )
 
-    assert route.called
     assert json.loads(route.calls.last.request.content) == {
         "input": ["hello"],
         "model": "nomic-ai/nomic-embed-text-v1.5",
         "dimensions": 2,
     }
     assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert response.usage.prompt_tokens == 4
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        4 * litellm.model_cost["fireworks_ai/nomic-ai/nomic-embed-text-v1.5"]["input_cost_per_token"]
+    )

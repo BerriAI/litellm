@@ -156,20 +156,6 @@ class TestHuggingFaceEmbedding:
         assert request_data["inputs"]["source_sentence"] == input_text[0]
         assert request_data["inputs"]["sentences"] == input_text[1:]
 
-    def test_hf_embedding_sentence_sim_builds_the_expected_payload(self):
-        self.mock_http.return_value.json.return_value = {"similarities": [[0.0, 0.9]]}
-        input_text: Final = ["source sentence", "candidate sentence"]
-
-        litellm.embedding(model=self.model, input=input_text)
-
-        request_data: Final = json.loads(self.mock_http.call_args.kwargs["data"])
-        assert request_data == {
-            "inputs": {
-                "source_sentence": "source sentence",
-                "sentences": ["candidate sentence"],
-            }
-        }
-
     def test_hf_sentence_similarity_transform_keeps_provider_options(self):
         from litellm.llms.huggingface.embedding.handler import HuggingFaceEmbedding
 
@@ -185,3 +171,29 @@ class TestHuggingFaceEmbedding:
             "inputs": {"source_sentence": "source sentence", "sentences": ["candidate sentence"]},
             "parameters": {"min_length": 2},
         }
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_hf_embedding_sentence_sim_sends_one_similarity_request(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf-test-token")
+    with respx.mock(assert_all_called=False) as hf:
+        hf.get(url__regex=r"https://huggingface\.co/api/models/.*").respond(json={"pipeline_tag": "sentence-similarity"})
+        hf.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(json={"max_position_embeddings": 512})
+        inference: Final = hf.post(
+            "https://router.huggingface.co/hf-inference/pipeline/sentence-similarity/sentence-transformers/TaylorAI/bge-micro-v2"
+        ).respond(json=[0.7708950042724609])
+        request: Final = {
+            "model": "huggingface/sentence-transformers/TaylorAI/bge-micro-v2",
+            "input": ["good morning from litellm", "this is another item"],
+        }
+        response: Final = litellm.embedding(**request) if sync_mode else await litellm.aembedding(**request)
+
+    assert inference.call_count == 1
+    assert json.loads(inference.calls.last.request.content) == {
+        "inputs": {"source_sentence": "good morning from litellm", "sentences": ["this is another item"]}
+    }
+    assert inference.calls.last.request.headers["Authorization"] == "Bearer hf-test-token"
+    assert response.data == [{"object": "embedding", "index": 0, "embedding": 0.7708950042724609}]

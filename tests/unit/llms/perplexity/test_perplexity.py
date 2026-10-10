@@ -39,5 +39,6 @@ def test_perplexity_401_maps_to_authentication_error(respx_mock: respx.MockRoute
         )
 
     assert exc_info.value.status_code == 401
+    assert "PerplexityException" in str(exc_info.value)
     assert "invalid API key" in str(exc_info.value)
     assert route.calls.last.request.headers["Authorization"] == "Bearer bad-perplexity-key"

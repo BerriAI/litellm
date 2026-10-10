@@ -288,6 +288,7 @@ def test_mistral_streaming_function_call_arguments_are_assembled(
         stream=True,
     )
     stream_chunks: Final = tuple(stream)
+    assert {chunk._hidden_params["custom_llm_provider"] for chunk in stream_chunks} == {"mistral"}
     argument_fragments: Final = tuple(
         chunk.choices[0].delta.tool_calls[0].function.arguments
         for chunk in stream_chunks
@@ -304,3 +305,22 @@ def test_mistral_streaming_function_call_arguments_are_assembled(
         "unit": "fahrenheit",
     }
     assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+def test_mistral_completion_cost_is_priced_from_the_returned_usage(respx_mock, mistral_api_response):
+    route: Final = respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=mistral_api_response)
+
+    response: Final = litellm.completion(
+        model="mistral/mistral-medium-latest",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        max_tokens=5,
+        seed=10,
+    )
+
+    rates: Final = litellm.model_cost["mistral/mistral-medium-latest"]
+    body: Final = json.loads(route.calls.last.request.content)
+    assert (body["random_seed"], body["max_tokens"]) == (10, 5)
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (10, 15)
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        10 * rates["input_cost_per_token"] + 15 * rates["output_cost_per_token"]
+    )

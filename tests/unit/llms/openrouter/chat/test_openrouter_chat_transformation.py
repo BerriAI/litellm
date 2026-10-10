@@ -680,6 +680,10 @@ def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> N
         api_key="test-openrouter-key",
     )
     stream_chunks: Final = tuple(stream)
+    assert stream_chunks[0].choices[0].delta.role == "assistant"
+    assert tuple(
+        chunk.choices[0].finish_reason for chunk in stream_chunks if chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
     assert "".join(
         chunk.choices[0].delta.content or "" for chunk in stream_chunks if chunk.choices
     ) == "The Supreme Court hears federal cases."
@@ -727,7 +731,7 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
         },
     )
     body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
-    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+    route: Final = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
             text=body,
@@ -743,9 +747,12 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=messages,
         stream=True,
+        reasoning={"effort": "high"},
+        drop_params=True,
         api_key="test-openrouter-key",
     )
     stream_chunks: Final = tuple(stream)
+    assert json.loads(route.calls.last.request.content)["reasoning"] == {"effort": "high"}
     reasoning_deltas: Final = tuple(
         getattr(chunk.choices[0].delta, "reasoning_content", None)
         for chunk in stream_chunks

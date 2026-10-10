@@ -183,6 +183,40 @@ def test_completion_openai_prompt_array_sends_both_prompts() -> None:
 
 
 @respx.mock
+def test_completion_text_003_token_prompt_array_returns_one_choice_per_prompt() -> None:
+    token_prompts: Final = [[2061, 338, 262, 6193, 287, 14362, 30], [2437, 318, 9502, 30]]
+    route: Final = respx.post("https://api.fireworks.ai/inference/v1/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "cmpl-token-prompts",
+                "object": "text_completion",
+                "created": 1677652288,
+                "model": "accounts/fireworks/models/glm-5p3-flash",
+                "choices": [
+                    {"text": "sunny", "index": 0, "logprobs": None, "finish_reason": "length"},
+                    {"text": "rainy", "index": 1, "logprobs": None, "finish_reason": "length"},
+                ],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13},
+            },
+        )
+    )
+
+    response: Final = text_completion(
+        model="text-completion-openai/accounts/fireworks/models/glm-5p3-flash",
+        api_base="https://api.fireworks.ai/inference/v1",
+        api_key="fireworks-test-key",
+        prompt=token_prompts,
+        max_tokens=5,
+    )
+
+    body: Final = json.loads(route.calls.last.request.read())
+    assert body["prompt"] == token_prompts
+    assert body["model"] == "accounts/fireworks/models/glm-5p3-flash"
+    assert [(choice.index, choice.text) for choice in response.choices] == [(0, "sunny"), (1, "rainy")]
+
+
+@respx.mock
 def test_text_completion_with_echo_returns_prompt_and_token_logprobs() -> None:
     route: Final = respx.post("https://api.openai.com/v1/completions").mock(
         return_value=Response(
@@ -291,8 +325,13 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
     )
     chunks: Final = [chunk async for chunk in stream]
     response: Final = litellm.stream_chunk_builder(chunks=chunks)
+    rates: Final = litellm.model_cost["gpt-3.5-turbo"]
 
     assert response.choices[0].text == "hello"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 1)
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        response.usage.completion_tokens * rates["output_cost_per_token"]
+    )
     assert tuple(
         chunk.choices[0].finish_reason
         for chunk in chunks
@@ -326,8 +365,12 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
     )
 
     assert tuple(chunk.choices[0].text for chunk in chunks) == ("hello", None, None)
-    assert chunks[-1].usage is not None
-    assert chunks[-1].usage.total_tokens == 3
+    assert tuple(chunk.usage for chunk in chunks[:-1]) == (None, None)
+    assert (chunks[-1].usage.prompt_tokens, chunks[-1].usage.completion_tokens, chunks[-1].usage.total_tokens) == (
+        2,
+        1,
+        3,
+    )
     assert json.loads(route.calls[0].request.content)["stream_options"] == {
         "include_usage": True
     }

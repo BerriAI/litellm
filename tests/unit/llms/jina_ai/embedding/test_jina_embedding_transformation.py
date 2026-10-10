@@ -1,9 +1,13 @@
+import json
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
+
+import litellm
 
 
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
@@ -195,21 +199,38 @@ def test_transform_embedding_response_invalid_field_is_reported_by_name(field: s
     assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
 
 
-def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs():
-    config: Final = JinaAIEmbeddingConfig()
-    image: Final = "data:image/png;base64,aGVsbG8="
+_PIXEL_PNG: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 
-    request: Final = config.transform_embedding_request(
-        model="jina-embeddings-v4",
-        input=["describe this", image],
-        optional_params={},
-        headers={},
+
+@pytest.mark.parametrize(
+    ("input_data", "expected_payload_input"),
+    [
+        (["hello world", "foo bar"], ["hello world", "foo bar"]),
+        (
+            ["A picture of a cat", f"data:image/png;base64,{_PIXEL_PNG}"],
+            [{"text": "A picture of a cat"}, {"image": _PIXEL_PNG}],
+        ),
+        ([f"data:image/png;base64,{_PIXEL_PNG}"], [{"image": _PIXEL_PNG}]),
+    ],
+    ids=["text_only", "text_and_image", "image_only"],
+)
+def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs(
+    input_data: list[str], expected_payload_input: list[object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "model": "jina-embeddings-v4",
+            "usage": {"prompt_tokens": 3, "total_tokens": 3},
+        }
     )
 
-    assert request == {
+    response: Final = litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data, api_key="jina-test-key")
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {
         "model": "jina-embeddings-v4",
-        "input": [
-            {"text": "describe this"},
-            {"image": "aGVsbG8="},
-        ],
+        "input": expected_payload_input,
     }
+    assert response.data[0]["embedding"] == [0.1, 0.2]

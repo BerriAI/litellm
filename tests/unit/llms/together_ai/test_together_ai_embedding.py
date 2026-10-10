@@ -33,3 +33,4 @@ def test_together_ai_embedding_uses_together_embeddings_endpoint(respx_mock: res
         "input": ["hello"],
     }
     assert response.data[0]["embedding"] == [0.3, 0.4]
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (1, 1)

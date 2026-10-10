@@ -31,3 +31,4 @@ def test_mistral_embedding_uses_mistral_embeddings_endpoint(respx_mock: respx.Mo
     assert route.calls.last.request.headers["Authorization"] == "Bearer test-mistral-key"
     assert json.loads(route.calls.last.request.read()) == {"model": "mistral-embed", "input": ["hello"]}
     assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (2, 2)

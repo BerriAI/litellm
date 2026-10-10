@@ -1,6 +1,5 @@
 import json
 from collections.abc import Mapping
-from itertools import chain
 from typing import Final
 
 import httpx
@@ -111,6 +110,8 @@ async def test_async_gemini_streaming_tool_call_arguments_are_valid(
     ]
 
     assert route.call_count == 1
+    assert response_chunks[0].choices[0].delta.role == "assistant"
+    assert tuple(chunk.choices[0].finish_reason for chunk in response_chunks) == (None, "tool_calls")
     assert len(tool_calls) == 1
     assert tool_calls[0].function.name == "generate_series_of_questions"
     assert json.loads(tool_calls[0].function.arguments) == {
@@ -213,3 +214,6 @@ async def test_gemini_streaming_legacy_function_call_arguments_are_valid(
     ) == ("get_current_weather",)
     arguments: Final = "".join(function_call.arguments or "" for function_call in function_calls)
     assert json.loads(arguments) == {"location": "Boston", "unit": "fahrenheit"}
+    rebuilt: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert rebuilt.choices[0].message.function_call.name == "get_current_weather"
+    assert json.loads(rebuilt.choices[0].message.function_call.arguments) == {"location": "Boston", "unit": "fahrenheit"}
