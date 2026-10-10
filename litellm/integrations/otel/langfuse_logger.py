@@ -51,6 +51,10 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
         response: "AsyncIterator[ModelResponseStream]",
         request_data: Mapping[str, object],
     ) -> "AsyncGenerator[ModelResponseStream, None]":
+        if not self._capture_span_content():
+            async for chunk in response:
+                yield chunk
+            return
         relayed: Final[list[ModelResponseStream]] = []  # mutable-ok: relayed as they arrive, assembled at end of stream
         async for chunk in response:
             relayed.append(chunk)
@@ -58,6 +62,8 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
         self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
 
     def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
+        if not self._capture_span_content():
+            return
         root: Final = request_root_span()
         if root is None or not root.is_recording():
             return

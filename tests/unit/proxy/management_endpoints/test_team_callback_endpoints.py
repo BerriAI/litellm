@@ -7,6 +7,7 @@ redacted audit rows for callback mutations.
 """
 
 import json
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1712,3 +1713,62 @@ def test_add_team_callback_accepts_arize_sampling_rate_vars():
     )
     assert data.callback_vars["arize_success_sampling_rate"] == "0.5"
     assert data.callback_vars["arize_error_sampling_rate"] == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_add_team_callbacks_rejects_capture_message_content_on_a_non_otel_v2_callback(patched_prisma):
+    data: Final = AddTeamCallback(
+        callback_name="langfuse",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk",
+            "langfuse_secret_key": "sk",
+            "capture_message_content": "no_content",
+        },
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=data,
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=_admin_auth(),
+        )
+    assert exc.value.status_code == 400
+    assert "capture_message_content" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.fixture
+def otel_v2_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture", ["no_content", "span_only"])
+async def test_add_team_callbacks_stores_capture_message_content_in_the_existing_callback_metadata(
+    patched_prisma, capture: str
+) -> None:
+    data: Final = AddTeamCallback(
+        callback_name="langfuse_otel",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk",
+            "langfuse_secret_key": "sk",
+            "capture_message_content": capture,
+        },
+    )
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=_admin_auth(),
+    )
+    patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
+    stored: Final = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert [entry["callback_vars"].get("capture_message_content") for entry in stored["logging"]] == [capture]
