@@ -4,12 +4,14 @@ import hashlib
 import json
 import os
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import ExitStack
 from importlib.metadata import version
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
+from execnet import XSpec
 from pydantic import TypeAdapter
 from redis import Redis
 
@@ -19,6 +21,7 @@ from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
+from tests.integration._support.workers import worker_endpoints, worker_gateway
 from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
@@ -28,6 +31,7 @@ WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
 SHARD_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
 SHARD_FILES: Final = pytest.StashKey[frozenset[str] | None]()
 INTEGER_OPTION: Final = TypeAdapter(int)
+STRING_ENVIRONMENT: Final = TypeAdapter(dict[str, str])
 
 
 @runtime_checkable
@@ -60,6 +64,37 @@ def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.register(IntegrationReportPlugin(config))
     if os.environ.get("INTEGRATION_ROUTING"):
         config.pluginmanager.register(RoutingPlugin(config))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_setupnodes(config: pytest.Config, specs: Sequence[XSpec]) -> None:
+    if (
+        os.environ.get("INTEGRATION_WORKER_ISOLATION") != "1"
+        or config.getoption("collectonly") is True
+        or config.stash[SHARD_FILES] == frozenset()
+    ):
+        return
+    resources: Final = ExitStack()
+    config.add_cleanup(resources.close)
+    destination: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"])
+    peer_needed: Final = bool(os.environ.get("INTEGRATION_PEER_URL"))
+    replica_needed: Final = bool(os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL"))
+    for index, spec in enumerate(specs):
+        results: Final = destination / f"gw{index}"
+        endpoints: Final = worker_endpoints()
+        with pytest.MonkeyPatch.context() as environment:
+            for name, value in endpoints.items():
+                environment.setenv(name, value)
+            environment.setenv("INTEGRATION_RESULTS_DIR", str(results))
+            services: Final = resources.enter_context(
+                worker_gateway(results / "runtime", peer=peer_needed, replica=replica_needed)
+            )
+        spec.env = {
+            **STRING_ENVIRONMENT.validate_python(spec.env),
+            **endpoints,
+            **services,
+            "INTEGRATION_RESULTS_DIR": str(results),
+        }
 
 
 class IntegrationReportPlugin:
@@ -212,7 +247,7 @@ def gateway() -> Iterator[Gateway]:
 
 @pytest.fixture(scope="session")
 def shared_provider_server() -> Iterator[SharedProvider]:
-    if os.environ.get("PYTEST_XDIST_WORKER"):
+    if os.environ.get("PYTEST_XDIST_WORKER") and os.environ.get("INTEGRATION_WORKER_ISOLATION") != "1":
         pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
     with shared_provider() as server:
         yield server

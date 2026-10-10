@@ -13,9 +13,38 @@ import httpx
 import pytest
 
 from tests.integration._support.client import Gateway
+from tests.integration._support.process import worker_configuration
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
 UNRELATED_CRASH: Final = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'litellm'\n"
+
+
+def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserves_other_targets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    source: Final = tmp_path / "source.yaml"
+    original: Final = (
+        'api_base: http://127.0.0.1:8191/v1\ntoken_url: "http://127.0.0.1:8190/_oauth/token"\n'
+        "peer: http://127.0.0.1:81910/v1\ncustom: http://127.0.0.1:9000/v1\n"
+    )
+    source.write_text(original)
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+    assert configured.read_text() == (
+        'api_base: http://127.0.0.1:8203/v1\ntoken_url: "http://127.0.0.1:8202/_oauth/token"\n'
+        "peer: http://127.0.0.1:81910/v1\ncustom: http://127.0.0.1:9000/v1\n"
+    )
+    assert source.read_text() == original
+
+
+def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("INTEGRATION_WORKER_ISOLATION", raising=False)
+    source: Final = tmp_path / "source.yaml"
+    source.write_text("api_base: http://127.0.0.1:8191/v1\n")
+    assert worker_configuration(source, tmp_path / "unused") == source
+    assert source.read_text() == "api_base: http://127.0.0.1:8191/v1\n"
 
 
 @pytest.fixture

@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -23,7 +24,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from integration._support.client import GATEWAY_LIMITS, Gateway
+
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
@@ -235,6 +237,22 @@ def _proxy_root() -> Path:
     return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
 
 
+def worker_configuration(config: Path, directory: Path) -> Path:
+    if os.environ.get("INTEGRATION_WORKER_ISOLATION") != "1":
+        return config
+
+    def endpoint(match: re.Match[str]) -> str:
+        if match.group(1) == "8190":
+            return os.environ["INTEGRATION_UPSTREAM_URL"]
+        return f"http://127.0.0.1:{os.environ['INTEGRATION_PROVIDER_PORT']}"
+
+    contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
+    directory.mkdir(parents=True, exist_ok=True)
+    destination: Final = directory / f"worker-config-{uuid.uuid4().hex}.yaml"
+    destination.write_text(contents)
+    return destination
+
+
 def _proxy_environment(
     gateway: Gateway, overrides: Mapping[str, str], remove_environment: tuple[str, ...]
 ) -> Mapping[str, str]:
@@ -314,7 +332,7 @@ def owned_proxy_process(
         "-m",
         "integration._support.proxy",
         "--config",
-        str(config or "tests/integration/proxy_config.yaml"),
+        str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory)),
         "--host",
         "127.0.0.1",
         "--num_workers",

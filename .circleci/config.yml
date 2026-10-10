@@ -3186,6 +3186,7 @@ workflows:
           name: integration-management
           suite: management
           parallelism: 4
+          resource_class: xlarge
       - integration_shard_coverage:
           name: integration-management-coverage
           suite: management
@@ -3195,6 +3196,7 @@ workflows:
           name: integration-accounting
           suite: accounting
           parallelism: 4
+          resource_class: xlarge
       - integration_shard_coverage:
           name: integration-accounting-coverage
           suite: accounting
@@ -3203,11 +3205,12 @@ workflows:
       - integration_contracts:
           name: integration-providers
           suite: providers
-          parallelism: 8
+          parallelism: 4
+          resource_class: xlarge
       - integration_shard_coverage:
           name: integration-providers-coverage
           suite: providers
-          shards: 8
+          shards: 4
           requires:
             - integration-providers
       - integration_contracts:
@@ -3234,6 +3237,7 @@ workflows:
           name: integration-extensions
           suite: extensions
           parallelism: 8
+          resource_class: xlarge
       - integration_shard_coverage:
           name: integration-extensions-coverage
           suite: extensions
@@ -3245,6 +3249,7 @@ workflows:
           suite: management
           mode: replica
           parallelism: 4
+          resource_class: xlarge
       - integration_shard_coverage:
           name: integration-management-replica-coverage
           suite: management
