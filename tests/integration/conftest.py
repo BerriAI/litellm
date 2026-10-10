@@ -3,34 +3,60 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from importlib.metadata import version
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 from redis import Redis
 
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.ordering import collected_case, fixture_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
+INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
+WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
+SHARD_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
+SHARD_FILES: Final = pytest.StashKey[frozenset[str] | None]()
+INTEGER_OPTION: Final = TypeAdapter(int)
+
+
+@runtime_checkable
+class WorkerConfig(Protocol):
+    @property
+    def workeroutput(self) -> dict[str, object]: ...
+
+
+class WorkerNode(Protocol):
+    @property
+    def workeroutput(self) -> Mapping[str, object]: ...
+
+
+def _worker_output(config: object) -> dict[str, object] | None:
+    return config.workeroutput if isinstance(config, WorkerConfig) else None
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--integration-order-seed", type=int, default=0)
+    parser.addoption("--integration-shard-count", type=int, default=1)
+    parser.addoption("--integration-shard-index", type=int, default=0)
+    parser.addoption("--integration-shard-files", type=Path)
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.stash[REPORTS] = []
+    config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
     if os.environ.get("INTEGRATION_ROUTING"):
         config.pluginmanager.register(RoutingPlugin(config))
@@ -47,6 +73,21 @@ class IntegrationReportPlugin:
     def pytest_xdist_node_collection_finished(self, node: object, ids: Sequence[str]) -> None:
         self.config.stash[COLLECTED] = tuple(nodeid for nodeid in ids if _owned(nodeid))
 
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_testnodedown(self, node: WorkerNode, error: object) -> None:
+        if error is not None:
+            return
+        inventory: Final = WORKER_INVENTORY.validate_python(node.workeroutput.get("integration_inventory"))
+        previous: Final = self.config.stash.get(INVENTORY, inventory)
+        if inventory != previous:
+            raise pytest.UsageError("Integration worker collection inventories disagree")
+        self.config.stash[INVENTORY] = inventory
+
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        output: Final = _worker_output(self.config)
+        if output is not None:
+            output["integration_inventory"] = self.config.stash.get(INVENTORY, ())
+
 
 def _owned(nodeid: str) -> bool:
     parts: Final = Path(nodeid.split("::", 1)[0]).parts
@@ -57,14 +98,29 @@ def _digest(seed: int, identity: str) -> bytes:
     return hashlib.sha256(f"{seed}:{identity}".encode()).digest()
 
 
-def _order_key(seed: int, nodeid: str) -> tuple[bytes, bytes]:
-    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, nodeid)
+def _order_key(seed: int, nodeid: str, group: str = "") -> tuple[bytes, bytes, bytes]:
+    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, group or nodeid), _digest(seed, nodeid)
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    order_seed: Final = config.getoption("integration_order_seed")
+def _shard_files(path: Path | None) -> frozenset[str] | None:
+    if path is None:
+        return None
+    try:
+        files: Final = tuple(path.read_text().splitlines())
+    except (OSError, UnicodeError) as error:
+        raise pytest.UsageError(f"Cannot read integration shard selection: {error}") from error
+    if len(frozenset(files)) != len(files) or any(not file for file in files):
+        raise pytest.UsageError("Integration shard selection contains duplicate or blank files")
+    return frozenset(files)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Iterator[None]:
+    yield
+    order_seed: Final = INTEGER_OPTION.validate_python(config.getoption("integration_order_seed"))
     if order_seed:
-        items.sort(key=lambda item: _order_key(order_seed, item.nodeid))
+        groups: Final = fixture_groups(tuple(collected_case(item) for item in items))
+        items.sort(key=lambda item: _order_key(order_seed, item.nodeid, groups[item.nodeid]))
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
@@ -78,7 +134,23 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
-    config.stash[COLLECTED] = tuple(item.nodeid for item in owned)
+    config.stash[INVENTORY] = tuple(item.nodeid for item in owned)
+    count: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_count"))
+    index: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_index"))
+    if count < 1 or not 0 <= index < count:
+        raise pytest.UsageError("Integration shard index must be within the positive shard count")
+    files: Final = config.stash[SHARD_FILES]
+    if count > 1 and files is None:
+        raise pytest.UsageError("Parallel integration runs require CircleCI's shard file selection")
+    if files is not None:
+        available: Final = frozenset(item.nodeid.split("::", 1)[0] for item in owned)
+        if files - available:
+            raise pytest.UsageError(f"Integration shard selected uncollected files: {sorted(files - available)}")
+        selected: Final = tuple(item for item in items if item not in owned or item.nodeid.split("::", 1)[0] in files)
+        deselected: Final = tuple(item for item in owned if item.nodeid.split("::", 1)[0] not in files)
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    config.stash[COLLECTED] = tuple(item.nodeid for item in items if item in owned)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -89,11 +161,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     collected: Final = session.config.stash.get(COLLECTED, ())
     reports: Final = tuple(report for report in session.config.stash[REPORTS] if report.nodeid in collected)
+    inventory: Final = session.config.stash.get(INVENTORY, collected)
+    empty_shard: Final = session.config.stash[SHARD_FILES] == frozenset() and bool(inventory)
     passed: Final = tuple(report.nodeid for report in reports if report.when == "call" and report.passed)
     skipped: Final = tuple(report.nodeid for report in reports if report.skipped)
     complete: Final = (
-        exitstatus == 0
-        and bool(collected)
+        (exitstatus == 0 or (empty_shard and exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED))
+        and (bool(collected) or empty_shard)
         and sorted(collected) == sorted(passed + skipped)
         and not any(report.failed for report in reports)
     )
@@ -103,10 +177,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         json.dumps(
             {
                 "collected": collected,
+                "inventory": inventory,
+                "shard_count": session.config.getoption("integration_shard_count"),
+                "shard_index": session.config.getoption("integration_shard_index"),
                 "passed": passed,
                 "skipped": skipped,
                 "complete": complete,
-                "exitstatus": exitstatus,
+                "exitstatus": 0 if complete else exitstatus,
                 "hypothesis_version": version("hypothesis"),
                 "hypothesis_seed": session.config.getoption("hypothesis_seed"),
                 "order_seed": session.config.getoption("integration_order_seed"),
@@ -123,6 +200,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     )
     if not complete and exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    if complete and empty_shard:
+        session.exitstatus = pytest.ExitCode.OK
 
 
 @pytest.fixture
@@ -138,7 +217,9 @@ def shared_provider_server() -> Iterator[SharedProvider]:
     with shared_provider() as server:
         yield server
         late: Final = server.received()
-        assert late == (), f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+        assert late == (), (
+            f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+        )
 
 
 @pytest.fixture

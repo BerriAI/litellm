@@ -15,7 +15,9 @@ from litellm.proxy._lazy_features import (
     attach_lazy_features,
     lazy_tag_to_prefix,
     loaded_lazy_modules,
+    reserve_lazy_slot,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
 FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 WARMUP_PATH: Final = "/lazy/warm/{name}"
@@ -158,6 +160,155 @@ def test_flag_lets_a_route_added_during_startup_beat_an_overlapping_feature_rout
         assert client.get("/zeta/health").json() == {"feature": "configured"}, (
             "lazy mode routes this to startup's route"
         )
+
+
+def test_configured_pass_through_added_after_attach_beats_a_reserved_slot_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    app: Final = FastAPI()
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    app.add_api_route("/late", late, methods=["GET"])
+    attach_lazy_features(app, features)
+    app.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "configured"}, (
+            "a deployment's own pass-through endpoint must outrank the built-in provider route"
+        )
+
+
+def test_flag_configured_pass_through_added_during_startup_beats_a_reserved_slot_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(FLAG, "true")
+    features: Final = (_feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}"),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    @asynccontextmanager
+    async def adds_a_pass_through(app_: FastAPI) -> AsyncGenerator[None]:
+        app_.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+        yield
+
+    app: Final = FastAPI(lifespan=adds_a_pass_through)
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    app.add_api_route("/late", late, methods=["GET"])
+    attach_lazy_features(app, features)
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "configured"}, (
+            "a deployment's own pass-through endpoint must outrank the built-in provider route"
+        )
+
+
+def test_builtin_routes_first_flag_keeps_a_reserved_slot_feature_ahead_of_a_configured_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    app: Final = FastAPI()
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    attach_lazy_features(app, features)
+    app.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "zeta"}, (
+            "LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST restores the old built-in-first order"
+        )
+
+
+def test_late_route_without_the_marker_still_loses_to_a_reserved_slot_feature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def early() -> dict[str, str]:
+        return {"feature": "early"}
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    app: Final = FastAPI()
+    app.add_api_route("/early", early, methods=["GET"])
+    reserve_lazy_slot(app, "zeta", features=features)
+    app.add_api_route("/late", late, methods=["GET"])
+    attach_lazy_features(app, features)
+    app.add_api_route("/zeta/{subpath:path}", late, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "zeta"}, (
+            "only configured pass-through routes are promoted; ordinary late routes keep losing"
+        )
+
+
+def test_configured_pass_through_under_a_different_segment_is_not_moved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    zeta: Final = _feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}")
+    features: Final = (LazyFeature(name="zeta", module_path=zeta.module_path, path_prefixes=("/zeta",)),)
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    setattr(configured, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+
+    app: Final = FastAPI()
+    reserve_lazy_slot(app, "zeta", features=features)
+    attach_lazy_features(app, features)
+    app.add_api_route("/omega/{subpath:path}", configured, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "zeta"}
+
+    routes: Final = app.router.routes
+    omega_index: Final = next(
+        i for i, route in enumerate(routes) if getattr(route, "path", "") == "/omega/{subpath:path}"
+    )
+    zeta_index: Final = next(
+        i for i, route in enumerate(routes) if getattr(route, "path", "") == "/zeta/{endpoint:path}"
+    )
+    assert omega_index > zeta_index, "an unrelated configured route keeps its position after the feature routes"
 
 
 def test_flag_does_not_bring_back_a_feature_route_removed_during_startup(monkeypatch: pytest.MonkeyPatch) -> None:

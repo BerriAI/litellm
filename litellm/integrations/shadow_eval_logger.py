@@ -631,13 +631,13 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     """
     try:
         from litellm.exceptions import BudgetExceededError
-        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import (
             get_team_object,
             team_max_budget_check,
             virtual_key_max_budget_check,
         )
         from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+        from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     except ImportError:
         return False
 
