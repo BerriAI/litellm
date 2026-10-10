@@ -23,6 +23,12 @@ if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
 
 
+_A2A_KIND_DIALECT_HINT: Final = (
+    " (the agent replied in the A2A 0.3 dialect while its card declares 1.0; "
+    'set litellm_params.a2a_protocol_version: "0.3" on this agent)'
+)
+
+
 try:
     from a2a.client import Client, ClientConfig, create_client
 
@@ -152,7 +158,7 @@ def map_a2a_exception(
 
     # Default: wrap in generic A2AError
     raise A2AError(
-        message=error_str,
+        message=error_str + _A2A_KIND_DIALECT_HINT if 'has no field named "kind"' in error_str else error_str,
         model=model,
     )
 

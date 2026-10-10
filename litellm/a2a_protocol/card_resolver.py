@@ -21,6 +21,7 @@ AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 FOUNDRY_AGENT_CARD_PATH: Final = "/agentCard/v1.0"
 AGENT_CARD_PATH_PARAM: Final = "agent_card_path"
+A2A_PROTOCOL_VERSION_PARAM: Final = "a2a_protocol_version"
 
 try:
     from a2a.client import A2ACardResolver as _A2ACardResolver
@@ -76,22 +77,43 @@ _CANONICAL_PROTOCOL_BINDINGS: Final = MappingProxyType(
 )
 
 _LEGACY_PROTOCOL_VERSION: Final = "0.3"
+_A2A_PROTOCOL_VERSION_ALIASES: Final = MappingProxyType(
+    {
+        "0.3": "0.3",
+        "0.3.0": "0.3",
+        "1.0": "1.0",
+        "1.0.0": "1.0",
+    }
+)
 
 
-def normalize_agent_card_interfaces(agent_card: "AgentCard") -> "AgentCard":
+def resolve_a2a_protocol_version(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        verbose_logger.warning("Ignoring invalid %s value: %r", A2A_PROTOCOL_VERSION_PARAM, value)
+        return None
+    if not isinstance(value, (str, int, float)):
+        verbose_logger.warning("Ignoring invalid %s value: %r", A2A_PROTOCOL_VERSION_PARAM, value)
+        return None
+
+    protocol_version: Final = _A2A_PROTOCOL_VERSION_ALIASES.get(str(value).strip())
+    if protocol_version is None:
+        verbose_logger.warning("Ignoring invalid %s value: %r", A2A_PROTOCOL_VERSION_PARAM, value)
+    return protocol_version
+
+
+def normalize_agent_card_interfaces(agent_card: "AgentCard", protocol_version: str | None = None) -> "AgentCard":
     """
     Canonicalize the supported interfaces of spec-adjacent agent cards.
 
     Some A2A servers (e.g. LangGraph Platform) serve agent cards with lowercase
     bindings like "jsonrpc", but a2a-sdk's ClientFactory matches bindings
     case-sensitively against its uppercase TransportProtocol constants and fails
-    with "no compatible transports found." for spec-adjacent casings.
-
-    The same servers also speak the A2A 0.3 JSON dialect ("kind"-discriminated
-    payloads) while declaring protocolVersion "1.0", which a2a-sdk's strict v1
-    proto parsing rejects. A mis-cased binding fingerprints such a server, so its
-    declared version is downgraded to 0.3 to route the SDK's ClientFactory onto
-    its v0.3 compat transport, which speaks that dialect.
+    with "no compatible transports found." for spec-adjacent casings. The casing
+    fingerprint stopped working with langgraph-api 0.15, so operators can pin
+    the version per agent via ``litellm_params.a2a_protocol_version``. An explicit
+    "1.0" opts out of the mis-cased downgrade.
     """
     normalized: Final = type(agent_card)()
     normalized.CopyFrom(agent_card)
@@ -101,6 +123,10 @@ def normalize_agent_card_interfaces(agent_card: "AgentCard") -> "AgentCard":
             continue
         interface.protocol_binding = canonical
         interface.protocol_version = _LEGACY_PROTOCOL_VERSION
+    if protocol_version is not None:
+        for interface in normalized.supported_interfaces:
+            if interface.protocol_binding in _CANONICAL_PROTOCOL_BINDINGS.values():
+                interface.protocol_version = protocol_version
     return normalized
 
 
