@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, X } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "@/lib/toast";
-import { fallbackChainOptions, primaryModelOptions } from "./fallbackOptions";
+import { fallbackChainOptions, fallbackPrimaryLabel, primaryModelOptions } from "./fallbackOptions";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
 interface FallbackSelectionFormProps {
@@ -81,7 +81,7 @@ export function FallbackSelectionForm({
   };
 
   const groupLabel = (group: FallbackGroup, index: number) =>
-    group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
+    group.primaryModel ? fallbackPrimaryLabel(group.primaryModel) : `Group ${index + 1}`;
 
   if (groups.length === 0) {
     return (

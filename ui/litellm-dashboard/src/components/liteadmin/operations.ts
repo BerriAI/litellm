@@ -109,7 +109,11 @@ const fallbackSetFields = {
   model: text.describe(
     "The primary model group, or a provider wildcard like openai/* meaning all models from that provider.",
   ),
-  fallbacks: z.array(fallbackTarget).min(1).max(10),
+  fallbacks: z
+    .array(fallbackTarget)
+    .min(1)
+    .max(10)
+    .describe("Concrete model groups to try in order. Never a wildcard."),
 };
 const fallbackDeleteFields = { model: text };
 
@@ -359,15 +363,12 @@ export function createLiteAdminOperations(context: OperationContext) {
           query: { ...a, start_date: `${a.start_date} 00:00:00`, end_date: `${a.end_date} 23:59:59` },
         }),
     ),
-    operation("read", "fallback")(
-      "fallbacks_list",
-      "List configured router fallbacks",
-      object({}),
-      async () => ({ fallbacks: fallbackEntries(await readRouterSettings()) }),
-    ),
+    operation("read", "fallback")("fallbacks_list", "List configured router fallbacks", object({}), async () => ({
+      fallbacks: fallbackEntries(await readRouterSettings()),
+    })),
     operation("write", "fallback")(
       "fallback_set",
-      "Set the fallback chain for a primary model. The model may be a provider wildcard like openai/* meaning all models from that provider; wildcards are allowed as model but never inside fallbacks",
+      "Set the fallback chain for a model",
       object(fallbackSetFields),
       async (a) => {
         const settings = await readRouterSettings();

@@ -53,7 +53,11 @@ describe("FallbackSelectionForm", () => {
   it("should display tabs when groups exist", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: null, fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("tab", { name: /group 1/i })).toBeInTheDocument();
   });
@@ -61,16 +65,36 @@ describe("FallbackSelectionForm", () => {
   it("should display primary model as tab label when set", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: "gpt-4", fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
+  });
+
+  it("should display friendly label for provider wildcard primary", () => {
+    const groups: FallbackGroup[] = [{ id: "1", primaryModel: "openai/*", fallbackModels: [] }];
+    render(
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "All OpenAI Models" })).toBeInTheDocument();
   });
 
   it("should call onGroupsChange when add tab button is clicked", async () => {
     const user = userEvent.setup();
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: null, fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
 
     const addTabButton = screen.getByRole("button", { name: /add fallback group/i });
@@ -125,7 +149,11 @@ describe("FallbackSelectionForm", () => {
       { id: "2", primaryModel: "gpt-3.5-turbo", fallbackModels: [] },
     ];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
 
     const removeButtons = screen.getAllByRole("button", { name: /^remove /i });
@@ -142,7 +170,11 @@ describe("FallbackSelectionForm", () => {
   it("should render FallbackGroupConfig for each group", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: null, fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("combobox", { name: /primary model/i })).toHaveValue("");
     expect(screen.getByText("Primary Model")).toBeInTheDocument();
@@ -151,7 +183,11 @@ describe("FallbackSelectionForm", () => {
   it("should display group with primary and fallback models in FallbackGroupConfig", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: "gpt-4", fallbackModels: ["gpt-3.5-turbo"] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
