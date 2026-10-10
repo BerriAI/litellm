@@ -1210,6 +1210,9 @@ def test_user_aggregate_keeps_current_day_query_semantics(
         ("0000-01-01", "9999-12-31", "valid YYYY-MM-DD"),
         ("2024-06-01", "2024-01-01", "on or after"),
         ("not-a-date", "2024-01-31", "valid YYYY-MM-DD"),
+        ("2026-9-24", "2026-09-26", "valid YYYY-MM-DD"),
+        ("２０２６-09-24", "2026-09-26", "valid YYYY-MM-DD"),
+        ("2026-09-01", "2026-09-4", "valid YYYY-MM-DD"),
         (None, "2024-01-31", "start_date and end_date"),
     ),
 )
@@ -1259,3 +1262,71 @@ def test_user_key_page_rejects_bad_date_ranges(
     assert response.status_code == 400, response.text
     assert message in str(response.json()["detail"]), response.text
     repository.key_page.assert_not_awaited()
+
+
+_NON_CANONICAL_DATE_RANGES: Final[tuple[tuple[str, str], ...]] = (
+    ("2026-9-24", "2026-09-26"),
+    ("２０２６-09-24", "2026-09-26"),
+    ("2026-09-01", "2026-09-4"),
+)
+
+
+@pytest.mark.parametrize(("start_date", "end_date"), _NON_CANONICAL_DATE_RANGES)
+def test_user_aggregate_rejects_non_canonical_dates(
+    daily_activity_client: tuple[TestClient, _FakeRepository], start_date: str, end_date: str
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params={"start_date": start_date, "end_date": end_date, "user_id": "user-a"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
+    repository.aggregated.assert_not_awaited()
+
+
+def test_user_aggregate_still_accepts_ranges_wider_than_the_team_limit(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params={"start_date": "2020-01-01", "end_date": "2026-12-31", "user_id": "user-a"},
+    )
+    assert response.status_code == 200, response.text
+    repository.aggregated.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("start_date", "end_date"), _NON_CANONICAL_DATE_RANGES)
+@pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
+def test_export_routes_reject_non_canonical_dates_before_querying(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    prefix: str,
+    query_name: str,
+    entity_id: str,
+    start_date: str,
+    end_date: str,
+) -> None:
+    client, repository = daily_activity_client
+    repository.export_rows_error = AssertionError("export must not query the repository")
+    response: Final = client.get(
+        f"{prefix}/daily/activity/export",
+        params={query_name: entity_id, "start_date": start_date, "end_date": end_date, "export_type": "daily"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
+    assert "content-disposition" not in response.headers
+
+
+def test_export_content_disposition_is_ascii_and_built_from_canonical_dates(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, _ = daily_activity_client
+    response: Final = client.get(
+        "/team/daily/activity/export",
+        params={**_entity_params("team_ids", "team-a"), "export_type": ExportType.DAILY.value},
+    )
+    assert response.status_code == 200, response.text
+    disposition: Final = response.headers["content-disposition"]
+    assert disposition == 'attachment; filename="team-usage-2025-01-01-2025-01-02-daily.csv"'
+    assert disposition.isascii()

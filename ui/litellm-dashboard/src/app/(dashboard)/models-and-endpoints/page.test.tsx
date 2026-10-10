@@ -21,7 +21,9 @@ vi.mock("./detailNavigation", () => ({
   useModelDetailRouting: () => ({ ...detailState, close: vi.fn(), openModel: vi.fn(), openTeam: vi.fn() }),
 }));
 
-vi.mock("@/components/molecules/cost_optimization_feedback_banner", () => ({ default: () => null }));
+vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
+  default: () => <section aria-label="Decision models" />,
+}));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -97,6 +99,12 @@ describe("ModelsAndEndpointsPage", () => {
     expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
   });
 
+  it("does not show a view-only session the decision models banner, whose Playground it cannot open", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    renderPage();
+    expect(screen.queryByRole("region", { name: "Decision models" })).not.toBeInTheDocument();
+  });
+
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {
     detailState.modelId = "abc-123";
     renderPage();
@@ -128,11 +136,18 @@ describe("ModelsAndEndpointsPage", () => {
     expect(teamInfoProps).toHaveBeenLastCalledWith(expect.objectContaining({ is_proxy_admin: false }));
   });
 
-  it("hides admin-only tabs for a non-admin user", () => {
+  it("hides admin-only tabs for a non-admin user but keeps LLM Credentials for their connections", () => {
     mockUseAuthorized.mockReturnValue(NON_ADMIN);
     renderPage();
-    expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "LLM Credentials" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
+  });
+
+  it("hides LLM Credentials from an internal viewer", () => {
+    mockUseAuthorized.mockReturnValue({ ...NON_ADMIN, userRole: "Internal Viewer", isViewOnly: true });
+    renderPage();
+    expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
   });
 
   it("keeps the full admin tab order for a real admin", () => {

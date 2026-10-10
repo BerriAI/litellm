@@ -5,7 +5,19 @@ use litellm_http::Client;
 
 use crate::{Connection, Error, valid_identifier};
 
-const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
+fn insert_timeout() -> Result<Duration, Error> {
+    let name = "CLICKHOUSE_INSERT_TIMEOUT_SECONDS";
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(Duration::from_secs)
+            .ok_or(Error::InvalidLimit(name)),
+        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs(30)),
+        Err(_) => Err(Error::InvalidLimit(name)),
+    }
+}
 
 pub async fn insert_encoded_rows(
     client: &Client,
@@ -74,7 +86,7 @@ pub async fn insert_compressed_rows(
         .append_pair("date_time_input_format", "best_effort");
     let response = client
         .post(url)
-        .timeout(INSERT_TIMEOUT)
+        .timeout(insert_timeout()?)
         .header("Content-Encoding", "gzip")
         .body(body)
         .send()

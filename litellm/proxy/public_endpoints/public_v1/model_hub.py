@@ -186,7 +186,7 @@ MODEL_HUB_LIST_SPEC: Final[ListSpec[ModelGroupInfoProxy, ModelGroupInfoProxy]] =
 
 def _published_rows() -> Sequence[ModelGroupInfoProxy]:
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
+        get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
         llm_router,
     )
 
@@ -202,7 +202,7 @@ def _published_rows() -> Sequence[ModelGroupInfoProxy]:
     if litellm.public_model_groups is None:
         return ()
     return tuple(
-        _get_model_group_info(
+        get_model_group_info(
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,

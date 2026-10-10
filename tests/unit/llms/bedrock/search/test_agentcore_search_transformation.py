@@ -9,10 +9,12 @@ the sharded CI (coverage collection runs against this tree).
 import json
 import os
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.search.transformation import (
     AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION,
     AgentCoreSearchConfig,
@@ -635,3 +637,44 @@ class TestAgentCoreSearchEdgeCases:
 
         monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
         assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (0.0, 0.0)
+
+
+def _transform_text(text: str) -> SearchResponse:
+    return AgentCoreSearchConfig().transform_search_response(
+        raw_response=httpx.Response(200, text=text),
+        logging_obj=MagicMock(),
+    )
+
+
+def _as_tuples(response: SearchResponse) -> list[tuple[str, str, str, str | None, str | None]]:
+    return [(r.title, r.url, r.snippet, r.date, r.last_updated) for r in response.results]
+
+
+EXPECTED_MCP_RESULTS = [
+    ("Test Result 1", "https://example.com/1", "Snippet for result 1", "2026-06-16", None),
+    ("Test Result 2", "https://example.com/2", "Snippet for result 2", None, None),
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        json.dumps(_mcp_response_body()),
+        f"event: message\ndata: {json.dumps(_mcp_response_body())}\n\n",
+        f"data: 5\n\ndata: [1]\n\ndata: {json.dumps(_mcp_response_body())}\n\n",
+        json.dumps({"result": {"content": [{"type": "text", "text": json.dumps({"results": MCP_RESULTS})}]}}),
+        json.dumps({"result": {"content": [{"type": "text", "text": "prose"}], "structuredContent": MCP_RESULTS}}),
+    ],
+)
+def test_transform_search_response_reads_results_from_a_real_http_response(text: str):
+    assert _as_tuples(_transform_text(text)) == EXPECTED_MCP_RESULTS
+
+
+@pytest.mark.parametrize(
+    "block_text",
+    ["null", "5", "true", '"text"', "{}", '{"results": null}', '{"results": "text"}', '["scalar", 5, null]'],
+)
+def test_transform_search_response_ignores_text_blocks_without_result_objects(block_text: str):
+    body = {"result": {"content": [{"type": "text", "text": block_text}]}}
+
+    assert _transform_text(json.dumps(body)).results == []

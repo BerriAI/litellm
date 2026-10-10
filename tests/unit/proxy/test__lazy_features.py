@@ -21,6 +21,20 @@ FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 WARMUP_PATH: Final = "/lazy/warm/{name}"
 
 
+def test_cimd_metadata_is_available_before_any_oauth_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(FLAG, "false")
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    app: Final = FastAPI()
+    attach_lazy_features(app)
+
+    with TestClient(app) as client:
+        response: Final = client.get("/oauth/client-metadata.json")
+
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert response.json()["redirect_uris"] == ["https://gateway.example.com/callback"]
+
+
 class _Operation(BaseModel):
     tags: tuple[str, ...]
 
@@ -48,6 +62,33 @@ def _paths(app: FastAPI) -> tuple[str, ...]:
 
 def _has_lazy_middleware(app: FastAPI) -> bool:
     return any(middleware.cls is LazyFeatureMiddleware for middleware in app.user_middleware)
+
+
+@pytest.mark.parametrize("disable_lazy_routes", ("false", "true"))
+def test_retired_roi_calculator_cannot_be_loaded_or_called(
+    monkeypatch: pytest.MonkeyPatch, disable_lazy_routes: str
+) -> None:
+    monkeypatch.setenv(FLAG, disable_lazy_routes)
+    app: Final = FastAPI()
+    attach_lazy_features(app)
+
+    with TestClient(app) as client:
+        for method, path in (
+            ("POST", "/lazy/warm/roi_calculator"),
+            ("GET", "/roi-calculator/settings"),
+            ("GET", "/roi-calculator/report?mode=demo"),
+            ("POST", "/roi-calculator/sync"),
+            ("GET", "/roi-calculator/observed/report"),
+            ("GET", "/roi-calculator/observed/apps"),
+            ("POST", "/roi-calculator/observed/sync"),
+            ("POST", "/roi-calculator/observed/oauth/github/start"),
+            ("GET", "/roi-calculator/observed/oauth/github/callback"),
+            ("GET", "/roi-calculator/observed/oauth/github/installed"),
+            ("POST", "/roi-calculator/observed/oauth/gitlab/start"),
+            ("GET", "/roi-calculator/observed/oauth/gitlab/callback"),
+        ):
+            response: Final = client.request(method, path)
+            assert response.status_code == 404, f"{method} {path}: {response.text}"
 
 
 @pytest.mark.parametrize("value", ("1", "true", "TRUE", "yes", "on"))

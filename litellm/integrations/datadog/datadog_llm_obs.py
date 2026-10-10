@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -57,6 +58,7 @@ from litellm.types.utils import (
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
     {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
 )
@@ -282,8 +284,10 @@ def _to_dd_arguments(raw_arguments: object) -> dict[str, object] | str:
         return raw_arguments if isinstance(raw_arguments, dict) else str(raw_arguments)
     if len(raw_arguments) > _MAX_PARSED_TOOL_ARGUMENT_CHARS:
         return raw_arguments
-    parsed: Final = safe_json_loads(raw_arguments)
-    return parsed if isinstance(parsed, dict) else raw_arguments
+    try:
+        return _JSON_OBJECT.validate_python(safe_json_loads(raw_arguments))
+    except ValidationError:
+        return raw_arguments
 
 
 def _to_dd_tool_calls(message: Mapping[str, object]) -> tuple[ToolCall, ...]:

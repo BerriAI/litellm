@@ -67,7 +67,7 @@ def test_where_clause_binds_each_filter_as_a_single_array_parameter() -> None:
 
     assert sql == (
         'date >= $1 AND date <= $2 AND "user_id" = ANY($3::text[]) '
-        'AND NOT ("user_id" = ANY($4::text[])) AND model = $5 AND api_key = ANY($6::text[])'
+        'AND ("user_id" IS NULL OR NOT ("user_id" = ANY($4::text[]))) AND model = $5 AND api_key = ANY($6::text[])'
     )
     assert params == (
         "2026-01-01",
@@ -77,6 +77,15 @@ def test_where_clause_binds_each_filter_as_a_single_array_parameter() -> None:
         "gpt-test",
         ["key-1", "key-2"],
     )
+
+
+def test_where_clause_exclusion_keeps_null_entity_rows() -> None:
+    scope = _scope(table=DailyActivityTable.TEAM, entity_ids=None, exclude_entity_ids=("litellm-dashboard",))
+
+    sql, params = build_where_clause(scope)
+
+    assert sql == 'date >= $1 AND date <= $2 AND ("team_id" IS NULL OR NOT ("team_id" = ANY($3::text[])))'
+    assert params == ("2026-01-01", "2026-01-31", ["litellm-dashboard"])
 
 
 @pytest.mark.parametrize(

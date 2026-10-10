@@ -15,6 +15,7 @@ from integration.spend._daily_activity_fixtures import (
     seed_daily_activity_fixture,
     seed_daily_tag_activity_fixture,
     seed_daily_tag_float_tie_fixture,
+    seed_daily_team_exclusion_fixture,
     seed_daily_team_unassigned_fixture,
 )
 from prisma import Prisma
@@ -91,6 +92,7 @@ async def _daily_activity_database(
     include_tag_activity: bool = False,
     include_tag_float_tie_activity: bool = False,
     include_team_unassigned_activity: bool = False,
+    include_team_exclusion_activity: bool = False,
 ) -> AsyncIterator[Prisma]:
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
@@ -111,6 +113,8 @@ async def _daily_activity_database(
                     seed_daily_team_unassigned_fixture(
                         connection, schema=schema, ptu_sentinel_api_key=constants.PTU_SENTINEL_API_KEY
                     )
+                if include_team_exclusion_activity:
+                    seed_daily_team_exclusion_fixture(connection, schema=schema)
             database: Final = Prisma(datasource={"url": _scoped_url(url, schema)})
             await database.connect()
             try:
@@ -622,3 +626,38 @@ async def test_team_entity_rollups_merge_null_and_empty_entity_ids() -> None:
         keyed_rows: Final = tuple(row for row in aggregate.entity_rows or () if not row.api_key_rolled)
         assert {row.entity_id for row in keyed_rows} == {""}
         assert {row.api_key for row in keyed_rows} == {"key-unassigned-null", "key-unassigned-empty"}
+
+
+@pytest.mark.asyncio
+async def test_team_exclusion_keeps_null_and_empty_entity_rows() -> None:
+    async with _daily_activity_database(include_team_exclusion_activity=True) as database:
+        repository: Final = _repository(database)
+        scope: Final = DailyActivityScope(
+            table=DailyActivityTable.TEAM,
+            entity_id_field="team_id",
+            entity_ids=None,
+            exclude_entity_ids=("litellm-dashboard",),
+            api_keys=None,
+            start_date="2026-06-04",
+            end_date="2026-06-04",
+            model=None,
+            timezone_offset_minutes=None,
+        )
+        aggregate: Final = await repository.aggregated(scope, include_entity_breakdown=True, api_key_limit=10)
+
+        totals: Final = tuple(row for row in aggregate.grouping_rows if row.group_level == 127)
+        assert len(totals) == 1
+        assert totals[0].spend == 23.0
+        assert aggregate.distinct_api_keys == 3
+
+        keyed_rows: Final = tuple(row for row in aggregate.entity_rows or () if not row.api_key_rolled)
+        assert {row.api_key for row in keyed_rows} == {"key-excluded-null", "key-excluded-empty", "key-excluded-normal"}
+        assert {row.entity_id for row in keyed_rows} == {"", "team-normal"}
+
+        page: Final = await repository.key_page(scope, offset=0, limit=10)
+        assert page.total_api_keys == 3
+        assert {row.api_key for row in page.rows} == {"key-excluded-null", "key-excluded-empty", "key-excluded-normal"}
+
+        daily: Final = await repository.daily_rows(scope, page=1, page_size=10)
+        assert daily.total_count == 3
+        assert {row.api_key for row in daily.rows} == {"key-excluded-null", "key-excluded-empty", "key-excluded-normal"}

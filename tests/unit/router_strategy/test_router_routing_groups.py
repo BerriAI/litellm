@@ -595,9 +595,9 @@ def test_init_routing_groups_with_none_clears_state():
             }
         ]
     )
-    assert router._routing_groups
+    assert router.routing_groups
     router._init_routing_groups(None)
-    assert router._routing_groups == {}
+    assert router.routing_groups == {}
     assert router._model_to_group == {}
     assert router._group_selectors == {}
 
@@ -814,7 +814,7 @@ def _single_latency_group():
 
 
 def _assert_still_routes_with_original_group(router, selector):
-    assert list(router._routing_groups) == ["g1"]
+    assert list(router.routing_groups) == ["g1"]
     assert router._model_to_group == {"filtered-model": "g1"}
     assert router._group_selectors["g1"]["latency-based-routing"] is selector
     assert router._get_routing_context("filtered-model", None) == ("latency-based-routing", selector)
@@ -855,7 +855,7 @@ def test_failed_routing_groups_update_does_not_poison_later_strategy_changes(mon
 
     router.update_settings(routing_strategy="least-busy")
 
-    assert list(router._routing_groups) == ["g1"]
+    assert list(router.routing_groups) == ["g1"]
     assert [g["group_name"] for g in router.get_settings()["routing_groups"]] == ["g1"]
 
 
@@ -958,7 +958,7 @@ def test_replace_routing_groups_swaps_state_and_callbacks_in_one_step(monkeypatc
         )
     )
 
-    assert list(router._routing_groups) == ["g2", "g3"]
+    assert list(router.routing_groups) == ["g2", "g3"]
     assert router._model_to_group == {"other-model": "g2", "other-model-2": "g3"}
     assert router._group_selectors == {"g2": {"least-busy": new_selector}, "g3": {}}
     assert router._get_routing_context("other-model", None) == ("least-busy", new_selector)
@@ -1556,7 +1556,7 @@ def _pin_choice_to(deployment_id):
 
 
 async def _call_and_get_cooldowns(router, model):
-    from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 
     with (
         patch("litellm.router_strategy.simple_shuffle.random.choice", side_effect=_pin_choice_to("deploy-3")),
@@ -1567,7 +1567,7 @@ async def _call_and_get_cooldowns(router, model):
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
-    return await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    return await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
 
 
 @pytest.mark.asyncio

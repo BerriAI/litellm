@@ -1,0 +1,13 @@
+[package]
+name = "litellm-inference-testing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+futures-util.workspace = true
+litellm-http.workspace = true
+litellm-inference.workspace = true
+litellm-secrets.workspace = true

@@ -12,6 +12,7 @@ import pytest
 
 from fastapi import HTTPException
 
+from litellm import Router
 from litellm.constants import (
     CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
     CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
@@ -3468,3 +3469,57 @@ class TestContentFilterToolCallArguments:
                 request_data={},
                 input_type="response",
             )
+
+
+def _guardrail_describing_images_as(description: str) -> ContentFilterGuardrail:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vision",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "mock_response": description,
+                },
+            }
+        ]
+    )
+    return ContentFilterGuardrail(
+        guardrail_name="image-filter",
+        blocked_words=[BlockedWord(keyword="project-titan", action=ContentFilterAction.BLOCK)],
+        llm_router=router,
+        image_model="vision",
+    )
+
+
+@pytest.mark.asyncio
+async def test_image_whose_description_contains_blocked_keyword_is_rejected():
+    description: Final = "A badge showing project-titan on a desk"
+    guardrail: Final = _guardrail_describing_images_as(description)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"images": ["https://example.com/badge.png"]},
+            request_data={},
+            input_type="request",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": f"Content blocked: keyword 'project-titan' detected (Image description): {description}",
+        "keyword": "project-titan",
+        "description": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_image_whose_description_is_clean_passes_through_unchanged():
+    guardrail: Final = _guardrail_describing_images_as("A plain wooden desk")
+
+    result: Final = await guardrail.apply_guardrail(
+        inputs={"images": ["https://example.com/desk.png"]},
+        request_data={},
+        input_type="request",
+    )
+
+    assert result == {"images": ["https://example.com/desk.png"], "texts": []}

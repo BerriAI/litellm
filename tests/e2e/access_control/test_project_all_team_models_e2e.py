@@ -22,6 +22,7 @@ from access_control_client import (
     AccessControlClient,
 )
 from e2e_config import settle_propagation, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatResponse, TeamInfoResponse
 
@@ -44,6 +45,14 @@ def _chat_assert_completion(client: AccessControlClient, key: str, model: str) -
 class TestProjectAllTeamModels:
     @pytest.mark.covers("other.auth.project.all_team_models_inherits_team_allowlist")
     @pytest.mark.parametrize("team_models", [[], [ALL_PROXY_MODELS]])
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI,),
+            models=(TEAM_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_all_team_models_project_calls_team_allowed_model(
         self, client: AccessControlClient, resources: ResourceManager, team_models: list[str]
     ) -> None:
@@ -59,6 +68,14 @@ class TestProjectAllTeamModels:
         _chat_assert_completion(client, key, TEAM_MODEL)
 
     @pytest.mark.covers("other.auth.project.all_team_models_denied_outside_team")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI, Provider.OPENAI),
+            models=(TEAM_MODEL, OUTSIDE_MODEL),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_all_team_models_project_denied_outside_team_list(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -94,6 +111,14 @@ class TestProjectAllTeamModels:
         )
 
     @pytest.mark.covers("other.auth.project.explicit_model_list_enforced")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI, Provider.OPENAI),
+            models=(TEAM_MODEL, OUTSIDE_MODEL),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_project_explicit_model_list_calls_model(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:

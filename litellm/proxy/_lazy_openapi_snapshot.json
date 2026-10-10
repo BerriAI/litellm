@@ -1241,7 +1241,7 @@
     "paths": {
       "/access_group/list": {
         "get": {
-          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
+          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
           "operationId": "list_access_groups_access_group_list_get",
           "responses": {
             "200": {
@@ -1268,7 +1268,7 @@
       },
       "/access_group/new": {
         "post": {
-          "description": "Create a new access group containing multiple model names.\n\nAn access group is a named collection of model groups that can be referenced\nby teams/keys for simplified access control.\n\nExample:\n```bash\ncurl -X POST 'http://localhost:4000/access_group/new' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"access_group\": \"production-models\",\n    \"model_names\": [\"gpt-4\", \"claude-3-opus\", \"gemini-pro\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (e.g., \"production-models\")\n- model_names: List[str] - List of existing model groups to include\n\nReturns:\n- NewModelGroupResponse with the created access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 500: If database operations fail",
+          "description": "Create a new access group containing multiple model names.\n\nAn access group is a named collection of model groups that can be referenced\nby teams/keys for simplified access control.\n\nExample:\n```bash\ncurl -X POST 'http://localhost:4000/access_group/new' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"access_group\": \"production-models\",\n    \"model_names\": [\"gpt-4\", \"claude-3-opus\", \"gemini-pro\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (e.g., \"production-models\")\n- model_names: List[str] - List of existing model groups to include\n\nReturns:\n- NewModelGroupResponse with the created access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 500: If database operations fail",
           "operationId": "create_model_group_access_group_new_post",
           "requestBody": {
             "content": {
@@ -1315,7 +1315,7 @@
       },
       "/access_group/{access_group}/budget": {
         "delete": {
-          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "delete_access_group_budget_access_group__access_group__budget_delete",
           "parameters": [
             {
@@ -1361,7 +1361,7 @@
           ]
         },
         "get": {
-          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_budget_access_group__access_group__budget_get",
           "parameters": [
             {
@@ -1407,7 +1407,7 @@
           ]
         },
         "put": {
-          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
+          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
           "operationId": "set_access_group_budget_access_group__access_group__budget_put",
           "parameters": [
             {
@@ -1465,7 +1465,7 @@
       },
       "/access_group/{access_group}/delete": {
         "delete": {
-          "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "delete_access_group_access_group__access_group__delete_delete",
           "parameters": [
             {
@@ -1513,7 +1513,7 @@
       },
       "/access_group/{access_group}/info": {
         "get": {
-          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_info_access_group__access_group__info_get",
           "parameters": [
             {
@@ -1561,7 +1561,7 @@
       },
       "/access_group/{access_group}/update": {
         "put": {
-          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
+          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
           "operationId": "update_access_group_access_group__access_group__update_put",
           "parameters": [
             {
@@ -9492,6 +9492,109 @@
       }
     }
   },
+  "decisions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/decisions": {
+        "post": {
+          "operationId": "decisions_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/systemone": {
+        "post": {
+          "operationId": "systemone_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/decisions": {
+        "post": {
+          "operationId": "decisions_v1_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/systemone": {
+        "post": {
+          "operationId": "systemone_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      }
+    }
+  },
   "evals": {
     "components": {
       "schemas": {
@@ -11517,6 +11620,34 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask_request_content": {
               "anyOf": [
                 {
@@ -11785,6 +11916,34 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
             },
             "template_id": {
               "anyOf": [
@@ -12672,6 +12831,77 @@
           "title": "GuardrailSubmissionSummary",
           "type": "object"
         },
+        "GuardrailUIAddGuardrailSettings": {
+          "properties": {
+            "content_filter_settings": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Filter Settings"
+            },
+            "pii_entity_categories": {
+              "items": {
+                "$ref": "#/components/schemas/PiiEntityCategoryMap"
+              },
+              "title": "Pii Entity Categories",
+              "type": "array"
+            },
+            "providers_without_directional_logging_only_scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers Without Directional Logging Only Scope",
+              "type": "array"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Actions",
+              "type": "array"
+            },
+            "supported_entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Entities",
+              "type": "array"
+            },
+            "supported_modes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Modes",
+              "type": "array"
+            },
+            "supported_modes_by_provider": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Supported Modes By Provider",
+              "type": "object"
+            }
+          },
+          "required": [
+            "supported_entities",
+            "supported_actions",
+            "supported_modes",
+            "supported_modes_by_provider",
+            "providers_without_directional_logging_only_scope",
+            "pii_entity_categories"
+          ],
+          "title": "GuardrailUIAddGuardrailSettings",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -12813,6 +13043,19 @@
                 "https://akto-ingestion.example.com"
               ],
               "title": "Akto Base Url"
+            },
+            "akto_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {\"policy_name\": \"PII Strict, Secrets\"}.",
+              "title": "Akto Metadata"
             },
             "akto_vxlan_id": {
               "anyOf": [
@@ -13352,6 +13595,22 @@
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
             },
+            "context_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ENDPOINT",
+                    "AGENTIC"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
+              "title": "Context Source"
+            },
             "contextual_grounding_from_messages": {
               "default": false,
               "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
@@ -13563,6 +13822,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_guardrail_timeout": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
+              "title": "File Guardrail Timeout"
+            },
             "gateway_name": {
               "anyOf": [
                 {
@@ -13766,6 +14037,34 @@
               ],
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
+            },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
             },
             "mask": {
               "anyOf": [
@@ -14582,6 +14881,34 @@
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
             },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
+            },
             "template_id": {
               "anyOf": [
                 {
@@ -14826,6 +15153,27 @@
           ],
           "title": "PiiAction",
           "type": "string"
+        },
+        "PiiEntityCategoryMap": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "category",
+            "entities"
+          ],
+          "title": "PiiEntityCategoryMap",
+          "type": "object"
         },
         "PiiEntityType": {
           "enum": [
@@ -16268,7 +16616,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/GuardrailUIAddGuardrailSettings"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -26318,6 +26668,30 @@
           ]
         }
       },
+      "/bespoke/v1/systemone": {
+        "post": {
+          "operationId": "bespoke_proxy_route_bespoke_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bespoke Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/cohere/{endpoint}": {
         "delete": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
@@ -26613,7 +26987,7 @@
       },
       "/cursor/chat/completions": {
         "post": {
-          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
+          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
           "operationId": "cursor_chat_completions_cursor_chat_completions_post",
           "responses": {
             "200": {
@@ -27761,6 +28135,30 @@
           ]
         }
       },
+      "/laya/v1/systemone": {
+        "post": {
+          "operationId": "laya_proxy_route_laya_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Laya Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/milvus/{endpoint}": {
         "delete": {
           "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
@@ -28429,7 +28827,7 @@
       },
       "/openai/deployments/{model}/chat/completions": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
           "operationId": "chat_completion_openai_deployments__model__chat_completions_post",
           "parameters": [
             {
@@ -28562,7 +28960,7 @@
       },
       "/openai/deployments/{model}/completions": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
           "operationId": "completion_openai_deployments__model__completions_post",
           "parameters": [
             {
@@ -28615,7 +29013,7 @@
       },
       "/openai/deployments/{model}/embeddings": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
           "operationId": "embeddings_openai_deployments__model__embeddings_post",
           "parameters": [
             {
@@ -28668,7 +29066,7 @@
       },
       "/openai/deployments/{model}/images/edits": {
         "post": {
-          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer sk-1234\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
+          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
           "operationId": "image_edit_api_openai_deployments__model__images_edits_post",
           "parameters": [
             {
@@ -28854,7 +29252,7 @@
       },
       "/openai/v1/responses": {
         "post": {
-          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
+          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
           "operationId": "responses_api_openai_v1_responses_post",
           "responses": {
             "200": {
@@ -28887,7 +29285,7 @@
       },
       "/openai/v1/responses/compact": {
         "post": {
-          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
+          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
           "operationId": "compact_response_openai_v1_responses_compact_post",
           "responses": {
             "200": {
@@ -28912,7 +29310,7 @@
       },
       "/openai/v1/responses/input_tokens": {
         "post": {
-          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
+          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
           "operationId": "responses_input_tokens_openai_v1_responses_input_tokens_post",
           "responses": {
             "200": {
@@ -28937,7 +29335,7 @@
       },
       "/openai/v1/responses/{response_id}": {
         "delete": {
-          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "delete_response_openai_v1_responses__response_id__delete",
           "parameters": [
             {
@@ -28983,7 +29381,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer sk-1234\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -29031,7 +29429,7 @@
       },
       "/openai/v1/responses/{response_id}/cancel": {
         "post": {
-          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "cancel_response_openai_v1_responses__response_id__cancel_post",
           "parameters": [
             {
@@ -31204,6 +31602,28 @@
               ],
               "title": "Client Secret"
             },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -31667,6 +32087,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -33520,6 +33952,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -33919,6 +34362,28 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -34384,6 +34849,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -34671,28 +35148,6 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
-        "Scope": {
-          "additionalProperties": false,
-          "properties": {
-            "all_teams": {
-              "default": false,
-              "title": "All Teams",
-              "type": "boolean"
-            },
-            "api_key_hash": {
-              "default": "",
-              "title": "Api Key Hash",
-              "type": "string"
-            },
-            "team_id": {
-              "default": "",
-              "title": "Team Id",
-              "type": "string"
-            }
-          },
-          "title": "Scope",
-          "type": "object"
-        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -34731,91 +35186,6 @@
             "type"
           ],
           "title": "ValidationError",
-          "type": "object"
-        },
-        "Worker": {
-          "additionalProperties": false,
-          "properties": {
-            "analysis_key_id": {
-              "anyOf": [
-                {
-                  "pattern": "^[a-f0-9]{64}$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Analysis Key Id"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "last_seen": {
-              "format": "date-time",
-              "title": "Last Seen",
-              "type": "string"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "revoked": {
-              "default": false,
-              "title": "Revoked",
-              "type": "boolean"
-            },
-            "scope": {
-              "$ref": "#/components/schemas/Scope"
-            }
-          },
-          "required": [
-            "id",
-            "name",
-            "scope",
-            "last_seen"
-          ],
-          "title": "Worker",
-          "type": "object"
-        },
-        "WorkerCreated": {
-          "additionalProperties": false,
-          "properties": {
-            "token": {
-              "title": "Token",
-              "type": "string"
-            },
-            "worker": {
-              "$ref": "#/components/schemas/Worker"
-            }
-          },
-          "required": [
-            "worker",
-            "token"
-          ],
-          "title": "WorkerCreated",
-          "type": "object"
-        },
-        "WorkerName": {
-          "properties": {
-            "analysis_key_id": {
-              "pattern": "^[a-f0-9]{64}$",
-              "title": "Analysis Key Id",
-              "type": "string"
-            },
-            "name": {
-              "default": "Lens worker",
-              "maxLength": 100,
-              "minLength": 1,
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          "required": [
-            "analysis_key_id"
-          ],
-          "title": "WorkerName",
           "type": "object"
         }
       }
@@ -35589,7 +35959,7 @@
       },
       "/callback": {
         "get": {
-          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
+          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the\n  authorization server sent one) matches the issuer /authorize sealed\n  into the state.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
           "operationId": "callback_callback_get",
           "parameters": [
             {
@@ -35622,6 +35992,22 @@
                   }
                 ],
                 "title": "State"
+              }
+            },
+            {
+              "in": "query",
+              "name": "iss",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Iss"
               }
             },
             {
@@ -35838,52 +36224,6 @@
             }
           ],
           "summary": "Introspect Endpoint",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
-      "/lens/workers/register": {
-        "post": {
-          "operationId": "register_worker_lens_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]
@@ -36762,6 +37102,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -37378,6 +37729,28 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -38470,6 +38843,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -39012,6 +39397,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "title": "Server Id",
@@ -41373,6 +41770,28 @@
               ],
               "title": "Client Secret"
             },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -41836,6 +42255,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -48891,1327 +49322,6 @@
           "summary": "Create Realtime Transcription Session",
           "tags": [
             "realtime"
-          ]
-        }
-      }
-    }
-  },
-  "roi_calculator": {
-    "components": {
-      "schemas": {
-        "HTTPValidationError": {
-          "properties": {
-            "detail": {
-              "items": {
-                "$ref": "#/components/schemas/ValidationError"
-              },
-              "title": "Detail",
-              "type": "array"
-            }
-          },
-          "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "ROIEstimateResponse": {
-          "properties": {
-            "cached": {
-              "default": false,
-              "title": "Cached",
-              "type": "boolean"
-            },
-            "effort_basis": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Effort Basis"
-            },
-            "evidence_source": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Evidence Source"
-            },
-            "hours": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Hours"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Model"
-            },
-            "reasoning": {
-              "title": "Reasoning",
-              "type": "string"
-            },
-            "status": {
-              "enum": [
-                "estimated",
-                "needs_review",
-                "error"
-              ],
-              "title": "Status",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status",
-            "hours",
-            "reasoning"
-          ],
-          "title": "ROIEstimateResponse",
-          "type": "object"
-        },
-        "ROIIdentityMapResponse": {
-          "properties": {
-            "identity_map": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "title": "Identity Map",
-              "type": "object"
-            },
-            "report": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ROISummaryResponse"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "report",
-            "identity_map"
-          ],
-          "title": "ROIIdentityMapResponse",
-          "type": "object"
-        },
-        "ROIIdentityMapUpdate": {
-          "properties": {
-            "email": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Email"
-            },
-            "github_login": {
-              "title": "Github Login",
-              "type": "string"
-            }
-          },
-          "required": [
-            "github_login",
-            "email"
-          ],
-          "title": "ROIIdentityMapUpdate",
-          "type": "object"
-        },
-        "ROIMetricsResponse": {
-          "properties": {
-            "cohort_people": {
-              "title": "Cohort People",
-              "type": "integer"
-            },
-            "cost_per_hour": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cost Per Hour"
-            },
-            "estimated_prs": {
-              "title": "Estimated Prs",
-              "type": "integer"
-            },
-            "excluded_spend": {
-              "title": "Excluded Spend",
-              "type": "number"
-            },
-            "hours_per_dollar": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Hours Per Dollar"
-            },
-            "matched_prs": {
-              "title": "Matched Prs",
-              "type": "integer"
-            },
-            "matched_spend": {
-              "title": "Matched Spend",
-              "type": "number"
-            },
-            "merged_prs": {
-              "title": "Merged Prs",
-              "type": "integer"
-            },
-            "output_hours": {
-              "title": "Output Hours",
-              "type": "number"
-            },
-            "pending_prs": {
-              "title": "Pending Prs",
-              "type": "integer"
-            },
-            "people_with_prs": {
-              "title": "People With Prs",
-              "type": "integer"
-            },
-            "total_output_hours": {
-              "title": "Total Output Hours",
-              "type": "number"
-            },
-            "total_spend": {
-              "title": "Total Spend",
-              "type": "number"
-            }
-          },
-          "required": [
-            "matched_spend",
-            "output_hours",
-            "total_spend",
-            "total_output_hours",
-            "excluded_spend",
-            "cost_per_hour",
-            "hours_per_dollar",
-            "merged_prs",
-            "estimated_prs",
-            "matched_prs",
-            "cohort_people",
-            "people_with_prs",
-            "pending_prs"
-          ],
-          "title": "ROIMetricsResponse",
-          "type": "object"
-        },
-        "ROIPersonResponse": {
-          "properties": {
-            "cost_per_hour": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cost Per Hour"
-            },
-            "eligible": {
-              "title": "Eligible",
-              "type": "boolean"
-            },
-            "email": {
-              "title": "Email",
-              "type": "string"
-            },
-            "estimated_prs": {
-              "title": "Estimated Prs",
-              "type": "integer"
-            },
-            "hours": {
-              "title": "Hours",
-              "type": "number"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "logins": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Logins",
-              "type": "array"
-            },
-            "match_methods": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Match Methods",
-              "type": "array"
-            },
-            "pending_prs": {
-              "title": "Pending Prs",
-              "type": "integer"
-            },
-            "prs": {
-              "title": "Prs",
-              "type": "integer"
-            },
-            "spend": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Spend"
-            }
-          },
-          "required": [
-            "id",
-            "email",
-            "logins",
-            "spend",
-            "hours",
-            "prs",
-            "estimated_prs",
-            "pending_prs",
-            "match_methods",
-            "eligible",
-            "cost_per_hour"
-          ],
-          "title": "ROIPersonResponse",
-          "type": "object"
-        },
-        "ROIPullResponse": {
-          "properties": {
-            "additions": {
-              "title": "Additions",
-              "type": "integer"
-            },
-            "cache_key": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cache Key"
-            },
-            "changed_files": {
-              "title": "Changed Files",
-              "type": "integer"
-            },
-            "commit_count": {
-              "title": "Commit Count",
-              "type": "integer"
-            },
-            "deletions": {
-              "title": "Deletions",
-              "type": "integer"
-            },
-            "email": {
-              "title": "Email",
-              "type": "string"
-            },
-            "emails": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Emails",
-              "type": "array"
-            },
-            "estimate": {
-              "$ref": "#/components/schemas/ROIEstimateResponse"
-            },
-            "head_sha": {
-              "title": "Head Sha",
-              "type": "string"
-            },
-            "incomplete_metadata": {
-              "title": "Incomplete Metadata",
-              "type": "boolean"
-            },
-            "login": {
-              "title": "Login",
-              "type": "string"
-            },
-            "match_method": {
-              "title": "Match Method",
-              "type": "string"
-            },
-            "matched": {
-              "title": "Matched",
-              "type": "boolean"
-            },
-            "merged_at": {
-              "title": "Merged At",
-              "type": "string"
-            },
-            "number": {
-              "title": "Number",
-              "type": "integer"
-            },
-            "profile_email": {
-              "title": "Profile Email",
-              "type": "string"
-            },
-            "repo": {
-              "title": "Repo",
-              "type": "string"
-            },
-            "title": {
-              "title": "Title",
-              "type": "string"
-            },
-            "url": {
-              "title": "Url",
-              "type": "string"
-            }
-          },
-          "required": [
-            "repo",
-            "number",
-            "title",
-            "url",
-            "login",
-            "emails",
-            "profile_email",
-            "merged_at",
-            "head_sha",
-            "additions",
-            "deletions",
-            "changed_files",
-            "commit_count",
-            "incomplete_metadata",
-            "estimate",
-            "email",
-            "match_method",
-            "matched"
-          ],
-          "title": "ROIPullResponse",
-          "type": "object"
-        },
-        "ROIReportResponse": {
-          "properties": {
-            "report": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ROISummaryResponse"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "report"
-          ],
-          "title": "ROIReportResponse",
-          "type": "object"
-        },
-        "ROIRepositoriesResponse": {
-          "properties": {
-            "has_more": {
-              "title": "Has More",
-              "type": "boolean"
-            },
-            "page": {
-              "title": "Page",
-              "type": "integer"
-            },
-            "repositories": {
-              "items": {
-                "$ref": "#/components/schemas/ROIRepository"
-              },
-              "title": "Repositories",
-              "type": "array"
-            }
-          },
-          "required": [
-            "repositories",
-            "page",
-            "has_more"
-          ],
-          "title": "ROIRepositoriesResponse",
-          "type": "object"
-        },
-        "ROIRepository": {
-          "properties": {
-            "archived": {
-              "title": "Archived",
-              "type": "boolean"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "visibility": {
-              "title": "Visibility",
-              "type": "string"
-            }
-          },
-          "required": [
-            "name",
-            "visibility",
-            "archived"
-          ],
-          "title": "ROIRepository",
-          "type": "object"
-        },
-        "ROISettingsResponse": {
-          "properties": {
-            "available_models": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Available Models",
-              "type": "array"
-            },
-            "backfill_days": {
-              "title": "Backfill Days",
-              "type": "integer"
-            },
-            "default_prompt": {
-              "title": "Default Prompt",
-              "type": "string"
-            },
-            "estimator_model": {
-              "title": "Estimator Model",
-              "type": "string"
-            },
-            "estimator_prompt": {
-              "title": "Estimator Prompt",
-              "type": "string"
-            },
-            "github_api_url": {
-              "title": "Github Api Url",
-              "type": "string"
-            },
-            "has_estimator_key": {
-              "title": "Has Estimator Key",
-              "type": "boolean"
-            },
-            "has_github_token": {
-              "title": "Has Github Token",
-              "type": "boolean"
-            },
-            "identity_map": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "title": "Identity Map",
-              "type": "object"
-            },
-            "ready": {
-              "title": "Ready",
-              "type": "boolean"
-            },
-            "repos": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Repos",
-              "type": "array"
-            },
-            "update_interval_minutes": {
-              "title": "Update Interval Minutes",
-              "type": "number"
-            }
-          },
-          "required": [
-            "github_api_url",
-            "repos",
-            "estimator_model",
-            "estimator_prompt",
-            "backfill_days",
-            "update_interval_minutes",
-            "has_estimator_key",
-            "identity_map",
-            "has_github_token",
-            "default_prompt",
-            "available_models",
-            "ready"
-          ],
-          "title": "ROISettingsResponse",
-          "type": "object"
-        },
-        "ROISettingsUpdate": {
-          "additionalProperties": false,
-          "properties": {
-            "backfill_days": {
-              "anyOf": [
-                {
-                  "maximum": 3650.0,
-                  "minimum": 1.0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Backfill Days"
-            },
-            "estimator_key": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Estimator Key"
-            },
-            "estimator_model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Estimator Model"
-            },
-            "estimator_prompt": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Estimator Prompt"
-            },
-            "github_api_url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Github Api Url"
-            },
-            "github_token": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Github Token"
-            },
-            "repos": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Repos"
-            },
-            "update_interval_minutes": {
-              "anyOf": [
-                {
-                  "maximum": 43200.0,
-                  "minimum": 0.0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Update Interval Minutes"
-            }
-          },
-          "title": "ROISettingsUpdate",
-          "type": "object"
-        },
-        "ROISummaryResponse": {
-          "properties": {
-            "effort_basis": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Effort Basis"
-            },
-            "end": {
-              "title": "End",
-              "type": "string"
-            },
-            "estimator_model": {
-              "title": "Estimator Model",
-              "type": "string"
-            },
-            "estimator_prompt": {
-              "title": "Estimator Prompt",
-              "type": "string"
-            },
-            "id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Id"
-            },
-            "metrics": {
-              "$ref": "#/components/schemas/ROIMetricsResponse"
-            },
-            "mode": {
-              "title": "Mode",
-              "type": "string"
-            },
-            "people": {
-              "items": {
-                "$ref": "#/components/schemas/ROIPersonResponse"
-              },
-              "title": "People",
-              "type": "array"
-            },
-            "pulls": {
-              "items": {
-                "$ref": "#/components/schemas/ROIPullResponse"
-              },
-              "title": "Pulls",
-              "type": "array"
-            },
-            "repos": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Repos",
-              "type": "array"
-            },
-            "start": {
-              "title": "Start",
-              "type": "string"
-            },
-            "synced_at": {
-              "title": "Synced At",
-              "type": "string"
-            },
-            "trend": {
-              "items": {
-                "$ref": "#/components/schemas/ROITrendResponse"
-              },
-              "title": "Trend",
-              "type": "array"
-            },
-            "warnings": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Warnings",
-              "type": "array"
-            }
-          },
-          "required": [
-            "id",
-            "mode",
-            "start",
-            "end",
-            "synced_at",
-            "repos",
-            "estimator_model",
-            "estimator_prompt",
-            "warnings",
-            "effort_basis",
-            "metrics",
-            "people",
-            "pulls",
-            "trend"
-          ],
-          "title": "ROISummaryResponse",
-          "type": "object"
-        },
-        "ROISyncStatus": {
-          "properties": {
-            "done": {
-              "title": "Done",
-              "type": "integer"
-            },
-            "elapsed_seconds": {
-              "default": 0,
-              "title": "Elapsed Seconds",
-              "type": "integer"
-            },
-            "error": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Error"
-            },
-            "estimated": {
-              "title": "Estimated",
-              "type": "integer"
-            },
-            "finished_at": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Finished At"
-            },
-            "needs_attention": {
-              "title": "Needs Attention",
-              "type": "integer"
-            },
-            "next_update": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Next Update"
-            },
-            "phase": {
-              "enum": [
-                "idle",
-                "spend",
-                "repositories",
-                "estimates",
-                "complete",
-                "cancelled",
-                "error"
-              ],
-              "title": "Phase",
-              "type": "string"
-            },
-            "remaining_seconds": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Remaining Seconds"
-            },
-            "reused": {
-              "title": "Reused",
-              "type": "integer"
-            },
-            "running": {
-              "title": "Running",
-              "type": "boolean"
-            },
-            "stage": {
-              "title": "Stage",
-              "type": "string"
-            },
-            "started_at": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Started At"
-            },
-            "total": {
-              "title": "Total",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "running",
-            "phase",
-            "stage",
-            "done",
-            "total",
-            "estimated",
-            "reused",
-            "needs_attention",
-            "error"
-          ],
-          "title": "ROISyncStatus",
-          "type": "object"
-        },
-        "ROITrendResponse": {
-          "properties": {
-            "date": {
-              "title": "Date",
-              "type": "string"
-            },
-            "hours": {
-              "title": "Hours",
-              "type": "number"
-            },
-            "prs": {
-              "title": "Prs",
-              "type": "integer"
-            },
-            "spend": {
-              "title": "Spend",
-              "type": "number"
-            }
-          },
-          "required": [
-            "date",
-            "spend",
-            "hours",
-            "prs"
-          ],
-          "title": "ROITrendResponse",
-          "type": "object"
-        },
-        "ValidationError": {
-          "properties": {
-            "ctx": {
-              "title": "Context",
-              "type": "object"
-            },
-            "input": {
-              "title": "Input"
-            },
-            "loc": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
-              "title": "Location",
-              "type": "array"
-            },
-            "msg": {
-              "title": "Message",
-              "type": "string"
-            },
-            "type": {
-              "title": "Error Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "loc",
-            "msg",
-            "type"
-          ],
-          "title": "ValidationError",
-          "type": "object"
-        }
-      }
-    },
-    "paths": {
-      "/roi-calculator/connections/test": {
-        "post": {
-          "operationId": "test_roi_calculator_connections_roi_calculator_connections_test_post",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Test Roi Calculator Connections",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/identity-map": {
-        "put": {
-          "operationId": "update_roi_calculator_identity_map_roi_calculator_identity_map_put",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ROIIdentityMapUpdate"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROIIdentityMapResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Update Roi Calculator Identity Map",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/report": {
-        "get": {
-          "operationId": "get_roi_calculator_report_roi_calculator_report_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mode",
-              "required": false,
-              "schema": {
-                "default": "live",
-                "enum": [
-                  "live",
-                  "demo"
-                ],
-                "title": "Mode",
-                "type": "string"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROIReportResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Report",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/repositories": {
-        "get": {
-          "operationId": "get_roi_calculator_repositories_roi_calculator_repositories_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "query",
-              "required": false,
-              "schema": {
-                "default": "",
-                "maxLength": 200,
-                "title": "Query",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "page",
-              "required": false,
-              "schema": {
-                "default": 1,
-                "maximum": 1000,
-                "minimum": 1,
-                "title": "Page",
-                "type": "integer"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROIRepositoriesResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Repositories",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/settings": {
-        "get": {
-          "operationId": "get_roi_calculator_settings_roi_calculator_settings_get",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Settings",
-          "tags": [
-            "roi_calculator"
-          ]
-        },
-        "put": {
-          "operationId": "update_roi_calculator_settings_roi_calculator_settings_put",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ROISettingsUpdate"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Update Roi Calculator Settings",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/setup/reset": {
-        "post": {
-          "operationId": "reset_roi_calculator_setup_roi_calculator_setup_reset_post",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Reset Roi Calculator Setup",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/sync": {
-        "delete": {
-          "operationId": "cancel_roi_calculator_sync_roi_calculator_sync_delete",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISyncStatus"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Cancel Roi Calculator Sync",
-          "tags": [
-            "roi_calculator"
-          ]
-        },
-        "get": {
-          "operationId": "get_roi_calculator_sync_status_roi_calculator_sync_get",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISyncStatus"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Sync Status",
-          "tags": [
-            "roi_calculator"
-          ]
-        },
-        "post": {
-          "operationId": "start_roi_calculator_sync_roi_calculator_sync_post",
-          "responses": {
-            "202": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISyncStatus"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Start Roi Calculator Sync",
-          "tags": [
-            "roi_calculator"
           ]
         }
       }
@@ -57553,7 +56663,7 @@
     "paths": {
       "/v1/indexes": {
         "get": {
-          "description": "List all vector store indexes. Proxy admin only.\n\n```bash\ncurl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H 'Authorization: Bearer sk-1234'\n```",
+          "description": "List all vector store indexes. Proxy admin only.\n\n```bash\ncurl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "index_list_v1_indexes_get",
           "responses": {
             "200": {
@@ -57578,7 +56688,7 @@
           ]
         },
         "post": {
-          "description": "Create an index. Just writes the index to the database.\n\n```bash\ncurl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{\n        \"index_name\": \"dall-e-3\",\n        \"litellm_params\": {\n            \"vector_store_index\": \"real-index-name\",\n            \"vector_store_name\": \"azure-ai-search\"\n        }\n    }'\n```",
+          "description": "Create an index. Just writes the index to the database.\n\n```bash\ncurl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"         -d '{\n        \"index_name\": \"dall-e-3\",\n        \"litellm_params\": {\n            \"vector_store_index\": \"real-index-name\",\n            \"vector_store_name\": \"azure-ai-search\"\n        }\n    }'\n```",
           "operationId": "index_create_v1_indexes_post",
           "requestBody": {
             "content": {

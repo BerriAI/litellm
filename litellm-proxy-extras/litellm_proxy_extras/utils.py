@@ -1,3 +1,4 @@
+import functools
 import glob
 import os
 import random
@@ -10,7 +11,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
+from urllib.parse import unquote, urlsplit
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
@@ -31,6 +33,12 @@ from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes,
 if TYPE_CHECKING:
     import psycopg
     import psycopg.sql
+
+
+class LensCheckConnect(Protocol):
+    def __call__(
+        self, conninfo: str, *, connect_timeout: int, autocommit: bool
+    ) -> "psycopg.Connection[tuple[object, ...]]": ...
 
 
 def str_to_bool(value: Optional[str]) -> bool:
@@ -78,6 +86,23 @@ class _InvalidIndex:
     table_size: str
 
 MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
+LIBPQ_URL_PARAMS: Final = frozenset(
+    {
+        "sslmode",
+        "sslcert",
+        "sslkey",
+        "sslrootcert",
+        "sslpassword",
+        "application_name",
+        "connect_timeout",
+        "client_encoding",
+        "options",
+        "service",
+        "gssencmode",
+        "krbsrvname",
+        "target_session_attrs",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -183,6 +208,64 @@ def _max_migration_timestamp(names) -> int:
     if not names:
         return 0
     return max(_migration_timestamp(n) for n in names)
+
+
+_REDACTED: Final = "REDACTED"
+_PASSWORD_QUERY_KEYS: Final = frozenset(("password", "sslpassword"))
+
+
+@functools.cache
+def _secret_shape_redactor() -> Callable[[str], str]:
+    try:
+        from litellm._logging import redact_secrets
+    except ImportError:
+        return lambda text: text
+    return redact_secrets
+
+
+def _url_passwords(url: str) -> frozenset[str]:
+    try:
+        parts: Final = urlsplit(url)
+    except ValueError:
+        return frozenset()
+    query_pairs: Final = tuple(pair.partition("=") for pair in parts.query.split("&"))
+    raw_query_passwords: Final = tuple(
+        value for key, separator, value in query_pairs if separator and key.lower() in _PASSWORD_QUERY_KEYS
+    )
+    raw_passwords: Final = ((parts.password,) if parts.password else ()) + raw_query_passwords
+    return frozenset(password for password in raw_passwords + tuple(map(unquote, raw_passwords)) if password)
+
+
+def _configured_database_passwords() -> frozenset[str]:
+    database_url: Final = os.getenv("DATABASE_URL")
+    direct_url: Final = os.getenv("DIRECT_URL")
+    database_passwords: Final = _url_passwords(database_url) if database_url else frozenset()
+    direct_passwords: Final = _url_passwords(direct_url) if direct_url else frozenset()
+    return database_passwords | direct_passwords
+
+
+def _redact_credentials(text: str) -> str:
+    """Mask configured database passwords before passing the text to LiteLLM redaction."""
+    passwords: Final = sorted(_configured_database_passwords(), key=len, reverse=True)
+    alternation: Final = "|".join(re.escape(password) for password in passwords)
+    password_pattern: Final = (
+        re.compile(rf"(?<![A-Za-z0-9_])(?:{alternation})(?![A-Za-z0-9_])", re.IGNORECASE) if passwords else None
+    )
+    result: Final = password_pattern.sub(_REDACTED, text) if password_pattern is not None else text
+    return _secret_shape_redactor()(result)
+
+
+def _redacted_command(command: object) -> Union[str, tuple[str, ...], list[str]]:
+    if isinstance(command, tuple):
+        return tuple(_redact_credentials(str(argument)) for argument in command)
+    if isinstance(command, list):
+        return [_redact_credentials(str(argument)) for argument in command]
+    return _redact_credentials(str(command))
+
+
+def _redact_command_error(error: subprocess.CalledProcessError) -> str:
+    redacted_command: Final = _redacted_command(error.cmd)
+    return str(subprocess.CalledProcessError(error.returncode, redacted_command))
 
 
 def _get_prisma_command() -> str:
@@ -298,7 +381,8 @@ class ProxyExtrasDBManager:
             return False
         except subprocess.CalledProcessError as e:
             logger.warning(
-                f"Error creating baseline migration: {e}, {e.stderr}, {e.stdout}"
+                f"Error creating baseline migration: {_redact_command_error(e)}, "
+                f"{_redact_credentials(str(e.stderr))}, {_redact_credentials(str(e.stdout))}"
             )
             raise e
 
@@ -336,9 +420,8 @@ class ProxyExtrasDBManager:
             pass
 
     @staticmethod
-    def _failed_migration_logs(migration_name: str) -> Optional[str]:
-        """Return failed migration logs, or None if the ledger is unavailable."""
-        database_url = os.getenv("DATABASE_URL")
+    def _read_migration_ledger(query: str, params: tuple[str, ...]) -> "tuple[object, ...] | None":
+        database_url: Final = os.getenv("DATABASE_URL")
         if not database_url:
             return None
 
@@ -347,28 +430,37 @@ class ProxyExtrasDBManager:
         except ImportError:
             return None
 
-        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
-        ledger_table = psycopg.sql.SQL("{}.{}").format(
-            psycopg.sql.Identifier(
-                ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-            ),
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
+            psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
             psycopg.sql.Identifier("_prisma_migrations"),
         )
         try:
-            with psycopg.connect(
-                cleaned_url, connect_timeout=10, autocommit=True
-            ) as conn:
-                row = conn.execute(
-                    psycopg.sql.SQL(
-                        "SELECT logs FROM {} "
-                        "WHERE migration_name = %s AND finished_at IS NULL "
-                        "AND rolled_back_at IS NULL"
-                    ).format(ledger_table),
-                    (migration_name,),
-                ).fetchone()
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+                row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
-        return (row[0] or "") if row else ""
+        return tuple(row) if row is not None else ()
+
+    @staticmethod
+    def _failed_migration_logs(migration_name: str, started_at: str) -> Optional[str]:
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
+            "SELECT logs FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
+            "AND finished_at IS NULL AND rolled_back_at IS NULL",
+            (migration_name, started_at),
+        )
+        if row is None:
+            return None
+        return row[0] if row and isinstance(row[0], str) else ""
+
+    @staticmethod
+    def _failed_migration_recovered(migration_name: str, started_at: str) -> bool:
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
+            "SELECT 1 FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
+            "AND (finished_at IS NOT NULL OR rolled_back_at IS NOT NULL)",
+            (migration_name, started_at),
+        )
+        return bool(row)
 
     @staticmethod
     def _resolve_specific_migration(migration_name: str):
@@ -602,7 +694,7 @@ class ProxyExtrasDBManager:
                     )
 
     @staticmethod
-    def raise_if_lens_rename_pending() -> None:
+    def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
             return
@@ -610,8 +702,9 @@ class ProxyExtrasDBManager:
             import psycopg
         except ImportError as exc:
             raise RuntimeError("Install psycopg to verify Lens data safety before prisma db push.") from exc
+        open_connection: Final = connect if connect is not None else psycopg.connect
         try:
-            with psycopg.connect(
+            with open_connection(
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
             ) as connection:
                 legacy: Final = connection.execute(
@@ -622,7 +715,8 @@ class ProxyExtrasDBManager:
                 ).fetchone()
         except psycopg.Error as exc:
             raise RuntimeError(
-                "Cannot verify Lens data safety; refusing prisma db push. Check database connectivity and psycopg installation."
+                "Cannot verify Lens data safety; refusing prisma db push. "
+                f"The database check failed: {_redact_credentials(str(exc)).strip()}"
             ) from exc
         if legacy is not None:
             raise RuntimeError(
@@ -689,30 +783,43 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _strip_prisma_query_params(url: str) -> str:
-        """Remove Prisma-specific query params (connection_limit, pool_timeout,
-        schema, etc.) from DATABASE_URL so psycopg can parse it."""
+        """Rewrite a Prisma-dialect URL for libpq: drop the Prisma-only params
+        (connection_limit, pool_timeout, schema, pgbouncer, sslaccept, ...) and
+        translate Prisma's TLS params back, since libpq reads ``sslcert`` as a
+        client certificate where Prisma reads it as the CA."""
         from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
-        parsed = urlparse(url)
+        parsed: Final = urlparse(url)
         if not parsed.query:
             return url
-        libpq_params = {
-            "sslmode",
-            "sslcert",
-            "sslkey",
-            "sslrootcert",
-            "sslpassword",
-            "application_name",
-            "connect_timeout",
-            "client_encoding",
-            "options",
-            "service",
-            "gssencmode",
-            "krbsrvname",
-            "target_session_attrs",
-        }
-        kept = [(k, v) for k, v in parse_qsl(parsed.query) if k in libpq_params]
-        return urlunparse(parsed._replace(query=urlencode(kept, quote_via=quote)))
+        pairs: Final = tuple(parse_qsl(parsed.query))
+        kept: Final = tuple((k, v) for k, v in pairs if k in LIBPQ_URL_PARAMS)
+        sslaccept: Final = next((v for k, v in pairs if k == "sslaccept"), None)
+        libpq_pairs: Final = ProxyExtrasDBManager._libpq_tls_params(kept, sslaccept)
+        return urlunparse(parsed._replace(query=urlencode(libpq_pairs, quote_via=quote)))
+
+    @staticmethod
+    def _libpq_tls_params(
+        pairs: "tuple[tuple[str, str], ...]", sslaccept: "str | None"
+    ) -> "tuple[tuple[str, str], ...]":
+        """Undo ``translate_libpq_ssl_params``. Prisma's ``sslcert`` is the CA and
+        ``sslaccept=strict`` checks chain and hostname, which libpq only does in
+        ``sslmode=verify-full``, so strict becomes ``sslrootcert`` plus
+        ``verify-full`` whatever ``sslmode`` said (``disable`` stays off). Prisma
+        defaults an absent ``sslaccept`` to ``accept_invalid_certs`` and anything
+        else to strict. Without strict it checks nothing, so the CA is dropped and
+        ``sslmode`` is kept as is: libpq only verifies when a root cert is present.
+        A URL that also carries ``sslkey`` is libpq's own client-certificate form
+        and is kept."""
+        keys: Final = frozenset(k for k, _ in pairs)
+        if "sslcert" not in keys or "sslkey" in keys:
+            return pairs
+        sslmode: Final = next((v for k, v in pairs if k == "sslmode"), None)
+        rest: Final = tuple((k, v) for k, v in pairs if k not in ("sslcert", "sslmode"))
+        if sslaccept in (None, "accept_invalid_certs") or sslmode == "disable":
+            return rest if sslmode is None else rest + (("sslmode", sslmode),)
+        root_cert: Final = tuple(("sslrootcert", v) for k, v in pairs if k == "sslcert" and "sslrootcert" not in keys)
+        return rest + root_cert + (("sslmode", "verify-full"),)
 
     @staticmethod
     def _warn_if_db_ahead_of_head(migrations_dir: str) -> None:
@@ -1073,6 +1180,11 @@ class ProxyExtrasDBManager:
         return None
 
     @staticmethod
+    def _v2_failed_migration_started_at(stderr: str, migration_name: str) -> "str | None":
+        match: Final = re.search(rf"`{re.escape(migration_name)}` migration started at ([^\r\n]+?) failed", stderr)
+        return match.group(1) if match else None
+
+    @staticmethod
     def _v2_roll_back_migration_best_effort(migration_name: str) -> None:
         from litellm_proxy_extras.migration_lock import migration_environment
 
@@ -1100,8 +1212,11 @@ class ProxyExtrasDBManager:
 
         if "P3009" in stderr:
             migration_name = ProxyExtrasDBManager._v2_failed_migration_name(stderr)
-            if migration_name:
-                ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name)
+            started_at: Final = (
+                ProxyExtrasDBManager._v2_failed_migration_started_at(stderr, migration_name) if migration_name else None
+            )
+            if migration_name and started_at:
+                ledger_logs: Final = ProxyExtrasDBManager._failed_migration_logs(migration_name, started_at)
                 if ledger_logs and _MIGRATION_DEADLOCK_MARKER in ledger_logs:
                     logger.info(
                         "Migration %s failed in a concurrent migrate deploy "
@@ -1109,6 +1224,14 @@ class ProxyExtrasDBManager:
                         migration_name,
                     )
                     ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                    return budget.spend()
+                if ProxyExtrasDBManager._failed_migration_recovered(migration_name, started_at):
+                    logger.info(
+                        "Migration %s started at %s was already rolled back or completed by a concurrent "
+                        "migrate deploy, retrying",
+                        migration_name,
+                        started_at,
+                    )
                     return budget.spend()
             raise RuntimeError(
                 "Migration completion could not be verified. LiteLLM startup has stopped.\n\n"
@@ -1518,6 +1641,11 @@ class ProxyExtrasDBManager:
                                     f"Error: {stderr}"
                                 )
                                 raise
+                        else:
+                            logger.error(
+                                "prisma migrate deploy failed with an error the resolver does not handle: "
+                                f"{_redact_credentials(stderr)}"
+                            )
                 else:
                     if ProxyExtrasDBManager.spend_logs_is_partitioned():
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
@@ -1532,7 +1660,7 @@ class ProxyExtrasDBManager:
                     )
                     return True
             except subprocess.TimeoutExpired:
-                logger.warning(
+                logger.error(
                     "Attempt %s timed out. Raise %s if this database needs longer to apply its schema.",
                     attempt + 1,
                     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR if use_migrate else PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -1545,7 +1673,12 @@ class ProxyExtrasDBManager:
                     if attempts_left > 0
                     else ""
                 )
-                logger.info(f"The process failed to execute. Details: {e}.{retry_msg}")
+                stderr_detail: Final = (
+                    f" stderr: {_redact_credentials(str(e.stderr))}" if e.stderr else ""
+                )
+                logger.error(
+                    f"The process failed to execute. Details: {_redact_command_error(e)}.{stderr_detail}{retry_msg}"
+                )
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)

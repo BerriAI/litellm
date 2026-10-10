@@ -16,7 +16,7 @@ import pytest
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     CompletionRequest,
-    _CompletionDispatchContext,
+    CompletionDispatchContext,
 )
 
 
@@ -155,8 +155,8 @@ def test_completion_request_with_all_params():
     assert request.n == 1
 
 
-def _build_dispatch_context() -> _CompletionDispatchContext:
-    return _CompletionDispatchContext(
+def _build_dispatch_context() -> CompletionDispatchContext:
+    return CompletionDispatchContext(
         _azure_detection_model="gpt-4o",
         acompletion=False,
         api_base=None,
@@ -181,6 +181,7 @@ def _build_dispatch_context() -> _CompletionDispatchContext:
         optional_params={},
         organization=None,
         provider_config=None,
+        request_params={},
         shared_session=None,
         stream=None,
         temperature=None,

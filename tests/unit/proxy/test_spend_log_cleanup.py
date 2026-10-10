@@ -7,6 +7,7 @@ import logging
 import math
 import time
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -23,6 +24,7 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SpendLogCleanup,
     TableCleanupResult,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
@@ -796,19 +798,23 @@ async def test_spend_logs_retention_alone_does_not_touch_the_session_rollup():
     assert any('"LiteLLM_SpendLogs"' in sql for sql in tables)
     assert not any('"LiteLLM_AutoRouterSession"' in sql for sql in tables)
     assert not any('"LiteLLM_AutoRouterUserSession"' in sql for sql in tables)
+    assert not any('"LiteLLM_AutoRouterDailySpend"' in sql for sql in tables)
     assert not any('"LiteLLM_HealthCheckTable"' in sql for sql in tables)
 
 
 @pytest.mark.asyncio
-async def test_session_retention_alone_cleans_both_session_rollups():
-    client = _mock_prisma_for_retention([0, 0])
+async def test_session_retention_alone_cleans_both_session_rollups_and_the_daily_rollup():
+    client = _mock_prisma_for_retention([0, 0, 0])
     cleaner = SpendLogCleanup(general_settings={"maximum_autorouter_session_retention_period": "365d"})
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
-    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
-    assert len(tables) == 2
+    calls = client.db.execute_raw.call_args_list
+    tables = [call[0][0] for call in calls]
+    assert len(tables) == 3
     assert '"LiteLLM_AutoRouterSession"' in tables[0]
     assert '"LiteLLM_AutoRouterUserSession"' in tables[1]
+    assert '"LiteLLM_AutoRouterDailySpend"' in tables[2]
+    assert calls[2][0][1] == calls[0][0][1].date().isoformat()
 
 
 @pytest.mark.asyncio
@@ -852,7 +858,7 @@ async def test_spend_logs_retention_alone_keeps_daily_tag_spend_forever():
 
 @pytest.mark.asyncio
 async def test_each_retention_key_cuts_off_at_its_own_horizon():
-    client = _mock_prisma_for_retention([0, 0, 0, 0, 0])
+    client = _mock_prisma_for_retention([0, 0, 0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
@@ -868,6 +874,8 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
             if '"LiteLLM_AutoRouterSession"' in call[0][0]
             else "LiteLLM_AutoRouterUserSession"
             if '"LiteLLM_AutoRouterUserSession"' in call[0][0]
+            else "LiteLLM_AutoRouterDailySpend"
+            if '"LiteLLM_AutoRouterDailySpend"' in call[0][0]
             else "LiteLLM_HealthCheckTable"
             if '"LiteLLM_HealthCheckTable"' in call[0][0]
             else "logs"
@@ -878,6 +886,7 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
     assert (now - cutoffs["logs"]).days == 7
     assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
     assert cutoffs["LiteLLM_AutoRouterUserSession"] == cutoffs["LiteLLM_AutoRouterSession"]
+    assert cutoffs["LiteLLM_AutoRouterDailySpend"] == cutoffs["LiteLLM_AutoRouterSession"].date().isoformat()
     assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
 
 
@@ -917,7 +926,7 @@ async def test_run_budget_stops_the_loop_and_leaves_the_backlog_for_the_next_run
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
     started_at = time.monotonic()
-    result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, time.monotonic() + 0.25)
+    result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, time.monotonic() + 1.0)
     elapsed = time.monotonic() - started_at
 
     assert result.stop_reason == "budget_exhausted"
@@ -1286,7 +1295,9 @@ async def test_a_statement_timeout_is_clamped_to_the_budget_that_is_left():
     )
 
     # Only 2s of budget left against a 30s batch timeout.
-    await cleaner._execute_delete_batch(client, "DELETE FROM x", datetime.now(timezone.utc), time.monotonic() + 2)
+    await cleaner._execute_delete_batch(
+        client, "DELETE FROM x", datetime.now(timezone.utc), "LiteLLM_SpendLogs", time.monotonic() + 2
+    )
 
     timeouts = [sql for sql in recorded if "statement_timeout" in sql]
     assert timeouts, f"no statement timeout was issued: {recorded}"
@@ -1660,3 +1671,18 @@ async def test_run_that_drains_every_table_logs_the_summary_at_info_not_warning(
     assert len(summaries) == 1
     assert summaries[0].levelno == logging.INFO
     assert "outcome=completed" in summaries[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_a_cleanup_delete_batch_renders_a_postgres_delete_span_for_its_table(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    client = MagicMock()
+    _wire_tx(client.db)
+    client.db.execute_raw = engine_call(5)
+
+    await SpendLogCleanup(general_settings={})._execute_delete_batch(
+        client, "DELETE FROM x", datetime(2026, 1, 1, tzinfo=timezone.utc), "LiteLLM_SpendLogs", time.monotonic() + 2
+    )
+
+    assert await postgres_span_names() == ("postgres.delete LiteLLM_SpendLogs",)

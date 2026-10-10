@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict
+from typing import TYPE_CHECKING, Final, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -194,7 +194,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         url: str,
         data: str | None = None,
         headers: dict[str, str] | None = None,
-    ) -> Any:
+    ) -> httpx.Response:
         """
         Helper to sign and execute AWS API requests using httpx + SigV4.
 
