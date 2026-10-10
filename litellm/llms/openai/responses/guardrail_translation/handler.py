@@ -265,7 +265,12 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     rewritten_content: Final = rewritten.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}
-    rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
+    # A lone system row with content would fold into `instructions` and leave no item to patch; as a developer
+    # row its content converts to the same input parts and stays an item.
+    row: Final = cast("Mapping[str, object]", rewritten)  # cast-ok: isinstance confirms a mapping, keyed by field name
+    folds: Final = row.get("role") == "system" and row.get("content") is not None
+    chat_row: Final = {**row, "role": "developer"} if folds else row
+    rewritten_row: Final = cast("AllMessageValues", chat_row)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
         [rewritten_row]
     )

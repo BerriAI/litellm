@@ -155,7 +155,8 @@ def _system_text_for_instructions(message: Mapping[str, object]) -> str | None:
         return None
     blocks: Final = cast(list[object], content)  # cast-ok: isinstance confirms a list of content blocks
     texts: Final = tuple(text for text in map(_foldable_system_text, blocks) if text is not None)
-    return " ".join(texts) if len(texts) == len(blocks) else None
+    # Newline-joined, empty blocks dropped, as the Anthropic-to-Responses adapter joins the same shape.
+    return "\n".join(filter(None, texts)) if len(texts) == len(blocks) else None
 
 
 def _pending_audio_breakpoint(pending: object, part: object) -> object:
@@ -791,8 +792,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
-        # of instructions, mirroring how non-string system content is already
-        # handled in convert_chat_completion_messages_to_responses_api.
+        # of instructions.
         is_system_only_request: Final = not converted_input_items and converted_instructions is not None
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)

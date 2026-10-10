@@ -4840,26 +4840,42 @@ def test_leading_system_messages_mixed_str_and_list_concatenate_in_order():
     ]
 
 
-def test_mid_conversation_system_list_content_stays_in_input_after_a_user_turn():
-    """Only the leading run folds (#40269): a list-content system message after the first
-    non-system message stays a positioned input item."""
+def test_leading_system_list_blocks_join_on_newlines_without_empty_blocks():
+    """A multi-block system prompt keeps its section boundaries: blocks join on newlines and
+    empty blocks drop, as the Anthropic-to-Responses adapter joins the same shape."""
     handler: Final = LiteLLMResponsesTransformationHandler()
 
-    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+    _, instructions = handler.convert_chat_completion_messages_to_responses_api(
         [
-            {"role": "user", "content": "Read the file."},
             {
                 "role": "system",
-                "content": [{"type": "text", "text": "<total_tokens>14982391 tokens left</total_tokens>"}],
+                "content": [
+                    {"type": "text", "text": "You are Claude Code."},
+                    {"type": "text", "text": ""},
+                    {"type": "text", "text": "# Tone\nBe brief.", "cache_control": {"type": "ephemeral"}},
+                ],
             },
+            {"role": "user", "content": "hi"},
         ]
     )
 
-    assert instructions is None
-    assert input_items == [
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read the file."}]},
-        _system_input_item("<total_tokens>14982391 tokens left</total_tokens>"),
-    ]
+    assert instructions == "You are Claude Code.\n# Tone\nBe brief."
+
+
+def test_system_only_request_with_list_content_stays_a_system_input_item():
+    """Responses rejects an empty input, so a request holding only a list-format system
+    message still goes out as one system input item, as a string one does."""
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": [{"type": "text", "text": "You are terse."}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [_system_input_item("You are terse.")]
 
 
 def test_leading_system_list_with_a_non_text_block_stays_an_input_item():

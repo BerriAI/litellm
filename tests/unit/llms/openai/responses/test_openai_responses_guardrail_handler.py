@@ -3105,6 +3105,29 @@ class TestPatchEdgeBranches:
         user_items = [item for item in result["input"] if item.get("role") == "user"]
         assert _texts(user_items[0]) == [COMPRESSED_MARKER]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("trailing", [[{"role": "user", "content": "What is the codename?"}], []])
+    async def test_list_content_system_item_rewrite_patches_in_place(self, trailing):
+        """A rewritten list-content system item stays an input item, never moved into instructions."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": "Answer from the memo only."}]},
+                *trailing,
+            ],
+        }
+
+        result = await handler.process_input_messages(
+            data, SystemRewriteGuardrail(rewritten_content=[{"type": "text", "text": COMPRESSED_MARKER}])
+        )
+
+        assert "instructions" not in result
+        assert result["input"] == [
+            {"role": "system", "content": [{"type": "input_text", "text": COMPRESSED_MARKER}]},
+            *trailing,
+        ]
+
     def test_item_rewrite_field_ignores_non_string_type(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _item_rewrite_field
 
