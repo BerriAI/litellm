@@ -47,7 +47,8 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
 def bridge_model_name(litellm_params: Mapping[str, object]) -> str:
     """The litellm model string a bridge agent completes with: ``<custom_llm_provider>/<model>``."""
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    model: Final = str(litellm_params.get("model") or "agent")
+    configured_model: Final = litellm_params.get("model", "agent")
+    model: Final = configured_model if isinstance(configured_model, str) else "agent"
     if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
         return model
     return f"{custom_llm_provider}/{model}"

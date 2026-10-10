@@ -36,6 +36,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.databricks.agent.transformation import is_databricks_app_url
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -81,7 +82,7 @@ class DatabricksAppOAuthConfig:
 
 
 def _workspace_origin(url: object) -> str | None:
-    if not isinstance(url, str) or not url.strip():
+    if not isinstance(url, str) or not url.strip() or is_databricks_app_url(url):
         return None
     parts: Final = urlsplit(url.strip())
     if not parts.scheme or not parts.netloc:
@@ -96,7 +97,7 @@ def _is_databricks_agent(litellm_params: Mapping[str, object]) -> bool:
 def _flat_databricks_agent_oauth(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
     """The Admin UI catalog cannot nest fields, so a ``databricks_agent`` spells its OAuth block as flat
     ``client_id`` / ``client_secret`` / ``workspace_url`` / ``scope``. ``workspace_url`` falls back to the
-    ``api_base`` origin, which holds for Model Serving but not for a Databricks App host."""
+    ``api_base`` origin for Model Serving; a Databricks App host is never a token endpoint, so an App must set it."""
     if not _is_databricks_agent(litellm_params):
         return None
     if not litellm_params.get("client_id") and not litellm_params.get("client_secret"):

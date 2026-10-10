@@ -549,6 +549,18 @@ def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
     assert config.scope == "custom-scope"
 
 
+def test_parse_flat_fields_of_an_app_without_a_workspace_url_raise_instead_of_using_the_app_host():
+    with pytest.raises(ValueError, match="workspace_url"):
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": "https://my-app-1.azure.databricksapps.com/responses",
+                "client_id": "sp-id",
+                "client_secret": "sp-secret",
+            }
+        )
+
+
 def test_parse_flat_fields_with_only_a_client_id_raise_on_the_missing_secret():
     with pytest.raises(ValueError, match="client_secret"):
         parse_databricks_oauth_config(

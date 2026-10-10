@@ -39,6 +39,8 @@ def _a2a_params() -> dict[str, object]:
         ({"custom_llm_provider": "databricks_agent", "model": "my-agent"}, "databricks_agent/my-agent"),
         ({"custom_llm_provider": "databricks_agent", "model": "databricks_agent/my-agent"}, "databricks_agent/my-agent"),
         ({"custom_llm_provider": "databricks_agent"}, "databricks_agent/agent"),
+        ({"custom_llm_provider": "databricks_agent", "model": None}, "databricks_agent/agent"),
+        ({"custom_llm_provider": "databricks_agent", "model": ""}, "databricks_agent/"),
         ({"model": "gpt-5"}, "gpt-5"),
     ],
 )

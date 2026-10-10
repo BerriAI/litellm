@@ -51,6 +51,10 @@ def _is_unified_responses_url(api_base: str) -> bool:
     return _normalized_base(api_base).endswith(_UNIFIED_RESPONSES_SUFFIX)
 
 
+def is_databricks_app_url(api_base: str) -> bool:
+    return _normalized_base(api_base).endswith("/responses") and not _is_unified_responses_url(api_base)
+
+
 def _required_endpoint_name(model: str) -> str:
     endpoint: Final = endpoint_name_from_model(model)
     if not endpoint:
