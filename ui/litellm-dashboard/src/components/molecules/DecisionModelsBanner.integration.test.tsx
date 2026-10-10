@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen, testQueryClient } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import DecisionModelsBanner from "./DecisionModelsBanner";
 
 const STORAGE_KEY = "hideDecisionModelsBanner";
@@ -43,7 +43,9 @@ describe("DecisionModelsBanner", () => {
     modelCostMap.mockRejectedValue(new Error("offline"));
     renderWithProviders(<DecisionModelsBanner />);
 
-    expect(await screen.findByRole("link", { name: "How to call them" })).toBeInTheDocument();
+    await waitFor(() => expect(testQueryClient.getQueryCache().findAll({ status: "error" })).toHaveLength(1));
+
+    expect(screen.getByRole("link", { name: "How to call them" })).toBeInTheDocument();
     expect(screen.getByRole("paragraph")).not.toHaveTextContent("Works with");
     expect(screen.getByRole("paragraph")).toHaveTextContent("Call them at /v1/decisions or /v1/systemone");
   });
