@@ -1,44 +1,29 @@
-"""OTLP/HTTP framing: request content encoding and the response body the exporter expects."""
-
-import gzip
 import json
-import zlib
-from io import BytesIO
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.constants import OTLP_MAX_BODY_BYTES
-from litellm.rust_bridge.trace.storage import encode_error
+from litellm.rust_bridge.loader import get_native_bridge
 
 
-class InvalidOTLPPayloadError(ValueError):
-    pass
+@runtime_checkable
+class NativeOtlpError(Protocol):
+    def trace_encode_error(self, message: str) -> bytes: ...
 
 
-class TracingPayloadTooLargeError(Exception):
-    pass
+_NATIVE: Final[TypeAdapter[NativeOtlpError]] = TypeAdapter(
+    NativeOtlpError, config=ConfigDict(arbitrary_types_allowed=True)
+)
 
 
 class OTLPError(TypedDict):
     message: ReadOnly[str]
 
 
-def decompress(body: bytes, content_encoding: str | None) -> bytes:
-    if len(body) > OTLP_MAX_BODY_BYTES:
-        raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
-    if content_encoding is None or content_encoding.lower() == "identity":
-        return body
-    if content_encoding.lower() != "gzip":
-        raise InvalidOTLPPayloadError("Unsupported OTLP content encoding")
-    try:
-        with gzip.GzipFile(fileobj=BytesIO(body)) as stream:
-            payload: Final = stream.read(OTLP_MAX_BODY_BYTES + 1)
-    except (EOFError, OSError, zlib.error) as error:
-        raise InvalidOTLPPayloadError("Invalid OTLP gzip body") from error
-    if len(payload) > OTLP_MAX_BODY_BYTES:
-        raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
-    return payload
+def encode_error(message: str) -> bytes:
+    native: Final = get_native_bridge()
+    return b"" if native is None else _NATIVE.validate_python(native).trace_encode_error(message)
 
 
 def encode_otlp_response(content_type: str | None, error: str | None = None) -> tuple[bytes, str]:

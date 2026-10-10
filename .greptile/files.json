@@ -29,13 +29,6 @@
       ]
     },
     {
-      "path": "litellm/rust_bridge/trace/AGENTS.md",
-      "description": "Conventions for code under litellm/rust_bridge/trace/",
-      "scope": [
-        "litellm/rust_bridge/trace/**"
-      ]
-    },
-    {
       "path": "litellm/tracing/AGENTS.md",
       "description": "Conventions for code under litellm/tracing/",
       "scope": [
@@ -365,62 +358,6 @@
       ]
     },
     {
-      "path": "litellm-rust/crates/traces/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces/",
-      "scope": [
-        "litellm-rust/crates/traces/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces/src/normalize/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces/src/normalize/",
-      "scope": [
-        "litellm-rust/crates/traces/src/normalize/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces/src/normalize/format/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces/src/normalize/format/",
-      "scope": [
-        "litellm-rust/crates/traces/src/normalize/format/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces/src/normalize/instrumentation/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces/src/normalize/instrumentation/",
-      "scope": [
-        "litellm-rust/crates/traces/src/normalize/instrumentation/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces/src/otlp/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces/src/otlp/",
-      "scope": [
-        "litellm-rust/crates/traces/src/otlp/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces/src/resolve/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces/src/resolve/",
-      "scope": [
-        "litellm-rust/crates/traces/src/resolve/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces-cache/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces-cache/",
-      "scope": [
-        "litellm-rust/crates/traces-cache/**"
-      ]
-    },
-    {
-      "path": "litellm-rust/crates/traces-clickhouse/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/traces-clickhouse/",
-      "scope": [
-        "litellm-rust/crates/traces-clickhouse/**"
-      ]
-    },
-    {
       "path": "litellm-rust/docs/adrs/AGENTS.md",
       "description": "Conventions for code under litellm-rust/docs/adrs/",
       "scope": [
@@ -530,13 +467,6 @@
       "description": "Conventions for code under ui/litellm-dashboard/src/components/chat/",
       "scope": [
         "ui/litellm-dashboard/src/components/chat/**"
-      ]
-    },
-    {
-      "path": "ui/litellm-dashboard/src/components/lens/traces/AGENTS.md",
-      "description": "Conventions for code under ui/litellm-dashboard/src/components/lens/traces/",
-      "scope": [
-        "ui/litellm-dashboard/src/components/lens/traces/**"
       ]
     }
   ]

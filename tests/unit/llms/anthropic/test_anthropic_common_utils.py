@@ -3761,7 +3761,10 @@ class TestWifServerOwnedParamsAreUnconditional:
         router.py merges request kwargs OVER deployment params, so it also beat the configured one."""
         from litellm.proxy.auth.auth_utils import is_request_body_safe
 
-        with pytest.raises(Exception, match="server-owned workload identity federation parameter"):
+        with pytest.raises(
+            Exception,
+            match="server-owned workload identity federation or OAuth token exchange parameter",
+        ):
             is_request_body_safe(
                 request_body={"model": "claude-sonnet-5", "anthropic_federation_workspace_id": "wrkspc_abc"},
                 general_settings={},

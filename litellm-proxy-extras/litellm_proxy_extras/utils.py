@@ -18,6 +18,7 @@ from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
+    MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR,
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
@@ -62,6 +63,7 @@ def _get_prisma_env() -> dict:
 _MIGRATION_TS_RE = re.compile(r"^(\d{14})_")
 
 _MIGRATION_DEADLOCK_MARKER = "deadlock detected"
+_MIGRATION_LOCK_TIMEOUT_MARKER = "canceling statement due to lock timeout"
 INDEX_REPAIR_ADVISORY_LOCK_KEY: Final = int.from_bytes(b"litellm", "big")
 _TRANSIENT_INDEX_SUFFIX_RE: Final = re.compile(r"_cc(?:new|old)\d*$")
 _INVALID_LITELLM_INDEXES_SQL: Final = (
@@ -1162,9 +1164,11 @@ class ProxyExtrasDBManager:
 
             raise RuntimeError(
                 f"Database migration failed after {MAX_MIGRATE_DEPLOY_ATTEMPTS} "
-                "attempts that made no progress (timeouts or deadlock retries). Check database connectivity, "
-                "load, and _prisma_migrations ledger state, and raise "
-                f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out."
+                "attempts that made no progress (timeouts, lock timeouts or deadlock retries). "
+                "Check database connectivity, load, long-running transactions on the migrated tables, "
+                "and _prisma_migrations ledger state. Raise "
+                f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out, or "
+                f"{MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR} if they timed out waiting for a table lock."
             )
         finally:
             os.chdir(original_dir)
@@ -1225,6 +1229,13 @@ class ProxyExtrasDBManager:
                     )
                     ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
                     return budget.spend()
+                if ledger_logs and _MIGRATION_LOCK_TIMEOUT_MARKER in ledger_logs:
+                    logger.info(
+                        "Migration %s timed out waiting for a table lock, rolling its ledger row back and retrying",
+                        migration_name,
+                    )
+                    ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                    return budget.spend()
                 if ProxyExtrasDBManager._failed_migration_recovered(migration_name, started_at):
                     logger.info(
                         "Migration %s started at %s was already rolled back or completed by a concurrent "
@@ -1270,6 +1281,16 @@ class ProxyExtrasDBManager:
                 ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
                 return budget.spend()
 
+            if migration_name and _MIGRATION_LOCK_TIMEOUT_MARKER in stderr:
+                ProxyExtrasDBManager._log_migration_lock_holders(migration_name)
+                logger.warning(
+                    "Migration %s timed out waiting for a table lock, rolling its ledger row back and retrying. "
+                    f"Raise {MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR} if the database needs longer.",
+                    migration_name,
+                )
+                ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                return budget.spend()
+
             raise RuntimeError(
                 "Database migration failed and cannot be auto-recovered. "
                 f"Manual intervention required.\n\nPrisma error:\n{stderr}"
@@ -1282,6 +1303,13 @@ class ProxyExtrasDBManager:
             )
             return budget.spend()
 
+        if _MIGRATION_LOCK_TIMEOUT_MARKER in stderr:
+            logger.info(
+                "Waiting for the advisory lock held by another Prisma migration; "
+                "contention does not spend a migration failure attempt"
+            )
+            return budget.after_contention(attempt_seconds)
+
         if "P1002" in stderr and "advisory lock" in stderr:
             logger.info(
                 "Waiting for the advisory lock held by another Prisma migration; "
@@ -1293,6 +1321,68 @@ class ProxyExtrasDBManager:
             "Database migration failed and cannot be auto-recovered. "
             f"Manual intervention required.\n\nPrisma error:\n{stderr}"
         ) from error
+
+    @staticmethod
+    def _log_migration_lock_holders(migration_name: str) -> None:
+        """Best-effort log of the sessions holding locks on the tables a timed-out migration touches."""
+        try:
+            migration_sql: Final = (
+                Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations" / migration_name / "migration.sql"
+            ).read_text()
+        except OSError:
+            return
+        relations: Final = sorted(set(re.findall(r'"(LiteLLM_\w+)"', migration_sql)))
+        database_url: Final = os.getenv("DATABASE_URL")
+        if not relations or not database_url:
+            return
+        try:
+            import psycopg
+        except ImportError:
+            return
+        try:
+            with psycopg.connect(
+                ProxyExtrasDBManager._strip_prisma_query_params(database_url),
+                connect_timeout=10,
+                autocommit=True,
+                options="-c statement_timeout=5000",
+            ) as conn:
+                rows: Final = conn.execute(
+                    "SELECT l.pid, c.relname, l.mode, a.state, a.application_name, "
+                    "date_trunc('second', now() - a.xact_start) "
+                    "FROM pg_locks l "
+                    "JOIN pg_class c ON c.oid = l.relation "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "JOIN pg_stat_activity a ON a.pid = l.pid "
+                    "WHERE l.granted AND n.nspname = %s AND c.relname = ANY(%s) AND l.pid <> pg_backend_pid() "
+                    "ORDER BY a.xact_start NULLS LAST "
+                    "LIMIT 10",
+                    (
+                        ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",
+                        relations,
+                    ),
+                ).fetchall()
+        except psycopg.Error:
+            return
+        if not rows:
+            logger.warning(
+                "Migration %s timed out waiting for a lock, but no current lock holder "
+                "was found on %s; the holder has likely since committed or rolled back",
+                migration_name,
+                ", ".join(relations),
+            )
+            return
+        for pid, relname, mode, state, application_name, age in rows:
+            logger.warning(
+                "Migration %s timed out waiting for a lock on %s held by pid %s "
+                "(mode %s, state %s, application %s, transaction open for %s)",
+                migration_name,
+                relname,
+                pid,
+                mode,
+                state,
+                application_name,
+                age,
+            )
 
     @staticmethod
     def _mark_migration_applied(name: str) -> None:

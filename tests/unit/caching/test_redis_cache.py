@@ -1611,3 +1611,27 @@ def test_call_stack_info_skips_native_lifecycle_frames():
         return native_drive()
 
     assert anthropic_messages() == "anthropic_messages <- test_call_stack_info_skips_native_lifecycle_frames"
+
+
+class _FormatCountingStr(str):
+    format_calls = 0
+
+    def __format__(self, spec: str) -> str:
+        _FormatCountingStr.format_calls += 1
+        return super().__format__(spec)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_does_not_format_cached_values_for_logging(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    pipe = _SetRecordingPipeline()
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=pipe)
+
+    _FormatCountingStr.format_calls = 0
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache_pipeline([("k1", _FormatCountingStr("embedding"))], ttl=60)
+
+    assert _FormatCountingStr.format_calls == 0
+    assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]

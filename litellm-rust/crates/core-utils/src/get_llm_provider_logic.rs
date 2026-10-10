@@ -18,6 +18,8 @@ pub enum LlmProviders {
     Bedrock,
     #[strum(serialize = "cohere")]
     Cohere,
+    #[strum(serialize = "deepseek")]
+    Deepseek,
     #[strum(serialize = "mistral")]
     Mistral,
     #[strum(serialize = "openai")]

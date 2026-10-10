@@ -1083,6 +1083,31 @@ def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psuti
     return tuple(c for c in parent.children() if _is_live_worker(c, exclude))
 
 
+def test_an_unreaped_worker_does_not_hide_the_surviving_proxy_worker(rig: Rig) -> None:
+    parent: Final = psutil.Process(rig.owned.process.pid)
+    workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda children: len(children) == 2)
+    victim: Final = workers[0]
+    survivor: Final = workers[1]
+    marker: Final = rig.marker()
+    os.kill(parent.pid, signal.SIGSTOP)
+    try:
+        os.kill(victim.pid, signal.SIGKILL)
+        assert eventually(victim.status, lambda status: status == psutil.STATUS_ZOMBIE) == psutil.STATUS_ZOMBIE
+        assert tuple(child.pid for child in _uvicorn_workers(parent)) == (survivor.pid,)
+        assert _uvicorn_workers(parent, exclude=survivor.pid) == ()
+        with httpx.Client(base_url=rig._base(), timeout=15, trust_env=False) as client:
+            response: Final = client.post(
+                "/v1/chat/completions",
+                json={"model": rig.chat_model, "messages": _messages(marker)},
+                headers={"Authorization": f"Bearer {rig.proxy.key}"},
+            )
+        assert response.status_code == 200, response.text
+        assert len(_v3_request_calls(rig, marker)) == 1
+    finally:
+        os.kill(parent.pid, signal.SIGCONT)
+    assert len(eventually(lambda: _uvicorn_workers(parent, exclude=victim.pid), lambda children: len(children) == 2)) == 2
+
+
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:
     parent: Final = psutil.Process(rig.owned.process.pid)
     workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda c: len(c) >= 2)

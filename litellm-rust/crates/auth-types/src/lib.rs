@@ -3,6 +3,7 @@
 mod credential;
 mod error;
 pub mod http;
+mod params;
 mod policy;
 mod secret;
 mod token;
@@ -52,6 +53,7 @@ pub use credential::{
 };
 pub use error::{Error, ErrorDetail, ErrorSource};
 pub use http::CredentialPlacement;
+pub use params::{AwsParams, ParamSpec, VertexParams};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

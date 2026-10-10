@@ -2,13 +2,14 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
+from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
+from openai._types import Response as SDKResponse
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -79,6 +80,7 @@ from typing_extensions import (
     ReadOnly,
     Required,
     TypedDict,
+    TypeVar,
     override,
 )
 
@@ -118,8 +120,12 @@ class BinaryResponseSummary(TypedDict):
     num_bytes: ReadOnly[int]
 
 
-class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
+_ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
+
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
+    response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -129,22 +135,28 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: httpx.Response) -> None:
-        super().__init__(response)
+    def __init__(self, response: _ResponseT) -> None:
+        super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
+
+    @property
+    def content_type(self) -> str | None:
+        headers: Final[Mapping[str, str]] = self.response.headers
+        return headers.get("content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
         return {
             "object": "binary",
-            "content_type": self.response.headers.get("content-type"),
+            "content_type": self.content_type,
             "num_bytes": self._num_bytes(),
         }
 
     def _num_bytes(self) -> int:
         try:
-            return len(self.response.content)
-        except httpx.ResponseNotRead:
+            content: Final = self.response.content
+        except RuntimeError:
             return self.response.num_bytes_downloaded
+        return len(content)
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:

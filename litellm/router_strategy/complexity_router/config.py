@@ -705,10 +705,18 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
+_ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
+    {
+        "jev": "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai",
+        "databricks": "DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE",
+    }
+)
+
+
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -753,10 +761,19 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
             if self.api_base is not None:
                 _ = validate_oss_api_base(self.provider, self.api_base)
             return self
+        if self.provider == "databricks":
+            from litellm.llms.databricks.decisions.transformation import validate_serving_endpoint_name
+
+            if "model" not in self.model_fields_set:
+                raise ValueError(
+                    "opensource_classifier_config.model is required for provider 'databricks': the serving endpoint "
+                    "name, e.g. databricks-openjev-qwen35-4b"
+                )
+            _ = validate_serving_endpoint_name(self.model)
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
-                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
-                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
+                f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
             )
         return self
 

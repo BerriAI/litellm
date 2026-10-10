@@ -43,7 +43,7 @@ export interface KeyResponse {
   key_alias: string;
   spend: number;
   total_spend: number;
-  max_budget: number;
+  max_budget: number | null;
   expires: string;
   models: string[];
   aliases: Record<string, unknown>;

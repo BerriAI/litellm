@@ -31,11 +31,11 @@ from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
-from litellm.rust_bridge.trace.errors import TraceChanged
-from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
-from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
-from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
+from litellm.tracing.errors import TraceChanged
+from litellm.tracing.generated.models import TraceQueryHelp
+from litellm.tracing.generated.responses import TraceSQLResponse
+from litellm.tracing.generated.types import AllQueryScope, TraceScope
+from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing import TraceReceiver
 from litellm.tracing.remote import RemoteTraceStore
 from litellm.tracing.types import TraceAgent, TraceAgentList
@@ -388,7 +388,7 @@ async def test_agent_picker_reads_through_worker_with_authenticated_scope(
         headers={"Authorization": f"Bearer {secret}"},
         transport=httpx.MockTransport(accept),
     ) as worker:
-        tracing: Final = TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(worker)))
+        tracing: Final = TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(worker)))
         client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
@@ -433,7 +433,7 @@ async def test_agent_picker_reports_worker_failures_without_leaking_details(
         base_url="http://lens",
         transport=httpx.MockTransport(lambda request: httpx.Response(status, text="private storage details")),
     ) as worker:
-        tracing: Final = TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(worker)))
+        tracing: Final = TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(worker)))
         client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
@@ -672,7 +672,7 @@ def test_invalid_cursor_is_a_client_error(client: TestClient, receiver: MagicMoc
     ),
 )
 def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKeyAuth) -> None:
-    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage: Final = MagicMock(spec=LensTraceStorage)
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
@@ -707,9 +707,9 @@ def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> 
 def test_lifespan_receivers_are_app_local(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-    first_storage: Final = MagicMock(spec=ClickHouseStorage)
+    first_storage: Final = MagicMock(spec=LensTraceStorage)
     first_storage.get_span = AsyncMock(return_value={**SPAN_DETAIL_RESPONSE, "span_id": "first-span"})
-    second_storage: Final = MagicMock(spec=ClickHouseStorage)
+    second_storage: Final = MagicMock(spec=LensTraceStorage)
     second_storage.get_span = AsyncMock(return_value={**SPAN_DETAIL_RESPONSE, "span_id": "second-span"})
     first_receiver: Final = TraceReceiver(first_storage)
     second_receiver: Final = TraceReceiver(second_storage)
@@ -764,7 +764,7 @@ def test_query_validation_precedes_trace_access_checks(client: TestClient, auth:
 @pytest.mark.parametrize("enabled", [True, False])
 def test_unconfigured_lifespan_receiver_returns_501(enabled: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
-    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage: Final = MagicMock(spec=LensTraceStorage)
     storage.ensure_schema = AsyncMock(side_effect=RuntimeError("storage unavailable"))
     tracing: Final = TraceReceiver(storage)
 
@@ -782,61 +782,6 @@ def test_unconfigured_lifespan_receiver_returns_501(enabled: bool, monkeypatch: 
     assert response.status_code == 501
     storage.ensure_schema.assert_not_awaited()
     storage.list_traces.assert_not_called()
-
-
-def test_lens_reads_from_the_lifespan_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy.lens.endpoints import router as lens_router
-
-    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-    storage: Final = MagicMock(spec=ClickHouseStorage)
-    storage.ensure_schema = AsyncMock()
-    storage.lens_sample = AsyncMock(return_value=[])
-    tracing: Final = TraceReceiver(storage)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
-        async with manage_tracing(True, lambda: tracing) as receiver:
-            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
-            yield state
-
-    app: Final = FastAPI(lifespan=lifespan)
-    app.include_router(lens_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    with TestClient(app) as client:
-        response: Final = client.post(
-            "/lens/preview/sample",
-            json={"selection": {"source": "requests", "service": "checkout"}},
-        )
-    assert response.status_code == 200, response.text
-    assert response.json()["executions"] == []
-    storage.lens_sample.assert_awaited_once()
-    params: Final = storage.lens_sample.await_args.args[0]
-    assert (params.all_teams, params.source, params.service, params.preview) == (1, "requests", "checkout", 1)
-
-
-def test_lens_reads_from_injected_storage_without_receiver() -> None:
-    from litellm.proxy.lens.endpoints import router as lens_router
-    from litellm.proxy.lens.sources import Storage
-
-    storage: Final = MagicMock(spec=Storage)
-    storage.lens_sample = AsyncMock(return_value=[])
-    app: Final = FastAPI()
-    app.include_router(lens_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    app.dependency_overrides[provide_storage] = lambda: storage
-
-    with TestClient(app) as client:
-        response: Final = client.post(
-            "/lens/preview/sample",
-            json={"selection": {"source": "requests", "service": "checkout"}},
-        )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["executions"] == []
-    storage.lens_sample.assert_awaited_once()
-    params: Final = storage.lens_sample.await_args.args[0]
-    assert (params.source, params.service, params.preview) == ("requests", "checkout", 1)
 
 
 @pytest.mark.parametrize(
@@ -1000,7 +945,7 @@ def test_shared_trace_permissions_reach_read_and_sql_boundaries(
         return teams
 
     team_lookup: Final = AsyncMock(side_effect=lookup)
-    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage: Final = MagicMock(spec=LensTraceStorage)
     storage.get_span = AsyncMock(return_value=SPAN_DETAIL_RESPONSE)
     storage.query_sql = AsyncMock(return_value=SQL_RESPONSE)
     storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
@@ -1057,51 +1002,32 @@ def test_trace_storage_permissions_map_owned_rows(
     }
 
 
-class _NativeConfig:
-    def __init__(self, database: str, url: str, retention_days: int, max_attribute_value_bytes: int) -> None:
-        pass
-
-
-class _NativeReturningHelp(ModuleType):
-    def __init__(self, help_payload: Mapping[str, object], trace_payload: Mapping[str, object] | None = None) -> None:
-        super().__init__("native_traces")
-
-        class Storage:
-            def __init__(self, config: _NativeConfig) -> None:
-                pass
-
-            async def query_help(self, scope: AllQueryScope, secret: str) -> Mapping[str, object]:
-                return help_payload
-
-            get_trace = AsyncMock(return_value=trace_payload)
-
-        self.trace_read: Final = Storage.get_trace
-        self.NativeTraceConfig: Final = _NativeConfig
-        self.NativeTraceStorage: Final = Storage
-        self.trace_encode_error: Final = bytes
-        self.trace_span_rows: Final = list
-
-
 @pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
-async def test_storage_preserves_page_cursor_and_normalizes_native_trace_data(
-    monkeypatch: pytest.MonkeyPatch, cursor: str | None, page_size: int | None
+async def test_storage_preserves_page_cursor_and_normalizes_remote_trace_data(
+    cursor: str | None, page_size: int | None
 ) -> None:
-    native: Final = _NativeReturningHelp(QUERY_HELP, {**TRACE_RESPONSE, "next_cursor": "more"})
-    monkeypatch.setattr(loader, "_cached_bridge", native)
-    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
     scope: Final[TraceScope] = {"all_teams": 0, "user_id": "owner", "team_ids": ()}
-    trace: Final = await storage.get_trace("t1", scope, "run", cursor, page_size)
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content) == {
+            "operation": "trace", "scope": {**scope, "team_ids": []}, "trace_id": "t1", "trace_ref": "run",
+            "cursor": cursor, "page_size": page_size,
+        }
+        return httpx.Response(200, json={**TRACE_RESPONSE, "next_cursor": "more"})
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        trace: Final = await LensTraceStorage(RemoteTraceStore(client)).get_trace("t1", scope, "run", cursor, page_size)
     assert trace is not None
     assert trace["next_cursor"] == "more"
     assert trace["spans"] == ()
     assert trace["summary"]["span_count"] == 0
-    native.trace_read.assert_awaited_once_with("t1", scope, "run", cursor, page_size)
 
 
-async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(loader, "_cached_bridge", _NativeReturningHelp(QUERY_HELP))
-    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
-    assert await storage.query_help({"kind": "all"}, "secret") == TraceQueryHelp.model_validate(QUERY_HELP)
+async def test_storage_validates_the_remote_query_help_value() -> None:
+    async with httpx.AsyncClient(
+        base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json=QUERY_HELP))
+    ) as client:
+        assert await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret") == TraceQueryHelp.model_validate(QUERY_HELP)
 
 
 @pytest.mark.parametrize(
@@ -1123,10 +1049,9 @@ async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest
         {"unexpected": True},
     ),
 )
-async def test_storage_rejects_native_query_help_that_drifts_from_the_contract(
-    monkeypatch: pytest.MonkeyPatch, drift: Mapping[str, object]
-) -> None:
-    monkeypatch.setattr(loader, "_cached_bridge", _NativeReturningHelp({**QUERY_HELP, **drift}))
-    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
-    with pytest.raises(RuntimeError, match="invalid response"):
-        await storage.query_help({"kind": "all"}, "secret")
+async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(drift: Mapping[str, object]) -> None:
+    async with httpx.AsyncClient(
+        base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift}))
+    ) as client:
+        with pytest.raises(RuntimeError, match="invalid response"):
+            await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")

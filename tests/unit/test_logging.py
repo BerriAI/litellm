@@ -1766,3 +1766,27 @@ def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, nati
     assert DiagnosticProcessingFilter().filter(record) is True
 
     assert secret not in record.getMessage()
+
+
+class _StrCountingValue:
+    str_calls = 0
+
+    def __str__(self) -> str:
+        _StrCountingValue.str_calls += 1
+        return "cached-vector"
+
+
+def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, capsys):
+    import litellm._logging as logging_module
+
+    _StrCountingValue.str_calls = 0
+
+    monkeypatch.setattr(logging_module, "set_verbose", False)
+    logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
+    assert _StrCountingValue.str_calls == 0
+    assert capsys.readouterr().out == ""
+
+    monkeypatch.setattr(logging_module, "set_verbose", True)
+    logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
+    assert _StrCountingValue.str_calls == 1
+    assert capsys.readouterr().out == "key k1 value cached-vector\n"
