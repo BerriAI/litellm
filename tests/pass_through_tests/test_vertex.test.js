@@ -10,6 +10,9 @@ const originalFetch = global.fetch || require('node-fetch');
 
 const { runVertexRequestOrSkip } = require('./vertex_test_helpers');
 
+const masterKey = process.env.LITELLM_MASTER_KEY;
+if (!masterKey) throw new Error("LITELLM_MASTER_KEY must be set");
+
 // Monkey-patch the fetch used internally
 global.fetch = async function patchedFetch(url, options) {
     // Modify the URL to use HTTP instead of HTTPS
@@ -75,7 +78,7 @@ describe('Vertex AI Tests', () => {
             });
 
             const customHeaders = new Headers({
-                "x-litellm-api-key": "sk-1234"
+                "x-litellm-api-key": masterKey
             });
 
             const requestOptions = {
@@ -121,7 +124,7 @@ describe('Vertex AI Tests', () => {
                 location: 'global',
                 apiEndpoint: "localhost:4000/vertex-ai"
             });
-            const customHeaders = new Headers({"x-litellm-api-key": "sk-1234"});
+            const customHeaders = new Headers({"x-litellm-api-key": masterKey});
             const requestOptions = {customHeaders: customHeaders};
             const generativeModel = vertexAI.getGenerativeModel(
                 {model: 'gemini-3.1-flash-lite'},

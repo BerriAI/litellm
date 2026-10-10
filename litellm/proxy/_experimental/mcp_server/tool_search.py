@@ -2,17 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import re
+from collections import deque
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict
 
-from pydantic import ValidationError
+import anyio
+from anyio import to_process
+from anyio.lowlevel import RunVar
+from pydantic import JsonValue, ValidationError
 from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -42,6 +49,77 @@ SKILL_SEARCH_TOOL_NAME: Final[str] = "skill_search"
 VIRTUAL_TOOL_NAMES: Final = frozenset(
     (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME, SKILL_SEARCH_TOOL_NAME)
 )
+
+_SCHEMA_VALIDATION_LIMITER: Final = RunVar[anyio.CapacityLimiter]("mcp_schema_validation_limiter")
+_MAX_VALIDATION_DEPTH: Final = 64
+_MAX_VALIDATION_NODES: Final = 10_000
+_MAX_VALIDATION_CHARACTERS: Final = 1_048_576
+_VALIDATION_TIMEOUT_SECONDS: Final = 30
+
+
+def _validation_nodes(value: JsonValue | Mapping[str, JsonValue]) -> Iterator[tuple[int, int]]:
+    pending: Final[deque[Iterator[JsonValue | Mapping[str, JsonValue]]]] = deque((iter((value,)),))
+    while pending:
+        try:
+            node, depth = next(pending[-1]), len(pending) - 1
+        except StopIteration:
+            pending.pop()
+            continue
+        yield depth, len(node) if isinstance(node, str) else 0
+        if depth > _MAX_VALIDATION_DEPTH:
+            continue
+        if isinstance(node, Mapping):
+            pending.append(chain(node.keys(), node.values()))
+        elif isinstance(node, list):
+            pending.append(iter(node))
+
+
+def _validation_limit_error(schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]) -> str | None:
+    nodes: Final = tuple(
+        islice(chain(_validation_nodes(schema), _validation_nodes(arguments)), _MAX_VALIDATION_NODES + 1)
+    )
+    if len(nodes) > _MAX_VALIDATION_NODES or any(depth > _MAX_VALIDATION_DEPTH for depth, _ in nodes):
+        return "Tool schema or arguments exceed validation size or depth limits"
+    if sum(size for _, size in nodes) > _MAX_VALIDATION_CHARACTERS:
+        return "Tool schema or arguments exceed validation size or depth limits"
+    return None
+
+
+def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]) -> str | None:
+    from jsonschema import validate
+    from jsonschema.exceptions import SchemaError
+    from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
+    from referencing import Registry
+    from referencing.exceptions import Unresolvable
+
+    try:
+        validate(instance=arguments, schema=dict(schema), registry=Registry())
+    except JsonSchemaValidationError as exc:
+        return f"Invalid arguments: {exc.message}"
+    except (SchemaError, Unresolvable, RecursionError, re.error):
+        return "Unable to validate tool arguments against the supplied schema"
+    return None
+
+
+async def _tool_argument_validation_error(
+    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
+) -> str | None:
+    limit_error: Final = _validation_limit_error(schema, arguments)
+    if limit_error is not None:
+        return limit_error
+    existing: Final = _SCHEMA_VALIDATION_LIMITER.get(None)
+    limiter: Final = existing if existing is not None else anyio.CapacityLimiter(4)
+    if existing is None:
+        _SCHEMA_VALIDATION_LIMITER.set(limiter)
+    try:
+        with anyio.fail_after(_VALIDATION_TIMEOUT_SECONDS):
+            return await to_process.run_sync(
+                _validate_tool_arguments, schema, arguments, cancellable=True, limiter=limiter
+            )
+    except TimeoutError:
+        return "Tool argument validation exceeded its time limit"
+    except anyio.BrokenWorkerProcess:
+        return "Tool argument validation worker failed"
 
 
 def coerce_top_k(value: Any, default: int = 5) -> int:
@@ -99,11 +177,20 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+    }
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema, "score": score}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+        "score": score,
+    }
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
@@ -111,22 +198,19 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(  # mutable-ok: Pydantic requires mutable update and metadata mappings
-        update={  # mutable-ok: Pydantic update payload
-            "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
-        }
-    )
+    return tool.model_copy(update={"meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}})
 
 
 def _mcp_proxy_identity(tool: Tool) -> MCPProxyToolIdentity:
-    identity: Final = (tool.meta or {}).get(_MCP_PROXY_IDENTITY_META_KEY)  # mutable-ok: absent metadata default
+    identity: Final = None if tool.meta is None else tool.meta.get(_MCP_PROXY_IDENTITY_META_KEY)
     if not isinstance(identity, Mapping):
         raise TypeError("MCP proxy tool identity is missing")
     server_id: Final = identity.get("server_id")
     tool_name: Final = identity.get("tool_name")
     if not isinstance(server_id, str) or not isinstance(tool_name, str):
         raise TypeError("MCP proxy tool identity is invalid")
-    return {"server_id": server_id, "tool_name": tool_name}  # mutable-ok: TypedDict identity payload
+    resolved: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool_name}
+    return resolved
 
 
 def mcp_proxy_tool_id(tool: Tool) -> str:
@@ -140,7 +224,7 @@ def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
         "name": hit.tool.name,
         "description": hit.tool.description or "",
     }
-    return {**base, "score": hit.score} if hit.score is not None else base  # mutable-ok: wire result payload
+    return {**base, "score": hit.score} if hit.score is not None else base
 
 
 def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
@@ -148,11 +232,11 @@ def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
         "tool_id": mcp_proxy_tool_id(tool),
         "name": tool.name,
         "description": tool.description or "",
-        "inputSchema": tool.inputSchema,
+        "inputSchema": tool.input_schema,
     }
-    if tool.outputSchema is None:
+    if tool.output_schema is None:
         return base
-    return {**base, "outputSchema": tool.outputSchema}  # mutable-ok: wire schema payload
+    return {**base, "outputSchema": tool.output_schema}
 
 
 def _tool_text(tool: Tool) -> str:
@@ -252,7 +336,7 @@ class VirtualToolDefinition(TypedDict):
 
 
 def _json_array(*items: str) -> Sequence[str]:
-    return list(items)  # mutable-ok: jsonschema's metaschema only accepts a JSON array for required
+    return list(items)
 
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
@@ -371,8 +455,8 @@ def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
-        isError=is_error,
+        content=[TextContent(type="text", text=text)],
+        is_error=is_error,
     )
 
 
@@ -454,8 +538,8 @@ async def handle_mcp_tool_search(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
-        _list_mcp_tools,  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
     )
     from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
@@ -495,7 +579,7 @@ async def handle_mcp_tool_search(
 
 async def handle_mcp_proxy_tool(
     name: str,
-    arguments: dict[str, object],  # mutable-ok: MCP dispatcher passes mutable call arguments
+    arguments: dict[str, JsonValue],  # mutable-ok: MCP dispatcher passes mutable JSON call arguments
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: str | None = None,
     mcp_servers: list[str] | None = None,  # mutable-ok: preserve MCP scope container for existing resolver
@@ -506,12 +590,10 @@ async def handle_mcp_proxy_tool(
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
 ) -> CallToolResult:
     from fastapi import HTTPException
-    from jsonschema import ValidationError as JsonSchemaValidationError
-    from jsonschema import validate
 
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.server import (  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
-        _list_mcp_tools,  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
     )
 
     listing: Final = await _list_mcp_tools(
@@ -524,7 +606,7 @@ async def handle_mcp_proxy_tool(
         raw_headers=raw_headers,
         mcp_proxy_mode=True,
     )
-    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}  # mutable-ok: lookup index
+    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}
 
     if name == MCP_PROXY_SEARCH_TOOL_NAME:
         llm_router: Final = proxy_server.llm_router
@@ -561,13 +643,12 @@ async def handle_mcp_proxy_tool(
     if name != MCP_PROXY_CALL_TOOL_NAME:
         raise HTTPException(status_code=400, detail=f"Unknown MCP proxy tool: {name}")
 
-    tool_arguments: Final = arguments.get("arguments", {})  # mutable-ok: JSON Schema validator consumes mapping
+    tool_arguments: Final = arguments.get("arguments", {})
     if not isinstance(tool_arguments, dict):
         return _text_tool_result("arguments must be an object", is_error=True)
-    try:
-        validate(instance=tool_arguments, schema=tool.inputSchema)
-    except JsonSchemaValidationError as exc:
-        return _text_tool_result(f"Invalid arguments: {exc.message}", is_error=True)
+    validation_error: Final = await _tool_argument_validation_error(tool.input_schema, tool_arguments)
+    if validation_error is not None:
+        return _text_tool_result(validation_error, is_error=True)
 
     return await handle_mcp_tool_call(
         tool_name=_mcp_proxy_identity(tool)["tool_name"],
@@ -598,7 +679,7 @@ async def handle_mcp_tool_call(
     requested_server_id: str | None = None,
     guardrail_context: Mapping[str, object] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
         execute_mcp_tool,
         raise_denied_scoped_mcp_access,
@@ -624,7 +705,7 @@ async def handle_mcp_tool_call(
 
         raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
-    return await execute_mcp_tool(
+    result: Final = await execute_mcp_tool(
         name=tool_name,
         arguments=arguments,
         allowed_mcp_servers=allowed_mcp_servers,
@@ -634,7 +715,9 @@ async def handle_mcp_tool_call(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        client_ip=client_ip,
         litellm_logging_obj=litellm_logging_obj,
         requested_server_id=requested_server_id,
         guardrail_context=guardrail_context,
     )
+    return complete_call_tool_result(result, WireCompat.LEGACY)

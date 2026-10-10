@@ -12,6 +12,7 @@ from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.types.videos.main import CharacterObject as _CharacterObject
     from litellm.types.videos.main import VideoObject as _VideoObject
 
@@ -180,7 +181,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video remix request into a URL and data
@@ -207,7 +208,7 @@ class BaseVideoConfig(ABC):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video list request into a URL and params
@@ -269,8 +270,23 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         pass
+
+    async def async_transform_video_status_retrieve_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> VideoObject:
+        """Async transform video status retrieve response."""
+        return self.transform_video_status_retrieve_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     def transform_video_create_character_request(
         self,
@@ -342,8 +358,8 @@ class BaseVideoConfig(ABC):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
         video_file: FileContent | None = None,
-        extra_body: dict[str, Any] | None = None,
-        prefetched_source_data: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
+        prefetched_source_data: dict[str, object] | None = None,
     ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
         Transform the video edit request into a URL plus either JSON data or
@@ -373,7 +389,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video extension request into a URL and JSON data.

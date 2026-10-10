@@ -1,19 +1,16 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
+use litellm_http::{
+    media::{DownloadPolicy, Error as MediaError, MediaFetcher},
+    transport::Error as TransportError,
+};
 use reqwest::Url;
 
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection, OcrDocument,
-        },
-    },
-    custom_httpx::{
-        media::{DownloadPolicy, Error as MediaError, MediaFetcher},
-        transport::Error as TransportError,
-    },
+use crate::base_llm::ocr::{
+    error::Error,
+    transformation::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection},
 };
+use litellm_llms_types::formats::ocr::OcrDocument;
 
 pub struct InlineDocument<'a>(DataUrl<'a>);
 
@@ -72,7 +69,7 @@ pub async fn inline_remote_document(
             url,
             DownloadPolicy {
                 timeout: connection.timeout,
-                max_bytes: connection.max_download_bytes,
+                max_bytes: connection.settings.max_download_bytes,
                 max_redirects: OCR_MAX_FETCH_REDIRECTS,
             },
         )
@@ -188,17 +185,20 @@ mod tests {
             reqwest::header::AUTHORIZATION,
             reqwest::header::HeaderValue::from_static("Bearer provider-secret"),
         );
-        let provider_http = reqwest::Client::builder()
-            .default_headers(provider_headers)
-            .build()
-            .unwrap();
-        let document_http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        let client = crate::custom_httpx::llm_http_handler::OcrClient::for_test(
+        #[expect(
+            clippy::disallowed_methods,
+            clippy::disallowed_types,
+            reason = "the pool has no default-header setting to stand in for provider credentials"
+        )]
+        let provider_http = litellm_http::Client::for_test(
+            reqwest::Client::builder()
+                .default_headers(provider_headers)
+                .build()
+                .unwrap(),
+        );
+        let client = crate::base_llm::ocr::handler::OcrClient::for_test(
             provider_http,
-            document_http,
+            litellm_http::Client::no_redirect_for_test(),
         );
         let converted = inline_remote_document(
             client.document_fetcher(),

@@ -2,8 +2,10 @@ from datetime import date
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class GroupByDimension(str, Enum):
@@ -16,7 +18,7 @@ class GroupByDimension(str, Enum):
     PROVIDER = "custom_llm_provider"
 
 
-class SpendMetrics(BaseModel):
+class SpendMetrics(LiteLLMBaseModel):
     spend: float = Field(default=0.0)
     flat_cost: float = Field(default=0.0)
     prompt_tokens: int = Field(default=0)
@@ -36,17 +38,18 @@ class SpendMetrics(BaseModel):
     timed_requests: int = Field(default=0)
 
 
-class MetricBase(BaseModel):
+class MetricBase(LiteLLMBaseModel):
     metrics: SpendMetrics
 
 
-class KeyMetadata(BaseModel):
+class KeyMetadata(LiteLLMBaseModel):
     """Metadata for a key"""
 
     key_alias: str | None = None
     team_id: str | None = None
     user_id: str | None = None
     user_email: str | None = None
+    key_exists: bool | None = None
 
 
 class KeyMetricWithMetadata(MetricBase):
@@ -61,7 +64,7 @@ class MetricWithMetadata(MetricBase):
     api_key_breakdown: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
 
 
-class BreakdownMetrics(BaseModel):
+class BreakdownMetrics(LiteLLMBaseModel):
     """Breakdown of spend by different dimensions"""
 
     mcp_servers: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # mcp_server -> {metrics, metadata}
@@ -73,13 +76,13 @@ class BreakdownMetrics(BaseModel):
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
 
 
-class DailySpendData(BaseModel):
+class DailySpendData(LiteLLMBaseModel):
     date: date
     metrics: SpendMetrics
     breakdown: BreakdownMetrics = Field(default_factory=BreakdownMetrics)
 
 
-class DailySpendMetadata(BaseModel):
+class DailySpendMetadata(LiteLLMBaseModel):
     total_spend: float = Field(default=0.0)
     total_flat_cost: float = Field(default=0.0)
     total_prompt_tokens: int = Field(default=0)
@@ -110,14 +113,65 @@ class DailySpendMetadata(BaseModel):
         description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
         "lists are truncated to the highest-spend keys.",
     )
+    entity_total_api_keys: dict[str, int] | None = Field(
+        default=None,
+        description="Distinct API keys per entity over the requested range, set when the entity breakdown is "
+        "included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys "
+        "among the top api_key_limit keys overall.",
+    )
 
 
-class SpendAnalyticsPaginatedResponse(BaseModel):
+class SpendAnalyticsPaginatedResponse(LiteLLMBaseModel):
     results: list[DailySpendData]
     metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
 
 
-class LiteLLM_DailyUserSpend(BaseModel):
+class KeyActivityRow(LiteLLMBaseModel):
+    api_key: str
+    metrics: SpendMetrics
+    metadata: KeyMetadata
+
+
+class KeySpendMetrics(LiteLLMBaseModel):
+    spend: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+class KeySpendActivityRow(LiteLLMBaseModel):
+    api_key: str
+    metrics: KeySpendMetrics
+    metadata: KeyMetadata
+
+
+class DailyActivityKeySearchResponse(LiteLLMBaseModel):
+    api_keys: list[KeyActivityRow]
+
+
+class DailyActivityKeyPageResponse(LiteLLMBaseModel):
+    api_keys: list[KeySpendActivityRow]
+    total_api_keys: int
+    offset: int
+    limit: int
+
+
+class ModelTopKeysResponse(LiteLLMBaseModel):
+    model: str
+    by_model_group: bool
+    api_keys: list[KeySpendActivityRow]
+
+
+class CacheLeakageKeysResponse(LiteLLMBaseModel):
+    api_keys: list[KeySpendActivityRow]
+
+
+class LiteLLM_DailyUserSpend(LiteLLMBaseModel):
     id: str
     user_id: str
     date: str

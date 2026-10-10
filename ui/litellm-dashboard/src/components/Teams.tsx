@@ -1,3 +1,4 @@
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -15,12 +16,13 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabsContent } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { parseAsString, useQueryState } from "nuqs";
@@ -652,7 +654,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <main className={selectedTeamId ? "px-12 py-6" : "flex h-full flex-col p-8"}>
+    <Page className={selectedTeamId ? undefined : "h-full"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -672,43 +674,38 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <Tabs defaultValue={tabItems[0].key} className="min-h-0 flex-1 gap-6">
-          <PageHeader
-            icon={<Users />}
-            title="Teams"
-            subtitle="Manage teams, members, and their access to models and budgets"
-            primaryAction={
-              canCreateOrManageTeams(userRole, userID, organizations) ? (
-                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
-                  <Plus className="size-4" />
-                  Create Team
-                </UIButton>
-              ) : undefined
-            }
-            tabs={({ leadingControls }) => (
-              <TabsList
-                variant="line"
-                className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
-              >
-                {leadingControls}
+        <PageTabs defaultValue={tabItems[0].key}>
+          <PageHeader>
+            <PageHeaderTitle>
+              <Users />
+              Teams
+            </PageHeaderTitle>
+            <PageHeaderDescription>Manage teams, members, and their access to models and budgets</PageHeaderDescription>
+            <PageHeaderControls>
+              <PageTabsList>
+                {canCreateOrManageTeams(userRole, userID, organizations) && (
+                  <>
+                    <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
+                      <Plus className="size-4" />
+                      Create Team
+                    </UIButton>
+                    <ToolbarSeparator className="mx-0 h-6" />
+                  </>
+                )}
                 {tabItems.map((item) => (
-                  <TabsTrigger
-                    key={item.key}
-                    value={item.key}
-                    className="flex-none px-0 py-[7px] data-active:font-semibold"
-                  >
+                  <PageTabsTrigger key={item.key} value={item.key}>
                     {item.label}
-                  </TabsTrigger>
+                  </PageTabsTrigger>
                 ))}
-              </TabsList>
-            )}
-          />
+              </PageTabsList>
+            </PageHeaderControls>
+          </PageHeader>
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
             </TabsContent>
           ))}
-        </Tabs>
+        </PageTabs>
       )}
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (
@@ -983,29 +980,31 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             />
                           )}
                         </FormField>
-                        <FormField
-                          control={form.control}
-                          name="disable_global_guardrails"
-                          className="mt-4"
-                          label={labelWithHint(
-                            "Disable Global Guardrails",
-                            "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
-                          )}
-                          description={
-                            premiumUser
-                              ? "Bypass global guardrails for this team"
-                              : "Premium feature - Upgrade to disable global guardrails by team"
-                          }
-                        >
-                          {({ id, value, onChange }) => (
-                            <Switch
-                              id={id}
-                              disabled={!premiumUser}
-                              checked={value === true}
-                              onCheckedChange={onChange}
-                            />
-                          )}
-                        </FormField>
+                        {isProxyAdminRole(userRole || "") && (
+                          <FormField
+                            control={form.control}
+                            name="disable_global_guardrails"
+                            className="mt-4"
+                            label={labelWithHint(
+                              "Disable Global Guardrails",
+                              "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
+                            )}
+                            description={
+                              premiumUser
+                                ? "Bypass global guardrails for this team"
+                                : "Premium feature - Upgrade to disable global guardrails by team"
+                            }
+                          >
+                            {({ id, value, onChange }) => (
+                              <Switch
+                                id={id}
+                                disabled={!premiumUser}
+                                checked={value === true}
+                                onCheckedChange={onChange}
+                              />
+                            )}
+                          </FormField>
+                        )}
                         {canViewPolicies && (
                           <FormField
                             control={form.control}
@@ -1310,7 +1309,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           </DialogContent>
         </Dialog>
       )}
-    </main>
+    </Page>
   );
 };
 

@@ -58,6 +58,10 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeyInfo", () => ({
   useKeyInfo: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys", () => ({
+  useApplyUserBudgetToTeamKeys: vi.fn(() => false),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
 }));
@@ -201,6 +205,12 @@ beforeEach(() => {
 it("should render VirtualKeysTable component", () => {
   renderWithProviders(<VirtualKeysTable />);
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+});
+
+it("right-aligns the Spend / Budget column", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+  expect(await screen.findByRole("columnheader", { name: /^Spend/ })).toHaveClass("text-right");
+  expect(screen.getByRole("columnheader", { name: /^Key$/ })).not.toHaveClass("text-right");
 });
 
 it("shows the Budget Reset column by default", async () => {

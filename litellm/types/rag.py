@@ -5,9 +5,10 @@ Type definitions for RAG (Retrieval Augmented Generation) Ingest API.
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse
 
 
@@ -225,7 +226,7 @@ class RAGIngestResponse(TypedDict, total=False):
     error: str | None  # Error message if status is "failed"
 
 
-class RAGIngestRequest(BaseModel):
+class RAGIngestRequest(LiteLLMBaseModel):
     """Request body for RAG ingest API (for validation)."""
 
     file_url: str | None = None  # URL to fetch file from
@@ -254,7 +255,7 @@ class RAGRerankConfig(TypedDict, total=False):
     return_documents: bool | None
 
 
-class RAGQueryRequest(BaseModel):
+class RAGQueryRequest(LiteLLMBaseModel):
     """Request body for RAG query API."""
 
     model: str

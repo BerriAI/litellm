@@ -27,16 +27,17 @@ FileCreateProvider = Literal[
     "litellm_proxy",
     "manus",
     "anthropic",
+    "mistral",
+    "xai",
 ]
-FileRetrieveProvider = Literal[
-    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic"
+FileDeleteProvider = Literal[
+    "openai", "azure", "gemini", "bedrock", "litellm_proxy", "manus", "anthropic", "mistral", "xai"
 ]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "bedrock", "litellm_proxy", "manus", "anthropic"]
-FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic"]
+FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic", "mistral", "xai"]
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
-from litellm.files.types import FileContentProvider, FileContentStreamingResult
+from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
 from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -48,6 +49,8 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
+from litellm.llms.xai.batches.handler import XAIBatchesHandler
+from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
@@ -102,6 +105,7 @@ openai_files_instance: Final = OpenAIFilesAPI()
 azure_files_instance: Final = AzureOpenAIFilesAPI()
 vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
+xai_batch_results_instance: Final = XAIBatchesHandler()
 #################################################
 
 
@@ -175,6 +179,22 @@ def create_file(
         if logging_obj is None:
             raise ValueError("logging_obj is required")
         client: Final = kwargs.get("client")
+        if litellm_params_dict.get("passthrough") is True and (
+            custom_llm_provider != "vertex_ai" or purpose != "batch"
+        ):
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    "`passthrough=True` uploads the file bytes unchanged for a native Vertex AI batch, so it needs "
+                    f"custom_llm_provider='vertex_ai' and purpose='batch', got '{custom_llm_provider}' and '{purpose}'."
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider or "n/a",
+                response=httpx.Response(
+                    status_code=400,
+                    content="passthrough needs a vertex_ai batch",
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),
+                ),
+            )
 
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -308,7 +328,7 @@ async def afile_retrieve(
         else:
             response = init_response
 
-        return OpenAIFileObject(**response.model_dump())
+        return OpenAIFileObject.model_validate(response.model_dump())
     except Exception as e:
         raise e
 
@@ -901,6 +921,15 @@ def file_content(
                 logging_obj=_file_content_logging_obj(kwargs, _is_async),
                 _is_async=_is_async,
                 client=client,
+            )
+
+        if custom_llm_provider == LlmProviders.XAI.value and is_xai_batch_results_id(file_id):
+            return xai_batch_results_instance.batch_results_content(
+                _is_async=_is_async,
+                batch_id=file_id,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
             )
 
         # Check if provider has a custom files config (e.g., Anthropic, Manus)

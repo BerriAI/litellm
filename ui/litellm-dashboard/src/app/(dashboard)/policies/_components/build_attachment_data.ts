@@ -7,6 +7,7 @@ export interface AttachmentFormInput {
   models?: string[];
   tags?: string[];
   priority?: number | null;
+  default?: boolean;
 }
 
 export function buildAttachmentData(
@@ -25,5 +26,6 @@ export function buildAttachmentData(
     if (formValues.tags && formValues.tags.length > 0) data.tags = formValues.tags;
   }
   if (typeof formValues.priority === "number") data.priority = formValues.priority;
+  if (formValues.default === true) data.default = true;
   return data;
 }

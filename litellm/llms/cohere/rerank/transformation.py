@@ -1,7 +1,8 @@
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -11,6 +12,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
 
 from ..common_utils import CohereError
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class CohereRerankConfig(BaseRerankConfig):
@@ -51,7 +54,7 @@ class CohereRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -148,7 +151,7 @@ class CohereRerankConfig(BaseRerankConfig):
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
-        return RerankResponse(**raw_response_json)
+        return RerankResponse.model_validate(_JSON_OBJECT.validate_python(raw_response_json))
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CohereError(message=error_message, status_code=status_code)

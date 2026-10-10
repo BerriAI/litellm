@@ -6,7 +6,7 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{config::HttpClientConfig, error::Error};
+use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -29,6 +29,8 @@ pub struct HttpClientPool {
     media_resolver: Arc<dyn Resolve>,
     ttl: Duration,
     clients: Mutex<Clients>,
+    #[cfg(feature = "mcp")]
+    mcp: crate::mcp::Pool,
 }
 
 impl HttpClientPool {
@@ -41,18 +43,28 @@ impl HttpClientPool {
             media_resolver,
             ttl,
             clients: Mutex::default(),
+            #[cfg(feature = "mcp")]
+            mcp: crate::mcp::Pool::default(),
         }
+    }
+
+    #[cfg(feature = "mcp")]
+    pub fn mcp_client(
+        &self,
+        config: &HttpClientConfig,
+    ) -> Result<impl rmcp::transport::streamable_http_client::StreamableHttpClient, Error> {
+        self.mcp.client(config, self.ttl)
     }
 
     pub fn client(
         &self,
         config: &HttpClientConfig,
         variant: ClientVariant,
-    ) -> Result<reqwest::Client, Error> {
+    ) -> Result<Client, Error> {
         let effective = match variant {
             ClientVariant::Media => HttpClientConfig {
                 client_certificate: None,
-                trust_proxy_env: false,
+                proxies: EnvironmentProxies::default(),
                 ..config.clone()
             },
             ClientVariant::UnpinnedMedia => HttpClientConfig {
@@ -65,7 +77,7 @@ impl HttpClientPool {
         if let Some(pooled) = self.lock().get(&key)
             && pooled.built_at.elapsed() < self.ttl
         {
-            return Ok(pooled.client.clone());
+            return Ok(Client::new(pooled.client.clone()));
         }
         let client = self
             .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
@@ -77,7 +89,7 @@ impl HttpClientPool {
                 built_at: Instant::now(),
             },
         );
-        Ok(client)
+        Ok(Client::new(client))
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -116,7 +128,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HttpSettings, Resolution, Verify};
+    use crate::{ClientIdentity, HttpSettings, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 
@@ -136,6 +148,13 @@ mod tests {
             user_agent: Some(user_agent.into()),
             ..Resolution::from(&HttpSettings::default()).config
         }
+    }
+
+    fn proxied_through(proxy: &str) -> EnvironmentProxies {
+        let proxy = proxy.to_owned();
+        EnvironmentProxies::from_environment(&move |name: &str| {
+            (name == "HTTP_PROXY").then(|| proxy.clone())
+        })
     }
 
     async fn serve(
@@ -203,6 +222,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_clients_route_through_the_resolved_proxy_not_the_process_environment() {
+        let (proxy, connections, requests) = serve("HTTP/1.1 204 No Content").await;
+        let config = HttpClientConfig {
+            proxies: proxied_through(&format!("http://user:secret@{proxy}")),
+            ..config("a")
+        };
+        let response = get(
+            &pool(),
+            &config,
+            ClientVariant::Provider,
+            "http://upstream.invalid/v1/ocr",
+        )
+        .await;
+        assert_eq!(response.status(), 204);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        let request = requests.lock().unwrap().concat();
+        assert!(request.starts_with("GET http://upstream.invalid/v1/ocr HTTP/1.1"));
+        assert!(request.contains("proxy-authorization: Basic dXNlcjpzZWNyZXQ="));
+    }
+
+    #[tokio::test]
+    async fn no_proxy_hosts_bypass_the_resolved_proxy() {
+        let (upstream, _, _) = serve("HTTP/1.1 204 No Content").await;
+        let (proxy, proxy_connections, _) = serve("HTTP/1.1 502 Bad Gateway").await;
+        let config = HttpClientConfig {
+            proxies: EnvironmentProxies::from_environment(&move |name: &str| match name {
+                "HTTP_PROXY" => Some(format!("http://{proxy}")),
+                "NO_PROXY" => Some("127.0.0.1".into()),
+                _ => None,
+            }),
+            ..config("a")
+        };
+        let response = get(
+            &pool(),
+            &config,
+            ClientVariant::Provider,
+            &format!("http://{upstream}/v1/ocr"),
+        )
+        .await;
+        assert_eq!(response.status(), 204);
+        assert_eq!(proxy_connections.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn expired_clients_are_rebuilt() {
         let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
         let url = format!("http://{address}");
@@ -220,9 +283,12 @@ mod tests {
         let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
         let pool = HttpClientPool::new(Arc::new(FixedResolver(address)));
         let url = format!("http://media.invalid:{}/doc", address.port());
-        for trust_proxy_env in [true, false] {
+        for proxies in [
+            proxied_through("http://proxy.invalid:3128"),
+            EnvironmentProxies::default(),
+        ] {
             let config = HttpClientConfig {
-                trust_proxy_env,
+                proxies,
                 ..config("a")
             };
             get(&pool, &config, ClientVariant::Media, &url).await;
@@ -234,7 +300,9 @@ mod tests {
     fn media_variant_never_loads_the_client_certificate() {
         let pool = pool();
         let with_identity = HttpClientConfig {
-            client_certificate: Some(std::env::temp_dir().join("litellm-http-absent-client.pem")),
+            client_certificate: Some(ClientIdentity::Pem(
+                std::env::temp_dir().join("litellm-http-absent-client.pem"),
+            )),
             ..config("a")
         };
         assert!(
@@ -321,5 +389,57 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[cfg(feature = "mcp")]
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn mcp_clients_reuse_connections_and_apply_proxy_headers_without_redirects() {
+        let (address, connections, requests) = serve("HTTP/1.1 302 Found").await;
+        let pool = pool();
+        let config = HttpClientConfig {
+            proxies: proxied_through(&format!("http://{address}")),
+            ..config("mcp-pool-test")
+        };
+        for _ in 0..2 {
+            let response = pool
+                .mcp
+                .client(&config, pool.ttl)
+                .unwrap()
+                .get("http://upstream.invalid/mcp")
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 302);
+            response.bytes().await.unwrap();
+        }
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with("GET http://upstream.invalid/mcp HTTP/1.1"))
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.contains("user-agent: mcp-pool-test"))
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn mcp_client_uses_host_tls_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = HttpClientConfig {
+            verify: Verify::CaBundle(directory.path().join("missing.pem")),
+            ..config("mcp-test")
+        };
+        assert!(matches!(
+            pool().mcp_client(&config),
+            Err(Error::Read { .. })
+        ));
     }
 }

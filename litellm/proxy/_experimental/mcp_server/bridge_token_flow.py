@@ -14,8 +14,9 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # reuse the encrypted credential's format discriminator
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # reuse the encrypted credential's format discriminator
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -86,8 +87,8 @@ async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
 
 
 async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
-        is_envelope,  # noqa: PLC0415  # envelope imports bridge types
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # envelope imports bridge types
+        is_envelope,
         is_refresh_envelope,
     )
     from litellm.proxy._types import hash_token  # noqa: PLC0415  # proxy import cycle
@@ -99,7 +100,7 @@ async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
         user_api_key_cache,
     )
 
-    if is_envelope(token) or is_refresh_envelope(token) or token.startswith(_V2_GCM_PREFIX):
+    if is_envelope(token) or is_refresh_envelope(token) or token.startswith(V2_GCM_PREFIX):
         return True
     try:
         if ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None:
@@ -209,6 +210,31 @@ async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyR
     return await _reload_active_key_by_hash(hash_token(token))
 
 
+def master_key_admin_auth(key_hash: str) -> "UserAPIKeyAuth | None":
+    from litellm.constants import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        LITELLM_PROXY_MASTER_KEY_ALIAS,
+    )
+    from litellm.proxy._types import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+        hash_token,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        litellm_proxy_admin_name,
+        master_key,
+    )
+
+    if not master_key or not secrets.compare_digest(key_hash, hash_token(master_key)):
+        return None
+    auth: Final = UserAPIKeyAuth(
+        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id=litellm_proxy_admin_name,
+    )
+    auth.via_virtual_key = True
+    return auth
+
+
 async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResolutionFailure":
     """Reload the live key record for ``key_hash`` (cache first, then DB) and gate it on active state,
     returning the resolved key or a precise failure. Shared by the token request's presented-key
@@ -233,6 +259,8 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
         user_api_key_cache,
     )
 
+    if (admin := master_key_admin_auth(key_hash)) is not None:
+        return _ResolvedKey(key_hash=key_hash, key=admin)
     if prisma_client is None:
         return "unresolvable"
     try:
@@ -256,10 +284,13 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
     return _ResolvedKey(key_hash=key_hash, key=key_obj)
 
 
-async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | None":
+async def reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | None":
     """``None`` when the user is live, else the precise failure ``load_active_user_by_id`` found."""
     loaded: Final = await load_active_user_by_id(user_id)
     return loaded if isinstance(loaded, str) else None
+
+
+_reload_active_user_by_id: Final = reload_active_user_by_id
 
 
 UserRowSource = Literal["cache", "database"]
@@ -276,9 +307,9 @@ async def load_active_user_by_id(
     database-service-unavailable error is a retryable outage (``unavailable``). Everything else fails
     closed as ``no_active_key`` (the caller maps it to invalid_grant): a ``ProxyException`` /
     ``HTTPException``, a SCIM-deactivated user, and, unlike the key path, a missing user. ``get_user_object``
-    catches every DB failure and re-raises a bare ``ValueError`` (a deleted user and a real outage look
-    identical, the original error surviving only as ``__context__``), so the outage check walks the cause
-    chain, and a missing user falls through to ``no_active_key`` rather than an opaque gateway fault.
+    lets a real outage propagate as-is and re-raises any other DB failure as a bare ``ValueError`` (the
+    original error surviving only as ``__context__``), so the outage check walks the cause chain, and a
+    missing user falls through to ``no_active_key`` rather than an opaque gateway fault.
     ``source="database"`` reads the row from the database, never the cache, so the credential mint refuses
     a user that a writer deactivated or deleted without evicting the cached row, and it leaves the fresh
     row in the cache for the requests the credential makes next. Every other caller keeps the cache read,
@@ -373,12 +404,12 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
                 return "no_active_key"
             return None
         case "user_id":
-            return await _reload_active_user_by_id(identity.subject)
+            return await reload_active_user_by_id(identity.subject)
         case _:
             assert_never(identity.subject_type)
 
 
-async def _extract_user_id_from_request(request: Request) -> str | None:
+async def extract_user_id_from_request(request: Request) -> str | None:
     """Resolve the caller for identity binding without granting credential-write permission."""
     from litellm.proxy.auth.handle_jwt import JWTIdentity  # noqa: PLC0415  # proxy import cycle
 
@@ -386,6 +417,9 @@ async def _extract_user_id_from_request(request: Request) -> str | None:
     if isinstance(resolved, JWTIdentity):
         return resolved.user_id
     return _active_key_user_id(resolved) if resolved is not None else None
+
+
+_extract_user_id_from_request: Final = extract_user_id_from_request
 
 
 async def authorize_oauth_credential_request(request: Request, server_id: str) -> str | None:
@@ -421,13 +455,13 @@ async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", s
     )
     from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
-        _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse admission policy for the credential-write action
+        run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse admission policy for the credential-write action
     )
 
     write_route: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential"
     try:
         RouteChecks.is_virtual_key_allowed_to_call_route(route=write_route, valid_token=auth, request=request)
-        await _run_centralized_common_checks(
+        await run_centralized_common_checks(
             user_api_key_auth_obj=auth,
             request=request,
             request_data={},
@@ -475,7 +509,7 @@ async def _resolve_jwt_auth(
                 proxy_logging_obj=proxy_logging_obj,
             )
             if isinstance(mapped, UserAPIKeyAuth):
-                return None if await _key_owner_scim_deactivated(mapped) or not _active_key_user_id(mapped) else mapped
+                return None if await _key_owner_scim_deactivated(mapped) or not _key_is_active(mapped) else mapped
             if mapped is not None:
                 return None
         if write_route is None:
@@ -593,6 +627,7 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
 
 _BridgeMintError = Literal[
     "no_identity",
+    "jwt_client_policy_unsupported",
     "invalid_refresh",
     "identity_unavailable",
     "identity_faulted",
@@ -618,7 +653,7 @@ class _BridgeMintReady:
     keys: "EnvelopeKeys"
 
 
-def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
+def bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
     """Map a bridge-mint failure value to its token-endpoint response: one place, RFC 6749 §5.2 shape
     (top-level ``error``, no-store headers) for every case, with a status truthful about where the
     failure is. The caller's request is 400, a transient gateway outage is 503, a gateway
@@ -632,6 +667,13 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 "invalid_request",
                 "this server issues a gateway-bound credential; complete the interactive sign-in, or "
                 "send a litellm credential (x-litellm-api-key or Authorization) on the token request",
+            )
+        case "jwt_client_policy_unsupported":
+            status, code, desc = (
+                400,
+                "invalid_request",
+                "JWT bridge minting is not supported with a claim-based MCP client allowlist; "
+                "the bridge credential cannot preserve the signed client identity",
             )
         case "invalid_refresh":
             status, code, desc = (
@@ -696,6 +738,9 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
     )
 
 
+_bridge_mint_error_response: Final = bridge_mint_error_response
+
+
 def _key_resolution_failure_to_mint_error(failure: _KeyResolutionFailure) -> _BridgeMintError:
     """Lift an identity-resolution failure into the mint taxonomy, preserving origin so the status stays
     truthful: the caller's missing credential is 400, a transient DB outage is 503, and a gateway that
@@ -724,7 +769,7 @@ def _upstream_rejection_to_mint_error(rejection: _UpstreamGrantRejection) -> _Br
             assert_never(rejection)
 
 
-async def _prepare_bridge_mint(
+async def prepare_bridge_mint(
     request: Request,
     mcp_server: MCPServer,
     bridge_identity: "_BridgeAuthorizationCode | None" = None,
@@ -736,11 +781,18 @@ async def _prepare_bridge_mint(
 
     Two identity sources, one envelope. The interactive DCR client authenticates via SSO at the bridged
     authorize, so its identity arrives as ``bridge_identity`` (the user recovered from the gateway
-    authorization code) and mints a user subject. The scripted two-header client presents a litellm key
-    on the token request instead, so its identity is the active key's hash and mints a key_hash subject.
-    A missing or invalid presented key keeps its resolution origin so the mapper statuses it truthfully;
-    neither source present is ``no_identity``. The refresh_token grant has its own phase-1
+    authorization code) and mints a user subject. The scripted two-header client presents a litellm
+    credential (a virtual key or a JWT) on the token request instead: a key mints a key_hash subject,
+    while a JWT resolves through the same auth path as admission and mints a key_hash subject when it
+    maps to a virtual key. An unmapped JWT is rejected because a user subject cannot preserve its
+    JWT-specific authorization restrictions. A JWT client-claim allowlist also prevents JWT minting:
+    the envelope cannot retain the signed client identity for subsequent allowlist checks. A missing or invalid
+    presented key keeps its resolution origin so the mapper statuses it truthfully; neither source
+    present is ``no_identity``. The refresh_token grant has its own phase-1
     (:func:`_prepare_bridge_refresh`), which recovers identity from the presented refresh envelope."""
+    from litellm.proxy._experimental.mcp_server.client_allowlist import (  # noqa: PLC0415  # keep mint policy dependencies local
+        load_mcp_client_allowlist,
+    )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         envelope_keys_from_master_key,
     )
@@ -748,7 +800,10 @@ async def _prepare_bridge_mint(
         key_hash_identity,
         user_identity,
     )
+    from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        general_settings,
         master_key,
     )
 
@@ -758,11 +813,24 @@ async def _prepare_bridge_mint(
     if bridge_identity is not None:
         identity = user_identity(server_id=mcp_server.server_id, user_id=bridge_identity.litellm_user_id)
         return _BridgeMintReady(identity=identity, keys=keys)
+    presented_token: Final = _litellm_key_from_request(request)
+    if presented_token is not None and JWTHandler.is_jwt(presented_token):
+        client_allowlist: Final = load_mcp_client_allowlist(general_settings)
+        if client_allowlist is not None and client_allowlist.jwt_field is not None:
+            return "jwt_client_policy_unsupported"
+        resolved_jwt: Final = await _resolve_jwt_auth(request, presented_token, None)
+        if isinstance(resolved_jwt, UserAPIKeyAuth) and resolved_jwt.token:
+            identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=resolved_jwt.token)
+            return _BridgeMintReady(identity=identity, keys=keys)
+        return "no_identity"
     resolved: Final = await _resolve_active_litellm_key(request)
     if not isinstance(resolved, _ResolvedKey):
         return _key_resolution_failure_to_mint_error(resolved)
     identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=resolved.key_hash)
     return _BridgeMintReady(identity=identity, keys=keys)
+
+
+_prepare_bridge_mint: Final = prepare_bridge_mint
 
 
 @dataclass(frozen=True, slots=True)
@@ -799,7 +867,7 @@ def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Bridg
             assert_never(failure)
 
 
-async def _prepare_bridge_refresh(
+async def prepare_bridge_refresh(
     mcp_server: MCPServer, refresh_value: str | None
 ) -> "_BridgeRefreshReady | _BridgeMintError":
     """Phase 1 for the refresh_token grant, BEFORE the upstream exchange: open the client's refresh
@@ -836,7 +904,10 @@ async def _prepare_bridge_refresh(
     )
 
 
-def _finish_bridge_mint(
+_prepare_bridge_refresh: Final = prepare_bridge_refresh
+
+
+def finish_bridge_mint(
     ready: "_BridgeMintReady", mcp_server: MCPServer, token_response: object, now: datetime
 ) -> "JSONResponse | _BridgeMintError":
     """Phase 3, AFTER the upstream exchange: seal the upstream grant into the client-held access envelope
@@ -876,6 +947,9 @@ def _finish_bridge_mint(
         **({"refresh_token": refresh_envelope} if refresh_envelope is not None else {}),
     }
     return JSONResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
+
+
+_finish_bridge_mint: Final = finish_bridge_mint
 
 
 def _upstream_refresh_credential(token_response: object) -> "RefreshCredential | None":
