@@ -1474,6 +1474,7 @@ from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
+from .systemone.main import *
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
