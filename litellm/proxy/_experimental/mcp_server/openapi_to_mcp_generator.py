@@ -9,15 +9,11 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import (
-    Any,
-    Final,
-    TypedDict,
-    cast,  # noqa: TID251  # dynamic OpenAPI and PyYAML payloads require runtime narrowing
-)
+from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -36,6 +32,7 @@ OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
 _MAX_YAML_INT_LENGTH: Final = 1024
+_OPENAPI_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -163,7 +160,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, Any]:
+def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -181,7 +178,7 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-def _parse_openapi_spec(text: str) -> dict[str, Any]:
+def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
     """Parse JSON or YAML OpenAPI documents into a mapping."""
     try:
         parsed_json: Final[Any] = json.loads(text)
@@ -198,13 +195,12 @@ def _parse_openapi_spec(text: str) -> dict[str, Any]:
                 return super().compose_node(parent, index)
 
             def flatten_mapping(self, node: MappingNode) -> None:
-                node_values: Final = cast(tuple[tuple[Node, Node], ...], node.value)
-                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node_values):
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node.value):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
 
             def construct_yaml_int(self, node: ScalarNode) -> int:
-                node_value: Final = cast(str, node.value)
+                node_value: Final = str(node.value)
                 if len(node_value) > _MAX_YAML_INT_LENGTH:
                     raise yaml.YAMLError("YAML integer is too long")
                 return super().construct_yaml_int(node)
@@ -214,17 +210,19 @@ def _parse_openapi_spec(text: str) -> dict[str, Any]:
             _NoMergeSafeLoader.construct_yaml_int,
         )
 
-        parsed_yaml_raw: Final = yaml.load(text, Loader=_NoMergeSafeLoader)
-        if not isinstance(parsed_yaml_raw, dict):
-            raise TypeError("OpenAPI spec must be a JSON or YAML object")
-        return cast(dict[str, Any], parsed_yaml_raw)
+        return _validate_openapi_mapping(yaml.load(text, Loader=_NoMergeSafeLoader))
 
-    if not isinstance(parsed_json, dict):
-        raise TypeError("OpenAPI spec must be a JSON or YAML object")
-    return cast(dict[str, Any], parsed_json)
+    return _validate_openapi_mapping(parsed_json)
 
 
-async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
+def _validate_openapi_mapping(value: object) -> Mapping[str, Any]:
+    try:
+        return _OPENAPI_MAPPING_ADAPTER.validate_python(value)
+    except ValueError as exc:
+        raise TypeError("OpenAPI spec must be a JSON or YAML object") from exc
+
+
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> Mapping[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r: Final[httpx.Response] = (

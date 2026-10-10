@@ -23,9 +23,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-    request_auth_header,
-    request_extra_headers,
-    request_resolved_auth_headers,
     _request_upstream_url,
     _resolve_param_list,
     _resolve_ref,
@@ -33,6 +30,9 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     create_tool_function,
     extract_parameters,
     get_base_url,
+    request_auth_header,
+    request_extra_headers,
+    request_resolved_auth_headers,
     resolve_operation_params,
 )
 from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult, TextResult
