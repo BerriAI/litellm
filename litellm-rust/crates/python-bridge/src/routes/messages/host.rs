@@ -21,7 +21,9 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    marshal::{
+        optional_timeout, project_optional_fields, public_provider_response, python_timeout_seconds,
+    },
     python_settings::missing_module,
 };
 
@@ -298,9 +300,11 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        response: litellm_http::response::ProviderResponse<
+            Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        >,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
+        public_provider_response(py, ROUTE_HOST_MODULE, response)
     }
 
     fn encode_stream_head(
@@ -310,7 +314,15 @@ impl PythonBinding for MessagesPythonHost {
     ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))
+            .call1((
+                to_py(py, &head.headers)?,
+                to_py(
+                    py,
+                    &litellm_http::request::response_headers(
+                        &litellm_http::response::forwarded_headers(&head.headers),
+                    ),
+                )?,
+            ))
             .map(Bound::unbind)
     }
 

@@ -166,3 +166,36 @@ impl litellm_gateway_auth::IdentityResolver for TestPermissions {
         })
     }
 }
+
+pub fn provider_headers(template: wiremock::ResponseTemplate) -> wiremock::ResponseTemplate {
+    template
+        .append_header("x-provider-trace", "first")
+        .append_header("x-provider-trace", "second")
+        .insert_header("retry-after", "7")
+        .insert_header("x-ratelimit-remaining-requests", "41")
+        .insert_header("connection", "x-private, keep-alive")
+        .insert_header("x-private", "upstream-only")
+        .insert_header("set-cookie", "provider-session=private")
+        .insert_header("x-litellm-rust", "false")
+}
+
+pub fn assert_provider_headers(headers: &axum::http::HeaderMap) {
+    assert_eq!(
+        headers
+            .get_all("x-provider-trace")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(headers["retry-after"], "7");
+    assert_eq!(headers["x-ratelimit-remaining-requests"], "41");
+    assert!(!headers.contains_key("connection"));
+    assert!(!headers.contains_key("x-private"));
+    assert!(!headers.contains_key("set-cookie"));
+    assert_ne!(
+        headers
+            .get("x-litellm-rust")
+            .and_then(|value| value.to_str().ok()),
+        Some("false")
+    );
+}

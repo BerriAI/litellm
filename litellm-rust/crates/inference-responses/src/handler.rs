@@ -92,6 +92,7 @@ pub(super) async fn execute(
                     chunks,
                 });
             }
+            let headers = litellm_http::request::response_headers(response.headers());
             let body = response.text().await.map_err(network)?;
             let raw = RawResponse { body: body.clone() };
             if let Some(observers) = observers {
@@ -108,7 +109,12 @@ pub(super) async fn execute(
             request
                 .config
                 .transform_response_api_response(value)
-                .map(ResponsesOutput::Complete)
+                .map(|body| {
+                    ResponsesOutput::Complete(litellm_http::response::ProviderResponse {
+                        body,
+                        headers,
+                    })
+                })
                 .map_err(Error::from)
         },
     )

@@ -46,7 +46,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     mock.and(body_json(
         json!({"model": "test-model", "messages": messages, "max_tokens": 16, "stream": streaming}),
     ))
-    .respond_with(template)
+    .respond_with(support::provider_headers(template))
     .expect(1)
     .mount(&upstream)
     .await;
@@ -62,6 +62,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    support::assert_provider_headers(response.headers());
     if streaming {
         assert_eq!(response.headers()["content-type"], "text/event-stream");
         assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), sse);

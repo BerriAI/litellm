@@ -41,8 +41,12 @@ pub(super) fn invalid_request(err: serde_json::Error) -> Error {
     Error::InvalidRequest(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
-pub type MessagesCallResponse =
-    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
+pub type MessagesCallResponse = CallOutput<
+    litellm_http::response::ProviderResponse<Box<MessagesResponse>>,
+    super::route::MessagesStreamHead,
+    Bytes,
+    Error,
+>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {

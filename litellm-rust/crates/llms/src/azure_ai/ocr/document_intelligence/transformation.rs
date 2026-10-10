@@ -227,7 +227,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         model: &str,
         raw_response: reqwest::Response,
         context: OcrResponseContext<'_>,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<litellm_http::response::ProviderResponse<LiteLLMOcrResponse>, Error> {
         let decoded = read_operation_response(
             context.client.polling_http(),
             raw_response,
@@ -238,13 +238,16 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             context.hooks,
         )
         .await?;
-        Ok(LiteLLMOcrResponse {
-            provider_native_response: decoded.native,
-            ..transform_completed_response(
-                model,
-                decoded.data,
-                context.connection.settings.document_intelligence_dpi,
-            )?
+        Ok(litellm_http::response::ProviderResponse {
+            headers: decoded.headers,
+            body: LiteLLMOcrResponse {
+                provider_native_response: decoded.native,
+                ..transform_completed_response(
+                    model,
+                    decoded.data,
+                    context.connection.settings.document_intelligence_dpi,
+                )?
+            },
         })
     }
 }
@@ -444,13 +447,17 @@ async fn read_operation_response(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
+        let response_headers = litellm_http::request::response_headers(response.headers());
         let bytes = crate::base_llm::ocr::handler::read_response_bytes(
             response,
             connection.max_response_bytes,
         )
         .await?;
         hooks.response_received(&bytes).await?;
-        return decode_response(&bytes, native);
+        return decode_response(&bytes, native).map(|decoded| DecodedOcrResponse {
+            headers: response_headers,
+            ..decoded
+        });
     }
     let location = response
         .headers()

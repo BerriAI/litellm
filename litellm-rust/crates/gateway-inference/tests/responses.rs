@@ -34,12 +34,13 @@ async fn responses_aliases_run_the_core_route(
         .and(path("/responses"))
         .and(header("authorization", "Bearer test-key"))
         .and(body_json(json!({"model": "test-model", "input": "hello", "stream": stream, "metadata": {"caller": "test"}})))
-        .respond_with(template)
+        .respond_with(support::provider_headers(template))
         .expect(1)
         .mount(&upstream).await;
     let response = support::post(support::app("openai/test-model", &upstream.uri()), route,
         json!({"model": "public/model", "input": "hello", "stream": stream, "metadata": {"caller": "test"}})).await;
     assert_eq!(response.status(), 200);
+    support::assert_provider_headers(response.headers());
     if stream {
         assert_eq!(response.headers()["content-type"], "text/event-stream");
         assert_eq!(

@@ -43,7 +43,7 @@ async fn all_inference_endpoints_share_native_cache(
         ResponseTemplate::new(200).set_body_json(provider_body)
     };
     Mock::given(method("POST"))
-        .respond_with(template)
+        .respond_with(support::provider_headers(template))
         .expect(2)
         .mount(&upstream)
         .await;
@@ -65,10 +65,17 @@ async fn all_inference_endpoints_share_native_cache(
     };
     let first = support::post(app.clone(), path, request.clone()).await;
     assert_eq!(first.status(), 200);
+    support::assert_provider_headers(first.headers());
     assert!(!first.headers().contains_key("x-litellm-cache-key"));
     let first = to_bytes(first.into_body(), 4096).await.unwrap();
     let second = support::post(app.clone(), path, request.clone()).await;
     assert_eq!(second.status(), 200);
+    assert!(!second.headers().contains_key("x-provider-trace"));
+    assert!(
+        !second
+            .headers()
+            .contains_key("x-ratelimit-remaining-requests")
+    );
     let cache_key = second.headers().get("x-litellm-cache-key").unwrap().clone();
     assert!(!cache_key.as_bytes().is_empty());
     let stored = cache
@@ -116,6 +123,7 @@ async fn all_inference_endpoints_share_native_cache(
     );
     let bypassed = support::post(app.clone(), path, bypass_request).await;
     assert_eq!(bypassed.status(), 200);
+    support::assert_provider_headers(bypassed.headers());
     assert!(!bypassed.headers().contains_key("x-litellm-cache-key"));
     to_bytes(bypassed.into_body(), 4096).await.unwrap();
     let restored = support::post(app, path, request).await;

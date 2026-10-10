@@ -26,7 +26,7 @@ async fn json_and_multipart_reach_ocr_with_the_deployment(
     Mock::given(method("POST")).and(path("/v1/ocr"))
         .and(header("authorization", "Bearer test-key"))
         .and(body_json(json!({"model": "test-ocr", "document": {"type": "document_url", "document_url": DOCUMENT}, "pages": [0]})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"pages": [{"index": 0, "markdown": "recognized text"}]})))
+        .respond_with(support::provider_headers(ResponseTemplate::new(200).set_body_json(json!({"pages": [{"index": 0, "markdown": "recognized text"}]}))))
         .expect(1).mount(&upstream).await;
     let app = support::app("mistral/test-ocr", &upstream.uri());
     let response = if multipart {
@@ -43,6 +43,7 @@ async fn json_and_multipart_reach_ocr_with_the_deployment(
         support::post(app, route, json!({"model": "public/model", "document": {"type": "document_url", "document_url": DOCUMENT}, "pages": [0]})).await
     };
     assert_eq!(response.status(), 200);
+    support::assert_provider_headers(response.headers());
     let body = support::json(response).await;
     assert_eq!(body["pages"][0]["markdown"], "recognized text");
     assert_eq!(body["model"], "test-ocr");

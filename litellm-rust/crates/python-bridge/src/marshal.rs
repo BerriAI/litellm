@@ -124,6 +124,29 @@ pub(crate) fn public_response(
         .map(Bound::unbind)
 }
 
+pub(crate) fn provider_metadata(
+    py: Python<'_>,
+    response: Py<PyAny>,
+    headers: &[(String, String)],
+) -> PyResult<Py<PyAny>> {
+    let forwarded = litellm_http::request::response_headers(
+        &litellm_http::response::forwarded_headers(headers),
+    );
+    py.import("litellm.rust_bridge.response_metadata")?
+        .getattr("with_provider_headers")?
+        .call1((response, to_py(py, headers)?, to_py(py, &forwarded)?))
+        .map(Bound::unbind)
+}
+
+pub(crate) fn public_provider_response<T: Serialize>(
+    py: Python<'_>,
+    module: &str,
+    response: litellm_http::response::ProviderResponse<T>,
+) -> PyResult<Py<PyAny>> {
+    let public = public_response(py, module, &response.body)?;
+    provider_metadata(py, public, &response.headers)
+}
+
 struct RequestFieldSources<'py> {
     body: Option<Bound<'py, PyAny>>,
     credentials: Option<Bound<'py, PyAny>>,

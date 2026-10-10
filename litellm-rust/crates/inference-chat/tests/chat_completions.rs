@@ -17,7 +17,9 @@ use support::*;
 
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
-async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
+async fn complete(
+    request: ChatCompletionsRequest<'_>,
+) -> Result<litellm_http::response::ProviderResponse<ChatCompletionsResponse>, Error> {
     chat_completions_route().execute(request, &(), None).await
 }
 
@@ -403,4 +405,41 @@ async fn completed_chat_records_route_and_resolved_provider(
     );
     assert_eq!(summaries[0]["outcome"], "success");
     assert_eq!(summaries[0]["stream"], false);
+}
+
+#[rstest]
+#[tokio::test]
+async fn success_keeps_raw_provider_headers_separate_from_the_normalized_body(
+    request: ChatCompletionsRequest<'static>,
+) {
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)
+        .append_header("x-provider-trace", "first")
+        .append_header("x-provider-trace", "second")
+        .insert_header("set-cookie", "session=private")])
+    .await;
+    let base = upstream.uri();
+    let response = complete(ChatCompletionsRequest {
+        api_base: Some(&base),
+        ..request
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        response
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "x-provider-trace")
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert!(
+        response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "set-cookie" && value == "session=private")
+    );
+    let public = serde_json::to_value(&response).unwrap();
+    assert_eq!(public["choices"][0]["message"]["content"], "hello");
+    assert!(public.get("headers").is_none());
 }

@@ -88,6 +88,9 @@ def finalize(
         MetadataUpdater, response_metadata.update_response_metadata
     )
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
+    from litellm.rust_bridge.response_metadata import restore_provider_headers
+
+    restore_provider_headers(response)
     cache_key: Final = logger.model_call_details.get("cache_key")
     if logger.model_call_details.get("cache_hit") is True and isinstance(cache_key, str):
         from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict

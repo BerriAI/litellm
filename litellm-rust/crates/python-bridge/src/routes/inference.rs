@@ -17,7 +17,7 @@ use super::NativeCall;
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{
-        RouteOptions, optional_timeout, project_optional_fields, public_response,
+        RouteOptions, optional_timeout, project_optional_fields, public_provider_response,
         python_timeout_seconds,
     },
 };
@@ -107,8 +107,12 @@ impl InferenceHost {
         })
     }
 
-    pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
-        public_response(py, self.module, response)
+    pub fn response<T: Serialize>(
+        &self,
+        py: Python<'_>,
+        response: litellm_http::response::ProviderResponse<T>,
+    ) -> PyResult<Py<PyAny>> {
+        public_provider_response(py, self.module, response)
     }
 
     pub fn error(&self, py: Python<'_>, error: RouteError) -> PyResult<PyErr> {

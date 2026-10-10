@@ -8,7 +8,9 @@ use support::*;
 
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
-async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+async fn transcribe(
+    request: AudioTranscriptionRequest<'_>,
+) -> Result<litellm_http::response::ProviderResponse<Value>, Error> {
     audio_transcription_route().execute(request).await
 }
 
@@ -57,7 +59,7 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
     .await
     .expect("transcription");
 
-    assert_eq!(response, json!({"text": "hello"}));
+    assert_eq!(response.body, json!({"text": "hello"}));
     let sent = only_request(&upstream).await;
     assert_eq!(sent.method.as_str(), "POST");
     assert_eq!(sent.url.path(), format!("/model/{MODEL}/converse"));

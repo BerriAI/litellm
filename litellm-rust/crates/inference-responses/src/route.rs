@@ -1,3 +1,4 @@
+use litellm_http::response::ProviderResponse;
 use std::convert::Infallible;
 
 use bytes::Bytes;
@@ -15,7 +16,7 @@ use super::{
 pub struct Responses;
 
 impl Protocol for Responses {
-    type Response = ResponsesApiResponse;
+    type Response = ProviderResponse<ResponsesApiResponse>;
     type Error = Error;
     type Request = ResponsesCall;
     type HostCall = Infallible;

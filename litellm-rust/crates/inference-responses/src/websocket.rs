@@ -26,9 +26,14 @@ pub fn is_terminal_event(event_type: &ResponsesWsEventType) -> bool {
 #[derive(Clone)]
 pub struct ResponsesWebSocketConnection {
     socket: Arc<Mutex<Option<UpstreamWebSocket>>>,
+    headers: Arc<[(String, String)]>,
 }
 
 impl ResponsesWebSocketConnection {
+    pub fn response_headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
     #[tracing::instrument(
         name = "litellm.websocket.connect_url",
         level = "debug",
@@ -61,7 +66,7 @@ impl ResponsesWebSocketConnection {
                 })?,
                 None => connect.await,
             };
-            let (socket, _) = result.map_err(|error| match *error {
+            let (socket, response) = result.map_err(|error| match *error {
                 tokio_tungstenite::tungstenite::Error::Http(response) => {
                     Error::Transport(litellm_http::transport::Error::Http {
                         status: response.status().as_u16(),
@@ -75,6 +80,7 @@ impl ResponsesWebSocketConnection {
             })?;
             Ok(Self {
                 socket: Arc::new(Mutex::new(Some(socket))),
+                headers: litellm_http::request::response_headers(response.headers()).into(),
             })
         })
         .await

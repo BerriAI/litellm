@@ -1,6 +1,7 @@
 use futures_util::future::BoxFuture;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
+use litellm_http::response::ProviderResponse;
 use litellm_llms::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient},
@@ -18,7 +19,7 @@ pub(crate) async fn perform_ocr_request(
     host: &impl Interceptors<Error>,
     caller_document: bool,
     observers: Option<&ObservationSender>,
-) -> Result<LiteLLMOcrResponse, Error> {
+) -> Result<ProviderResponse<LiteLLMOcrResponse>, Error> {
     request.response_format()?;
     let config = request.config;
     let secrets = client

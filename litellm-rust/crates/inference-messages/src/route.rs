@@ -9,7 +9,8 @@ use litellm_llms_types::formats::messages::MessagesResponse;
 
 use super::{Error, MessagesCall};
 
-pub type MessagesOutput = HostedCompletion<Box<MessagesResponse>>;
+pub type MessagesOutput =
+    HostedCompletion<litellm_http::response::ProviderResponse<Box<MessagesResponse>>>;
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
@@ -19,7 +20,7 @@ pub struct MessagesStreamHead {
 pub struct Messages;
 
 impl Protocol for Messages {
-    type Response = Box<MessagesResponse>;
+    type Response = litellm_http::response::ProviderResponse<Box<MessagesResponse>>;
     type Error = Error;
     type Request = MessagesCall;
     type HostCall = Infallible;

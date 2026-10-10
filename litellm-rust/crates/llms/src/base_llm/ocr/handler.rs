@@ -119,7 +119,7 @@ pub async fn ocr<C: BaseOcrConfig>(
     client: &OcrClient,
     request: &PreparedOcrRequest,
     hooks: &dyn CallHooks<Error>,
-) -> Result<LiteLLMOcrResponse, Error> {
+) -> Result<litellm_http::response::ProviderResponse<LiteLLMOcrResponse>, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
     let url = http.url().to_string();
     let headers = http.headers().to_vec();
@@ -156,8 +156,9 @@ pub async fn read_json_response<T: DeserializeOwned>(
     native: bool,
     max_response_bytes: usize,
 ) -> Result<DecodedOcrResponse<T>, Error> {
+    let headers = litellm_http::request::response_headers(response.headers());
     let bytes = read_response_bytes(response, max_response_bytes).await?;
-    decode_response(&bytes, native)
+    decode_response(&bytes, native).map(|decoded| DecodedOcrResponse { headers, ..decoded })
 }
 
 pub async fn read_response_bytes(

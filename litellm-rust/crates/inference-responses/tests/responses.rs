@@ -424,7 +424,9 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
-        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+        let mut socket = tokio_tungstenite::accept_hdr_async(socket, handshake_headers)
+            .await
+            .unwrap();
         let message = socket.next().await.unwrap().unwrap();
         socket.send(message).await.unwrap();
         let _ = socket.next().await;
@@ -442,6 +444,15 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
             )
             .await
             .unwrap();
+            assert_eq!(
+                connection
+                    .response_headers()
+                    .iter()
+                    .filter(|(name, _)| name == "x-provider-trace")
+                    .map(|(_, value)| value.as_str())
+                    .collect::<Vec<_>>(),
+                ["first", "second"]
+            );
             connection
                 .send_text("private-frame-sentinel".into())
                 .await
@@ -515,4 +526,24 @@ async fn upstream_errors_preserve_response_headers(call: ResponsesCall, #[case] 
         litellm_http::request::header_value(&headers, "retry-after"),
         Some("17")
     );
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "tungstenite's handshake callback fixes the error type"
+)]
+fn handshake_headers(
+    _: &tokio_tungstenite::tungstenite::handshake::server::Request,
+    mut response: tokio_tungstenite::tungstenite::handshake::server::Response,
+) -> Result<
+    tokio_tungstenite::tungstenite::handshake::server::Response,
+    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+> {
+    response
+        .headers_mut()
+        .append("x-provider-trace", "first".parse().unwrap());
+    response
+        .headers_mut()
+        .append("x-provider-trace", "second".parse().unwrap());
+    Ok(response)
 }

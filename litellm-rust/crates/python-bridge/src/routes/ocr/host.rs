@@ -15,7 +15,7 @@ use super::{
     errors::to_pyerr as ocr_error_to_pyerr,
     project::{OcrHostHandles, SETTINGS_ERROR_MARKER, project_request},
 };
-use crate::marshal::public_response;
+use crate::marshal::public_provider_response;
 
 enum OcrHostData {
     Unprojected,
@@ -112,9 +112,9 @@ impl PythonBinding for OcrPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: LiteLLMOcrResponse,
+        response: litellm_http::response::ProviderResponse<LiteLLMOcrResponse>,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, "litellm.rust_bridge.ocr.route_host", &response)
+        public_provider_response(py, "litellm.rust_bridge.ocr.route_host", response)
     }
 
     fn encode_stream_head(

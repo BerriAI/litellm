@@ -77,7 +77,7 @@ impl PythonBinding for ResponsesPythonHost {
         py: Python<'_>,
         response: <Responses as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
-        self.0.response(py, &response)
+        self.0.response(py, response)
     }
 
     fn encode_stream_head(

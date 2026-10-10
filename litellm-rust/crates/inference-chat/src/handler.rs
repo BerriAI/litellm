@@ -1,4 +1,5 @@
 use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
+use litellm_http::response::ProviderResponse;
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
@@ -22,7 +23,7 @@ pub(super) async fn execute(
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<ChatCompletionsResponse, Error> {
+) -> Result<ProviderResponse<ChatCompletionsResponse>, Error> {
     let ProviderChatCompletionsRequest {
         model,
         custom_llm_provider,
@@ -126,6 +127,7 @@ pub(super) async fn execute(
                 .transform_response(&model, ProviderChatResponseData { body })
                 .map_err(Error::from)
                 .map_err(as_response_error)
+                .map(|body| ProviderResponse { body, headers })
         },
     )
     .await

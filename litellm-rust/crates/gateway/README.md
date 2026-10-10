@@ -41,3 +41,11 @@ Each MCP entry supports HTTP or stdio transport, an optional pinned `server_id`,
 The gateway initializes upstreams before opening its listener. Startup fails when credentials cannot be resolved or an upstream cannot initialize. Shutdown cancels upstream connections and terminates owned stdio children
 
 The config schema preserves Python sections, but parsing a section does not implement its service. MCP OAuth, database-backed server management, guardrails, spend accounting, local Python tools, and legacy SSE upstream connections remain unimplemented. Unsupported MCP settings and configured guardrail policies fail at startup. Incoming legacy SSE clients remain supported
+
+## Provider response headers
+
+Inference routes carry upstream headers alongside the normalized body in `litellm_http::response::ProviderResponse<T>`. SDK callers can read `body` and the original header pairs in `headers`. JSON serialization and response caches contain only the body, so cache hits do not reuse provider request IDs or quota snapshots. Streaming responses expose headers before the first chunk, and Responses WebSocket connections expose their handshake headers
+
+The gateway forwards provider headers on successful JSON responses, SSE streams, and HTTP errors. Duplicate values remain separate. The forwarding policy removes hop-by-hop headers, fields named by `Connection`, provider cookies, body framing and encoding, and provider-supplied `x-litellm-*` fields. The gateway generates its own body headers and `x-litellm-rust` marker. MCP and UI transport headers remain owned by their mounted routers
+
+The Python bridge stores original pairs in `_hidden_params["provider_response_headers"]`, safe headers in `_hidden_params["headers"]`, and proxy headers in `_hidden_params["additional_headers"]`. Python also retains the existing `llm_provider-*` names. Its dictionary header contract combines repeated values, while the original pairs remain available separately

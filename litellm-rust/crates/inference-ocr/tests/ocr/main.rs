@@ -58,7 +58,10 @@ fn ocr_route_with(settings: OcrSettings) -> OcrRoute {
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    ocr_route().execute(request, &(), None).await
+    ocr_route()
+        .execute(request, &(), None)
+        .await
+        .map(|response| response.body)
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
@@ -149,10 +152,12 @@ fn accepted(server: &MockServer, body: Value) -> ResponseTemplate {
 }
 
 fn completed(
-    result: litellm_host::call::HostedCompletion<LiteLLMOcrResponse>,
+    result: litellm_host::call::HostedCompletion<
+        litellm_http::response::ProviderResponse<LiteLLMOcrResponse>,
+    >,
 ) -> LiteLLMOcrResponse {
     match result {
-        litellm_host::call::HostedCompletion::Complete(response) => response,
+        litellm_host::call::HostedCompletion::Complete(response) => response.body,
         other => panic!("unexpected OCR completion: {other:?}"),
     }
 }
