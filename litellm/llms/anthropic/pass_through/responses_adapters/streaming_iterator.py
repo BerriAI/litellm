@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, field_validator
@@ -11,7 +11,7 @@ from pydantic import ConfigDict, field_validator
 from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import APIError, MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
@@ -123,9 +123,11 @@ class AnthropicResponsesStreamWrapper:
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
+        self.litellm_logging_obj = litellm_logging_obj
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
+        self._unreported_failure: Exception | None = None
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
@@ -431,9 +433,34 @@ class AnthropicResponsesStreamWrapper:
             self._sent_message_stop = True
             return
 
-    def _fail_stream(self, status_code: int, message: str) -> None:
+    def _fail_stream(self, status_code: int, message: str, failure: Exception | None = None) -> None:
         self._stream_failed = True
+        self._unreported_failure = failure or APIError(
+            status_code=status_code,
+            message=message,
+            llm_provider=getattr(self.responses_stream, "custom_llm_provider", None),
+            model=self.model,
+        )
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
+
+    async def _report_failure_once_the_error_event_was_consumed(self) -> None:
+        failure: Final = self._unreported_failure
+        if failure is None:
+            return
+        self._unreported_failure = None
+        on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
+            self.litellm_logging_obj, "_on_detached_stream_failure", None
+        )
+        if on_failure is None:
+            return
+        try:
+            await on_failure(failure)
+        except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not hide the error event from the client
+            verbose_logger.warning(
+                "AnthropicResponsesStreamWrapper: stream failure hook raised: %s(%s)",
+                type(hook_failure).__name__,
+                hook_failure,
+            )
 
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
@@ -442,6 +469,7 @@ class AnthropicResponsesStreamWrapper:
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
+            await self._report_failure_once_the_error_event_was_consumed()
             raise StopAsyncIteration
 
         if not self._sent_message_start:
@@ -470,7 +498,7 @@ class AnthropicResponsesStreamWrapper:
             verbose_logger.exception(
                 "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model
             )
-            self._fail_stream(*_failure_status_and_message(e))
+            self._fail_stream(*_failure_status_and_message(e), failure=_original_failure(e))
 
         if not self._chunk_queue and not self._sent_message_stop and not self._stream_failed:
             verbose_logger.error(
