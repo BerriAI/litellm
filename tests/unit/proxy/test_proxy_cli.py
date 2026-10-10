@@ -71,7 +71,7 @@ class TestProxyInitializationHelpers:
     @patch("openai.OpenAI")
     @patch("click.echo")
     @patch("builtins.print")
-    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):
+    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):  # test-quality-ok: pins the string-URL passthrough to the client; the flag path is asserted at the HTTP boundary in the stub-server test below
         # Setup
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
@@ -87,12 +87,6 @@ class TestProxyInitializationHelpers:
         ]
 
         # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion(
-                "localhost", 8000, "gpt-3.5-turbo", True
-            )
-
-        # Test with valid string test value
         ProxyInitializationHelpers._run_test_chat_completion(
             "localhost", 8000, "gpt-3.5-turbo", "http://test-url"
         )
@@ -102,6 +96,101 @@ class TestProxyInitializationHelpers:
             api_key="My API Key", base_url="http://test-url"
         )
         mock_client.chat.completions.create.assert_called()
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+    def test_run_test_chat_completion_flag_uses_host_and_port(self, host: str) -> None:
+        import json
+        import socket
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        seen: Final[list[tuple[str, dict[str, object]]]] = []
+
+        class Stub(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen.append((self.path, body))
+                if self.path.endswith("/chat/completions") and body.get("stream"):
+                    payload = (
+                        'data: {"id":"c","object":"chat.completion.chunk","created":1,'
+                        '"model":"m","choices":[{"index":0,"delta":{"content":"hi"},'
+                        '"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+                    )
+                    ctype = "text/event-stream"
+                elif self.path.endswith("/chat/completions"):
+                    payload = json.dumps(
+                        {
+                            "id": "c",
+                            "object": "chat.completion",
+                            "created": 1,
+                            "model": "m",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": "hi"},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                        }
+                    )
+                    ctype = "application/json"
+                else:
+                    payload = json.dumps(
+                        {
+                            "id": "c",
+                            "object": "text_completion",
+                            "created": 1,
+                            "model": "m",
+                            "choices": [{"index": 0, "text": "hi", "finish_reason": "stop"}],
+                        }
+                    )
+                    ctype = "application/json"
+                data = payload.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        class StubServer(HTTPServer):
+            address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+        try:
+            server: Final = StubServer((host, 0), Stub)
+        except OSError:
+            pytest.skip(f"cannot bind {host} on this machine")
+        thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            ProxyInitializationHelpers._run_test_chat_completion(
+                host, server.server_port, "my-model", True
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        chat: Final = [body for path, body in seen if path.endswith("/chat/completions")]
+        assert [b.get("stream", False) for b in chat] == [False, True]
+        assert all(b["model"] == "my-model" for b in chat)
+
+    @patch("openai.OpenAI")
+    def test_test_flag_on_cli_sends_request_to_host_and_port(self, mock_openai):
+        from click.testing import CliRunner
+
+        result = CliRunner().invoke(
+            run_server,
+            ["--test", "--host", "127.0.0.1", "--port", "4000", "--model", "my-model"],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_openai.assert_called_once_with(
+            api_key="My API Key", base_url="http://127.0.0.1:4000"
+        )
+        first_call = mock_openai.return_value.chat.completions.create.call_args_list[0]
+        assert first_call.kwargs["model"] == "my-model"
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config
