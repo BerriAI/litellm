@@ -2,8 +2,8 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
+use crate::LoggingOperation;
 use litellm_host_python::PythonOwned;
-use litellm_types::Operation;
 
 use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
@@ -45,7 +45,7 @@ struct LoggedRequest {
 }
 
 pub struct LegacyLogging {
-    operation: Operation,
+    operation: LoggingOperation,
     call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
@@ -68,7 +68,12 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
 }
 
 impl LegacyLogging {
-    pub fn new(py: Python<'_>, operation: Operation, call: PublicCall, asynchronous: bool) -> Self {
+    pub fn new(
+        py: Python<'_>,
+        operation: LoggingOperation,
+        call: PublicCall,
+        asynchronous: bool,
+    ) -> Self {
         Self {
             operation,
             call,
@@ -87,32 +92,34 @@ impl LegacyLogging {
 
     fn call_type(&self) -> &'static str {
         match (self.operation, self.asynchronous) {
-            (Operation::Completion, false) => "completion",
-            (Operation::Completion, true) => "acompletion",
-            (Operation::Responses, false) => "responses",
-            (Operation::Responses, true) => "aresponses",
-            (Operation::Messages, _) => "anthropic_messages",
-            (Operation::Ocr, false) => "ocr",
-            (Operation::Ocr, true) => "aocr",
+            (LoggingOperation::Completion, false) => "completion",
+            (LoggingOperation::Completion, true) => "acompletion",
+            (LoggingOperation::Responses, false) => "responses",
+            (LoggingOperation::Responses, true) => "aresponses",
+            (LoggingOperation::Messages, _) => "anthropic_messages",
+            (LoggingOperation::Ocr, false) => "ocr",
+            (LoggingOperation::Ocr, true) => "aocr",
         }
     }
 
     fn input_description(&self) -> &'static str {
         match self.operation {
-            Operation::Completion => "Chat completions",
-            Operation::Responses => "Responses",
-            Operation::Messages => "Messages",
-            Operation::Ocr => "OCR document processing",
+            LoggingOperation::Completion => "Chat completions",
+            LoggingOperation::Responses => "Responses",
+            LoggingOperation::Messages => "Messages",
+            LoggingOperation::Ocr => "OCR document processing",
         }
     }
 
     fn stream_billing(&self) -> Option<PassThroughStream> {
         match self.operation {
-            Operation::Messages => Some(PassThroughStream {
+            LoggingOperation::Messages => Some(PassThroughStream {
                 url_route: "/v1/messages",
                 endpoint_type: "anthropic",
             }),
-            Operation::Completion | Operation::Responses | Operation::Ocr => None,
+            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
+                None
+            }
         }
     }
 
@@ -529,7 +536,7 @@ impl LegacyLogging {
             head.bind(py).set_item("cache_key", key)?;
             head.bind(py).set_item("cache_hit", true)?;
         }
-        Streaming::Opened.call(py, (self.logger()?.object(py),))?;
+        Streaming::Opened.call(py, (self.logger()?.object(py), head.bind(py)))?;
         self.stream = Some(DeliveredStream {
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,
@@ -643,16 +650,16 @@ kwargs = {'logger': logger, 'document': document}
     }
 
     #[rstest]
-    #[case::sync_completion(litellm_types::Operation::Completion, false, "completion")]
-    #[case::async_completion(litellm_types::Operation::Completion, true, "acompletion")]
-    #[case::sync_responses(litellm_types::Operation::Responses, false, "responses")]
-    #[case::async_responses(litellm_types::Operation::Responses, true, "aresponses")]
-    #[case::sync_messages(litellm_types::Operation::Messages, false, "anthropic_messages")]
-    #[case::async_messages(litellm_types::Operation::Messages, true, "anthropic_messages")]
-    #[case::sync_ocr(litellm_types::Operation::Ocr, false, "ocr")]
-    #[case::async_ocr(litellm_types::Operation::Ocr, true, "aocr")]
+    #[case::sync_completion(crate::LoggingOperation::Completion, false, "completion")]
+    #[case::async_completion(crate::LoggingOperation::Completion, true, "acompletion")]
+    #[case::sync_responses(crate::LoggingOperation::Responses, false, "responses")]
+    #[case::async_responses(crate::LoggingOperation::Responses, true, "aresponses")]
+    #[case::sync_messages(crate::LoggingOperation::Messages, false, "anthropic_messages")]
+    #[case::async_messages(crate::LoggingOperation::Messages, true, "anthropic_messages")]
+    #[case::sync_ocr(crate::LoggingOperation::Ocr, false, "ocr")]
+    #[case::async_ocr(crate::LoggingOperation::Ocr, true, "aocr")]
     fn operation_selects_the_legacy_setup_and_deployment_hook_contract(
-        #[case] operation: litellm_types::Operation,
+        #[case] operation: crate::LoggingOperation,
         #[case] asynchronous: bool,
         #[case] expected: &str,
     ) {
@@ -929,9 +936,6 @@ mod payload_tests {
     /// The payload phases of `Logging` on top of `StubLogger`, with `pre_call` handing the
     /// payload to the case's `on_pre_call`.
     const PAYLOAD_LOGGER: &CStr = c"
-class Request:
-    pass
-
 class PayloadLogger(StubLogger):
     def update_from_kwargs(self, **update):
         self.update = update
@@ -947,7 +951,7 @@ class PayloadLogger(StubLogger):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
 
-request = Request()
+bound = {}
 kwargs = {}
 logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
@@ -1088,12 +1092,12 @@ check = lambda: None
     }
 
     #[rstest]
-    #[case::completion(litellm_types::Operation::Completion, "Chat completions")]
-    #[case::responses(litellm_types::Operation::Responses, "Responses")]
-    #[case::messages(litellm_types::Operation::Messages, "Messages")]
-    #[case::ocr(litellm_types::Operation::Ocr, "OCR document processing")]
+    #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
+    #[case::responses(crate::LoggingOperation::Responses, "Responses")]
+    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
+    #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
-        #[case] operation: litellm_types::Operation,
+        #[case] operation: crate::LoggingOperation,
         #[case] description: &str,
     ) {
         Python::initialize();
@@ -1218,10 +1222,10 @@ on_pre_call = lambda args: observed.append(
 def check():
     assert observed == [(True, True)], observed
 ")]
-    #[case::request_attribute_behind_an_omitted_keyword(c"
+    #[case::bound_value_behind_an_omitted_keyword(c"
 document = {'type': 'document_url', 'document_url': 'data:application/pdf;base64,YWJj'}
 pages = [0]
-request.document = document
+bound['document'] = document
 kwargs = {'pages': pages}
 observed = []
 on_pre_call = lambda args: observed.append(
@@ -1761,13 +1765,13 @@ assert logger.calls[1][1] is response
     fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out() {
         Python::initialize();
         Python::attach(|py| {
-            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None");
+            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
-                operation: litellm_types::Operation::Messages,
+                operation: crate::LoggingOperation::Messages,
                 ..logged(py, &locals, true)
             };
             logging
-                .on_stream_open(py, &pyo3::types::PyDict::new(py).into_any().unbind())
+                .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
             logging
                 .on_stream_chunk(py, &local(&locals, "first").unbind())
@@ -1784,6 +1788,7 @@ assert logger.calls[1][1] is response
                 &locals,
                 c"
 assert logger.names() == ['stream_opened', 'stream_success'], logger.calls
+assert logger.calls[0][1] is head
 chunks = logger.calls[1][1]
 assert len(chunks) == 2
 assert chunks[0] is first

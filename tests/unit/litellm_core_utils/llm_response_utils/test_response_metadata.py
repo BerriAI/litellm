@@ -78,7 +78,7 @@ class TestCallbackDurationMs:
         """End-to-end: update_response_metadata should propagate callback_duration_ms."""
         result = ModelResponse()
         logging_obj = self._make_logging_obj(callback_duration_ms=5.5, llm_api_duration_ms=800.0)
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
         start = datetime.datetime(2025, 1, 1, 0, 0, 0)
@@ -128,7 +128,7 @@ class TestDictResultsSkipMetadataUpdate:
             end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
         )
 
-        logging_obj._response_cost_calculator.assert_not_called()
+        logging_obj.response_cost_calculator.assert_not_called()
         assert "_hidden_params" not in anthropic_response
 
     def test_update_response_metadata_keeps_timing_on_logging_obj_for_dict_results(self):
@@ -152,7 +152,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj.set_response_timing_metrics.assert_called_once_with(
             {"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0}
         )
-        logging_obj._response_cost_calculator.assert_not_called()
+        logging_obj.response_cost_calculator.assert_not_called()
         assert "_hidden_params" not in anthropic_response
 
     def test_update_response_metadata_keeps_timing_for_stream_wrapper_without_hidden_params(self):
@@ -183,7 +183,7 @@ class TestDictResultsSkipMetadataUpdate:
         asyncio.run(drive())
 
         logging_obj.set_response_timing_metrics.assert_called_once_with({"_response_ms": 250.0})
-        logging_obj._response_cost_calculator.assert_not_called()
+        logging_obj.response_cost_calculator.assert_not_called()
 
     def test_update_response_metadata_leaves_logging_obj_alone_for_objects_with_hidden_params(self):
         """ModelResponse keeps carrying its own timing; the logging-object carrier is not written."""
@@ -191,7 +191,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
         logging_obj.caching_details = None
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
         update_response_metadata(
@@ -213,7 +213,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {"llm_api_duration_ms": 200.0}
         logging_obj.caching_details = None
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
         update_response_metadata(
@@ -607,8 +607,7 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     litellm.register_model(
         model_cost={
             deployment_id: {
-                "input_cost_per_second": 0.02,
-                "output_cost_per_second": 0.04,
+                "cost_per_second": 0.02,
                 "litellm_provider": "openai",
                 "mode": "chat",
             }
@@ -627,8 +626,7 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     logging_obj.update_environment_variables(
         model="gpt-5.4-nano",
         litellm_params={
-            "input_cost_per_second": 0.02,
-            "output_cost_per_second": 0.04,
+            "cost_per_second": 0.02,
             "metadata": {"model_info": {"id": deployment_id}},
         },
         optional_params={},
@@ -650,4 +648,4 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     )
 
     assert result._response_ms == pytest.approx(2000)
-    assert result._hidden_params["response_cost"] == pytest.approx((0.02 + 0.04) * 2)
+    assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)

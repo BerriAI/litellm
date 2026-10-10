@@ -10,9 +10,9 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
-use litellm_core::messages::{MessagesCall, messages_body, route::Messages};
 use litellm_host_http::Sse;
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
@@ -54,7 +54,7 @@ async fn handle(
     };
 
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options);
+    let machine = route.machine(call, cache_options.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();
@@ -79,6 +79,7 @@ fn project(
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
+        litellm_params: deployment.litellm_params.clone(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
         timeout: deployment.timeout,

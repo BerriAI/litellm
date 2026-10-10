@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -20,6 +21,8 @@ from litellm.types.integrations.slack_alerting import (
     MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
     HangingRequestData,
 )
+
+_REQUEST_STATUS_TARGET: Final = "request_status"
 
 if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -82,6 +85,7 @@ class AlertingHangingRequestCheck:
         )
         return
 
+    @with_service_target(_REQUEST_STATUS_TARGET)
     async def send_alerts_for_hanging_requests(self):
         """
         Send alerts for hanging requests

@@ -11,7 +11,9 @@ PyPI HTTP responses are mocked — these tests never hit the network.
 import os
 import sys
 from pathlib import Path
+from typing import Final
 
+import pytest
 import requests
 
 _CODE_COVERAGE_DIR = os.path.join(
@@ -35,7 +37,7 @@ class _FakeResponse:
         return self._payload
 
 
-def _make_checker():
+def _make_checker() -> check_licenses.LicenseChecker:
     return check_licenses.LicenseChecker(config_file=_LICCHECK_INI)
 
 
@@ -280,3 +282,69 @@ def test_check_package_rejects_package_without_license(monkeypatch):
     )
     checker = _make_checker()
     assert checker.check_package("mystery-pkg", "1.0.0") is False
+
+
+def test_load_requirements_checks_every_dependency_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["runtime==1.0"]\n'
+        "[dependency-groups]\n"
+        'admin_mcp = ["connector==2.0"]\n'
+        'proxy = [{include-group = "admin-mcp"}, "server==3.0"]\n'
+        'dev = [{include-group = "proxy"}, "server==3.0"]\n'
+    )
+    _ = (tmp_path / "uv.lock").write_text("package = []\n")
+    checker: Final = _make_checker()
+
+    assert tuple(str(req) for req in checker._load_requirements()) == (
+        "runtime==1.0",
+        "connector==2.0",
+        "server==3.0",
+    )
+
+
+@pytest.mark.parametrize("entry", ('{include-group = "missing"}', '{include-group = "dev", unknown = "value"}', "123"))
+def test_load_requirements_rejects_invalid_group_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _ = (tmp_path / "pyproject.toml").write_text(
+        f"[project]\ndependencies = []\n[dependency-groups]\ndev = [{entry}]\n"
+    )
+    _ = (tmp_path / "uv.lock").write_text("package = []\n")
+    checker: Final = _make_checker()
+
+    with pytest.raises(RuntimeError, match="Invalid dependency group entry"):
+        checker._load_requirements()
+
+
+def test_load_requirements_preserves_url_hash_and_python_marker(tmp_path: Path) -> None:
+    requirements: Final = tmp_path / "requirements.txt"
+    _ = requirements.write_text(
+        "# pinned connector\n"
+        'connector @ https://example.test/connector.tar.gz#sha256=abcd ; python_version >= "3.12"\n'
+        "requests==2.0 # ordinary comment\n"
+    )
+    checker: Final = _make_checker()
+    connector, registry = checker._load_requirements(requirements)
+
+    assert connector.url == "https://example.test/connector.tar.gz#sha256=abcd"
+    assert str(connector.marker) == 'python_version >= "3.12"'
+    assert str(registry) == "requests==2.0"
+
+
+def test_license_cli_fails_when_requirements_cannot_be_parsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config: Final = tmp_path / "tests/code_coverage_tests/liccheck.ini"
+    config.parent.mkdir(parents=True)
+    _ = config.write_text(_LICCHECK_INI.read_text())
+    _ = (tmp_path / "requirements.txt").write_text("not a valid requirement\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_licenses.py", "requirements.txt"])
+
+    with pytest.raises(SystemExit) as result:
+        check_licenses.main()
+
+    assert result.value.code == 1
+    assert "Error parsing requirements" in capsys.readouterr().out

@@ -15,6 +15,7 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, TeamNewBody
 from other_client import OtherClient
 from pydantic import BaseModel
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
@@ -120,6 +121,14 @@ def _corrupt_signature(token: str) -> str:
 
 class TestJwtAuth:
     @pytest.mark.covers("other.auth.jwt.valid_token_allows", "other.auth.jwt.spend_attributed_to_claims")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_valid_token_for_an_existing_team_is_accepted_and_attributed(
         self, client: OtherClient, identity: Identity
     ) -> None:
@@ -142,6 +151,13 @@ class TestJwtAuth:
         )
 
     @pytest.mark.covers("other.auth.jwt.invalid_signature_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tampered_signature_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         tampered: Final = _corrupt_signature(client.idp.access_token(identity))
 
@@ -154,6 +170,13 @@ class TestJwtAuth:
         )
 
     @pytest.mark.covers("other.auth.jwt.expired_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_expired_token_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         expiring: Final = client.idp.access_token(identity, client_id=SHORT_LIVED_CLIENT_ID)
         delay: Final = _claims(expiring).exp - time.time() + 1
@@ -167,6 +190,13 @@ class TestJwtAuth:
         assert "expired" in result.body.lower(), f"the 401 must say the token expired, got {result.body[:300]}"
 
     @pytest.mark.covers("other.auth.jwt.wrong_issuer_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_signed_token_from_the_wrong_issuer_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         token: Final = client.idp.access_token(identity, issuer_host="unexpected-issuer.invalid")
         claims: Final = _claims(token)
@@ -177,6 +207,13 @@ class TestJwtAuth:
         assert "issuer" in result.body.lower(), f"expected issuer validation to reject the token: {result}"
 
     @pytest.mark.covers("other.auth.jwt.wrong_audience_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_signed_token_for_another_application_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         token: Final = client.idp.access_token(identity, client_id=WRONG_AUDIENCE_CLIENT_ID)
         claims: Final = _claims(token)
@@ -189,6 +226,13 @@ class TestJwtAuth:
         assert "audience" in result.body.lower(), f"expected audience validation to reject the token: {result}"
 
     @pytest.mark.covers("other.auth.jwt.unknown_team_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_token_naming_a_team_that_does_not_exist_is_rejected(
         self, client: OtherClient, resources: ResourceManager
     ) -> None:
@@ -204,6 +248,14 @@ class TestJwtAuth:
         )
 
     @pytest.mark.covers("other.auth.jwt.virtual_key_unaffected")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_plain_virtual_key_still_works_with_jwt_auth_enabled(self, client: OtherClient, scoped_key: str) -> None:
         response: Final = unwrap(client.proxy.chat(scoped_key, _ping()))
         assert response.choices, f"an sk- key must keep working on a proxy with enable_jwt_auth, got {response}"
@@ -230,6 +282,14 @@ def _denial(client: OtherClient, token: str, team: str) -> str:
 
 class TestJwtTeamHeader:
     @pytest.mark.covers("other.auth.jwt.team_header_alias_binds_team")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_header_with_the_team_alias_binds_the_same_team_as_the_team_id(
         self, client: OtherClient, bound_team: BoundTeam
     ) -> None:
@@ -249,6 +309,14 @@ class TestJwtTeamHeader:
 
     @pytest.mark.covers("other.auth.jwt.team_model_alias_listed_and_routes")
     @pytest.mark.parametrize("anthropic", [False, True], ids=["openai_shape", "anthropic_shape"])
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_model_alias_is_listed_by_v1_models_under_the_same_token_that_routes_it(
         self, client: OtherClient, aliased_team: AliasedTeam, anthropic: bool
     ) -> None:
@@ -265,6 +333,13 @@ class TestJwtTeamHeader:
         assert aliased_team.target in listed, f"the alias target {aliased_team.target!r} must stay listed, got {listed}"
 
     @pytest.mark.covers("other.auth.jwt.team_header_non_member_alias_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_header_with_the_alias_of_a_team_the_caller_is_not_in_is_rejected_like_an_unknown_value(
         self, client: OtherClient, resources: ResourceManager, bound_team: BoundTeam
     ) -> None:

@@ -195,3 +195,52 @@ def test_pinned_revision_pairs_list_and_call_through_gateway(
         assert negotiations, "The operation must reach the upstream negotiation"
         assert all(request["params"]["protocolVersion"] == upstream for request in negotiations), negotiations
         assert len(tool_calls(observed)) == 1
+
+
+@pytest.mark.parametrize("downstream", ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"))
+@pytest.mark.parametrize("peer_kind", ("http", "stdio"))
+def test_legacy_gateway_calls_modern_upstream_without_initialize(
+    gateway: Gateway,
+    downstream: str,
+    peer_kind: PeerKind,
+) -> None:
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.types.mcp import MCPTransport
+
+    with peer_of(peer_kind) as peer, gateway.scenario() as scenario:
+        alias: Final = "modern" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, mcp_info={"protocol_version": "2026-07-28"})
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        client: Final = MCPClient(
+            server_url=str(gateway.client.base_url).rstrip("/") + "/mcp",
+            transport_type=MCPTransport.http,
+            protocol_version=downstream,
+            extra_headers={"Authorization": f"Bearer {key}"},
+        )
+
+        async def exercise() -> None:
+            listed: Final = await client.list_tools(raise_on_error=True)
+            assert f"{alias}-add" in tuple(tool.name for tool in listed)
+            called: Final = await client.call_tool(
+                CallToolRequestParams(name=f"{alias}-add", arguments={"a": 2, "b": 3}),
+                raise_on_error=True,
+            )
+            assert called.is_error is False
+            assert called.content[0].text == "5"
+
+        peer.drain()
+        asyncio.run(exercise())
+        observed: Final = peer.drain()
+        assert len(tool_calls(observed)) == 1
+        assert all(row["body"].get("method") not in ("initialize", "notifications/initialized") for row in observed)
+        requests: Final = tuple(row for row in observed if "id" in row["body"])
+        assert requests
+        for row in requests:
+            metadata: Final = row["body"]["params"]["_meta"]
+            assert metadata["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
+            assert "io.modelcontextprotocol/clientCapabilities" in metadata
+            assert b"mcp-session-id" not in row.get("headers", {})

@@ -12,13 +12,14 @@ import click
 import requests
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.model_listing_utils import (
     CLAUDE_CODE_CLIENT,
     CLAUDE_CODE_PICKER_PATTERN,
     GATEWAY_CLIENT_HEADER,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .agents import codex_config_path
 from .claude_settings import (
@@ -68,7 +69,7 @@ _TARGET_SELECTION: Final = TypeAdapter(tuple[Target, ...])
 _MODEL_SELECTION: Final = TypeAdapter(str)
 
 
-class ConnectionSettings(BaseModel):
+class ConnectionSettings(LiteLLMBaseModel):
     base_url: str
     base_url_explicit: bool = False
     api_key: str | None = None
@@ -222,9 +223,7 @@ def _has_targets(chosen: Sequence[object]) -> bool:
 
 
 def pick_targets(defaults: tuple[Target, ...] = ("claude", "codex"), *, edit: bool = False) -> tuple[Target, ...]:
-    choices: Final = [  # mutable-ok: InquirerPy requires a list
-        Choice(value, name=label, enabled=value in defaults) for value, label in _TARGETS
-    ]
+    choices: Final = [Choice(value, name=label, enabled=value in defaults) for value, label in _TARGETS]
     picked: Final = _TARGET_SELECTION.validate_python(
         inquirer.checkbox(
             message="Which agents should be edited? Unselected agents keep their current setup"
@@ -239,7 +238,7 @@ def pick_targets(defaults: tuple[Target, ...] = ("claude", "codex"), *, edit: bo
 
 
 def _pick_model(listed: Sequence[str], default: str | None = None) -> str | None:
-    choices: Final = [_KEEP_DEFAULT_MODEL, *listed]  # mutable-ok: InquirerPy requires a list
+    choices: Final = [_KEEP_DEFAULT_MODEL, *listed]
     picked: Final = _MODEL_SELECTION.validate_python(
         inquirer.fuzzy(
             message="Model Claude Code starts on (type to filter; /model switches any time):",
@@ -251,7 +250,7 @@ def _pick_model(listed: Sequence[str], default: str | None = None) -> str | None
 
 
 def _pick_codex_model(listed: Sequence[str], default: str | None = None) -> str:
-    choices: Final = list(listed)  # mutable-ok: InquirerPy's choices parameter requires a list
+    choices: Final = list(listed)
     return _MODEL_SELECTION.validate_python(
         inquirer.fuzzy(
             message="Model Codex starts on (type to filter):",

@@ -17,7 +17,7 @@ from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.integrations.opentelemetry import _MAX_DYNAMIC_TRACER_PROVIDERS, OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import ArizeOtlpProtocol, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -32,6 +32,36 @@ else:
 
 _SUCCESS_SAMPLING_RATE_VAR: Final = "arize_success_sampling_rate"
 _ERROR_SAMPLING_RATE_VAR: Final = "arize_error_sampling_rate"
+
+
+def parse_sampling_rate(value: object, var: str) -> float | None:
+    """The rate a key or team set for ``var``, or ``None`` when nothing usable was set.
+
+    Unset, empty and ``"None"`` mean "export everything". A value that is not a number
+    or lies outside ``0.0..1.0`` is logged and treated the same way, so a typo never
+    silences a tenant's traces. ``0.0`` is a real rate and comes back as ``0.0``.
+    """
+    if value is None or value in ("", "None"):
+        return None
+    try:
+        if not isinstance(value, (str, int, float)):
+            raise TypeError(type(value).__name__)
+        rate: Final = float(value)
+    except (TypeError, ValueError):
+        verbose_logger.warning(
+            "ArizeLogger: %s value %r is not a number; exporting the request",
+            var,
+            value,
+        )
+        return None
+    if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+        verbose_logger.warning(
+            "ArizeLogger: %s value %r is outside 0.0..1.0; exporting the request",
+            var,
+            value,
+        )
+        return None
+    return rate
 
 
 class ArizeLogger(OpenTelemetry):
@@ -108,26 +138,7 @@ class ArizeLogger(OpenTelemetry):
         dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
         if not isinstance(dynamic_params, Mapping):
             return None
-        value: Final = dynamic_params.get(var)
-        if value is None or value in ("", "None"):
-            return None
-        try:
-            rate: Final = float(value)
-        except (TypeError, ValueError):
-            verbose_logger.warning(
-                "ArizeLogger: %s value %r is not a number; exporting the request",
-                var,
-                value,
-            )
-            return None
-        if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
-            verbose_logger.warning(
-                "ArizeLogger: %s value %r is outside 0.0..1.0; exporting the request",
-                var,
-                value,
-            )
-            return None
-        return rate
+        return parse_sampling_rate(dynamic_params.get(var), var)
 
     def _should_export(self, kwargs: dict[str, object], var: str) -> bool:
         rate: Final = self._sampling_rate_for_request(kwargs, var)
@@ -163,7 +174,7 @@ class ArizeLogger(OpenTelemetry):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
 
     @staticmethod
-    def get_arize_config() -> ArizeConfig:
+    def get_arize_config(otlp_protocol: ArizeOtlpProtocol | None = None) -> ArizeConfig:
         """
         Helper function to get Arize configuration.
 
@@ -184,7 +195,19 @@ class ArizeLogger(OpenTelemetry):
         endpoint = None
         protocol: Protocol = "otlp_grpc"
 
-        if grpc_endpoint:
+        if otlp_protocol == "http/protobuf":
+            protocol = "otlp_http"
+            if http_endpoint:
+                endpoint = http_endpoint
+            elif grpc_endpoint:
+                base: Final = grpc_endpoint.rstrip("/")
+                endpoint = f"{base}/traces" if base.endswith("/v1") else base
+            else:
+                endpoint = "https://otlp.arize.com/v1/traces"
+        elif otlp_protocol == "grpc":
+            protocol = "otlp_grpc"
+            endpoint = grpc_endpoint or http_endpoint or "https://otlp.arize.com/v1"
+        elif grpc_endpoint:
             protocol = "otlp_grpc"
             endpoint = grpc_endpoint
         elif http_endpoint:

@@ -1,12 +1,12 @@
-from typing import Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
-from litellm.proxy.utils import update_daily_tag_spend
 from litellm.proxy._types import DailyTagSpendTransaction
-import httpx
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.proxy.utils import update_daily_tag_spend
 
 
 @pytest.mark.asyncio
@@ -14,25 +14,23 @@ async def test_update_daily_tag_spend_delegates_to_tag_commit_writer():
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
     redis_update_buffer = MagicMock()
-    redis_update_buffer._should_commit_spend_updates_to_redis.return_value = False
+    redis_update_buffer.should_commit_spend_updates_to_redis.return_value = False
     proxy_logging_obj.db_spend_update_writer = MagicMock()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock()
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     await update_daily_tag_spend(
         prisma_client,
         proxy_logging_obj,
     )
 
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db.assert_awaited_once_with(
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db.assert_awaited_once_with(
         prisma_client=prisma_client,
         n_retry_times=3,
         proxy_logging_obj=proxy_logging_obj,
     )
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis.assert_not_awaited()
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db_with_redis.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -40,15 +38,11 @@ async def test_update_daily_tag_spend_logs_error_and_does_not_raise():
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
     redis_update_buffer = MagicMock()
-    redis_update_buffer._should_commit_spend_updates_to_redis.return_value = False
+    redis_update_buffer.should_commit_spend_updates_to_redis.return_value = False
     proxy_logging_obj.db_spend_update_writer = MagicMock()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(
-        side_effect=ValueError("boom")
-    )
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db = AsyncMock(side_effect=ValueError("boom"))
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     with patch("litellm.proxy.utils.verbose_proxy_logger.error") as error_logger:
         await update_daily_tag_spend(
@@ -56,7 +50,7 @@ async def test_update_daily_tag_spend_logs_error_and_does_not_raise():
             proxy_logging_obj,
         )
 
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db.assert_awaited_once()
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db.assert_awaited_once()
     error_logger.assert_called_once()
 
 
@@ -65,25 +59,23 @@ async def test_update_daily_tag_spend_uses_redis_writer_when_enabled():
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
     redis_update_buffer = MagicMock()
-    redis_update_buffer._should_commit_spend_updates_to_redis.return_value = True
+    redis_update_buffer.should_commit_spend_updates_to_redis.return_value = True
     proxy_logging_obj.db_spend_update_writer = MagicMock()
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db = AsyncMock()
     proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = (
-        AsyncMock()
-    )
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     await update_daily_tag_spend(
         prisma_client,
         proxy_logging_obj,
     )
 
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis.assert_awaited_once_with(
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db_with_redis.assert_awaited_once_with(
         prisma_client=prisma_client,
         n_retry_times=3,
         proxy_logging_obj=proxy_logging_obj,
     )
-    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db.assert_not_awaited()
+    proxy_logging_obj.db_spend_update_writer.commit_daily_tag_spend_to_db.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -92,17 +84,20 @@ async def test_daily_tag_spend_retries_then_succeeds():
     proxy_logging_obj = MagicMock()
 
     # Fail the upsert 3 times with retryable DB errors, then succeed.
-    prisma_client.db.execute_raw = AsyncMock(
-        side_effect=[
-            httpx.ConnectError("x"),
-            httpx.ConnectError("x"),
-            httpx.ConnectError("x"),
-            1,
-        ]
-    )
+    upsert_outcomes = iter([httpx.ConnectError("x"), httpx.ConnectError("x"), httpx.ConnectError("x"), 1])
+
+    async def execute_raw(query: str, *args: object) -> int:
+        if query == ROLLUP_LOCK_TIMEOUT_SQL:
+            return 0
+        outcome = next(upsert_outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    prisma_client.db.execute_raw = AsyncMock(side_effect=execute_raw)
     prisma_client.db.tx.return_value.__aenter__.return_value.execute_raw = prisma_client.db.execute_raw
 
-    daily_spend_transactions: Dict[str, DailyTagSpendTransaction] = {
+    daily_spend_transactions: dict[str, DailyTagSpendTransaction] = {
         "k": {
             "tag": "prod-tag",
             "date": "2026-04-03",
@@ -135,7 +130,8 @@ async def test_daily_tag_spend_retries_then_succeeds():
             daily_spend_transactions=daily_spend_transactions,
         )
 
-    assert prisma_client.db.execute_raw.await_count == 4
+    upsert_attempts = [c for c in prisma_client.db.execute_raw.await_args_list if c.args[0] != ROLLUP_LOCK_TIMEOUT_SQL]
+    assert len(upsert_attempts) == 4
     assert sleep_mock.await_count == 3
     # The batch is one statement, so the successful attempt is a single call carrying
     # the row rather than one call per key.

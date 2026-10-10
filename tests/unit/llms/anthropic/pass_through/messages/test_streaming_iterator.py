@@ -15,10 +15,11 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
     _incomplete_stream_error_sse_event,
-    _is_message_stop_chunk,
-    _is_provider_error_chunk,
     anthropic_messages_response_as_sse_events,
     is_anthropic_content_delta_chunk,
+    is_anthropic_ping_chunk,
+    is_message_stop_chunk,
+    is_provider_error_chunk,
     parse_anthropic_error_event,
 )
 
@@ -164,11 +165,30 @@ async def test_async_sse_wrapper_treats_message_stop_bytes_as_complete():
 
 
 def test_is_message_stop_chunk():
-    assert _is_message_stop_chunk({"type": "message_stop"}) is True
-    assert _is_message_stop_chunk({"type": "message_delta"}) is False
-    assert _is_message_stop_chunk(b'event: message_stop\ndata: {}\n\n') is True
-    assert _is_message_stop_chunk(b"raw-bytes") is False
-    assert _is_message_stop_chunk("message_stop") is False
+    assert is_message_stop_chunk({"type": "message_stop"}) is True
+    assert is_message_stop_chunk({"type": "message_delta"}) is False
+    assert is_message_stop_chunk(b"event: message_stop\ndata: {}\n\n") is True
+    assert is_message_stop_chunk(b"raw-bytes") is False
+    assert is_message_stop_chunk("message_stop") is False
+
+
+@pytest.mark.parametrize(
+    ("chunk", "expected"),
+    [
+        (b'event: ping\ndata: {"type": "ping"}\n\n', True),
+        (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n', True),
+        (b'event: ping\ndata: {"type": "ping"}\n\nevent: ping\ndata: {"type": "ping"}\n\n', True),
+        ({"type": "ping"}, True),
+        (b'event: ping\ndata: {"ty', False),
+        (b'pe": "ping"}\n\n', False),
+        (b'pe": "message_start"}}\n\nevent: ping\ndata: {"type": "ping"}\n\n', False),
+        (b'event: ping\ndata: {"type": "ping"}\n\nevent: content_block_delta\ndata: {}\n\n', False),
+        ({"type": "message_start"}, False),
+        ("event: ping", False),
+    ],
+)
+def test_is_anthropic_ping_chunk_only_matches_whole_ping_frames(chunk: object, expected: bool):
+    assert is_anthropic_ping_chunk(chunk) is expected, chunk
 
 
 def test_is_message_stop_chunk_ignores_substring_in_payload():
@@ -178,11 +198,11 @@ def test_is_message_stop_chunk_ignores_substring_in_payload():
     not be treated as a terminal stop event.
     """
     delta_frame_with_substring = (
-        b'event: content_block_delta\n'
+        b"event: content_block_delta\n"
         b'data: {"type": "content_block_delta", "delta": '
         b'{"type": "input_json_delta", "partial_json": "\\"message_stop\\""}}\n\n'
     )
-    assert _is_message_stop_chunk(delta_frame_with_substring) is False
+    assert is_message_stop_chunk(delta_frame_with_substring) is False
 
 
 def test_parse_anthropic_error_event_from_dict_chunk():
@@ -190,7 +210,7 @@ def test_parse_anthropic_error_event_from_dict_chunk():
     (type, message, status) so the Router can decide whether to fall back."""
     chunk = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     assert parse_anthropic_error_event(chunk) == ("overloaded_error", "Overloaded", 503)
-    assert _is_provider_error_chunk(chunk) is True
+    assert is_provider_error_chunk(chunk) is True
 
 
 def test_parse_anthropic_error_event_from_sse_bytes():
@@ -198,11 +218,10 @@ def test_parse_anthropic_error_event_from_sse_bytes():
     Anthropic/Bedrock passthrough forwards verbatim today) must parse
     identically to the dict shape so the Router can raise a fallback."""
     sse_chunk = (
-        b"event: error\n"
-        b'data: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
+        b'event: error\ndata: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
     )
     assert parse_anthropic_error_event(sse_chunk) == ("internal_server_error", "boom", 500)
-    assert _is_provider_error_chunk(sse_chunk) is True
+    assert is_provider_error_chunk(sse_chunk) is True
 
 
 def test_parse_anthropic_error_event_defaults_status_for_unknown_type():
@@ -228,7 +247,7 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     must not be treated as an error event or raise, just be ignored."""
     malformed_frame = b"event: error\ndata: {not valid json\n\n"
     assert parse_anthropic_error_event(malformed_frame) is None
-    assert _is_provider_error_chunk(malformed_frame) is False
+    assert is_provider_error_chunk(malformed_frame) is False
 
 
 class TestIsAnthropicContentDeltaChunk:
@@ -261,7 +280,7 @@ class TestIsAnthropicContentDeltaChunk:
 )
 def test_parse_anthropic_error_event_non_error_chunks_return_none(chunk):
     assert parse_anthropic_error_event(chunk) is None
-    assert _is_provider_error_chunk(chunk) is False
+    assert is_provider_error_chunk(chunk) is False
 
 
 def test_parse_anthropic_error_event_ignores_substring_in_payload():
@@ -282,10 +301,11 @@ async def test_async_sse_wrapper_emits_error_when_bytes_stream_only_mentions_mes
     payload text contains `message_stop` (but never emits the actual
     `event: message_stop` frame) must still be flagged as incomplete.
     """
+
     async def _byte_stream():
         yield b'event: message_start\ndata: {"type": "message_start"}\n\n'
         yield (
-            b'event: content_block_delta\n'
+            b"event: content_block_delta\n"
             b'data: {"type": "content_block_delta", "delta": '
             b'{"type": "input_json_delta", "partial_json": "\\"message_stop\\""}}\n\n'
         )
@@ -594,7 +614,7 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
         request_body={},
     )
     detached_hook = _DetachedFailureRecorder()
-    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
 
     received = []
 
@@ -639,7 +659,7 @@ async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect
         request_body={},
     )
     detached_hook = _DetachedFailureRecorder()
-    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_gated_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
@@ -680,7 +700,7 @@ async def test_async_sse_wrapper_logs_failure_when_queued_error_is_never_consume
         request_body={},
     )
     detached_hook = _DetachedFailureRecorder()
-    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]

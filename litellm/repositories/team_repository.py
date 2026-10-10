@@ -70,6 +70,9 @@ class _PrismaClientView(Protocol):
     @property
     def db(self) -> _PrismaTeamDb: ...
 
+    @property
+    def writer_db(self) -> _PrismaTeamDb: ...
+
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
 _JSON_ENCODED_TEAM_FIELDS: Final = (
@@ -85,10 +88,14 @@ _JSON_ENCODED_TEAM_FIELDS: Final = (
 class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
     @property
     def _db(self) -> _PrismaTeamDb:
         client: Final[_PrismaClientView] = self.prisma_client
-        return client.db
+        return client.writer_db if self._use_writer else client.db
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:

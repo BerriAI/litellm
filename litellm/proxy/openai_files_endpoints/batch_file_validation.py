@@ -7,6 +7,7 @@ from typing import BinaryIO, Final, NoReturn
 from typing_extensions import assert_never
 
 from litellm.proxy._types import ProxyException
+from litellm.proxy.openai_files_endpoints.file_usage_caps import FileUsageLimit, describe_limit_source
 
 _MB: Final = 1024 * 1024
 
@@ -31,6 +32,11 @@ PASSTHROUGH_BATCH_LINE_SHAPE: Final = BatchLineShape(
 class BatchFileTooLarge:
     size_bytes: int
     limit_mb: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchFileTooManyRecords:
+    limit: FileUsageLimit
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +68,7 @@ class BatchFileMissingLineKey:
 
 BatchFileValidationFailure = (
     BatchFileTooLarge
+    | BatchFileTooManyRecords
     | BatchFileWrongExtension
     | BatchFileEmpty
     | BatchFileInvalidJsonLine
@@ -99,7 +106,23 @@ def _check_line(line_number: int, raw_line: bytes, line_shape: BatchLineShape) -
     return BatchFileMissingLineKey(line_number=line_number, key=missing, line_shape=line_shape)
 
 
-def _scan_lines(file_source: bytes | BinaryIO, line_shape: BatchLineShape) -> BatchFileValidationFailure | None:
+def _check_record(
+    record_number: int,
+    line_number: int,
+    raw_line: bytes,
+    line_shape: BatchLineShape,
+    max_records: FileUsageLimit | None,
+) -> BatchFileValidationFailure | None:
+    if max_records is not None and record_number > max_records.value:
+        return BatchFileTooManyRecords(limit=max_records)
+    return _check_line(line_number, raw_line, line_shape)
+
+
+def _scan_lines(
+    file_source: bytes | BinaryIO,
+    line_shape: BatchLineShape,
+    max_records: FileUsageLimit | None,
+) -> BatchFileValidationFailure | None:
     content_lines: Final = (
         (line_number, raw_line)
         for line_number, raw_line in enumerate(_iter_lines(file_source), start=1)
@@ -108,15 +131,11 @@ def _scan_lines(file_source: bytes | BinaryIO, line_shape: BatchLineShape) -> Ba
     first_line: Final = next(content_lines, None)
     if first_line is None:
         return BatchFileEmpty()
-    return next(
-        (
-            failure
-            for line_number, raw_line in chain((first_line,), content_lines)
-            for failure in (_check_line(line_number, raw_line, line_shape),)
-            if failure is not None
-        ),
-        None,
+    failures: Final = (
+        _check_record(record_number, line_number, raw_line, line_shape, max_records)
+        for record_number, (line_number, raw_line) in enumerate(chain((first_line,), content_lines), start=1)
     )
+    return next((failure for failure in failures if failure is not None), None)
 
 
 def check_batch_file_upload(
@@ -124,6 +143,7 @@ def check_batch_file_upload(
     file_source: bytes | BinaryIO,
     max_batch_file_size_mb: int | None,
     line_shape: BatchLineShape = BATCH_LINE_SHAPE,
+    max_records: FileUsageLimit | None = None,
 ) -> BatchFileValidationFailure | None:
     if filename is None or not filename.lower().endswith(".jsonl"):
         return BatchFileWrongExtension(filename=filename or "")
@@ -131,7 +151,7 @@ def check_batch_file_upload(
         size_bytes: Final = _file_size_bytes(file_source)
         if size_bytes > max_batch_file_size_mb * _MB:
             return BatchFileTooLarge(size_bytes=size_bytes, limit_mb=max_batch_file_size_mb)
-    scan_failure: Final = _scan_lines(file_source, line_shape)
+    scan_failure: Final = _scan_lines(file_source, line_shape, max_records)
     if not isinstance(file_source, bytes):
         file_source.seek(0)
     return scan_failure
@@ -144,6 +164,17 @@ def raise_batch_file_validation_failure(failure: BatchFileValidationFailure) -> 
                 message=(
                     f"Batch input file is {size_bytes / _MB:.1f} MB, which exceeds the configured "
                     f"max_batch_file_size_mb of {limit_mb} MB. The file was not forwarded to the provider."
+                ),
+                type="invalid_request_error",
+                param="file",
+                code=413,
+            )
+        case BatchFileTooManyRecords(limit=limit):
+            raise ProxyException(
+                message=(
+                    f"Batch input file has more than {limit.value} records, which exceeds the "
+                    f"{limit.setting} of {limit.value} set {describe_limit_source(limit.source)}. "
+                    "The file was not forwarded to the provider."
                 ),
                 type="invalid_request_error",
                 param="file",

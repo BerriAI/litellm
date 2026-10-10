@@ -24,6 +24,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     litellm_logging_obj_from_kwargs,
     local_model_name,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -32,8 +33,8 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "safeguards"})
@@ -231,7 +232,7 @@ def _normalize_spec_edits(
 ) -> list[dict[str, object]] | None:
     """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
 
-    Delegates spec-shape normalization to the dispatcher's ``_normalize_spec``
+    Delegates spec-shape normalization to the dispatcher's ``normalize_spec``
     so the prediction here can't drift from what the dispatcher actually does.
     """
     if not context_management_spec:
@@ -241,11 +242,11 @@ def _normalize_spec_edits(
         return None
 
     from litellm.llms.anthropic.pass_through.context_management.dispatcher import (
-        _normalize_spec,
+        normalize_spec,
     )
 
     try:
-        return _normalize_spec(context_management_spec)
+        return normalize_spec(context_management_spec)
     except Exception:
         return None
 
@@ -411,7 +412,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.main import responses_api_bridge_check
+        from litellm.responses.bridge_check import responses_api_bridge_check
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
@@ -564,7 +565,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # Maintainability: when adding a new Anthropic-only request param to
         # ``AnthropicMessagesRequestOptionalParams``, also extend
         # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
-        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | {"anthropic_messages"}
+        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | CONVERTED_STREAM_KEYS | {"anthropic_messages"}
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():

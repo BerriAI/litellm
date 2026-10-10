@@ -1,26 +1,37 @@
 import base64
 import hashlib
+import re
 import secrets
+import textwrap
+import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import jwt
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
+    INITIALIZE,
     EntryPoint,
     McpCaller,
     McpPeer,
+    Outcome,
+    _outcome_from_rpc,
     call_tool,
     mcp_peer,
     register_mcp,
     tool_calls,
 )
+from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
+from integration._support.process import owned_proxy
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -383,3 +394,184 @@ def test_dcr_bridge_relays_client_registration_and_advertises_gateway_endpoints(
         assert issuer.json()["authorization_endpoint"] == f"{_base(gateway)}/{alias}/authorize"
         assert issuer.json()["token_endpoint"] == f"{_base(gateway)}/{alias}/token"
         assert "S256" in issuer.json()["code_challenge_methods_supported"]
+
+
+def _ui_session_cookie(gateway: Gateway, user_id: str) -> dict[str, str]:
+    claims: Final = {"user_id": user_id, "login_method": "username_password", "exp": int(time.time()) + 600}
+    return {"token": jwt.encode(claims, gateway.key, algorithm="HS256")}
+
+
+def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None = None) -> str:
+    registered: Final = gateway.client.post(
+        "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+    )
+    assert registered.status_code in (200, 201), registered.text
+    client_id: Final = registered.json()["client_id"]
+    pkce: Final = _Pkce(secrets.token_urlsafe(48))
+    cookies: Final = _ui_session_cookie(gateway, user_id)
+    started: Final = gateway.client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": CLIENT_REDIRECT,
+            "response_type": "code",
+            "state": "lit6029",
+            "code_challenge": pkce.challenge,
+            "code_challenge_method": "S256",
+            **({} if resource is None else {"resource": resource}),
+        },
+        cookies=cookies,
+    )
+    assert started.status_code == 303, started.text
+    handle: Final = parse_qs(urlsplit(started.headers["location"]).query)["connect_flow"][0]
+    completed: Final = gateway.client.post(
+        "/authorize/complete", data={"flow": handle}, cookies={**cookies, **dict(started.cookies)}
+    )
+    assert completed.status_code == 303, completed.text
+    callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
+    assert "code" in callback, completed.headers["location"]
+    issued: Final = gateway.client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": callback["code"][0],
+            "redirect_uri": CLIENT_REDIRECT,
+            "client_id": client_id,
+            "code_verifier": pkce.verifier,
+        },
+    )
+    assert issued.status_code == 200, issued.text
+    return _issued_token(issued.json())
+
+
+def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: dict[str, object]) -> Outcome:
+    def post(rpc_method: str, rpc_params: dict[str, object]) -> httpx.Response:
+        return gateway.client.post(
+            f"/toolset/{name}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": rpc_method, "params": rpc_params},
+            headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json, text/event-stream"},
+        )
+
+    initialized: Final = _outcome_from_rpc(post("initialize", dict(INITIALIZE)))
+    if not initialized.ok:
+        return initialized
+    return _outcome_from_rpc(post(method, params))
+
+
+def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_its_route(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit6029sess" + uuid.uuid4().hex[:6]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        granted_name: Final = "lit6029g" + uuid.uuid4().hex[:8]
+        withheld_name: Final = "lit6029w" + uuid.uuid4().hex[:8]
+        granted_id: Final = create_toolset(scenario, ((server_id, "add"),), toolset_name=granted_name)
+        create_toolset(scenario, ((server_id, "multiply"),), toolset_name=withheld_name)
+        member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [granted_id]}))
+        bearer: Final = _gateway_session_bearer(gateway, member)
+        assert bearer.startswith("llm_session_"), bearer[:16]
+        listed: Final = _toolset_rpc(gateway, bearer, granted_name, "tools/list", {})
+        assert listed.tools == (f"{alias}-add",), listed.raw
+        peer.drain()
+        called: Final = _toolset_rpc(
+            gateway, bearer, granted_name, "tools/call", {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}}
+        )
+        assert called.ok and called.text == "9", called.raw
+        assert len(tool_calls(peer.drain())) == 1
+        denied: Final = _toolset_rpc(gateway, bearer, withheld_name, "tools/list", {})
+        assert denied.status == 403, denied.raw
+        assert tool_calls(peer.drain()) == ()
+
+
+def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_and_none_outside(
+    gateway: Gateway,
+) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        inside: Final = "lit6029in" + uuid.uuid4().hex[:6]
+        outside: Final = "lit6029out" + uuid.uuid4().hex[:6]
+        inside_server: Final = register_mcp(scenario, peer, inside)
+        outside_server: Final = register_mcp(scenario, peer, outside)
+        inside_name: Final = "lit6029i" + uuid.uuid4().hex[:8]
+        outside_name: Final = "lit6029o" + uuid.uuid4().hex[:8]
+        inside_id: Final = create_toolset(scenario, ((inside_server, "add"),), toolset_name=inside_name)
+        outside_id: Final = create_toolset(scenario, ((outside_server, "add"),), toolset_name=outside_name)
+        member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [inside_id, outside_id]}))
+        bearer: Final = _gateway_session_bearer(gateway, member, resource=f"{_base(gateway)}/{inside}/mcp")
+        assert bearer.startswith("llm_session_"), bearer[:16]
+        listed: Final = _toolset_rpc(gateway, bearer, inside_name, "tools/list", {})
+        assert listed.tools == (f"{inside}-add",), listed.raw
+        peer.drain()
+        called: Final = _toolset_rpc(
+            gateway, bearer, inside_name, "tools/call", {"name": f"{inside}-add", "arguments": {"a": 4, "b": 5}}
+        )
+        assert called.ok and called.text == "9", called.raw
+        assert len(tool_calls(peer.drain())) == 1
+        refused: Final = _toolset_rpc(gateway, bearer, outside_name, "tools/list", {})
+        assert refused.status == 403, refused.raw
+        assert tool_calls(peer.drain()) == ()
+
+
+_PROBE: Final = "catalog-probe"
+_ECHO: Final = "catalog-echo"
+_UNLISTED: Final = ""
+_GUARDRAIL_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
+    "        return allow()\n"
+    '    function = inputs.get("tools", [{}])[0].get("function", {})\n'
+    f'    return block("{_ECHO}[" + function.get("description") + "]")\n'
+)
+
+
+_ECHO_GUARDRAIL_YAML: Final = (
+    "guardrails:\n"
+    "  - guardrail_name: catalog-echo\n"
+    "    litellm_params:\n"
+    "      guardrail: custom_code\n"
+    "      mode: pre_mcp_call\n"
+    "      default_on: true\n"
+    "      custom_code: |\n" + textwrap.indent(_GUARDRAIL_CODE, 8 * " ")
+)
+
+
+@pytest.fixture(scope="module")
+def echo_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("catalog-echo")
+    path: Final = directory / "catalog_echo.yaml"
+    path.write_text((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text() + _ECHO_GUARDRAIL_YAML)
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path, workers=2) as rig:
+        yield rig
+
+
+def _echoed_description(outcome: Outcome) -> str:
+    found: Final = re.search(rf"{_ECHO}\[(.*?)\]", outcome.raw)
+    assert found is not None, outcome.raw
+    return found.group(1)
+
+
+def test_token_exchange_callers_with_different_subject_tokens_own_separate_listings(echo_rig: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, echo_rig.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=auth.issuer + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        first_subject: Final = "subject-" + uuid.uuid4().hex
+        first: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": f"Bearer {first_subject}"})
+        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": "Bearer subject-" + uuid.uuid4().hex})
+        auth.drain()
+        assert first.list_tools().ok
+        assert [request["subject_token"] for request in auth.token_requests()] == [first_subject]
+        probe: Final = {"probe": _PROBE}
+        own: Final = _echoed_description(first.call(f"{alias}-add", probe))
+        other: Final = _echoed_description(second.call(f"{alias}-add", probe))
+        assert (own, other) == ("Add two integers", _UNLISTED), (
+            "the caller bearer is part of the identity on a token-exchange server: one subject, one slot"
+        )
+        assert second.list_tools().ok
+        assert _echoed_description(second.call(f"{alias}-add", probe)) == "Add two integers"
+        assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"

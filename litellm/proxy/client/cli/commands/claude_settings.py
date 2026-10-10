@@ -25,7 +25,7 @@ from typing import Final, TypeAlias
 import click
 from filelock import FileLock
 from packaging.version import InvalidVersion, Version
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm._version import version as litellm_version
 from litellm.litellm_core_utils.private_json import (
@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_json,
     write_private_bytes,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from . import statusline_script
 from .cmd_quoting import quote_for_cmd
@@ -159,7 +160,7 @@ class StartOn:
 ModelChoice: TypeAlias = KeepModel | UnpinModel | StartOn
 
 
-class OwnedValue(BaseModel):
+class OwnedValue(LiteLLMBaseModel):
     """What one key held at a moment in time; `present=False` is an absent key, not a null one."""
 
     model_config = ConfigDict(frozen=True)
@@ -168,7 +169,7 @@ class OwnedValue(BaseModel):
     value: JsonValue = None
 
 
-class ConfigureReceipt(BaseModel):
+class ConfigureReceipt(LiteLLMBaseModel):
     """What `lite configure claude` found and what it owns, keyed by dotted path (`env.X` or a top-level key).
 
     Ownership moves only by a write: `written` fingerprints the keys some configure changed, at the
@@ -370,8 +371,8 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
     ours: Final = existing is None or (isinstance(existing_command, str) and command.split()[-1] in existing_command)
     if not ours:
         return settings
-    entry: Final = dict((("type", "command"), ("command", command)))  # mutable-ok: JSON document
-    return dict(chain(settings.items(), ((STATUS_LINE_KEY, entry),)))  # mutable-ok: JSON document
+    entry: Final = dict((("type", "command"), ("command", command)))
+    return dict(chain(settings.items(), ((STATUS_LINE_KEY, entry),)))
 
 
 def merge_claude_settings(
@@ -394,7 +395,7 @@ def merge_claude_settings(
     """
     raw_env: Final = settings.get(ENV_KEY, {})
     current_env: Final = raw_env if isinstance(raw_env, dict) else {}
-    env: Final = dict(  # mutable-ok: JSON document handed to json.dump, which rejects a read-only mapping
+    env: Final = dict(
         chain(
             (
                 (ENABLE_TOOL_SEARCH_KEY, ENABLE_TOOL_SEARCH_VALUE),
@@ -406,7 +407,7 @@ def merge_claude_settings(
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )
     )
-    return dict(  # mutable-ok: JSON document handed to json.dump, which rejects a read-only mapping
+    return dict(
         chain(
             (
                 (key, value)
@@ -438,7 +439,7 @@ def _lookup(settings: Mapping[str, JsonValue], path: str) -> OwnedValue:
 
 
 def _with_key(container: Mapping[str, JsonValue], key: str, owned: OwnedValue) -> Mapping[str, JsonValue]:
-    return dict(  # mutable-ok: JSON document handed to json.dump, which rejects a read-only mapping
+    return dict(
         chain(((k, v) for k, v in container.items() if k != key), ((key, owned.value),) if owned.present else ())
     )
 

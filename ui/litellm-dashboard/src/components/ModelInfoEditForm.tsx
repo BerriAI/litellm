@@ -5,7 +5,7 @@ import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import * as React from "react";
 import { useForm, type Resolver } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { FormField } from "@/components/shared/form/FormField";
@@ -14,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialLabelsByName, credentialOptions } from "@/components/shared/credentialOptions";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -345,6 +347,9 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
   );
 };
 
+const attachedCredentialLabel = (credentialName: string | null | undefined, credentials: CredentialItem[]): string =>
+  credentialName ? credentialLabelsByName(credentials).get(credentialName) ?? credentialName : "Manual";
+
 const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   localModelData,
   modelData,
@@ -634,36 +639,23 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>Existing Credentials</FieldLabel>
               {isEditing ? (
                 <FormField control={form.control} name="litellm_credential_name">
-                  {({ id, value, onChange, onBlur }) => {
-                    const items: { value: string | null; label: string }[] = [
-                      { value: null, label: "None" },
-                      ...credentialsList.map((credential) => ({
-                        value: credential.credential_name,
-                        label: credential.credential_name,
-                      })),
-                    ];
-                    return (
-                      <Select
-                        items={items}
-                        value={(value as string | null) ?? null}
-                        onValueChange={(selected: string | null) => onChange(selected)}
-                      >
-                        <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
-                          <SelectValue placeholder="Select or search for existing credentials" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {items.map((item) => (
-                            <SelectItem key={item.value ?? "none"} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    );
-                  }}
+                  {({ id, value, onChange }) => (
+                    <SearchSelect
+                      inputId={id}
+                      placeholder="Select or search for existing credentials"
+                      options={credentialOptions(credentialsList)}
+                      value={(value as string | null) ?? ""}
+                      allowClear={false}
+                      onValueChange={(selected) => {
+                        if (selected !== null) onChange(selected === "" ? null : selected);
+                      }}
+                    />
+                  )}
                 </FormField>
               ) : (
-                <Display>{localModelData.litellm_params?.litellm_credential_name || "Manual"}</Display>
+                <Display>
+                  {attachedCredentialLabel(localModelData.litellm_params?.litellm_credential_name, credentialsList)}
+                </Display>
               )}
             </div>
 

@@ -110,7 +110,7 @@ def validate_password_policy(password: str, general_settings: Mapping[str, objec
 def get_hibp_client() -> AsyncHTTPHandler:
     return get_async_httpx_client(
         llm_provider=httpxSpecialProvider.PasswordBreachCheck,
-        params={"timeout": HIBP_TIMEOUT_SECONDS},  # mutable-ok: callee takes a bare dict (PEP 589)
+        params={"timeout": HIBP_TIMEOUT_SECONDS},
     )
 
 
@@ -125,7 +125,7 @@ def _is_suffix_in_range_response(response_body: str, hash_suffix: str) -> bool:
 async def _is_password_breached(password: str, client: AsyncHTTPHandler) -> bool:
     # usedforsecurity=False: SHA-1 is only a lookup key into the HIBP dataset, so no security property rests on it
     sha1_hex: Final = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
-    headers: Final = {  # mutable-ok: callee takes a bare dict (PEP 589)
+    headers: Final = {
         "Add-Padding": "true",
         "User-Agent": f"litellm-proxy/{version}",
     }

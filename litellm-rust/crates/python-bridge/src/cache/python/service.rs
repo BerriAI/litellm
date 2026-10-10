@@ -4,11 +4,11 @@ use litellm_cache::Error;
 use litellm_cache_response::{
     ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
 };
-use litellm_core::caching::CachedOutput;
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::{Protocol, Reply},
 };
+use litellm_inference::caching::CachedOutput;
 use serde_json::Value;
 
 const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";

@@ -10,9 +10,9 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_core::resources::CoreResources;
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
+use litellm_inference::resources::CoreResources;
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
 use tower::ServiceExt;

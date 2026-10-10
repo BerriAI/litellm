@@ -48,7 +48,54 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
-  it.each([false, true])("omits masked JEV credentials from dashboard saves, edited: %s", (edited) => {
+  it.each([undefined, false, true])("preserves cache settings through edit and save: %s", (enabled) => {
+    const stored = {
+      ...STORED,
+      classifier_type: "heuristic" as const,
+      cache_aware_routing: enabled,
+      cache_aware_routing_output_tokens: 0,
+      cache_aware_routing_timeout_ms: 750,
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.cache_aware_routing).toBe(enabled);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+    expect(saved.cache_aware_routing).toBe(enabled);
+    expect(Object.hasOwn(saved, "cache_aware_routing")).toBe(enabled !== undefined);
+    expect(saved).toMatchObject({
+      cache_aware_routing_output_tokens: 0,
+      cache_aware_routing_timeout_ms: 750,
+      some_future_backend_key: STORED.some_future_backend_key,
+    });
+  });
+
+  it("disables cache routing and removes cleared overrides without changing context or output limits", () => {
+    const stored = {
+      ...STORED,
+      classifier_type: "heuristic" as const,
+      cache_aware_routing: true,
+      cache_aware_routing_output_tokens: 512,
+      cache_aware_routing_timeout_ms: 750,
+      enable_context_window_escalation: false,
+      max_tokens_from_tier_model: false,
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const edited = {
+      ...hydrated,
+      cache_aware_routing: false,
+      cache_aware_routing_output_tokens: undefined,
+      cache_aware_routing_timeout_ms: undefined,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, edited);
+    expect(saved).toMatchObject({
+      cache_aware_routing: false,
+      enable_context_window_escalation: false,
+      max_tokens_from_tier_model: false,
+    });
+    expect(saved).not.toHaveProperty("cache_aware_routing_output_tokens");
+    expect(saved).not.toHaveProperty("cache_aware_routing_timeout_ms");
+  });
+
+  it.each([false, true])("omits masked Jev credentials from legacy/canonical saves, edited: %s", (edited) => {
     const stored = {
       classifier_type: "jev" as const,
       tiers: FORM_VALUE.tiers,
@@ -60,7 +107,15 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
         api_base: "https://jev.example.com",
       },
     };
-    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const source = edited
+      ? {
+          ...stored,
+          classifier_type: "oss_classifier" as const,
+          jev_classifier_config: undefined,
+          opensource_classifier_config: { ...stored.jev_classifier_config, provider: "typesafe" },
+        }
+      : stored;
+    const hydrated = hydrateComplexityRouterConfig(source, undefined);
     expect(hydrated.jev_classifier_config).not.toHaveProperty("api_key");
     expect(hydrated.jev_classifier_config).not.toHaveProperty("api_base");
     const value = edited
@@ -69,8 +124,9 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
           jev_classifier_config: { model: "jev-updated", timeout_ms: 8100, instructions: "" },
         }
       : hydrated;
-    const saved = buildUpdatedComplexityRouterConfig(stored, value);
-    expect(saved.jev_classifier_config).toEqual({
+    const saved = buildUpdatedComplexityRouterConfig(source, value);
+    expect(saved.opensource_classifier_config).toEqual({
+      provider: "jev",
       ...(edited
         ? { model: "jev-updated", timeout_ms: 8100 }
         : { model: "jev-configured", timeout_ms: 6100, instructions: "Existing instructions" }),
@@ -78,7 +134,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     for (const classifierType of ["llm", "heuristic"] as const) {
       expect(
         buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(value, classifierType)),
-      ).not.toHaveProperty("jev_classifier_config");
+      ).not.toHaveProperty("opensource_classifier_config");
     }
   });
 
@@ -94,19 +150,21 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
       tiers: FORM_VALUE.tiers,
     };
     const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
-    expect(saved.jev_classifier_config).toEqual({
+    expect(saved.opensource_classifier_config).toEqual({
+      provider: "jev",
       model: "jev-configured",
       timeout_ms: 6100,
       circuit_breaker_enabled: false,
     });
   });
-  it.each([false, true])("round trips JEV settings and preserves unmanaged fields, custom: %s", (custom) => {
+  it.each([false, true])("round trips Laya settings and preserves unmanaged fields, custom: %s", (custom) => {
     const stored = {
       ...(custom ? storedCustomConfig() : STORED),
       classifier_llm_config: { model: "stale-judge", timeout_ms: 3000 },
-      classifier_type: "jev" as const,
-      jev_classifier_config: {
-        model: "jev-test",
+      classifier_type: "oss_classifier" as const,
+      opensource_classifier_config: {
+        provider: "laya" as const,
+        model: "english",
         timeout_ms: 4100,
         instructions: "Judge the request",
         circuit_breaker_enabled: false,
@@ -121,12 +179,12 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     const hydrated = hydrateComplexityRouterConfig(stored, undefined);
     expect(effectiveClassifierType(hydrated)).toBe("jev");
     expect(hydrated.classifier_llm_config).toBeUndefined();
-    expect(hydrated.jev_classifier_config).toEqual(stored.jev_classifier_config);
+    expect(hydrated.jev_classifier_config).toEqual(stored.opensource_classifier_config);
     expect(hydrated.classifier_context_per_turn_chars).toBe(450);
     const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
     const expectedSavedConfig = {
-      classifier_type: "jev",
-      jev_classifier_config: stored.jev_classifier_config,
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: stored.opensource_classifier_config,
       classifier_context_window_size: 7,
       classifier_context_budget_chars: 9000,
       classifier_context_per_turn_chars: 450,
@@ -135,12 +193,13 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     };
     expect(saved).toMatchObject(expectedSavedConfig);
     expect(saved).not.toHaveProperty("classifier_llm_config");
+    expect(saved).not.toHaveProperty("jev_classifier_config");
     const reloaded = hydrateComplexityRouterConfig(saved, undefined);
     expect(reloaded.jev_classifier_config).toEqual(hydrated.jev_classifier_config);
     expect(reloaded.classifier_context_per_turn_chars).toBe(450);
     expect(effectiveClassifierType(reloaded)).toBe("jev");
     const llm = buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(reloaded, "llm"));
-    expect(llm).not.toHaveProperty("jev_classifier_config");
+    expect(llm).not.toHaveProperty("opensource_classifier_config");
   });
 
   it.each([0, 0.92, 1])("hydrates and saves a success threshold of %s without changing the artifact", (threshold) => {
@@ -836,6 +895,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     plan_mode_min_tier: "COMPLEX",
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
+    local_heuristic: "heuristic",
     heuristic_v2_success_threshold: 0.89,
     heuristic_first_max_tier: "SIMPLE",
     classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
@@ -863,6 +923,9 @@ describe("managed keys survive an untouched open-and-save", () => {
     reasoning_override_min_score: 0.3,
     enable_context_window_escalation: false,
     context_window_escalation_buffer: 0.9,
+    cache_aware_routing: false,
+    cache_aware_routing_output_tokens: 512,
+    cache_aware_routing_timeout_ms: 750,
     code_keywords: ["async", "await"],
     reasoning_keywords: ["prove"],
     technical_keywords: ["api"],
@@ -883,6 +946,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     "fallback_tier",
     "hybrid_boundary_margin",
     "jev_classifier_config",
+    "opensource_classifier_config",
     "classifier_plugin_timeout_ms",
   ]);
 
@@ -905,6 +969,8 @@ describe("managed keys survive an untouched open-and-save", () => {
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
+    expect(hydrated.local_heuristic).toBe(STORED_ALL_MANAGED.local_heuristic);
+    expect(saved.local_heuristic).toBe(STORED_ALL_MANAGED.local_heuristic);
 
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))

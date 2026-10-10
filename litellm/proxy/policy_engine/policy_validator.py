@@ -193,7 +193,7 @@ class PolicyValidator:
         # A concrete entry is one the request-time matcher compares by exact equality;
         # only a trailing "*" is a wildcard (RouteChecks._is_wildcard_pattern), and those
         # are left unvalidated since they may match zero entities today and more later.
-        is_pattern: Final = RouteChecks._is_wildcard_pattern
+        is_pattern: Final = RouteChecks.is_wildcard_pattern
         concrete_teams: Final = [t for t in (teams or []) if not is_pattern(pattern=t)]
         concrete_keys: Final = [k for k in (keys or []) if not is_pattern(pattern=k)]
         concrete_models: Final = [m for m in (models or []) if not is_pattern(pattern=m)]
@@ -429,7 +429,7 @@ class PolicyValidator:
 
         for policy_name, policy_data in policy_config.items():
             try:
-                policy = temp_registry._parse_policy(policy_name, policy_data)
+                policy = temp_registry.parse_policy(policy_name, policy_data)
                 policies[policy_name] = policy
             except Exception as e:
                 errors.append(

@@ -7,7 +7,7 @@ use litellm_llms::{
     },
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
 };
-use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -582,28 +582,34 @@ fn leaves_a_complete_converse_url_untouched() {
     );
 }
 
-#[test]
-fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
+#[rstest]
+#[case::full_static_pair(
+    json!({"aws_access_key_id": "AKIAHOST", "aws_secret_access_key": "hostsecret", "aws_session_token": "hosttoken"}),
+    Some(("AKIAHOST", "hostsecret", Some("hosttoken")))
+)]
+#[case::pair_without_session_token(
+    json!({"aws_access_key_id": "AKIAHOST", "aws_secret_access_key": "hostsecret"}),
+    Some(("AKIAHOST", "hostsecret", None))
+)]
+#[case::key_id_alone(json!({"aws_access_key_id": "AKIA"}), None)]
+#[case::blank_key_id(json!({"aws_access_key_id": "  ", "aws_secret_access_key": "s"}), None)]
+#[case::nothing(json!({}), None)]
+fn host_supplied_credentials_need_a_full_static_pair(
+    #[case] optional_params: Value,
+    #[case] expected: Option<(&str, &str, Option<&str>)>,
+) {
+    use litellm_auth::AwsParams;
     use litellm_auth_aws::host_supplied_credentials;
 
-    let supplied = params(json!({
-        "aws_access_key_id": "AKIAHOST",
-        "aws_secret_access_key": "hostsecret",
-        "aws_session_token": "hosttoken"
-    }));
-    let credentials = host_supplied_credentials(&supplied).expect("host credentials");
-    assert_eq!(credentials.access_key_id(), "AKIAHOST");
-    assert_eq!(credentials.secret_access_key(), "hostsecret");
-    assert_eq!(credentials.session_token(), Some("hosttoken"));
+    let credentials =
+        host_supplied_credentials(&AwsParams::from_optional_params(&params(optional_params)));
 
-    // Without a full static pair there is nothing to honor, so the core falls
-    // back to deriving credentials itself.
-    assert!(host_supplied_credentials(&params(json!({"aws_access_key_id": "AKIA"}))).is_none());
-    assert!(
-        host_supplied_credentials(&params(
-            json!({"aws_access_key_id": "  ", "aws_secret_access_key": "s"})
-        ))
-        .is_none()
+    assert_eq!(
+        credentials.as_ref().map(|credentials| (
+            credentials.access_key_id(),
+            credentials.secret_access_key(),
+            credentials.session_token(),
+        )),
+        expected
     );
-    assert!(host_supplied_credentials(&Map::new()).is_none());
 }

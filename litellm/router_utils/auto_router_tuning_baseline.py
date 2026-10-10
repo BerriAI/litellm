@@ -8,7 +8,7 @@ from typing import Final
 
 from pydantic import ValidationError
 
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, configured_local_heuristic
 
 # v2 hashes combine models and scoring rules; a new snapshot is required to separate them.
 TUNING_BASELINE_PARAM_NAME: Final = "auto_router_tuning_baseline_v3"
@@ -30,7 +30,6 @@ HEURISTIC_V1_TUNING_FIELDS: Final = (
 
 _TUNING_FIELD_SET: Final = frozenset(HEURISTIC_V1_TUNING_FIELDS)
 
-_V1_SCORING_CLASSIFIER_TYPES: Final = frozenset({"heuristic", "heuristic_first", "hybrid"})
 _AUTO_ROUTER_COMPLEXITY_PREFIX: Final = "auto_router/complexity_router"
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_TAGS: Final[tuple[str, ...]] = ()
@@ -71,7 +70,7 @@ DEFAULT_TUNING_FINGERPRINT: Final = tuning_fingerprint(_EMPTY)
 
 def uses_heuristic_v1(complexity_router_config: object) -> bool:
     """Whether a config's primary classifier path is the heuristic-v1 scorer."""
-    return _mapping(complexity_router_config).get("classifier_type", "heuristic") in _V1_SCORING_CLASSIFIER_TYPES
+    return configured_local_heuristic(_mapping(complexity_router_config)) == "heuristic"
 
 
 def router_identity(deployment: Mapping[str, object]) -> str | None:

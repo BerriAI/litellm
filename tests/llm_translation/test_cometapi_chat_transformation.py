@@ -8,42 +8,7 @@ import os
 
 import pytest
 
-
-
-
 # Integration test example (requires real API key)
-@pytest.mark.skip(reason="Skipping integration test")
-def test_cometapi_integration():
-    """
-    Integration test - requires real API key
-    Run with: pytest -k test_cometapi_integration -s
-    """
-    from litellm import completion
-
-    # Try to get API key from multiple environment variables
-    api_key = (
-        os.getenv("COMETAPI_API_KEY")
-        or os.getenv("COMETAPI_KEY")
-        or os.getenv("COMET_API_KEY")
-    )
-
-    if not api_key:
-        pytest.skip("COMETAPI_API_KEY not set - skipping integration test")
-
-    response = completion(
-        model="cometapi/gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Say hello in one word"}],
-        api_key=api_key,
-        max_tokens=10,
-        temperature=0.7,
-    )
-
-    # Verify response structure
-    assert response.choices[0].message.content
-    assert len(response.choices[0].message.content.strip()) > 0
-    assert response.model
-    assert response.usage
-    assert response.usage.total_tokens > 0
 
 
 def test_cometapi_streaming_integration():

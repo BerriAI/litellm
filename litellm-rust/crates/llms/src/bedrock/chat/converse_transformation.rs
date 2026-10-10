@@ -1,3 +1,4 @@
+use litellm_auth::AwsParams;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
@@ -8,12 +9,9 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, TurnRole, build_conversation},
 };
-use litellm_types::{
-    llms::openai::{ChatMessage, ChatMessageContent},
-    utils::{
-        ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-        ChatCompletionsUsage,
-    },
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
+    ChatCompletionsUsage, ChatMessage, ChatMessageContent,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -171,7 +169,7 @@ pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: AmazonConverseConfig = AmazonConverse
 
 impl BaseConfig for AmazonConverseConfig {
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES
+        litellm_auth::AwsParams::secret_names()
             .iter()
             .copied()
             .chain([AWS_BEARER_TOKEN_BEDROCK])
@@ -190,7 +188,11 @@ impl BaseConfig for AmazonConverseConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
+        let region = resolve_bedrock_region(
+            model_region.as_deref(),
+            &AwsParams::from_optional_params(optional_params),
+            env_lookup,
+        );
         let endpoint = optional_params
             .get(AWS_BEDROCK_RUNTIME_ENDPOINT)
             .and_then(Value::as_str)
@@ -319,19 +321,13 @@ impl BaseConfig for AmazonConverseConfig {
             });
         }
         let (_, model_region) = bedrock_model_id_and_region(model);
+        let params = AwsParams::from_optional_params(optional_params);
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
             },
         })
     }
@@ -388,7 +384,7 @@ fn converse_body(conversation: &Conversation, optional_params: &Map<String, Valu
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": <&'static str>::from(turn.role),
                 "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
             })
         })

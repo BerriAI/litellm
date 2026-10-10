@@ -1,7 +1,7 @@
-use litellm_types::{
-    llms::anthropic_messages::anthropic_request::{
-        AdaptiveThinking, AnthropicMessage, AnthropicMessagesOptionalParams,
-        AnthropicMessagesRequest, EnabledThinking, ThinkingConfig, ThinkingDisplay,
+use litellm_llms_types::{
+    formats::messages::{
+        AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
+        ThinkingConfig, ThinkingDisplay,
     },
     recognized::Recognized,
 };
@@ -16,12 +16,12 @@ use crate::{
 };
 
 pub fn shape_anthropic_messages_request(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     reasoning_auto_summary: bool,
-) -> Result<AnthropicMessagesRequest, Error> {
-    Ok(AnthropicMessagesRequest {
+) -> Result<MessagesRequest, Error> {
+    Ok(MessagesRequest {
         messages: sanitize_anthropic_messages(request.messages),
-        params: AnthropicMessagesOptionalParams {
+        params: MessagesOptionalParams {
             metadata: request
                 .params
                 .metadata
@@ -35,7 +35,7 @@ pub fn shape_anthropic_messages_request(
     })
 }
 
-fn sanitize_anthropic_messages(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
         sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
     ))
@@ -100,11 +100,11 @@ mod tests {
 
     use super::*;
 
-    fn messages(value: Value) -> Vec<AnthropicMessage> {
+    fn messages(value: Value) -> Vec<Message> {
         serde_json::from_value(value).unwrap()
     }
 
-    fn request(body: Value) -> AnthropicMessagesRequest {
+    fn request(body: Value) -> MessagesRequest {
         serde_json::from_value(body).unwrap()
     }
 

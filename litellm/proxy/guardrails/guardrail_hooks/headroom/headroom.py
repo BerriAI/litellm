@@ -42,9 +42,10 @@ from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import (
-    HEADROOM_CONVERTED_STREAM_KEY,
+    HEADROOM_INTERCEPTION_PREFIX,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    as_converted_stream,
 )
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
@@ -508,7 +509,6 @@ class HeadroomGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
-        self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -520,6 +520,7 @@ class HeadroomGuardrail(CustomGuardrail):
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
         )
+        self.timeout = self._resolve_timeout(timeout)
 
     def _should_bypass(self, request_data: dict) -> bool:
         psr: Final = request_data.get("proxy_server_request")
@@ -883,18 +884,14 @@ class HeadroomGuardrail(CustomGuardrail):
         call_type: CallTypes | None,
     ) -> dict[str, object] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
-        effective: Final = base_result if base_result is not None else kwargs
         if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
             return base_result
+        effective: Final = kwargs if base_result is None else _REQUEST_DATA_ADAPTER.validate_python(base_result)
         if not effective.get("stream") or effective.get("background"):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
-        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
-            **effective,
-            "stream": False,
-            HEADROOM_CONVERTED_STREAM_KEY: True,
-        }
+        return as_converted_stream(effective, HEADROOM_INTERCEPTION_PREFIX)
 
     async def async_should_run_agentic_loop(
         self,
