@@ -435,13 +435,6 @@ async def test_databricks_agent_flat_oauth_send_reaches_the_endpoint_with_the_mi
 
     with (
         patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry),
-        patch(
-            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
-            side_effect=lambda data, **kw: data,
-        ),
-        patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
-        patch("litellm.proxy.proxy_server.version", "1.0.0"),
     ):
         response = await invoke_agent_a2a(
             agent_id="dbx-agent",

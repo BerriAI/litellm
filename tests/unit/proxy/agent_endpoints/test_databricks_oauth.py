@@ -8,6 +8,7 @@ helper.
 """
 
 import base64
+from typing import Final
 from unittest.mock import MagicMock, create_autospec, patch
 
 import httpx
@@ -20,6 +21,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
     has_databricks_oauth,
     parse_databricks_oauth_config,
     resolve_databricks_app_auth_header,
+    resolve_databricks_backend_auth,
     without_databricks_oauth_params,
 )
 
@@ -137,6 +139,14 @@ def test_parse_raises_on_an_empty_nested_block(block, error):
     assert has_databricks_oauth(params)
     with pytest.raises(ValueError, match=error):
         parse_databricks_oauth_config(params)
+
+
+@pytest.mark.parametrize("block", [{}, ""])
+@pytest.mark.asyncio
+async def test_an_empty_nested_block_on_a_url_agent_is_ignored_as_before(block):
+    auth: Final = await resolve_databricks_backend_auth({"databricks_oauth": block, "api_key": "hop-key"})
+    assert auth.header is None
+    assert auth.litellm_params == {"api_key": "hop-key"}
 
 
 def test_parse_resolves_os_environ_references(monkeypatch):

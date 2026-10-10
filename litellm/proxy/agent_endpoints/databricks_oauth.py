@@ -113,6 +113,8 @@ def _flat_databricks_agent_oauth(litellm_params: Mapping[str, object]) -> Mappin
 
 def _raw_oauth_block(litellm_params: Mapping[str, object]) -> object | None:
     nested: Final = litellm_params.get(DATABRICKS_OAUTH_PARAM)
+    if not _is_databricks_agent(litellm_params):
+        return nested or None
     return nested if nested is not None else _flat_databricks_agent_oauth(litellm_params)
 
 
