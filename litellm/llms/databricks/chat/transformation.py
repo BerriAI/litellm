@@ -75,20 +75,11 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
-def _collapse_single_text_block(message: AllMessageValues) -> AllMessageValues:
-    message_values: Final[Mapping[str, object]] = cast(  # cast-ok: TypedDict is a Mapping
-        Mapping[str, object], message
-    )
-    content: Final[object] = message_values.get("content")
-    match cast(list[object], content):  # cast-ok: the list pattern checks content at runtime
-        case [{"type": "text", "text": str() as text} as block] if (
-            isinstance(block, dict)
-            and len(
-                cast(Mapping[str, object], block)  # cast-ok: mapping-pattern values are unknown
-            )
-            == 2
-        ):
-            return cast(AllMessageValues, {**message, "content": text})  # cast-ok: role fields are preserved
+def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    match content:
+        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+            return {**message, "content": text}
         case _:
             return message
 
