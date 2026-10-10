@@ -417,11 +417,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_encrypts_params(self, mock_decrypt, mock_encrypt, repo):
@@ -435,11 +435,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
@@ -459,11 +459,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
@@ -485,7 +485,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_all(self, mock_decrypt, repo):
@@ -508,7 +508,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_unblocked(self, mock_decrypt, repo):
@@ -525,7 +525,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_by_name(self, mock_decrypt, repo):
@@ -541,11 +541,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model(self, mock_decrypt, mock_encrypt, repo):
@@ -564,7 +564,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_delete_model(self, mock_decrypt, repo):
@@ -578,11 +578,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_block_unblock_model(self, mock_decrypt, mock_encrypt, repo):
@@ -2012,7 +2012,7 @@ class TestModelRepositoryExtended:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda value, **kw: value,
     )
     async def test_find_by_team_id(self, mock_decrypt, repo):
