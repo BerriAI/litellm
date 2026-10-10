@@ -48,6 +48,26 @@ end
 return current
 """
 
+_DELETE_PIN_IF_MODEL_ID_SCRIPT: Final = """
+local current = redis.call('GET', KEYS[1])
+if current == false then
+  return 0
+end
+local stored_id = current
+local decoded, parsed = pcall(cjson.decode, current)
+if decoded then
+  if type(parsed) == 'table' then
+    stored_id = parsed['model_id']
+  else
+    stored_id = parsed
+  end
+end
+if tostring(stored_id) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
 
 def set_local_affinity_pin(cache: DualCache, cache_key: str, value: object, ttl_seconds: int) -> None:
     """Replace the entry because InMemoryCache.set_cache preserves a live key's expiry."""
@@ -85,6 +105,42 @@ def _decode_pin(value: str) -> object:
         return _PIN_JSON_ADAPTER.validate_json(value)
     except ValidationError:
         return value
+
+
+def _stored_pin_model_id(stored: object) -> str | None:
+    """Deployment id named by a stored pin, for both the dict shape and bare strings."""
+    if isinstance(stored, dict):
+        model_id = stored.get("model_id")
+        return str(model_id) if model_id is not None else None
+    if isinstance(stored, str):
+        return stored
+    return None
+
+
+def delete_affinity_pin_if_model_id_in_memory(cache: DualCache, cache_key: str, model_id: str) -> bool:
+    """Synchronous compare-and-delete; no await sits between the read and the write."""
+    if _stored_pin_model_id(cache.in_memory_cache.get_cache(cache_key)) != model_id:
+        return False
+    cache.in_memory_cache.delete_cache(cache_key)
+    return True
+
+
+async def delete_affinity_pin_if_model_id(cache: DualCache, cache_key: str, model_id: str) -> bool:
+    """Delete the pin only when it still names `model_id`; True when anything was deleted.
+
+    The Redis compare-and-delete runs as a single Lua script, so a sibling worker
+    that re-pinned the session after our read keeps its fresh pin. Falls back to a
+    same-tick in-memory compare-and-delete when Redis is absent or fails.
+    """
+    deleted: bool = False
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is not None:
+        try:
+            delete_script: Final = redis_cache.async_register_script(_DELETE_PIN_IF_MODEL_ID_SCRIPT)
+            deleted = bool(await delete_script(keys=(cache_key,), args=(model_id,)))
+        except Exception as error:  # noqa: BLE001  # Redis/Lua faults fall through to the local tier
+            verbose_router_logger.debug("Affinity cache: Redis pin delete failed. error=%s", error)
+    return delete_affinity_pin_if_model_id_in_memory(cache, cache_key, model_id) or deleted
 
 
 async def claim_affinity_pin(
