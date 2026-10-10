@@ -43,7 +43,13 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFileUploadStream,
     LiteLLMLoggingObj,
 )
-from litellm.llms.vertex_ai.batches.transformation import vertex_embedding_prompt_token_count
+from litellm.llms.vertex_ai.batches.transformation import (
+    VERTEX_ANTHROPIC_VERSION,
+    as_json_object,
+    is_vertex_anthropic_batch_model,
+    is_vertex_anthropic_batch_output_response,
+    vertex_embedding_prompt_token_count,
+)
 from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_ai_fine_tuned_endpoint_id,
@@ -55,6 +61,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     transform_openai_input_gemini_embed_content,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -83,6 +90,7 @@ _GCP_LABEL_VALUE_MAX_LEN: Final = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"
 _VERTEX_BATCH_KEY_FIELD: Final = "key"
 _MANAGED_GCS_MODEL_PATH_PATTERN: Final = re.compile(r"publishers/[^/]+/models/([^/?]+)")
+_PUBLISHER_MODEL_PATH_PATTERN: Final = re.compile(r"publishers/[^/]+/models/")
 _EMBED_REQUEST_FIELD_BY_GEMINI_PARAM: Final = (
     ("outputDimensionality", "output_dimensionality"),
     ("taskType", "task_type"),
@@ -220,10 +228,14 @@ def _get_litellm_batch_custom_id(vertex_output_row: Mapping[str, object]) -> str
     """
     Resolve the OpenAI `custom_id` for a Vertex batch output row.
 
-    Embedding rows carry it in the top-level `key` field that Vertex echoes back;
-    `generateContent` rows have no such field, so it is smuggled through request
-    labels instead (see `_set_litellm_batch_custom_id_labels`).
+    Claude rows carry it in their own top-level `custom_id` field and embedding rows in
+    the top-level `key` field that Vertex echoes back; `generateContent` rows have no
+    such field, so it is smuggled through request labels instead (see
+    `_set_litellm_batch_custom_id_labels`).
     """
+    anthropic_custom_id: Final = vertex_output_row.get("custom_id")
+    if anthropic_custom_id is not None:
+        return str(anthropic_custom_id)
     key = vertex_output_row.get(_VERTEX_BATCH_KEY_FIELD)
     if key is not None:
         return unquote(str(key))
@@ -281,6 +293,25 @@ def _is_vertex_generate_content_batch_output_row(vertex_output_row: Mapping[str,
     response: Final = vertex_output_row.get("response")
     return (isinstance(response, dict) and ("candidates" in response or "promptFeedback" in response)) or bool(
         vertex_output_row.get("status")
+    )
+
+
+def _is_vertex_anthropic_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
+    """
+    Whether a Vertex batch output row came from a Claude (Anthropic Messages) request. Successful rows hold an
+    Anthropic `message` response, and failed ones are still recognized from the `anthropic_version` every Claude
+    request row carries
+    """
+    response: Final = as_json_object(vertex_output_row.get("response"))
+    if response is not None and is_vertex_anthropic_batch_output_response(response):
+        return True
+    request: Final = as_json_object(vertex_output_row.get("request"))
+    return request is not None and "anthropic_version" in request
+
+
+def _is_vertex_chat_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
+    return _is_vertex_generate_content_batch_output_row(vertex_output_row) or _is_vertex_anthropic_batch_output_row(
+        vertex_output_row
     )
 
 
@@ -403,6 +434,38 @@ def _openai_batch_output_row(
         },
         "error": None if error_code is None else {"code": error_code, "message": error_message},
     }
+
+
+def _vertex_anthropic_batch_output_row_to_openai(
+    custom_id: str,
+    response: object,
+    mock_httpx_response: httpx.Response,
+) -> _OpenAIBatchOutputRow:
+    """
+    One OpenAI batch output row from a Vertex Claude row's Anthropic `message` response. A response that is an
+    Anthropic `error` object, or missing, becomes a failed row
+    """
+    anthropic_response: Final = as_json_object(response)
+    if anthropic_response is None or not is_vertex_anthropic_batch_output_response(anthropic_response):
+        anthropic_error: Final = anthropic_response.get("error") if anthropic_response is not None else None
+        return _openai_batch_output_row(
+            custom_id=custom_id,
+            error_code="vertex_ai_error",
+            error_message=json.dumps(anthropic_error) if anthropic_error else "Claude batch row has no response",
+        )
+    try:
+        model_response: Final = VertexAIAnthropicConfig().transform_parsed_response(
+            completion_response=dict(anthropic_response),
+            raw_response=mock_httpx_response,
+            model_response=ModelResponse(),
+        )
+    except Exception as e:  # noqa: BLE001  # one malformed row must fail alone, not the whole output file
+        return _openai_batch_output_row(
+            custom_id=custom_id,
+            error_code="transformation_error",
+            error_message=f"Failed to transform response: {e}",
+        )
+    return _openai_batch_output_row(custom_id=custom_id, body=model_response.model_dump())
 
 
 def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[str, int, int]:
@@ -670,26 +733,69 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     )
 
 
+def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
+    openai_entry: Mapping[str, object],
+    chat_request_body: Mapping[str, Any],
+    model: str,
+) -> Mapping[str, object]:
+    """
+    Transforms an OpenAI chat batch entry into the Anthropic Messages row Vertex batches Claude with,
+    `{"custom_id": ..., "request": {"messages": [...], "anthropic_version": "vertex-2023-10-16", "max_tokens": ...}}`
+    """
+    config: Final = VertexAIAnthropicConfig()
+    bare_model: Final = model.rsplit("/", 1)[-1]
+    optional_params: Final[Mapping[str, object]] = config.map_openai_params(
+        non_default_params={key: value for key, value in chat_request_body.items() if key not in ("model", "messages")},
+        optional_params={},
+        model=bare_model,
+        drop_params=False,
+    )
+    anthropic_request: Final[Mapping[str, object]] = config.transform_request(
+        model=bare_model,
+        messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
+        optional_params={**optional_params, "anthropic_version": VERTEX_ANTHROPIC_VERSION},
+        litellm_params={},
+        headers={},
+    )
+    custom_id: Final = openai_entry.get("custom_id")
+    if custom_id is None:
+        return {"request": anthropic_request}
+    return {"custom_id": str(custom_id), "request": anthropic_request}
+
+
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
     map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+    batch_model: str | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
+
+    `batch_model` is the deployment model the batch runs against and wins over the entry's own `body.model`,
+    which picks the row shape: Anthropic Messages for Claude, `GenerateContentRequest` otherwise.
 
     jsonl body for vertex is {"request": <request_body>}
     Example Vertex jsonl
     {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
     """
+    openai_request_body: Final = openai_entry.get("body") or {}
+    model: Final = batch_model or str(openai_request_body.get("model") or "")
+    is_anthropic_model: Final = is_vertex_anthropic_batch_model(model)
     if _is_embeddings_batch_entry(openai_entry):
+        if is_anthropic_model:
+            raise VertexAIError(
+                status_code=400,
+                message=f"Vertex AI batch embeddings are not supported for Claude models ('{model}')",
+            )
         return _openai_batch_jsonl_entry_to_vertex_embeddings_rows(openai_entry)
 
-    openai_request_body: Final = openai_entry.get("body") or {}
     chat_request_body: Final = (
         responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
+    if is_anthropic_model:
+        return (_openai_batch_jsonl_entry_to_vertex_anthropic_row(openai_entry, chat_request_body, model),)
     vertex_request_body: Final = transform_request_body(
         messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
         model=chat_request_body.get("model", ""),
@@ -801,14 +907,18 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
         self,
         openai_file_content: FileTypes,
         map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+        batch_model: str | None = None,
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
+        self._batch_model = batch_model
 
     def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
         first = True
         for entry in _iter_openai_jsonl_entries(self._openai_file_content):
-            for wrapped in _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params):
+            for wrapped in _openai_batch_jsonl_entry_to_vertex_rows(
+                entry, self._map_openai_to_vertex_params, batch_model=self._batch_model
+            ):
                 prefix = b"" if first else b"\n"
                 first = False
                 yield prefix + json.dumps(wrapped).encode("utf-8")
@@ -857,13 +967,21 @@ class _RawFileUploadStream(BaseFileUploadStream):
         return _iter_raw_file_chunks(self._file_content)
 
 
+def _deployment_batch_model(litellm_params: Mapping[str, object]) -> str | None:
+    model: Final = litellm_params.get("model")
+    return model.removeprefix("vertex_ai/") if isinstance(model, str) and model else None
+
+
+def _publisher_model_path(raw_model: str) -> str:
+    if _PUBLISHER_MODEL_PATH_PATTERN.search(raw_model):
+        return raw_model
+    publisher: Final = "anthropic" if is_vertex_anthropic_batch_model(raw_model) else "google"
+    return f"publishers/{publisher}/models/{raw_model}"
+
+
 def _managed_batch_object_name(raw_model: str, *, passthrough: bool) -> str:
     endpoint_id: Final = get_vertex_ai_fine_tuned_endpoint_id(raw_model)
-    model_path: Final = (
-        f"endpoints/{endpoint_id}"
-        if endpoint_id is not None
-        else (raw_model if "publishers/google/models" in raw_model else f"publishers/google/models/{raw_model}")
-    )
+    model_path: Final = f"endpoints/{endpoint_id}" if endpoint_id is not None else _publisher_model_path(raw_model)
     safe_model_path: Final = sanitize_cloud_object_path(model_path, fallback="model")
     prefix: Final = _PASSTHROUGH_MANAGED_GCS_PREFIX if passthrough else VERTEX_AI_MANAGED_GCS_PREFIX
     return f"{prefix}{safe_model_path}/{uuid.uuid4()}"
@@ -968,10 +1086,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             fallback_filename="file",
         )
 
-    def _get_configured_bucket_name(self, litellm_params: dict) -> str:
+    def _get_configured_bucket_name(self, litellm_params: Mapping[str, object]) -> str:
+        configured_bucket_name: Final = litellm_params.get("gcs_bucket_name") or litellm_params.get("bucket_name")
         bucket_name: Final = (
-            litellm_params.get("gcs_bucket_name")
-            or litellm_params.get("bucket_name")
+            (configured_bucket_name if isinstance(configured_bucket_name, str) else None)
             or os.getenv("GCS_BATCH_BUCKET_NAME")
             or os.getenv("GCS_BUCKET_NAME")
         )
@@ -985,7 +1103,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         data: CreateFileRequest,
     ) -> str:
         """
@@ -1009,11 +1127,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        configured_model: Final = litellm_params.get("model")
         object_name = self.get_object_name(
             file_data,
             purpose,
-            deployment_model=configured_model if isinstance(configured_model, str) else None,
+            deployment_model=_deployment_batch_model(litellm_params),
             passthrough=is_passthrough_batch_upload(data, litellm_params),
         )
         if object_prefix:
@@ -1064,7 +1181,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         model: str,
         create_file_data: CreateFileRequest,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> bytes | str | dict:
         """
         2 Cases:
@@ -1095,6 +1212,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
                         self._map_openai_to_vertex_params,
+                        batch_model=_deployment_batch_model(litellm_params),
                     ),
                     content_type="application/json",
                 )
@@ -1145,7 +1263,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
-    def _parse_gcs_uri(self, file_id: str, litellm_params: dict | None = None) -> tuple[str, str]:
+    def _parse_gcs_uri(self, file_id: str, litellm_params: Mapping[str, object] | None = None) -> tuple[str, str]:
         """
         Validate a managed GCS file_id and return (bucket, url-encoded-object-path).
         """
@@ -1163,7 +1281,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         file_id: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> tuple[str, dict]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
@@ -1193,7 +1311,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         file_id: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> tuple[str, dict]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
@@ -1236,7 +1354,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         file_content_request,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> tuple[str, dict]:
         file_id: Final = file_content_request.get("file_id", "")
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
@@ -1333,7 +1451,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 headers=MappingProxyType({**headers, "content-length": str(len(transformed_content))}),
             )
 
-        if not _is_vertex_generate_content_batch_output_row(first_row):
+        if not _is_vertex_chat_batch_output_row(first_row):
             return FileContentStreamingResult(stream_iterator=replayed_stream, headers=headers)
 
         return FileContentStreamingResult(
@@ -1417,10 +1535,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # first line is not valid UTF-8/JSON) raises and falls through to the
             # passthrough below, leaving the content untouched.
             first_row: Final = _parse_vertex_batch_output_row(first_line)
-            if not (
-                _is_vertex_embeddings_batch_output_row(first_row)
-                or _is_vertex_generate_content_batch_output_row(first_row)
-            ):
+            if not (_is_vertex_embeddings_batch_output_row(first_row) or _is_vertex_chat_batch_output_row(first_row)):
                 return content
 
             context: Final = _new_vertex_batch_output_row_transform_context()
@@ -1483,6 +1598,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 custom_id=custom_id,
                 error_code="vertex_ai_error",
                 error_message=status,
+            )
+
+        if _is_vertex_anthropic_batch_output_row(vertex_output):
+            return _vertex_anthropic_batch_output_row_to_openai(
+                custom_id=custom_id,
+                response=vertex_output.get("response"),
+                mock_httpx_response=mock_httpx_response,
             )
 
         # Transform successful response using existing transformation
