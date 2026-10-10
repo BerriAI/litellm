@@ -16571,6 +16571,98 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "coralbricks/glm-5.3-fast": {
+        "cache_creation_input_token_cost": 1.68e-06,
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 1.12e-06,
+        "litellm_provider": "coralbricks",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.coralbricks.ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "coralbricks/glm-5.3-fp4": {
+        "cache_creation_input_token_cost": 1.68e-06,
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 1.12e-06,
+        "litellm_provider": "coralbricks",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.coralbricks.ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "coralbricks/deepseek-v4.1-flash-fast": {
+        "cache_creation_input_token_cost": 9e-08,
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 1e-08,
+        "litellm_provider": "coralbricks",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.coralbricks.ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "coralbricks/deepseek-v4.1-flash-fast-fp4": {
+        "cache_creation_input_token_cost": 9e-08,
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 1e-08,
+        "litellm_provider": "coralbricks",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.coralbricks.ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "computer-use-preview": {
         "deprecation_date": "2026-07-23",
         "input_cost_per_token": 3e-06,
