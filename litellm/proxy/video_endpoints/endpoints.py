@@ -1,6 +1,6 @@
 #### Video Endpoints #####
 
-from typing import Final
+from typing import Any, Final, cast  # noqa: TID251  # request-body boundary needs Any and a checked-by-source cast
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
@@ -20,9 +20,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
+    deployment_id_for_encoding,
     encode_character_id_in_response,
+    encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    route_to_encoded_deployment,
+    video_id_for_provider,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -83,7 +87,10 @@ async def video_generation(
     )
 
     # Read request body
-    data: Final = await read_request_body(request=request)
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
+        dict[str, Any],
+        await read_request_body(request=request),
+    )
     if input_reference is not None:
         input_reference_file: Final = await batch_to_bytesio([input_reference])
         if input_reference_file:
@@ -110,6 +117,7 @@ async def video_generation(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(generated, deployment_id_for_encoding(generated, data))
     except Exception as e:
         raise await processor.handle_llm_api_exception(
             e=e,
@@ -118,7 +126,7 @@ async def video_generation(
             version=version,
         )
     else:
-        return generated
+        return encoded_response
 
 
 @router.get(
@@ -271,13 +279,16 @@ async def video_status(
 
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
+    pinned_deployment_id: Final = (
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
+        if model_id_from_decoded and llm_router
+        else None
+    )
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, video_id)
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned_deployment_id=pinned_deployment_id)
     try:
         status: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -297,6 +308,9 @@ async def video_status(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_status: Final = encode_video_id_in_response(
+            status, deployment_id_for_encoding(status, data, pinned_deployment_id)
+        )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
             e=e,
@@ -305,7 +319,7 @@ async def video_status(
             version=version,
         )
     else:
-        return status
+        return encoded_status
 
 
 @router.get(
@@ -371,12 +385,15 @@ async def video_content(
 
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
+    pinned_deployment_id: Final = (
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
+        if model_id_from_decoded and llm_router
+        else None
+    )
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, video_id)
     # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned_deployment_id=pinned_deployment_id)
     try:
         # Call the video content function directly to get raw bytes
         video_bytes: Final = await processor.base_process_llm_request(
@@ -461,7 +478,10 @@ async def video_remix(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
+        dict[str, Any],
+        await read_request_body(request=request),
+    )
     data["video_id"] = video_id
 
     decoded: Final = decode_video_id_with_provider(video_id)
@@ -479,13 +499,16 @@ async def video_remix(
 
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
+    pinned_deployment_id: Final = (
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
+        if model_id_from_decoded and llm_router
+        else None
+    )
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, video_id)
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned_deployment_id=pinned_deployment_id)
     try:
         remixed: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -505,6 +528,9 @@ async def video_remix(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(
+            remixed, deployment_id_for_encoding(remixed, data, pinned_deployment_id)
+        )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
             e=e,
@@ -513,7 +539,7 @@ async def video_remix(
             version=version,
         )
     else:
-        return remixed
+        return encoded_response
 
 
 @router.post(
@@ -563,7 +589,10 @@ async def video_create_character(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
+        dict[str, Any],
+        await read_request_body(request=request),
+    )
     video_file: Final = await batch_to_bytesio([video])
     if video_file:
         data["video"] = video_file[0]
@@ -603,7 +632,7 @@ async def video_create_character(
         if target_model_name:
             hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
             provider_for_encoding: Final = hidden_params.get("custom_llm_provider") or custom_llm_provider or "openai"
-            model_id_for_encoding: Final = hidden_params.get("model_id") or data.get("model")
+            model_id_for_encoding: Final = deployment_id_for_encoding(response, data)
             response = encode_character_id_in_response(
                 response=response,
                 custom_llm_provider=provider_for_encoding,
@@ -668,7 +697,10 @@ async def video_get_character(
 
     decoded: Final = decode_character_id_with_provider(character_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
-    model_id_from_decoded: Final = decoded.get("model_id")
+    raw_model_id_from_decoded: Final = decoded.get("model_id")
+    model_id_from_decoded: Final[str | None] = (
+        raw_model_id_from_decoded if isinstance(raw_model_id_from_decoded, str) else None
+    )
     decoded_character_id: Final = decoded.get("character_id")
     if decoded_character_id:
         data["character_id"] = decoded_character_id
@@ -682,12 +714,13 @@ async def video_get_character(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+    pinned_deployment_id: Final = (
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
+        if model_id_from_decoded and llm_router
+        else None
+    )
 
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned_deployment_id=pinned_deployment_id)
     try:
         response: object = await processor.base_process_llm_request(
             request=request,
@@ -770,7 +803,10 @@ async def video_edit(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
+        dict[str, Any],
+        await read_request_body(request=request),
+    )
     uploaded_video: Final = data.pop("video", None)
     if isinstance(uploaded_video, StarletteUploadFile):
         video_files: Final = await batch_to_bytesio((uploaded_video,))
@@ -793,12 +829,15 @@ async def video_edit(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
+    pinned_deployment_id: Final = (
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
+        if model_id_from_decoded and llm_router
+        else None
+    )
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
 
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned_deployment_id=pinned_deployment_id)
     try:
         edited: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -818,6 +857,9 @@ async def video_edit(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(
+            edited, deployment_id_for_encoding(edited, data, pinned_deployment_id)
+        )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
             e=e,
@@ -826,7 +868,7 @@ async def video_edit(
             version=version,
         )
     else:
-        return edited
+        return encoded_response
 
 
 @router.post(
@@ -874,7 +916,10 @@ async def video_extension(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
+        dict[str, Any],
+        await read_request_body(request=request),
+    )
     data["video_id"] = video_reference_to_id(data.pop("video", None))
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
@@ -890,12 +935,15 @@ async def video_extension(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
+    pinned_deployment_id: Final = (
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
+        if model_id_from_decoded and llm_router
+        else None
+    )
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
-        if resolved_model:
-            data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
 
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned_deployment_id=pinned_deployment_id)
     try:
         extended: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -915,6 +963,9 @@ async def video_extension(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(
+            extended, deployment_id_for_encoding(extended, data, pinned_deployment_id)
+        )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
             e=e,
@@ -923,4 +974,4 @@ async def video_extension(
             version=version,
         )
     else:
-        return extended
+        return encoded_response

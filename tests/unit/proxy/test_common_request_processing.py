@@ -2046,6 +2046,46 @@ class TestProxyBaseLLMRequestProcessing:
             logging_obj.start_time.timestamp(), abs=1e-6
         )
 
+    @pytest.mark.asyncio
+    async def test_pinned_deployment_is_set_after_the_client_metadata_is_stripped(self, monkeypatch):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "sora-2", "metadata": {"pinned_deployment_id": "deployment-a"}},
+            pinned_deployment_id="deployment-b",
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/v1/videos/video_123"
+
+        async def strip_client_metadata(*args, **kwargs):
+            data = kwargs["data"]
+            data["metadata"] = {}
+            data["disable_fallbacks"] = False
+            return data
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            strip_client_metadata,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="avideo_status",
+        )
+
+        assert returned_data["metadata"]["pinned_deployment_id"] == "deployment-b"
+        assert returned_data["disable_fallbacks"] is True
+
 
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:
