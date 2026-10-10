@@ -23,7 +23,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     resolve_prediction_target,
     supported_prediction_headers,
 )
-from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
+from litellm.llms.anthropic.prompt_cache_pricing import price_cache_tokens
 from litellm.proxy.hooks.prompt_cache_prediction import lookup
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_cache_prediction import (
