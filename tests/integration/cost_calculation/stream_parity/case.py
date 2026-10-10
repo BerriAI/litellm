@@ -1,35 +1,44 @@
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Final
 
+from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase
 from pydantic import JsonValue
 
+COVERS: Final = "quota_management.spend_tracking.scripted_wire.logs_cost"
+REQUEST_ID: Final = "$REQUEST_ID"
 MODEL: Final = "$MODEL"
-RESPONSE_ID: Final = "$ID"
+
+
+def sse_frames(*events: Mapping[str, JsonValue], done: bool = False) -> tuple[str, ...]:
+    frames: Final = tuple(
+        f"event: {event['type']}\ndata: {json.dumps(event)}" if "type" in event else f"data: {json.dumps(event)}"
+        for event in events
+    )
+    return (*frames, "data: [DONE]") if done else frames
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StreamParityTestCase:
-    """One request sent twice through the same deployment and key, once plain and once with `stream_parameters` merged
-    in. The fake provider answers the plain request with `mock_provider_response` and the streamed one with
-    `mock_provider_stream`, and both LiteLLM_SpendLogs rows must equal `expected_spend_row`.
+    """The same request as two CostTrackingTestCases, `plain` answered with JSON and `streamed` answered with SSE,
+    that must both bill the one `expected` row."""
 
-    `$MODEL` in a request or expected row is the deployment the runner registers from `deployment` (its name is
-    generated per run). `$ID` in a mock is replaced by a fresh id per call because `request_id` is the SpendLogs
-    primary key, so a repeated provider id would drop the second row.
-    """
+    plain: CostTrackingTestCase
+    streamed: CostTrackingTestCase
 
-    scenario: str
-    litellm_endpoint: str
-    deployment: Mapping[str, JsonValue]
-    litellm_request: Mapping[str, JsonValue]
-    stream_parameters: Mapping[str, JsonValue] = MappingProxyType({"stream": True})
-    expected_provider_endpoint: str
-    mock_provider_response: Mapping[str, JsonValue]
-    mock_provider_stream: tuple[Mapping[str, JsonValue], ...]
-    expected_spend_row: Mapping[str, JsonValue]
+    def __post_init__(self) -> None:
+        if self.plain.expected != self.streamed.expected:
+            raise ValueError(f"{self.id}: plain and streamed cases expect different rows")
+        if self.streamed.request.get("stream") is not True or self.plain.request.get("stream") is True:
+            raise ValueError(f"{self.id}: streamed case must set stream: true and the plain case must not")
+        if (self.plain.model, self.plain.endpoint, self.plain.deployment) != (
+            self.streamed.model,
+            self.streamed.endpoint,
+            self.streamed.deployment,
+        ):
+            raise ValueError(f"{self.id}: plain and streamed cases must share model, endpoint and deployment")
 
     @property
     def id(self) -> str:
-        return f"{self.deployment['model']}-{self.scenario}"
+        return self.plain.name
