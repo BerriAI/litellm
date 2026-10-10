@@ -3636,6 +3636,35 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         error_spans = [s for s in spans if s.status.status_code == StatusCode.ERROR]
         self.assertTrue(error_spans, "Expected at least one span with ERROR status")
 
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"})
+    def test_handle_success_failure_leaves_ended_active_span_alone(self, handle_method: str):
+        tracer_provider: Final = TracerProvider()
+        otel: Final = OpenTelemetry(tracer_provider=tracer_provider)
+        server_span: Final = tracer_provider.get_tracer("web-framework").start_span("GET /chat")
+        server_span.end()
+        start: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        kwargs: Final = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {"id": "test-id", "call_type": "completion", "metadata": {}},
+            "exception": Exception("test error"),
+        }
+        response_obj: Final = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        with (
+            trace.use_span(server_span, end_on_exit=False),
+            self.assertNoLogs("opentelemetry.sdk.trace", level="WARNING"),
+        ):
+            getattr(otel, handle_method)(kwargs, response_obj, start, start + timedelta(seconds=1))
+
 
 class TestRawSpanAttributeIsolation(unittest.TestCase):
     """Issue #3: raw_gen_ai_request span should only contain provider-specific
