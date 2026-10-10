@@ -70,6 +70,20 @@ _STRANDS_RESPONSE: Final[Mapping[str, object]] = {
     "usage": {"input_tokens": 216, "output_tokens": 3},
     "latency_ms": 3722.17,
 }
+_DATABRICKS_ENDPOINT: Final = "databricks-openjev-qwen35-4b"
+_DATABRICKS_ENDPOINT_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "/mosaicml/local_model",
+    "answers": {
+        "is_defect": {"type": "noul", "noul": 0.9},
+        "sentiment": {
+            "type": "choice",
+            "choice": "positive",
+            "confidence": 0.8,
+            "probabilities": {"positive": 0.8, "negative": 0.2},
+        },
+    },
+    "usage": {"input_tokens": 214, "output_tokens": 0},
+}
 _DATABRICKS_ROUTE: Final = "https://workspace.example/api/2.0/ai-functions/ai-decide"
 _DATABRICKS_RESPONSE: Final[Mapping[str, object]] = {
     "response": {
@@ -903,18 +917,20 @@ async def test_databricks_requires_api_base_before_http(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["databricks-openjev-qwen35-4b", "serving-endpoints/ai_decide", "ai-decide"])
-async def test_databricks_rejects_a_model_other_than_ai_decide_before_http(
+@pytest.mark.parametrize(
+    "endpoint_name", ["serving-endpoints/openjev", "openjev?x=1", "openjev#frag", "..", "open jev"]
+)
+async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the_url(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
-    model: str,
+    endpoint_name: str,
 ) -> None:
-    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example")
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
     monkeypatch.setenv("DATABRICKS_API_KEY", "dapi-key")
 
-    with pytest.raises(litellm.BadRequestError, match="'ai_decide'"):
+    with pytest.raises(litellm.BadRequestError, match="bare serving endpoint name"):
         await litellm.adecisions(
-            model=f"databricks/{model}",
+            model=f"databricks/{endpoint_name}",
             state="review",
             questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
         )
@@ -939,6 +955,47 @@ async def test_databricks_requires_a_key_before_http(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base", ["https://workspace.example/serving-endpoints", "https://workspace.example/serving-endpoints/"]
+)
+async def test_databricks_posts_the_jev_body_to_the_serving_endpoint_invocations_route(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", api_base)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-token")
+    route: Final = respx_mock.post(
+        f"https://workspace.example/serving-endpoints/{_DATABRICKS_ENDPOINT}/invocations"
+    ).respond(json=_DATABRICKS_ENDPOINT_RESPONSE)
+    questions: Final = {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"},
+        "sentiment": {"type": "choice", "criteria": {"positive": None, "negative": "unhappy"}},
+    }
+
+    response: Final = await litellm.adecisions(
+        model=f"databricks/{_DATABRICKS_ENDPOINT}",
+        state={"ticket": "export hangs"},
+        questions=questions,
+    )
+
+    assert route.called
+    sent: Final = respx_mock.calls[0].request
+    assert sent.headers["authorization"] == "Bearer dapi-token"
+    assert json.loads(sent.content) == {
+        "model": _DATABRICKS_ENDPOINT,
+        "state": {"ticket": "export hangs"},
+        "questions": questions,
+    }
+    assert response.model == "/mosaicml/local_model"
+    assert isinstance(response.answers["is_defect"], NoulAnswer)
+    assert isinstance(response.answers["sentiment"], ChoiceAnswer)
+    assert response.hidden_params["custom_llm_provider"] == "databricks"
+    assert response.hidden_params["model"] == f"databricks/{_DATABRICKS_ENDPOINT}"
 
 
 @pytest.mark.asyncio

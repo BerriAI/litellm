@@ -764,15 +764,15 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
         if self.provider == "databricks":
             from litellm.llms.databricks.decisions.transformation import (
                 DATABRICKS_AI_DECIDE_MODEL,
-                validate_ai_decide_model,
+                validate_databricks_decisions_model,
             )
 
             if "model" not in self.model_fields_set:
                 raise ValueError(
-                    "opensource_classifier_config.model is required for provider 'databricks': set it to "
-                    f"{DATABRICKS_AI_DECIDE_MODEL!r}"
+                    "opensource_classifier_config.model is required for provider 'databricks': "
+                    f"{DATABRICKS_AI_DECIDE_MODEL!r} or a serving endpoint name, e.g. databricks-openjev-qwen35-4b"
                 )
-            _ = validate_ai_decide_model(self.model)
+            _ = validate_databricks_decisions_model(self.model)
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
                 "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "

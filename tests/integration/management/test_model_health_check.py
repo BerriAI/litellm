@@ -188,7 +188,47 @@ def test_evaluation_mode_health_check_of_hosted_vllm_sends_a_choice_probe(gatewa
         ]
 
 
-_DATABRICKS_PROBE_REPLY: Final = JsonResponse(
+_DATABRICKS_ENDPOINT_PROBE_REPLY: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "databricks-openjev-qwen35-4b",
+        "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+    },
+)
+
+
+def test_evaluation_mode_health_check_of_a_databricks_serving_endpoint_resolves_the_mode_from_the_cost_map(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _DATABRICKS_ENDPOINT_PROBE_REPLY)
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="databricks/databricks-openjev-qwen35-4b",
+            api_base=handle.api_base(),
+            api_key="synthetic-databricks-key",
+        )
+        listed: Final = gateway.request("GET", "/v2/model/info", params={"model": model})
+        assert listed.status_code == 200, listed.text
+        assert [object_value(object_value(entry)["model_info"])["mode"] for entry in listed.json()["data"]] == [
+            "evaluation"
+        ], listed.text
+        report: Final = _health_report(gateway, model)
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        assert _probes_sent_to(gateway, handle) == [
+            (
+                f"/{handle.scenario_id}/databricks-openjev-qwen35-4b/invocations",
+                {
+                    "model": "databricks-openjev-qwen35-4b",
+                    "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
+                    "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                },
+            )
+        ]
+
+
+_DATABRICKS_AI_DECIDE_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
     body={
         "response": {"answers": {"reachable": {"type": "noul", "probability": 1.0}}},
@@ -201,7 +241,7 @@ def test_evaluation_mode_health_check_of_databricks_ai_decide_resolves_the_mode_
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
-        handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _DATABRICKS_PROBE_REPLY)
+        handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _DATABRICKS_AI_DECIDE_PROBE_REPLY)
         scenario.cleanups.callback(delete_scenario, handle)
         model: Final = scenario.model(
             model="databricks/ai_decide",

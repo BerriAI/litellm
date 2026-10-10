@@ -190,6 +190,15 @@ _PROVIDERS: Final = (
         ai_decide=True,
     ),
     _Provider(
+        "databricks",
+        "databricks/databricks-openjev-qwen35-4b",
+        "/databricks-openjev-qwen35-4b/invocations",
+        "databricks-openjev-qwen35-4b",
+        _API_KEY,
+        False,
+        None,
+    ),
+    _Provider(
         "azure_ai", "azure_ai/decision-1", "/providers/microsoft/v1/systemone", "decision-1", _API_KEY, False, None
     ),
     _Provider("openai", "openai/gpt-6-luna", "/v1/decisions", "gpt-6-luna", _API_KEY, False, "gpt-6-luna", True),
@@ -249,7 +258,7 @@ def _response_cost(response: httpx.Response) -> float:
 
 
 def _provider_id(provider: _Provider) -> str:
-    return provider.name
+    return provider.model
 
 
 def _number(value: JsonValue) -> float:
