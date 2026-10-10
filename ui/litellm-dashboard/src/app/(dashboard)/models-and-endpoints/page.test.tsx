@@ -21,7 +21,9 @@ vi.mock("./detailNavigation", () => ({
   useModelDetailRouting: () => ({ ...detailState, close: vi.fn(), openModel: vi.fn(), openTeam: vi.fn() }),
 }));
 
-vi.mock("@/components/molecules/cost_optimization_feedback_banner", () => ({ default: () => null }));
+vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
+  default: () => <section aria-label="Decision models" />,
+}));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -95,6 +97,12 @@ describe("ModelsAndEndpointsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Health Status" }));
     expect(screen.getByTestId("panel-health")).toBeInTheDocument();
     expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
+  });
+
+  it("does not show a view-only session the decision models banner, whose Playground it cannot open", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    renderPage();
+    expect(screen.queryByRole("region", { name: "Decision models" })).not.toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {

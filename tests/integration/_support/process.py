@@ -1,4 +1,5 @@
 import errno
+import json
 import os
 import signal
 import socket
@@ -14,6 +15,7 @@ from ipaddress import IPv4Address
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
 import psutil
@@ -103,19 +105,25 @@ def owned_proxy(
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
-    root_stopped: Final = stop_root_process(process)
-    residual: Final = group_members(process.pid)
-    if residual:
-        signal_group(process.pid, signal.SIGTERM)
-        psutil.wait_procs(residual, timeout=5)
-    remaining: Final = group_members(process.pid)
-    if remaining:
+    try:
+        root_stopped: Final = stop_root_process(process)
+        residual: Final = group_members(process.pid)
+        if residual:
+            signal_group(process.pid, signal.SIGTERM)
+            psutil.wait_procs(residual, timeout=5)
+        remaining: Final = group_members(process.pid)
+        if remaining:
+            signal_group(process.pid, signal.SIGKILL)
+            psutil.wait_procs(remaining, timeout=3)
+        process.wait(timeout=3)
+        survivors: Final = group_members(process.pid)
+        assert not survivors, "Owned proxy child survived cleanup"
+        assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+    except BaseException:
         signal_group(process.pid, signal.SIGKILL)
-        psutil.wait_procs(remaining, timeout=3)
-    process.wait(timeout=3)
-    survivors: Final = group_members(process.pid)
-    assert not survivors, "Owned proxy child survived cleanup"
-    assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+        process.wait(timeout=3)
+        psutil.wait_procs(group_members(process.pid), timeout=3)
+        raise
 
 
 _PORT_ATTEMPTS: Final = 3
@@ -133,11 +141,38 @@ class _Launch:
     process: subprocess.Popen[bytes]
     port: int
     log: Path
+    started: float
+
+
+def _stop_launch(launch: _Launch) -> None:
+    started: Final = time.monotonic()
+    exit_before: Final = launch.process.poll()
+    exception_before: Final = sys.exc_info()[0]
+    try:
+        _stop(launch.process)
+    finally:
+        exception_at_record: Final = sys.exc_info()[0]
+        launch.log.with_suffix(".exit.json").write_text(
+            json.dumps(
+                {
+                    "root_pid": launch.process.pid,
+                    "exit_before_stop": exit_before,
+                    "exit_after_stop": launch.process.poll(),
+                    "exception_before_stop": exception_before.__name__ if exception_before else None,
+                    "exception_at_record": exception_at_record.__name__ if exception_at_record else None,
+                    "cleanup_seconds": time.monotonic() - started,
+                    "process_lifetime_seconds": time.monotonic() - launch.started,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
 
 def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path) -> _Launch:
     port: Final = _free_port()
     log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
+    started: Final = time.monotonic()
     with log_path.open("w") as log:
         process: Final = subprocess.Popen(
             [*command, "--port", str(port)],
@@ -147,7 +182,7 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    return _Launch(process, port, log_path)
+    return _Launch(process, port, log_path, started)
 
 
 def _lost_port_race(exit_code: int | None, log: Path) -> bool:
@@ -178,11 +213,21 @@ def _launch_until_bound(
             "Owned proxy exited before readiness"
         )
     except BaseException:
-        _stop(launch.process)
+        _stop_launch(launch)
         raise
     if exit_code is None:
+        launch.log.with_suffix(".startup.json").write_text(
+            json.dumps(
+                {
+                    "root_pid": launch.process.pid,
+                    "readiness_seconds": time.monotonic() - launch.started,
+                    "logical_cpus": os.cpu_count(),
+                }
+            )
+            + "\n"
+        )
         return launch
-    _stop(launch.process)
+    _stop_launch(launch)
     return _launch_until_bound(command, root, environment, output, attempts - 1)
 
 
@@ -193,17 +238,31 @@ def _proxy_root() -> Path:
 def _proxy_environment(
     gateway: Gateway, overrides: Mapping[str, str], remove_environment: tuple[str, ...]
 ) -> Mapping[str, str]:
+    inherited: Final = {**os.environ, **proxy_database_environment()}
+    writer: Final = overrides.get("DATABASE_URL")
+    reader: Final = inherited.get("DATABASE_URL_READ_REPLICA")
+    unpaired_reader: Final = (
+        writer is not None
+        and reader is not None
+        and "DATABASE_URL_READ_REPLICA" not in overrides
+        and urlsplit(writer).path != urlsplit(reader).path
+    )
+    removed: Final = frozenset((*remove_environment, *(("DATABASE_URL_READ_REPLICA",) if unpaired_reader else ())))
+    configured_hooks: Final = overrides.get(
+        "LITELLM_WORKER_STARTUP_HOOKS",
+        inherited.get("LITELLM_WORKER_STARTUP_HOOKS", "") if "LITELLM_WORKER_STARTUP_HOOKS" not in removed else "",
+    )
     return MappingProxyType(
         {
-            **{
-                name: value
-                for name, value in {**os.environ, **proxy_database_environment()}.items()
-                if name not in remove_environment
-            },
+            **{name: value for name, value in inherited.items() if name not in removed},
             "LITELLM_MASTER_KEY": gateway.key,
             "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
             "STORE_MODEL_IN_DB": "True",
+            "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
+            "LITELLM_WORKER_STARTUP_HOOKS": ",".join(
+                hook for hook in ("integration._support.runtime:configure_executor", configured_hooks) if hook
+            ),
         }
     )
 
@@ -261,7 +320,7 @@ def owned_proxy_process(
         "--num_workers",
         str(workers),
         "--timeout_worker_healthcheck",
-        str(int(graceful_stop_seconds())),
+        "5",
         *database_setup,
         *extra_arguments,
     )
@@ -273,7 +332,7 @@ def owned_proxy_process(
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
     finally:
-        _stop(process)
+        _stop_launch(launch)
 
 
 @contextmanager
@@ -306,7 +365,7 @@ def owned_gateway_image(
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
     finally:
-        _stop(launch.process)
+        _stop_launch(launch)
 
 
 def _is_ready(client: httpx.Client) -> bool:
@@ -353,7 +412,7 @@ def refused_boot_log(
         assert launch.process.returncode != 0, f"Proxy exited 0 instead of refusing to boot:\n{launch.log.read_text()}"
         return launch.log.read_text()
     finally:
-        _stop(launch.process)
+        _stop_launch(launch)
 
 
 _UPSTREAM_READY_SECONDS: Final = 60
@@ -439,19 +498,23 @@ class UpstreamSlot:
                 start_new_session=True,
             )
         self.process = process
-        deadline: Final = time.monotonic() + _UPSTREAM_READY_SECONDS
-        while process.poll() is None:
-            try:
-                probe: Final = httpx.get(
-                    f"{self.url}/health", timeout=2, trust_env=False, verify=self.certificate is None
-                )
-                if probe.status_code == 200:
-                    return
-            except httpx.TransportError:
-                pass
-            assert time.monotonic() < deadline, f"Owned upstream readiness deadline exceeded: {log_path}"
-            time.sleep(0.1)
-        raise AssertionError(f"Owned upstream exited before readiness: {log_path}")
+        try:
+            deadline: Final = time.monotonic() + _UPSTREAM_READY_SECONDS
+            while process.poll() is None:
+                try:
+                    probe: Final = httpx.get(
+                        f"{self.url}/health", timeout=2, trust_env=False, verify=self.certificate is None
+                    )
+                    if probe.status_code == 200:
+                        return
+                except httpx.TransportError:
+                    pass
+                assert time.monotonic() < deadline, f"Owned upstream readiness deadline exceeded: {log_path}"
+                time.sleep(0.1)
+            raise AssertionError(f"Owned upstream exited before readiness: {log_path}")
+        except BaseException:
+            self.stop()
+            raise
 
     def stop(self) -> None:
         process: Final = self.process
@@ -468,8 +531,8 @@ def _harness_root() -> Path:
 def owned_upstream(directory: Path, *, tls: bool = False) -> Generator[UpstreamSlot]:
     certificate: Final = self_signed_certificate(directory) if tls else None
     slot: Final = UpstreamSlot(directory, _free_port(), _harness_root(), certificate)
-    slot.start()
     try:
+        slot.start()
         yield slot
     finally:
         if slot.process is not None:

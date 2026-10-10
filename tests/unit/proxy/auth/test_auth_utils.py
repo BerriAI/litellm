@@ -64,6 +64,60 @@ def test_token_exchange_settings_in_request_body_are_rejected(field: str) -> Non
     assert field in str(error.value)
 
 
+@pytest.mark.parametrize("field", oauth_token_exchange_litellm_params)
+@pytest.mark.parametrize("route", ("/v1/mcp/server", "/v1/mcp/server/abc123"))
+def test_mcp_server_management_body_may_set_token_exchange_settings(field: str, route: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"server_id": "abc123", "auth_type": "oauth2_token_exchange", field: "configured-value"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("field", oauth_token_exchange_litellm_params)
+@pytest.mark.parametrize("route", ("/chat/completions", "/v1/mcp/serverfoo"))
+def test_token_exchange_settings_remain_banned_outside_mcp_server_management(field: str, route: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        is_request_body_safe(
+            request_body={"server_id": "abc123", "auth_type": "oauth2_token_exchange", field: "configured-value"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+
+
+def test_mcp_server_management_body_still_rejects_anthropic_wif_settings() -> None:
+    with pytest.raises(ValueError, match="anthropic_federation_rule_id"):
+        is_request_body_safe(
+            request_body={"server_id": "abc123", "anthropic_federation_rule_id": "fdrl_admin"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/v1/mcp/server",
+        )
+
+
+def test_mcp_server_management_body_still_rejects_nested_token_exchange_settings() -> None:
+    with pytest.raises(ValueError, match="token_exchange_endpoint"):
+        is_request_body_safe(
+            request_body={
+                "server_id": "abc123",
+                "auth_type": "oauth2_token_exchange",
+                "metadata": {"token_exchange_endpoint": "https://identity.example.com/token"},
+            },
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/v1/mcp/server",
+        )
+
+
 def test_model_opt_in_cannot_allow_a_token_exchange_endpoint_in_a_request_body() -> None:
     router: Final = Router(
         model_list=[
@@ -3023,6 +3077,22 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
             )
             is True
         )
+
+
+def test_agentcore_runtime_session_id_in_request_body_is_rejected_without_admin_opt_in():
+    body: Final = {"model": "strands-decider", "agentcore_runtime_session_id": "caller-session-0123456789abcdef0123"}
+
+    with pytest.raises(ValueError, match="agentcore_runtime_session_id"):
+        is_request_body_safe(request_body=body, general_settings={}, llm_router=None, model="strands-decider")
+    assert (
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="strands-decider",
+        )
+        is True
+    )
 
 
 class TestIsRequestBodySafeBlocksClaudePlatformWorkspaceOverride:

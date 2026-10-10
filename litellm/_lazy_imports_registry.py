@@ -165,6 +165,7 @@ LLM_CONFIG_NAMES: Final = (
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
     "OpenAIDecisionsConfig",
+    "AzureAIDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
     "VertexAIRerankConfig",
@@ -276,6 +277,7 @@ LLM_CONFIG_NAMES: Final = (
     "NvidiaNimConfig",
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
+    "ScaleDownChatConfig",
     "CerebrasConfig",
     "NadirConfig",
     "BasetenConfig",
@@ -731,6 +733,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "HostedVLLMDecisionsConfig",
     ),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
+    "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",
         "NvidiaNimRerankConfig",
@@ -1100,6 +1103,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "FeatherlessAIConfig": (
         ".llms.featherless_ai.chat.transformation",
         "FeatherlessAIConfig",
+    ),
+    "ScaleDownChatConfig": (
+        ".llms.scaledown.chat.transformation",
+        "ScaleDownChatConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
     "NadirConfig": (".llms.nadir.chat.transformation", "NadirConfig"),

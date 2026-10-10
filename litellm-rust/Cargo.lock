@@ -3378,10 +3378,12 @@ dependencies = [
  "moka",
  "reqwest 0.12.28",
  "rstest",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "veil",
 ]
 
 [[package]]
@@ -3410,9 +3412,12 @@ dependencies = [
  "litellm-auth-types",
  "moka",
  "rstest",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "tokio",
+ "veil",
 ]
 
 [[package]]
@@ -3421,6 +3426,7 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "serde",
+ "serde_json",
  "subtle",
  "thiserror 2.0.19",
  "tokio",
@@ -3640,6 +3646,7 @@ name = "litellm-config"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-router-types",
  "rstest",
  "serde",
  "serde_json",
@@ -4024,6 +4031,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-router-types",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest 0.12.28",
@@ -4144,6 +4152,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms-types",
  "litellm-python-compat",
+ "litellm-router-types",
  "litellm-secrets",
  "reqwest 0.12.28",
  "rstest",
@@ -4215,6 +4224,7 @@ dependencies = [
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-router-types",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -4263,7 +4273,19 @@ dependencies = [
  "litellm-config",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-router-types",
  "rstest",
+]
+
+[[package]]
+name = "litellm-router-types"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-types",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
 ]
 
 [[package]]

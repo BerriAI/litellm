@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
@@ -114,6 +115,25 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+# Gemini prebuilt voices per https://ai.google.dev/gemini-api/docs/speech-generation (2026-10-01), by nearest character;
+# nova is left out since Gemini 3.x TTS models accept it as given (live check 2026-10-08)
+OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "alloy": "Kore",
+        "ash": "Iapetus",
+        "ballad": "Algieba",
+        "cedar": "Achird",
+        "coral": "Sulafat",
+        "echo": "Charon",
+        "fable": "Umbriel",
+        "marin": "Despina",
+        "onyx": "Orus",
+        "sage": "Vindemiatrix",
+        "shimmer": "Achernar",
+        "verse": "Puck",
+    }
+)
 
 
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
@@ -1071,7 +1091,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         speechConfig = {
             voiceConfig: {
                 prebuiltVoiceConfig: {
-                    voiceName: "alloy",
+                    voiceName: "Kore",
                 }
             },
             languageCode: "en-US",
@@ -1096,7 +1116,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         speech_config: Final[SpeechConfig] = {}
 
         if "voice" in value:
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": value["voice"]}
+            voice: Final = value["voice"]
+            voice_name: Final = (
+                OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice
+            )
+            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice_name}
             voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
 

@@ -37,7 +37,8 @@ class RecordingUpstream(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self) -> None:
-        REQUESTS.put((self.path, dict(self.headers), self.rfile.read(int(self.headers["Content-Length"]))))
+        headers: Final = {name.lower(): value for name, value in self.headers.items()}
+        REQUESTS.put((self.path, headers, self.rfile.read(int(self.headers["Content-Length"]))))
         status, body = RESPONSES.get(timeout=10)
         ARRIVED.set()
         if status == 0:
@@ -78,7 +79,7 @@ def check_http(base: str) -> None:
     assert response.usage.total_tokens == 5
     path, headers, body = REQUESTS.get(timeout=10)
     assert path == "/v1/chat/completions"
-    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["authorization"] == "Bearer test-key"
     assert json.loads(body)["messages"] == MESSAGES
     enqueue_stream()
     assert "".join(part.choices[0].delta.content or "" for part in litellm.completion(**arguments, stream=True)) == "pong"
@@ -156,7 +157,7 @@ def check_http(base: str) -> None:
             assert result.usage.total_tokens == 5
             path, headers, body = REQUESTS.get(timeout=10)
             assert path.endswith("/converse")
-            assert {key.lower(): value for key, value in headers.items()}["authorization"].startswith(
+            assert headers["authorization"].startswith(
                 "AWS4-HMAC-SHA256" if signed else "Bearer bearer-key"
             )
             assert json.loads(body)["messages"][0]["content"][0]["text"] == "ping"

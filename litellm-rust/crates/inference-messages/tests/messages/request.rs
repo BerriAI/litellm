@@ -1,8 +1,10 @@
+use litellm_auth::VertexParams;
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
     providers::anthropic::{AnthropicBeta, BetaSet},
 };
+use litellm_router_types::LitellmParams;
 use rstest::rstest;
 
 use super::*;
@@ -10,6 +12,14 @@ use super::*;
 #[rstest]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
+#[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
+#[case::deepseek_forwards_caller_authorization(
+    "deepseek",
+    Some("sk-deepseek"),
+    &[("Authorization", "Bearer caller")],
+    ("authorization", "Bearer caller"),
+    &["x-api-key"]
+)]
 #[case::caller_x_api_key_wins(
     "azure_ai",
     Some("rust-fallback-key"),
@@ -58,6 +68,7 @@ async fn credentials_become_exactly_one_auth_header(
 
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
+        litellm_params: Default::default(),
         api_key: api_key.map(Into::into),
         api_base: Some(upstream.uri()),
         extra_headers: headers(extra_headers.iter().copied()),
@@ -76,6 +87,7 @@ async fn credentials_become_exactly_one_auth_header(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -85,6 +97,7 @@ async fn a_call_without_credentials_fails_before_sending(
 
     let error = run(MessagesCall {
         custom_llm_provider: Some(provider.into()),
+        litellm_params: Default::default(),
         api_base: Some(upstream.uri()),
         ..call
     })
@@ -111,6 +124,8 @@ async fn a_call_without_credentials_fails_before_sending(
     "/v1/messages"
 )]
 #[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages")]
+#[case::deepseek(MODEL, Some("deepseek"), "", "/anthropic/v1/messages")]
+#[case::deepseek_openai_compatible_base(MODEL, Some("deepseek"), "/beta", "/anthropic/v1/messages")]
 #[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages")]
 #[tokio::test]
 async fn each_provider_posts_to_its_messages_endpoint(
@@ -124,6 +139,7 @@ async fn each_provider_posts_to_its_messages_endpoint(
 
     run_message(MessagesCall {
         custom_llm_provider: provider.map(Into::into),
+        litellm_params: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(format!("{}{base_suffix}", upstream.uri())),
         ..with_model(call, model)
@@ -154,6 +170,7 @@ async fn unsupported_providers_are_rejected_before_sending(
 ) {
     let error = run(MessagesCall {
         custom_llm_provider: provider.map(Into::into),
+        litellm_params: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(UNREACHABLE_BASE.into()),
         ..with_model(call, model)
@@ -206,6 +223,7 @@ async fn cache_scope_removal_is_selected_by_the_provider(
 
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
+        litellm_params: Default::default(),
         api_key: Some("sk-azure".into()),
         api_base: Some(upstream.uri()),
         body: body(json!({
@@ -343,12 +361,14 @@ async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: M
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
+        litellm_params: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         extra_headers: headers([
@@ -400,6 +420,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 },
                 body: call.body.clone(),
                 custom_llm_provider: call.custom_llm_provider.clone(),
+                litellm_params: Default::default(),
                 extra_headers: None,
                 provider_specific_header: None,
                 timeout: call.timeout,
@@ -570,6 +591,7 @@ async fn replayed_history_is_cleaned_before_sending(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
@@ -577,6 +599,7 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
     run_message(with_fields(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
+            litellm_params: Default::default(),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             ..call
@@ -589,6 +612,91 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
         only_request(&upstream).await.json()["metadata"],
         json!({"user_id": "u-1"})
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("deepseek".into()),
+            litellm_params: Default::default(),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({
+            "system": [
+                {"type": "text", "text": "x-anthropic-billing-header: cc_version=1"},
+                {"type": "text", "text": "be terse"}
+            ],
+            "tools": [{"type": "custom", "name": "get_weather", "input_schema": {"type": "object"}}]
+        }),
+    ))
+    .await;
+
+    let body = only_request(&upstream).await.json();
+    assert_eq!(
+        body["system"],
+        json!([{"type": "text", "text": "be terse"}])
+    );
+    assert_eq!(
+        body["tools"],
+        json!([{"name": "get_weather", "input_schema": {"type": "object"}}])
+    );
+}
+
+#[rstest]
+#[case::not_streaming(false, ":rawPredict")]
+#[case::streaming(true, ":streamRawPredict?alt=sse")]
+#[tokio::test]
+async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
+    call: MessagesCall,
+    #[case] stream: bool,
+    #[case] suffix: &str,
+) {
+    let streamed = ResponseTemplate::new(200).set_body_raw(
+        "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "text/event-stream",
+    );
+    let upstream = upstream([if stream { streamed } else { message_response() }]).await;
+
+    run(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: LitellmParams {
+                vertex: VertexParams {
+                    vertex_project: Some("proj".into()),
+                    vertex_location: Some("us-east5".into()),
+                    ..VertexParams::default()
+                },
+                ..LitellmParams::default()
+            },
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Authorization", "Bearer caller-token")]),
+            ..with_model(call, "claude-sonnet-4-5@20250929")
+        },
+        json!({"stream": stream}),
+    ))
+    .await
+    .expect("messages call succeeds");
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.url.path().to_string() + request.url.query().map_or("", |_| "?alt=sse"),
+        format!(
+            "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
+        )
+    );
+    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("anthropic-version"), None);
+    let body = request.json();
+    assert_eq!(body.get("model"), None);
+    assert_eq!(body["anthropic_version"], json!("vertex-2023-10-16"));
 }
 
 #[rstest]
@@ -638,6 +746,7 @@ async fn system_message_folding_is_selected_by_the_provider(
     run_message(with_fields(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
+            litellm_params: Default::default(),
             api_key: Some("sk-azure".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
@@ -702,6 +811,7 @@ async fn provider_validation_runs_before_caller_parameter_removal(
     let result = run(with_fields(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
+            litellm_params: Default::default(),
             api_key: Some("sk-test".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {

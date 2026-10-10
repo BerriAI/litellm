@@ -38,6 +38,8 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { authTypesFor } from "./provider_auth_types";
 import { TEST_MODES } from "./add_model_modes";
+import DecisionModelNote from "./DecisionModelNote";
+import { type DecisionCatalog } from "@/lib/decisionModels";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -59,6 +61,7 @@ interface AddModelFormProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
   credentials: CredentialItem[];
+  decisionCatalog: DecisionCatalog;
 }
 
 const connectionTestModelName = (values: MountedFormValues): string | undefined => {
@@ -82,6 +85,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   setShowAdvancedSettings,
   teams,
   credentials,
+  decisionCatalog,
 }) => {
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
@@ -99,6 +103,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
+  const pickedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
   const queryClient = useQueryClient();
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [credentialModalAuthTypeId, setCredentialModalAuthTypeId] = useState<string | undefined>();
@@ -172,6 +177,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       })),
     [sortedProviderMetadata],
   );
+
+  const pickedLitellmProvider = sortedProviderMetadata.find(
+    (providerInfo) => providerInfo.provider === pickedProvider,
+  )?.litellm_provider;
 
   const credentialSelectOptions: SearchSelectOption[] = useMemo(() => credentialOptions(credentials), [credentials]);
 
@@ -274,6 +283,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                         providerModels={providerModels}
                         getPlaceholder={getPlaceholder}
                       />
+                      <DecisionModelNote catalog={decisionCatalog} litellmProvider={pickedLitellmProvider} />
 
                       {/* Conditionally Render "Public Model Name" */}
                       <ConditionalPublicModelName />

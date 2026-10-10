@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import {
   Providers,
   getPlaceholder,
@@ -6,7 +8,16 @@ import {
   getProviderModels,
   providerLogoMap,
   provider_map,
+  resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
+
+const PROVIDER_CREATE_FIELDS: { provider: string; litellm_provider: string }[] = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+);
+
+const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../model_prices_and_context_window.json"), "utf8"),
+);
 
 describe("provider_info_helpers", () => {
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
@@ -364,6 +375,40 @@ describe("provider_info_helpers", () => {
     });
   });
 
+  describe("resolveLitellmProviderSlug", () => {
+    it("should resolve every provider the backend serves to the slug that backend declares", () => {
+      const misresolved = PROVIDER_CREATE_FIELDS.filter(
+        (entry) => resolveLitellmProviderSlug(entry.provider) !== entry.litellm_provider,
+      ).map(
+        (entry) =>
+          `${entry.provider} -> ${resolveLitellmProviderSlug(entry.provider)} (want ${entry.litellm_provider})`,
+      );
+      expect(misresolved).toEqual([]);
+    });
+
+    it("should resolve providers the backend spells in caps and provider_map spells in camel case", () => {
+      expect(resolveLitellmProviderSlug("MINIMAX")).toBe("minimax");
+      expect(resolveLitellmProviderSlug("CURSOR")).toBe("cursor");
+      expect(resolveLitellmProviderSlug("RUNWAYML")).toBe("runwayml");
+    });
+
+    it("should resolve providers absent from provider_map to their lowercased value", () => {
+      expect(resolveLitellmProviderSlug("MILVUS")).toBe("milvus");
+      expect(resolveLitellmProviderSlug("LANGFUSE")).toBe("langfuse");
+      expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe("litellm_proxy");
+    });
+
+    it("should keep SAGEMAKER on the plain slug rather than the chat variant SageMaker maps to", () => {
+      expect(resolveLitellmProviderSlug("SAGEMAKER")).toBe("sagemaker");
+      expect(resolveLitellmProviderSlug("SageMaker")).toBe("sagemaker_chat");
+    });
+
+    it("should prefer an exact provider_map key over the lowercase fallback", () => {
+      expect(resolveLitellmProviderSlug("Vertex_AI")).toBe("vertex_ai");
+      expect(resolveLitellmProviderSlug("Google_AI_Studio")).toBe("gemini");
+    });
+  });
+
   describe("getProviderModels", () => {
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
@@ -585,6 +630,34 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.Bedrock, modelMap);
       expect(result).toEqual([]);
+    });
+
+    it("should populate models for a provider whose backend key is spelled differently from its provider_map key", () => {
+      const modelMap = {
+        "cursor/composer-1": { litellm_provider: "cursor" },
+        "gpt-4": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("CURSOR" as Providers, modelMap);
+      expect(result).toEqual(["cursor/composer-1"]);
+    });
+
+    it("should populate models for SAGEMAKER, whose key is absent from provider_map", () => {
+      const modelMap = {
+        "sagemaker-base": { litellm_provider: "sagemaker" },
+        "gpt-4": { litellm_provider: "openai" },
+      };
+      expect(getProviderModels("SAGEMAKER" as Providers, modelMap)).toEqual(["sagemaker-base"]);
+    });
+
+    it("should populate MiniMax's bundled models from the real cost map", () => {
+      const minimaxModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+        (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "minimax",
+      );
+      expect(minimaxModels.length).toBeGreaterThan(0);
+
+      const result = getProviderModels("MINIMAX" as Providers, BUNDLED_MODEL_MAP);
+
+      expect([...result].sort()).toEqual([...minimaxModels].sort());
     });
 
     it("should handle multiple providers correctly", () => {

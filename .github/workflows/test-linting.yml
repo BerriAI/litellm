@@ -645,9 +645,32 @@ jobs:
 
       - name: Assert .github/workflows/ holds only workflows, correctly named
         run: python .github/scripts/assert_workflow_dir_hygiene.py
+  semgrep:
+    name: semgrep
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Run Semgrep (custom rules)
+        run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules . --error
   lint-passed:
     name: lint passed
-    needs: [python, secret-scan, ui, ui-api-types, code-quality, ci-coverage]
+    needs: [python, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

@@ -1,4 +1,5 @@
 use litellm_auth::SecretValue;
+use litellm_auth::VertexParams;
 use litellm_host_python::{from_py, present};
 use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
@@ -10,8 +11,10 @@ use serde_json::{Map, Value};
 
 use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
+    coercion::FieldSpec,
     credentials::{self, CallerTokenProvider},
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+    python_settings::{PythonSettings, Snapshot},
 };
 
 /// What the host keeps after projection: the caller's token callable that answers the
@@ -123,6 +126,16 @@ pub(super) fn project_request(
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
     let optional_params =
         project_optional_fields(names.iter().copied(), |name| present(kwargs, bound, name))?;
+    let globals = module_globals_to_read(&optional_params, &names);
+    let defaults = if globals.is_empty() {
+        None
+    } else {
+        PythonSettings::ProviderDefaults.read_or_unset(bound.py())?
+    };
+    let optional_params = match defaults {
+        Some(defaults) => fold_module_globals(bound.py(), optional_params, &globals, &defaults)?,
+        None => optional_params,
+    };
     let input_sources = request_input_sources(
         kwargs,
         names
@@ -156,12 +169,164 @@ pub(super) fn project_request(
     ))
 }
 
+/// Python's `VertexBase.get_vertex_ai_project` and `get_vertex_ai_location` fall back to a
+/// `litellm.<name>` module global when a call names neither spelling: the globals of the
+/// specs this route consumes whose wire names the call left out.
+fn module_globals_to_read(
+    optional_params: &Map<String, Value>,
+    consumed: &[&str],
+) -> Vec<&'static str> {
+    VertexParams::SPECS
+        .iter()
+        .filter(|spec| spec.wire.iter().all(|name| consumed.contains(name)))
+        .filter(|spec| {
+            !spec
+                .wire
+                .iter()
+                .any(|name| optional_params.contains_key(*name))
+        })
+        .filter_map(|spec| spec.module_global)
+        .collect()
+}
+
+/// Folds each module global in under the name its spec declares, skipping falsy values the
+/// way Python's `or` chain does.
+fn fold_module_globals(
+    py: Python<'_>,
+    optional_params: Map<String, Value>,
+    globals: &[&'static str],
+    defaults: &Snapshot<'_>,
+) -> PyResult<Map<String, Value>> {
+    let read = globals
+        .iter()
+        .map(|name| {
+            let spec = FieldSpec::new(name, |field| field.falsy_optional_string());
+            Ok(defaults
+                .read(&spec)
+                .map_err(|error| settings_error(py, error.into()))?
+                .map(|value| (name.to_string(), Value::String(value))))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(optional_params
+        .into_iter()
+        .chain(read.into_iter().flatten())
+        .collect())
+}
+
+/// A misconfigured litellm setting is the operator's error, not the request's or the
+/// provider's, so the host raises it as is instead of mapping it onto a provider failure.
+pub(super) const SETTINGS_ERROR_MARKER: &str = "native_settings_error";
+
+fn settings_error(py: Python<'_>, error: PyErr) -> PyErr {
+    error.value(py).setattr(SETTINGS_ERROR_MARKER, true).ok();
+    error
+}
+
 #[cfg(test)]
 mod tests {
     use litellm_llms_types::formats::ocr::OcrDocument;
     use pyo3::exceptions::PyValueError;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::global_fills_a_missing_project(
+        serde_json::json!({"vertex_location": "us-east5"}),
+        "vertex_project='from-global', vertex_location='ignored'",
+        serde_json::json!({"vertex_location": "us-east5", "vertex_project": "from-global"}),
+    )]
+    #[case::either_spelling_on_the_call_wins(
+        serde_json::json!({"vertex_ai_project": "from-call"}),
+        "vertex_project='from-global', vertex_location=None",
+        serde_json::json!({"vertex_ai_project": "from-call"}),
+    )]
+    #[case::falsy_globals_are_absent(
+        serde_json::json!({}),
+        "vertex_project=[], vertex_location=''",
+        serde_json::json!({}),
+    )]
+    fn module_globals_fill_the_vertex_params_the_call_leaves_out(
+        #[case] params: Value,
+        #[case] defaults: &str,
+        #[case] expected: Value,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = py
+                .eval(
+                    &std::ffi::CString::new(format!(
+                        "__import__('types').SimpleNamespace({defaults})"
+                    ))
+                    .unwrap(),
+                    None,
+                    None,
+                )
+                .unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
+            let consumed = VertexParams::fields().collect::<Vec<_>>();
+            let params = params.as_object().cloned().unwrap();
+            let globals = module_globals_to_read(&params, &consumed);
+
+            let folded = fold_module_globals(py, params, &globals, &snapshot).unwrap();
+
+            assert_eq!(Value::Object(folded), expected);
+        });
+    }
+
+    #[rstest::rstest]
+    fn a_bad_global_is_a_marked_settings_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = py
+                .eval(
+                    c"__import__('types').SimpleNamespace(vertex_project=1)",
+                    None,
+                    None,
+                )
+                .unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
+
+            let error =
+                fold_module_globals(py, Map::new(), &["vertex_project"], &snapshot).unwrap_err();
+
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(
+                error
+                    .to_string()
+                    .contains("provider_defaults.vertex_project")
+            );
+            assert!(
+                error
+                    .value(py)
+                    .getattr_opt(SETTINGS_ERROR_MARKER)
+                    .unwrap()
+                    .is_some()
+            );
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::not_consumed(&["pages"], serde_json::json!({}), &[])]
+    #[case::consumed_and_absent(
+        &["vertex_project", "vertex_ai_project", "vertex_location", "vertex_ai_location"],
+        serde_json::json!({}),
+        &["vertex_project", "vertex_location"]
+    )]
+    #[case::consumed_and_present_in_either_spelling(
+        &["vertex_project", "vertex_ai_project", "vertex_location", "vertex_ai_location"],
+        serde_json::json!({"vertex_ai_project": "p"}),
+        &["vertex_location"]
+    )]
+    fn only_the_globals_of_consumed_absent_params_are_read(
+        #[case] consumed: &[&str],
+        #[case] params: Value,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            module_globals_to_read(params.as_object().unwrap(), consumed),
+            expected
+        );
+    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
