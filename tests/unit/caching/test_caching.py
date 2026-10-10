@@ -17,7 +17,13 @@ from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import (
+    DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
+    EMBEDDING_CACHE_FORMAT_VERSION,
+    CachingSupportedCallTypes,
+    LiteLLMCacheType,
+    SemanticCacheScope,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -1014,3 +1020,43 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
     assert answer(five, "five first") == "five first"
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
+
+
+def test_default_supported_call_types_are_not_shared_between_cache_instances() -> None:
+    first: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    second: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    assert first.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+    removed: Final = first.supported_call_types[0]
+    first.supported_call_types.remove(removed)
+
+    third: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    assert second.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+    assert third.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+
+@pytest.mark.parametrize("initial_call_types", [(), ("completion", "embedding")], ids=["empty", "nonempty"])
+def test_explicit_supported_call_types_are_not_shared(
+    initial_call_types: tuple[CachingSupportedCallTypes, ...],
+) -> None:
+    supported_call_types: Final = list(initial_call_types)
+    first: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
+    second: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
+
+    supported_call_types.append("acompletion")
+    assert first.supported_call_types == list(initial_call_types)
+    assert second.supported_call_types == list(initial_call_types)
+
+    first.supported_call_types.append("aembedding")
+    assert second.supported_call_types == list(initial_call_types)
+    assert supported_call_types == [*initial_call_types, "acompletion"]
+
+
+@pytest.mark.parametrize("supported_call_types", [None, []])
+def test_disabled_supported_call_types_are_preserved(
+    supported_call_types: list[CachingSupportedCallTypes] | None,
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
+
+    assert cache.supported_call_types == supported_call_types

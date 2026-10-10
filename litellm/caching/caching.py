@@ -312,9 +312,7 @@ class Cache:
             litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
-        self.supported_call_types = (
-            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
-        )
+        self.supported_call_types = None if supported_call_types is None else list(supported_call_types)
         self.type = type
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
