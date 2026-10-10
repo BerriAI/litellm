@@ -63,9 +63,10 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
 }
 
 fn bedrock_invoke_model(model: &str) -> bool {
-    let route = model.split_once('/').map_or(model, |(prefix, _)| prefix);
     model.contains("claude")
-        && !matches!(route, "converse" | "mantle" | "claude_platform" | "openai")
+        && !model
+            .split('/')
+            .any(|route| matches!(route, "converse" | "mantle" | "claude_platform" | "openai"))
 }
 
 pub(super) fn string_headers(
@@ -108,6 +109,10 @@ mod tests {
     #[case::bedrock_converse(LlmProviders::Bedrock, "converse/claude-test")]
     #[case::bedrock_mantle(LlmProviders::Bedrock, "mantle/claude-test")]
     #[case::bedrock_platform(LlmProviders::Bedrock, "claude_platform/claude-test")]
+    #[case::bedrock_nested_converse(LlmProviders::Bedrock, "tenant/converse/claude-test")]
+    #[case::bedrock_nested_mantle(LlmProviders::Bedrock, "tenant/mantle/claude-test")]
+    #[case::bedrock_nested_platform(LlmProviders::Bedrock, "tenant/claude_platform/claude-test")]
+    #[case::bedrock_nested_openai(LlmProviders::Bedrock, "tenant/openai/claude-test")]
     fn provider_without_a_messages_config_is_rejected(
         #[case] provider: LlmProviders,
         #[case] model: &str,
