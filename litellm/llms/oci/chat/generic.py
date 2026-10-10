@@ -166,6 +166,31 @@ def adapt_messages_to_generic_oci_standard_tool_response(role: str, tool_call_id
     )
 
 
+def normalize_tool_result_content(content: object) -> str:
+    """Convert OpenAI text content parts to the string required by OCI."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        raise OCIError(
+            status_code=400,
+            message="Tool result message `content` must be a string or list of text parts",
+        )
+
+    for content_item in content:
+        if not isinstance(content_item, dict) or content_item.get("type") not in ("text", "input_text"):
+            raise OCIError(
+                status_code=400,
+                message="Tool result content must contain only text parts",
+            )
+        if not isinstance(content_item.get("text"), str):
+            raise OCIError(
+                status_code=400,
+                message="Tool result text content must have a string `text` field",
+            )
+
+    return "\n".join(content_item["text"] for content_item in content)
+
+
 def adapt_messages_to_generic_oci_standard(
     messages: list[AllMessageValues],
 ) -> list[OCIMessage]:
@@ -196,12 +221,13 @@ def adapt_messages_to_generic_oci_standard(
                     status_code=400,
                     message="Tool result message must have a string `tool_call_id`",
                 )
-            if not isinstance(content, str):
-                raise OCIError(
-                    status_code=400,
-                    message="Tool result message `content` must be a string",
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_response(
+                    role,
+                    tool_call_id,
+                    normalize_tool_result_content(content),
                 )
-            new_messages.append(adapt_messages_to_generic_oci_standard_tool_response(role, tool_call_id, content))
+            )
 
     return new_messages
 
@@ -431,6 +457,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
             StreamingChoices(
                 index=typed_chunk.index,
                 delta=Delta(
+                    role="assistant",
                     content=text,
                     tool_calls=tool_calls,
                     provider_specific_fields=None,
