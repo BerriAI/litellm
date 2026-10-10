@@ -2073,25 +2073,36 @@ def _complete_ragflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
 
 
 def _complete_scaledown(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
-    return base_llm_http_handler.completion(
-        model=ctx.model,
-        messages=ctx.messages,
-        headers=ctx.headers,
-        model_response=ctx.model_response,
-        api_key=ctx.api_key,
-        api_base=ctx.api_base,
-        acompletion=ctx.acompletion,
-        logging_obj=ctx.logging,
-        optional_params=ctx.optional_params,
-        litellm_params=ctx.litellm_params,
-        shared_session=ctx.shared_session,
-        timeout=cast(float | httpx.Timeout, ctx.timeout),  # cast-ok: CompletionTimeout.resolve normalizes this value
-        client=_dispatch_client_http(ctx),
-        custom_llm_provider=ctx.custom_llm_provider,
-        encoding=_get_encoding(),
-        stream=ctx.stream,
-        provider_config=ctx.provider_config,
-    )
+    try:
+        return base_llm_http_handler.completion(
+            model=ctx.model,
+            messages=ctx.messages,
+            headers=ctx.headers,
+            model_response=ctx.model_response,
+            api_key=ctx.api_key,
+            api_base=ctx.api_base,
+            acompletion=ctx.acompletion,
+            logging_obj=ctx.logging,
+            optional_params=ctx.optional_params,
+            litellm_params=ctx.litellm_params,
+            shared_session=ctx.shared_session,
+            timeout=cast(
+                float | httpx.Timeout, ctx.timeout
+            ),  # cast-ok: CompletionTimeout.resolve normalizes this value
+            client=_dispatch_client_http(ctx),
+            custom_llm_provider=ctx.custom_llm_provider,
+            encoding=_get_encoding(),
+            stream=ctx.stream,
+            provider_config=ctx.provider_config,
+        )
+    except Exception as exc:
+        ctx.logging.post_call(
+            input=ctx.messages,
+            api_key=ctx.api_key,
+            original_response=str(exc),
+            additional_args={"headers": ctx.headers},
+        )
+        raise
 
 
 def _complete_xai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:

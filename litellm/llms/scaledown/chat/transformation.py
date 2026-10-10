@@ -324,6 +324,10 @@ def _nullable_branch(schema: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]
     variants: Final = schema.get("anyOf", schema.get("oneOf"))
     if variants is None:
         return None
+    if any(key in schema for key in ("properties", "items", "$ref", "type")) or (
+        "anyOf" in schema and "oneOf" in schema
+    ):
+        _reject("ScaleDown extraction cannot combine nullable branches with sibling schema definitions.")
     if not isinstance(variants, list) or len(variants) != 2:
         _reject("ScaleDown extraction supports anyOf/oneOf only for one schema plus null.")
     branches: Final = tuple(branch for branch in variants if isinstance(branch, dict))
@@ -354,6 +358,8 @@ def _deref(
             continue
         if not isinstance(ref, str) or not ref.startswith("#/"):
             return current, followed, False
+        if any(key in current for key in ("properties", "items", "type")):
+            _reject("ScaleDown extraction cannot combine $ref with sibling schema definitions.")
         if ref in followed:
             return current, followed, True
         target: JsonValue = reduce(_child, ref[2:].split("/"), dict(root))

@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from queue import SimpleQueue
 from typing import Final, Literal
 
 import httpx
@@ -459,6 +461,22 @@ def test_extract_nullable_array_keeps_item_fields(config: ScaleDownChatConfig, f
     assert _extract_body(config, schema)["entities"] == {"invoices": [{"amount": "amount"}]}
 
 
+@pytest.mark.parametrize("wrapper", ["anyOf", "oneOf", "$ref"])
+def test_extract_rejects_sibling_fields_instead_of_dropping_them(config: ScaleDownChatConfig, wrapper: str) -> None:
+    address: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+    reference: Final = {"$ref": "#/$defs/Address"}
+    field: Final = {
+        **(reference if wrapper == "$ref" else {wrapper: [address, {"type": "null"}]}),
+        "properties": {"postal_code": {"type": "string"}},
+    }
+    schema: Final = {"$defs": {"Address": address}, "type": "object", "properties": {"address": field}}
+
+    with pytest.raises(ScaleDownError, match="sibling") as exc:
+        _extract_body(config, schema)
+
+    assert exc.value.status_code == 400
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -881,6 +899,28 @@ def test_upstream_payment_error_surfaces_the_detail():
         )
 
     assert "Insufficient credits" in str(exc.value)
+
+
+@respx.mock
+def test_failed_completion_invokes_post_api_logger() -> None:
+    events: Final = SimpleQueue[str]()
+
+    def logger_fn(details: Mapping[str, object]) -> None:
+        if details.get("log_event_type") == "post_api_call":
+            events.put(str(details.get("original_response")))
+
+    respx.post(f"{BASE}/v1/scaledown").respond(402, json={"detail": "Insufficient credits"})
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="scaledown/decisions",
+            messages=[{"role": "user", "content": "text"}],
+            questions={"q": {"type": "noul", "instructions": "Positive?"}},
+            logger_fn=logger_fn,
+        )
+
+    assert not events.empty()
+    assert "Insufficient credits" in events.get_nowait()
 
 
 @respx.mock
