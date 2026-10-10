@@ -28,7 +28,7 @@ pub(super) async fn execute(
     let wire = interceptors
         .before_provider_request(
             WireRequest {
-                url: authenticated.url.unwrap_or(request.url),
+                url: request.url,
                 headers: authenticated.headers,
                 body: request.body,
             },
@@ -56,7 +56,6 @@ pub(super) async fn execute(
                 Authenticated {
                     headers: wire.headers,
                     signer: authenticated.signer,
-                    url: None,
                 },
                 wire.url,
                 &wire.body,

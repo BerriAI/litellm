@@ -10,7 +10,7 @@ use litellm_inference_messages::{
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
-use litellm_router_types::LitellmParams;
+use litellm_router_types::{GithubCopilotSession, LitellmParams};
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -27,6 +27,7 @@ use crate::{
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
+const GITHUB_COPILOT_MODULE: &str = "litellm.rust_bridge.github_copilot";
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
 
 const BODY_FIELDS: [&str; 22] = [
@@ -91,6 +92,23 @@ fn project_litellm_params<'py>(
         .filter_map(|spec| spec.module_global);
     let folded = project_optional_fields(globals, &global)?;
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
+}
+
+fn github_copilot_session(
+    py: Python<'_>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    arguments: &Bound<'_, PyDict>,
+) -> PyResult<Option<GithubCopilotSession>> {
+    let resolved: Option<(String, String)> = py
+        .import(GITHUB_COPILOT_MODULE)?
+        .getattr("session")?
+        .call1((model, custom_llm_provider, arguments))?
+        .extract()?;
+    Ok(resolved.map(|(token, api_base)| GithubCopilotSession {
+        token: litellm_auth::SecretValue::new(token),
+        api_base,
+    }))
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -168,6 +186,8 @@ impl MessagesPythonHost {
         let api_base = string("api_base")?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
+        let github_copilot_session =
+            github_copilot_session(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
@@ -177,7 +197,10 @@ impl MessagesPythonHost {
                 extra_headers,
                 provider_specific_header,
                 custom_llm_provider,
-                litellm_params: litellm_params?,
+                litellm_params: LitellmParams {
+                    github_copilot_session,
+                    ..litellm_params?
+                },
                 timeout: optional_timeout(timeout),
                 shaping,
             })

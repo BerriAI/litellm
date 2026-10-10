@@ -1,6 +1,8 @@
+use litellm_auth::CredentialPlacement;
 use litellm_http::request::{with_default_headers, with_header};
 use litellm_llms_types::formats::messages::MessagesRequest;
-use litellm_router_types::LitellmParams;
+use litellm_llms_types::providers::github_copilot::{DEFAULT_HEADERS, MESSAGES_PATH};
+use litellm_router_types::{GithubCopilotSession, LitellmParams};
 
 use crate::{
     Error,
@@ -15,16 +17,6 @@ use crate::{
         },
     },
 };
-
-const DEFAULT_HEADERS: &[(&str, &str)] = &[
-    ("content-type", "application/json"),
-    ("copilot-integration-id", "vscode-chat"),
-    ("editor-version", "vscode/1.95.0"),
-    ("editor-plugin-version", "copilot-chat/0.26.7"),
-    ("user-agent", "GitHubCopilotChat/0.26.7"),
-    ("x-vscode-user-agent-library-version", "electron-fetch"),
-    ("anthropic-version", "2023-06-01"),
-];
 
 pub struct GithubCopilotAnthropicMessagesConfig;
 pub const COPILOT_MESSAGES_CONFIG: GithubCopilotAnthropicMessagesConfig =
@@ -47,15 +39,11 @@ impl BaseMessagesConfig for GithubCopilotAnthropicMessagesConfig {
         params: &LitellmParams,
         _env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if params.extra.contains_key("github_copilot_user_session") {
-            return Err(Error::Unsupported(
-                "native Copilot per-user session projection",
-            ));
-        }
         Ok(ValidatedEnvironment {
             headers,
-            auth: AuthScheme::CopilotSession {
-                path: "/v1/messages",
+            auth: AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                secret: host_session(params)?.token.clone(),
             },
         })
     }
@@ -64,14 +52,16 @@ impl BaseMessagesConfig for GithubCopilotAnthropicMessagesConfig {
         &self,
         _api_base: Option<&str>,
         _model: &str,
-        _params: &LitellmParams,
+        params: &LitellmParams,
         _stream: bool,
         _env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(format!(
-            "{}/v1/messages",
-            litellm_auth_copilot::DEFAULT_API_BASE
-        ))
+        let api_base = host_session(params)?.api_base.trim_end_matches('/');
+        Ok(if api_base.ends_with(MESSAGES_PATH) {
+            api_base.to_string()
+        } else {
+            format!("{api_base}{MESSAGES_PATH}")
+        })
     }
 
     fn transform_anthropic_messages_request(
@@ -100,4 +90,13 @@ impl BaseMessagesConfig for GithubCopilotAnthropicMessagesConfig {
         let headers = with_header(headers, "x-interaction-type", "messages-proxy".into());
         with_header(headers, "x-github-api-version", "2026-06-01".into())
     }
+}
+
+fn host_session(params: &LitellmParams) -> Result<&GithubCopilotSession, Error> {
+    params.github_copilot_session.as_ref().ok_or_else(|| {
+        litellm_auth::Error::ProviderAuthentication(
+            "GitHub Copilot session was not resolved by the host".into(),
+        )
+        .into()
+    })
 }

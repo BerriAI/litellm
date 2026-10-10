@@ -15,8 +15,7 @@ litellm-core-utils.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
-litellm-auth = { workspace = true, features = ["aws", "azure", "gcp", "copilot"] }
-litellm-auth-copilot.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-tracing.workspace = true

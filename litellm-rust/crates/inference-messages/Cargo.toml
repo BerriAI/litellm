@@ -27,7 +27,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 litellm-framer = { workspace = true, features = ["sse"] }
-litellm-auth-copilot.workspace = true
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }

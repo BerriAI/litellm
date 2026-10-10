@@ -3359,7 +3359,6 @@ version = "0.1.0"
 dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
- "litellm-auth-copilot",
  "litellm-auth-gcp",
  "litellm-auth-types",
 ]
@@ -3401,21 +3400,6 @@ dependencies = [
  "strum",
  "tokio",
  "url",
-]
-
-[[package]]
-name = "litellm-auth-copilot"
-version = "0.1.0"
-dependencies = [
- "litellm-auth-types",
- "litellm-http",
- "rstest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "url",
- "wiremock",
 ]
 
 [[package]]
@@ -3982,7 +3966,6 @@ dependencies = [
  "bytes",
  "futures-util",
  "litellm-auth",
- "litellm-auth-copilot",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
@@ -4038,7 +4021,6 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
- "litellm-auth-copilot",
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
@@ -4166,7 +4148,6 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",
- "litellm-auth-copilot",
  "litellm-auth-gcp",
  "litellm-core-utils",
  "litellm-framer",
