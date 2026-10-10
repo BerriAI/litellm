@@ -187,7 +187,7 @@ class _AcreateNamedParams(TypedDict, total=False):
 
 class _AsearchNamedParams(TypedDict, total=False):
     max_results: ReadOnly[int | None]
-    search_domain_filter: ReadOnly[list[str] | None]  # mutable-ok: mirrors litellm.asearch's search_domain_filter parameter
+    search_domain_filter: ReadOnly[list[str] | None]  # mutable-ok: matches asearch's search_domain_filter
     max_tokens_per_page: ReadOnly[int | None]
     country: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
@@ -426,7 +426,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # tool before the search executes.
         domain_filters: Final = _extract_web_search_domain_filters(tools)
         if domain_filters is not None and isinstance(kwargs, dict):
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook stashes the collected domain limits on the kwargs it returns
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook returns the kwargs it edits
 
         outcome: Final = await self._short_circuit_search_outcome(query, kwargs=kwargs)
         search_result_text: Final = WebSearchTransformation.search_outcome_text(outcome)
@@ -523,7 +523,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # replaced, so the downstream search can apply them.
         domain_filters: Final = _extract_web_search_domain_filters(tools)
         if domain_filters is not None:
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook stashes the collected domain limits on the kwargs it returns
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook returns the kwargs it edits
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
@@ -704,7 +704,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # replaced, so the downstream search can apply them.
         domain_filters: Final = _extract_web_search_domain_filters(tools)
         if domain_filters is not None:
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook stashes the collected domain limits on the kwargs it returns
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook returns the kwargs it edits
 
         # Convert native web search tools to LiteLLM standard
         converted_tools: Final[list[dict[str, object]]] = []
