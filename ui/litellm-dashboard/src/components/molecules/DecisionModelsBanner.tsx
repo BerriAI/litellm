@@ -1,7 +1,14 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ArrowRight, Sparkles, X } from "lucide-react";
 
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE } from "@/lib/decisionModels";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_PROVIDERS_DOCS_URL,
+  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  buildDecisionCatalog,
+  decisionProviderNames,
+} from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
 
 import { Button } from "@/components/ui/button";
@@ -19,6 +26,8 @@ const DecisionModelsBanner: React.FC<DecisionModelsBannerProps> = ({ onAddModel 
     }
     return false;
   });
+  const { data: costMap } = useModelCostMap(!dismissed, true);
+  const providers = useMemo(() => decisionProviderNames(buildDecisionCatalog(costMap)), [costMap]);
 
   if (dismissed) {
     return null;
@@ -32,6 +41,15 @@ const DecisionModelsBanner: React.FC<DecisionModelsBannerProps> = ({ onAddModel 
       <div className="min-w-0 flex-1">
         <h4 className="m-0 text-sm font-semibold text-foreground">Decision models are now supported</h4>
         <p className="m-0 mt-0.5 text-xs text-muted-foreground">
+          {providers.length > 0 && (
+            <>
+              Works with{" "}
+              <a href={DECISIONS_PROVIDERS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
+                {providers.length} providers
+              </a>
+              : {providers.join(", ")}.{" "}
+            </>
+          )}
           {onAddModel && (
             <>
               Search <code>decision</code> in Add Model to find them.{" "}

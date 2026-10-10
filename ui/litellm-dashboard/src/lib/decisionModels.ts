@@ -1,6 +1,9 @@
 import { z } from "zod";
 
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+
 export const DECISIONS_DOCS_URL = "https://docs.litellm.ai/docs/decisions";
+export const DECISIONS_PROVIDERS_DOCS_URL = `${DECISIONS_DOCS_URL}#supported-providers`;
 export const SYSTEM_ONE_PLAYGROUND_ROUTE = "playground?tab=system-one";
 
 const DECISION_ENDPOINTS: ReadonlySet<string> = new Set(["/v1/decisions", "/v1/systemone"]);
@@ -72,3 +75,8 @@ export const isDecisionSelection = (
 ): boolean =>
   (litellmProvider !== undefined && catalog.providers.get(litellmProvider)?.decisionOnly === true) ||
   selectedModels.some((model) => catalog.models.has(model));
+
+export const decisionProviderNames = (catalog: DecisionCatalog): readonly string[] =>
+  [...catalog.providers.keys()]
+    .map((provider) => getProviderLogoAndName(provider).displayName)
+    .sort((a, b) => a.localeCompare(b));
