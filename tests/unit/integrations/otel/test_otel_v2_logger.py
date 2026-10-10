@@ -3356,6 +3356,175 @@ def test_provisional_close_then_payload_close_does_not_duplicate():
     assert len(llm_spans) == 1
 
 
+def test_async_post_call_failure_hook_redacts_error_text_when_gated(monkeypatch):
+    """With message redaction on, the proxy-level failure span must not carry the
+    prompt through error.message / the exception event, while error.type and the
+    provider error code stay intact."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    secret = "secret-prompt-marker"
+    result = asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=_proxy_exc(f"Unsupported content: {secret}", 400),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=f"Traceback ... {secret} ...",
+        )
+    )
+    server.end()
+    assert result is None
+    (span,) = exporter.get_finished_spans()
+    assert secret not in str(dict(span.attributes or {}))
+    assert secret not in str([dict(e.attributes or {}) for e in span.events])
+    assert span.attributes["error.message"] == "redacted-by-litellm"
+    assert span.attributes["error.type"] == "ProxyException"
+    assert span.attributes["litellm.provider.error.code"] == "400"
+    assert span.attributes["litellm.provider.error.stack_trace"] == "redacted-by-litellm"
+
+
+def test_async_post_call_failure_hook_keeps_error_text_when_not_gated():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    secret = "secret-prompt-marker"
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=_proxy_exc(f"Unsupported content: {secret}", 400),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str="trace",
+        )
+    )
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert secret in span.attributes["error.message"]
+
+
+def test_record_error_attributes_on_span_preserves_request_opt_in_redaction(monkeypatch):
+    """Global flag off but the request opts in via header: the failure hook
+    stamps redacted values on the SERVER span; the exception-handler restamp
+    must keep them instead of re-writing raw error text from the global probe."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    secret = "secret-prompt-marker"
+    exc = _proxy_exc(f"Unsupported content: {secret}", 400)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+            original_exception=exc,
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=f"Traceback ... {secret} ...",
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert secret not in str(dict(span.attributes or {}))
+    assert secret not in str([dict(e.attributes or {}) for e in span.events])
+    assert secret not in str(span.status.description or "")
+    assert span.attributes["error.message"] == "redacted-by-litellm"
+    assert span.attributes["litellm.provider.error.code"] == "400"
+
+
+def test_record_error_attributes_on_span_preserves_opt_out_raw_message(monkeypatch):
+    """Global flag on but the request opts out via header: the failure hook
+    stamps the raw error text; the restamp must not overwrite it with the
+    redaction marker."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    secret = "secret-prompt-marker"
+    exc = _proxy_exc(f"Unsupported content: {secret}", 400)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"metadata": {"headers": {"litellm-disable-message-redaction": "true"}}},
+            original_exception=exc,
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=f"Traceback ... {secret} ...",
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert secret in span.attributes["error.message"]
+    assert span.attributes["litellm.provider.error.code"] == "400"
+
+
+def test_start_phase_span_does_not_record_raw_exception_when_gated(monkeypatch):
+    """With message redaction on, an exception raised inside a phase span must
+    not leak through use_span's automatic exception recording: exactly one
+    exception event lands, carrying only the redaction marker."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger()
+    secret = "secret-prompt-marker"
+    with pytest.raises(RuntimeError):
+        with logger.start_phase_span("auth"):
+            raise RuntimeError(f"auth exploded: {secret}")
+    (span,) = exporter.get_finished_spans()
+    assert secret not in str(dict(span.attributes or {}))
+    assert secret not in str([dict(e.attributes or {}) for e in span.events])
+    assert secret not in str(span.status.description or "")
+    exception_events = [e for e in span.events if e.name == "exception"]
+    assert len(exception_events) == 1
+    assert (exception_events[0].attributes or {}).get("exception.message") == "redacted-by-litellm"
+
+
+def test_start_phase_span_redact_content_kwarg_redacts_exception(monkeypatch):
+    """A caller-provided opt-in (e.g. an enable header seen at auth time, where
+    the key's opt-out permission is not known yet) must redact the phase-span
+    exception even when the global flag is off."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    logger, exporter = _logger()
+    secret = "secret-prompt-marker"
+    with pytest.raises(RuntimeError):
+        with logger.start_phase_span("auth", redact_content=True):
+            raise RuntimeError(f"auth exploded: {secret}")
+    (span,) = exporter.get_finished_spans()
+    assert secret not in str(dict(span.attributes or {}))
+    assert secret not in str([dict(e.attributes or {}) for e in span.events])
+    assert secret not in str(span.status.description or "")
+    exception_events = [e for e in span.events if e.name == "exception"]
+    assert len(exception_events) == 1
+    assert (exception_events[0].attributes or {}).get("exception.message") == "redacted-by-litellm"
+
+
+def test_start_phase_span_without_opt_in_keeps_raw_exception(monkeypatch):
+    """The default ``redact_content=False`` must leave use_span's own raw
+    exception recording untouched when the global flag is off."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    logger, exporter = _logger()
+    secret = "secret-prompt-marker"
+    with pytest.raises(RuntimeError):
+        with logger.start_phase_span("auth"):
+            raise RuntimeError(f"auth exploded: {secret}")
+    (span,) = exporter.get_finished_spans()
+    exception_events = [e for e in span.events if e.name == "exception"]
+    assert len(exception_events) == 1
+    assert secret in str(dict(exception_events[0].attributes or {}))
+
+
 def test_pipeline_op_count_lands_as_an_int_on_both_metadata_keys():
     """A ``RedisBatch`` flush reports ``call_type=request_redis_batch`` with
     ``event_metadata={"op_count": N}``; the span is ``redis.pipeline`` (no ``[N]`` in the

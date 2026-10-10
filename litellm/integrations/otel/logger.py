@@ -27,6 +27,7 @@ from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
@@ -49,7 +50,7 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
-from litellm.integrations.otel.model.semconv import Error
+from litellm.integrations.otel.model.semconv import Error, LiteLLMError
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
@@ -82,6 +83,10 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_failed_request,
+    should_redact_message_logging,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import MeterProvider
@@ -97,6 +102,21 @@ if TYPE_CHECKING:
 
 LITELLM_TRACER_NAME: Final = "litellm"
 _published_v2_provider: ApiTracerProvider | None = None
+_GLOBAL_REDACTION_PROBE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _span_failure_redact(span: "Span") -> bool:
+    """Redaction decision for re-stamping a span the failure hook may have
+    already marked: an existing ``error.message``/stack-trace attribute keeps
+    its request-aware value, so a later restamp with the global probe can't
+    leak an opt-in's raw text or clobber a valid opt-out."""
+    attributes: Final[Mapping[str, object]] = getattr(span, "attributes", None) or {}
+    if Error.MESSAGE in attributes or LiteLLMError.STACK_TRACE in attributes:
+        return (
+            attributes.get(Error.MESSAGE) == REDACTED_BY_LITELLM
+            or attributes.get(LiteLLMError.STACK_TRACE) == REDACTED_BY_LITELLM
+        )
+    return should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
 
 
 def _span_error_from_exception(
@@ -104,6 +124,7 @@ def _span_error_from_exception(
     *,
     status_code: int | None = None,
     traceback_str: str | None = None,
+    redact_content: bool = False,
 ) -> SpanError:
     """A ``SpanError`` for a proxy-level failure that never produced a
     ``StandardLoggingPayload`` (auth / validation / malformed-body rejections),
@@ -118,9 +139,13 @@ def _span_error_from_exception(
     )
     return SpanError(
         error_type=info.get("error_class") or info.get("error_code") or None,
-        message=info.get("error_message") or None,
+        message=REDACTED_BY_LITELLM
+        if redact_content and info.get("error_message")
+        else (info.get("error_message") or None),
         code=str(status_code) if status_code is not None else (info.get("error_code") or None),
-        stack_trace=info.get("traceback") or None,
+        stack_trace=REDACTED_BY_LITELLM
+        if redact_content and info.get("traceback")
+        else (info.get("traceback") or None),
         llm_provider=info.get("llm_provider") or None,
     )
 
@@ -753,7 +778,7 @@ class OpenTelemetryV2(CustomLogger):
             pass
 
     @contextmanager
-    def start_phase_span(self, name: str) -> "Iterator[Span]":
+    def start_phase_span(self, name: str, *, redact_content: bool = False) -> "Iterator[Span]":
         """A live INTERNAL span the service calls inside the block nest under.
 
         Parents like a service span: ambient first, and from the post-response phase
@@ -762,8 +787,14 @@ class OpenTelemetryV2(CustomLogger):
         """
         parent_context, links = resolve_service_span_context()
         span: Final = self._emitter.start_span(SpanRole.SERVICE, name, parent_context=parent_context, links=links)
+        redact: Final = redact_content or should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
         with (
-            use_span(span, end_on_exit=True),
+            use_span(
+                span,
+                end_on_exit=True,
+                record_exception=not redact,
+                set_status_on_exception=not redact,
+            ),
             active_phase(span),
             post_response_root(span) if links else nullcontext(),
         ):
@@ -771,7 +802,12 @@ class OpenTelemetryV2(CustomLogger):
                 yield span
             except Exception as exc:
                 if is_recordable_span(span):
-                    stamp_error(span, _span_error_from_exception(exc), record_event=False, set_status=False)
+                    stamp_error(
+                        span,
+                        _span_error_from_exception(exc, redact_content=redact),
+                        record_event=redact,
+                        set_status=redact,
+                    )
                 raise
 
     def add_phase_event(self, name: str, attributes: Mapping[str, str | int] | None = None) -> None:
@@ -823,13 +859,17 @@ class OpenTelemetryV2(CustomLogger):
         already_stamped: Final = Error.TYPE in (getattr(span, "attributes", None) or ())
         stamp_error(
             span,
-            _span_error_from_exception(exception, status_code=status_code),
+            _span_error_from_exception(
+                exception,
+                status_code=status_code,
+                redact_content=_span_failure_redact(span),
+            ),
             record_event=not already_stamped,
         )
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: "str | None" = None,
@@ -849,7 +889,14 @@ class OpenTelemetryV2(CustomLogger):
         span: Final = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
             return
-        stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
+        stamp_error(
+            span,
+            _span_error_from_exception(
+                original_exception,
+                traceback_str=traceback_str,
+                redact_content=should_redact_failed_request(request_data),
+            ),
+        )
         return
 
     def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
@@ -1034,12 +1081,12 @@ def fan_out_provider() -> ApiTracerProvider:
 
 
 @contextmanager
-def phase_span(name: str) -> "Iterator[Span | None]":
+def phase_span(name: str, *, redact_content: bool = False) -> "Iterator[Span | None]":
     logger: Final = _registered_v2_logger()
     if logger is None:
         yield None
         return
-    with logger.start_phase_span(name) as span:
+    with logger.start_phase_span(name, redact_content=redact_content) as span:
         yield span
 
 

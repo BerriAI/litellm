@@ -3855,7 +3855,9 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=result,
-                            kwargs=self.model_call_details,
+                            kwargs=callback.redact_standard_logging_payload_from_model_call_details(
+                                model_call_details=self.model_call_details
+                            ),
                         )
                     if callback == "langfuse":
                         global langFuseLogger
@@ -3973,8 +3975,10 @@ class Logging(LiteLLMLoggingBaseClass):
             global_callbacks=litellm._async_failure_callback,
         )
 
-        result: Final = None  # result sent to all loggers, init this to None incase it's not created
-
+        result: Final = redact_message_input_output_from_logging(
+            model_call_details=self.model_call_details,
+            result=None,
+        )
         self.mark_logging_complete(event_type="async_failure")
         for callback in callbacks:
             try:
@@ -3988,7 +3992,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
-                        kwargs=self.model_call_details,
+                        kwargs=callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        ),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,

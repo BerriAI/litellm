@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.redact_messages import maybe_redact_error_information
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -194,9 +195,12 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata["status"] = "failure"
-        _error_information = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=original_exception,
-            traceback_str=traceback_str,
+        _error_information = maybe_redact_error_information(
+            error_information=StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            ),
+            request_data=request_data,
         )
         if should_suppress_spend_log_tracebacks():
             # Drop the traceback key entirely so the per-row Metadata pane in

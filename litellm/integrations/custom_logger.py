@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    EMPTY_MAPPING,
+    REDACTED_BY_LITELLM,
+)
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -894,13 +898,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def redacts_messages_itself(self) -> bool:
         return False
 
-    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
+    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict[str, object]:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
         This method handles two features:
         1. turn_off_message_logging: When True, redacts messages and responses (unless the callback
-           redacts them itself, see `redacts_messages_itself`)
+           redacts them itself, see `redacts_messages_itself`), and redacts `error_str`,
+           `error_information`'s message/traceback and `traceback_exception` independent of
+           `redacts_messages_itself`
         2. standard_logging_payload_excluded_fields: Removes specified fields entirely
 
         Return a modified copy of the provided logging payload.
@@ -910,7 +916,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         import litellm
         from litellm import Choices, Message, ModelResponse
         from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
-        from litellm.litellm_core_utils.redact_messages import redacted_litellm_params
+        from litellm.litellm_core_utils.redact_messages import redacted_error_fields, redacted_litellm_params
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -925,12 +931,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if turn_off_message_logging and isinstance(params, Mapping)
             else EMPTY_MAPPING
         )
+        redacted_failure_fields: Final[Mapping[str, object]] = (
+            MappingProxyType({"traceback_exception": REDACTED_BY_LITELLM})
+            if turn_off_message_logging
+            and "traceback_exception" in model_call_details
+            and model_call_details["traceback_exception"]
+            else EMPTY_MAPPING
+        )
         standard_logging_object: Final = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
-            return {**model_call_details, **redacted_params}
+            return {**model_call_details, **redacted_params, **redacted_failure_fields}
 
         # Make a copy of just the standard_logging_object to avoid modifying the original
-        standard_logging_object_copy: Final = {
+        standard_logging_object_copy: Final[dict[str, object]] = {  # mutable-ok: the per-callback copy redaction edits
             key: value
             for key, value in standard_logging_object.items()
             if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
@@ -967,9 +980,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict: Final = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
+        if turn_off_message_logging:
+            standard_logging_object_copy.update(redacted_error_fields(standard_logging_object_copy))
+
         return {
             **model_call_details,
             **redacted_params,
+            **redacted_failure_fields,
             "standard_logging_object": standard_logging_object_copy,
         }
 

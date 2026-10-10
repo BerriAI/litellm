@@ -2586,6 +2586,57 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
 
 
 @pytest.mark.asyncio
+async def test_handle_logging_proxy_only_error_strips_excluded_fields_for_custom_logger(
+    monkeypatch,
+):
+    """A guardrail block logged through the proxy-only failure path hands a
+    CustomLogger a standard_logging_object without the excluded fields."""
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.utils import ProxyLogging
+
+    class _CapturingLogger(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.failure_kwargs = None
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.failure_kwargs = kwargs
+
+    capture = _CapturingLogger()
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["metadata", "messages"])
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    with patch("litellm.proxy.utils.threading.Thread") as mock_thread:
+        mock_thread.return_value.start = Mock()
+        await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "please zebrablock this"}],
+                "metadata": {"tags": ["sentinel"]},
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test_key",
+                token="test_token",
+                request_route="/v1/chat/completions",
+            ),
+            route="/v1/chat/completions",
+            original_exception=HTTPException(
+                status_code=400,
+                detail={"error": "Content blocked: keyword 'zebrablock' detected"},
+            ),
+        )
+
+    assert capture.failure_kwargs is not None
+    payload = capture.failure_kwargs["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert "metadata" not in payload
+    assert "messages" not in payload
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_parallel_execution():
     """
     Test that multiple guardrails in during_call_hook are executed in parallel.

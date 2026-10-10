@@ -39,6 +39,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -3551,7 +3552,10 @@ async def user_api_key_auth(
     # onto the server span, and name every cache read in it an auth-object read.
     # No-op when OTel V2 isn't active.
     with (
-        phase_span(f"auth {route}"),
+        phase_span(
+            f"auth {route}",
+            redact_content=request_opts_into_message_redaction(safe_get_request_headers(request), request_data),
+        ),
         service_target(AUTH_OBJECTS_TARGET),
         spend_counter_batch_scope(_spend_counter_redis_cache()),
     ):

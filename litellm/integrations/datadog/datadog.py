@@ -18,7 +18,7 @@ import datetime
 import os
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime as datetimeObj
 from typing import TYPE_CHECKING, Any, Final
 
@@ -287,7 +287,7 @@ class DataDogLogger(
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: str | None = None,
@@ -303,11 +303,20 @@ class DataDogLogger(
             from litellm.litellm_core_utils.litellm_logging import (
                 StandardLoggingPayloadSetup,
             )
+            from litellm.litellm_core_utils.redact_messages import (
+                redact_error_information,
+                should_redact_failed_request,
+            )
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            error_information: Final = StandardLoggingPayloadSetup.get_error_information(
+            _error_information_raw: Final = StandardLoggingPayloadSetup.get_error_information(
                 original_exception=original_exception,
                 traceback_str=traceback_str,
+            )
+            error_information: Final = (
+                redact_error_information(_error_information_raw)
+                if should_redact_failed_request(request_data)
+                else _error_information_raw
             )
             _code: Final = error_information.get("error_code") or ""
             status_code: int | None = None

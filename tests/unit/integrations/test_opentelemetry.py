@@ -6842,6 +6842,121 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
         )
 
 
+SECRET_PROMPT = "secret-prompt-marker"
+
+
+class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
+    def _run_hook(self, request_data, exception, redact):
+        with patch.object(litellm, "turn_off_message_logging", redact):
+            exporter = InMemorySpanExporter()
+            provider = TracerProvider()
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            tracer = provider.get_tracer(__name__)
+
+            otel = OpenTelemetry()
+            otel.tracer = tracer
+            server_span = tracer.start_span("Received Proxy Server Request")
+
+            user_api_key_dict = MagicMock()
+            user_api_key_dict.parent_otel_span = server_span
+
+            asyncio.run(
+                otel.async_post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=exception,
+                    user_api_key_dict=user_api_key_dict,
+                    traceback_str=f"Traceback ... {SECRET_PROMPT} ...",
+                )
+            )
+
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        return finished
+
+    def test_failure_hook_redacts_error_text_when_gated(self):
+        secret = SECRET_PROMPT
+        finished = self._run_hook(
+            {"metadata": {}},
+            litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+            redact=True,
+        )
+        server = finished["Received Proxy Server Request"]
+        child = finished["Failed Proxy Server Request"]
+        for span in (server, child):
+            assert secret not in str(dict(span.attributes or {}))
+            for event in span.events:
+                assert secret not in str(dict(event.attributes or {}))
+        assert server.attributes["error.message"] == "redacted-by-litellm"
+        assert server.attributes["error.type"] == "BadRequestError"
+        assert child.attributes["exception"] == "redacted-by-litellm"
+
+    def test_failure_hook_keeps_error_text_when_not_gated(self):
+        secret = SECRET_PROMPT
+        finished = self._run_hook(
+            {"metadata": {}},
+            litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+            redact=False,
+        )
+        child = finished["Failed Proxy Server Request"]
+        assert secret in child.attributes["exception"]
+
+    def test_record_error_attributes_on_span_redacts_via_global_gate(self):
+        with patch.object(litellm, "turn_off_message_logging", True):
+            otel = OpenTelemetry()
+            span = MagicMock()
+            otel.record_error_attributes_on_span(
+                span=span,
+                exception=litellm.BadRequestError(
+                    message=f"Unsupported content: {SECRET_PROMPT}", model="gpt-4o", llm_provider="openai"
+                ),
+                status_code=400,
+            )
+        stamped = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+        assert stamped.get("error.message") == "redacted-by-litellm"
+        assert stamped.get("error.type") == "BadRequestError"
+
+    def _restamped_span(self, stamped_message, redact, exception):
+        with patch.object(litellm, "turn_off_message_logging", redact):
+            exporter = InMemorySpanExporter()
+            provider = TracerProvider()
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            otel = OpenTelemetry()
+            otel.tracer = provider.get_tracer(__name__)
+            span = otel.tracer.start_span("Received Proxy Server Request")
+            otel.safe_set_attribute(span=span, key="error.message", value=stamped_message)
+            otel.record_error_attributes_on_span(span=span, exception=exception, status_code=400)
+            span.end()
+            return exporter.get_finished_spans()[0]
+
+    def test_record_error_attributes_on_span_preserves_request_opt_in_redaction(self):
+        """Global flag off but the request opted in: the failure hook already
+        stamped the redaction marker on the SERVER span; the exception-handler
+        restamp must keep it instead of writing raw error text."""
+        span = self._restamped_span(
+            "redacted-by-litellm",
+            redact=False,
+            exception=litellm.BadRequestError(
+                message=f"Unsupported content: {SECRET_PROMPT}", model="gpt-4o", llm_provider="openai"
+            ),
+        )
+        assert span.attributes["error.message"] == "redacted-by-litellm"
+        assert span.attributes["error.code"] == "400"
+        assert SECRET_PROMPT not in str(dict(span.attributes or {}))
+
+    def test_record_error_attributes_on_span_preserves_opt_out_raw_message(self):
+        """Global flag on but the request opted out: the failure hook stamped
+        the raw error text; the restamp must not overwrite it with the
+        redaction marker."""
+        span = self._restamped_span(
+            f"Unsupported content: {SECRET_PROMPT}",
+            redact=True,
+            exception=litellm.BadRequestError(
+                message=f"Unsupported content: {SECRET_PROMPT}", model="gpt-4o", llm_provider="openai"
+            ),
+        )
+        assert SECRET_PROMPT in span.attributes["error.message"]
+        assert span.attributes["error.code"] == "400"
+
+
 def _raw_response_span_attributes(original_response: str) -> dict[str, object]:
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()

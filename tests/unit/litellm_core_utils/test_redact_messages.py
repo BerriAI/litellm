@@ -1040,6 +1040,203 @@ def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwarg
     assert SERVED_OUTPUT_TEXTS_KEY not in details
 
 
+def _error_information(**overrides):
+    info = {
+        "error_code": "400",
+        "error_class": "BadRequestError",
+        "llm_provider": "openai",
+        "traceback": "Traceback ... secret-prompt-marker ...",
+        "error_message": "Unsupported content: secret-prompt-marker",
+        "error_rate_limit_category": None,
+        "normalized_error": None,
+    }
+    info.update(overrides)
+    return info
+
+
+class TestRedactErrorInformation:
+    def test_replaces_message_and_traceback_keeps_everything_else(self):
+        from litellm.litellm_core_utils.redact_messages import redact_error_information
+
+        info = _error_information()
+        redacted = redact_error_information(info)
+        assert redacted == {
+            "error_code": "400",
+            "error_class": "BadRequestError",
+            "llm_provider": "openai",
+            "traceback": "redacted-by-litellm",
+            "error_message": "redacted-by-litellm",
+            "error_rate_limit_category": None,
+            "normalized_error": None,
+        }
+
+    def test_empty_fields_stay_empty(self):
+        from litellm.litellm_core_utils.redact_messages import redact_error_information
+
+        redacted = redact_error_information(_error_information(traceback="", error_message=None))
+        assert redacted["traceback"] == ""
+        assert redacted["error_message"] is None
+        assert "secret-prompt-marker" not in str(redacted)
+
+    def test_input_not_mutated(self):
+        from litellm.litellm_core_utils.redact_messages import redact_error_information
+
+        info = _error_information()
+        redact_error_information(info)
+        assert info["error_message"] == "Unsupported content: secret-prompt-marker"
+        assert info["traceback"] == "Traceback ... secret-prompt-marker ..."
+
+
+class TestFailureRedactionOnStandardLoggingObject:
+    def test_redacted_standard_logging_payload_covers_error_fields(self):
+        payload = {
+            "messages": [{"role": "user", "content": "secret-prompt-marker"}],
+            "error_str": "Error: secret-prompt-marker",
+            "error_information": _error_information(),
+            "status": "failure",
+        }
+        redacted = redacted_standard_logging_payload(payload)
+        assert "secret-prompt-marker" not in str(redacted)
+        assert redacted["error_str"] == "redacted-by-litellm"
+        assert redacted["error_information"] == {
+            "error_code": "400",
+            "error_class": "BadRequestError",
+            "llm_provider": "openai",
+            "traceback": "redacted-by-litellm",
+            "error_message": "redacted-by-litellm",
+            "error_rate_limit_category": None,
+            "normalized_error": None,
+        }
+
+    def test_perform_redaction_covers_traceback_exception(self):
+        details = {
+            "litellm_params": {},
+            "traceback_exception": "Traceback ... secret-prompt-marker",
+            "standard_logging_object": {"error_str": "secret-prompt-marker"},
+        }
+        perform_redaction(details, None)
+        assert "secret-prompt-marker" not in str(details)
+        assert details["traceback_exception"] == "redacted-by-litellm"
+        assert details["standard_logging_object"]["error_str"] == "redacted-by-litellm"
+
+    def test_perform_redaction_leaves_empty_traceback_exception_alone(self):
+        details = {"litellm_params": {}, "traceback_exception": ""}
+        perform_redaction(details, None)
+        assert details["traceback_exception"] == ""
+
+
+def _request_data(metadata=None, litellm_metadata=None, turn_off_message_logging=None):
+    data = {"metadata": metadata if metadata is not None else {}}
+    if litellm_metadata is not None:
+        data["litellm_metadata"] = litellm_metadata
+    if turn_off_message_logging is not None:
+        data["turn_off_message_logging"] = turn_off_message_logging
+    return data
+
+
+class TestShouldRedactFailedRequest:
+    def test_global_on(self, monkeypatch):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        assert should_redact_failed_request(_request_data()) is True
+
+    def test_global_off(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        assert should_redact_failed_request(_request_data()) is False
+
+    def test_enable_header_in_metadata(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        request_data = _request_data(metadata={"headers": {"x-litellm-enable-message-redaction": "true"}})
+        assert should_redact_failed_request(request_data) is True
+
+    def test_disable_header_overrides_global_on(self, monkeypatch):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        request_data = _request_data(metadata={"headers": {"litellm-disable-message-redaction": "true"}})
+        assert should_redact_failed_request(request_data) is False
+
+    def test_enable_header_in_litellm_metadata(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        request_data = _request_data(litellm_metadata={"headers": {"x-litellm-enable-message-redaction": "true"}})
+        assert should_redact_failed_request(request_data) is True
+
+    def test_dynamic_param_true(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        assert should_redact_failed_request(_request_data(turn_off_message_logging=True)) is True
+
+    def test_dynamic_param_false_overrides_global_on(self, monkeypatch):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        assert should_redact_failed_request(_request_data(turn_off_message_logging=False)) is False
+
+    def test_dynamic_param_in_metadata_slot(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        assert should_redact_failed_request(_request_data(metadata={"turn_off_message_logging": True})) is True
+
+    def test_dynamic_param_in_litellm_metadata_slot(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        assert should_redact_failed_request(_request_data(litellm_metadata={"turn_off_message_logging": True})) is True
+
+    def test_top_level_dynamic_param_beats_metadata_slot(self, monkeypatch):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        request_data = _request_data(
+            metadata={"turn_off_message_logging": True},
+            turn_off_message_logging=False,
+        )
+        assert should_redact_failed_request(request_data) is False
+
+
+class TestRequestOptsIntoMessageRedaction:
+    @pytest.mark.parametrize("header", ["litellm-enable-message-redaction", "x-litellm-enable-message-redaction"])
+    def test_enable_header(self, header: str) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({header: "true"}, {}) is True
+
+    def test_top_level_dynamic_param(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {"turn_off_message_logging": True}) is True
+
+    def test_metadata_slot_dynamic_param(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {"metadata": {"turn_off_message_logging": True}}) is True
+
+    def test_empty_inputs(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {}) is False
+
+    def test_disable_header_alone_is_not_an_opt_in(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({"litellm-disable-message-redaction": "true"}, {}) is False
+
+    def test_dynamic_param_false(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {"turn_off_message_logging": False}) is False
+
+    @pytest.mark.parametrize("body", ([1], "x", None, 123, True))
+    def test_non_object_body_is_not_an_opt_in(self, body: object) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, body) is False
+        assert request_opts_into_message_redaction({"x-litellm-enable-message-redaction": "true"}, body) is True
+
+
 @pytest.mark.parametrize("callback_only", (False, True))
 @pytest.mark.parametrize("with_standard_payload", (False, True))
 def test_baseline_snapshots_are_redacted_without_mutating_request_state(
