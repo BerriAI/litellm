@@ -1,6 +1,6 @@
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -1323,9 +1323,9 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email_in_cont
                         deltas: Final = tuple(
                             choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ()
                         )
-                        assert (
-                            "".join(str(delta.get("content") or "") for delta in deltas) == masked_note
-                        ), response_body.decode()
+                        assert "".join(str(delta.get("content") or "") for delta in deltas) == masked_note, (
+                            response_body.decode()
+                        )
                         assert all(
                             "commentary" not in delta["provider_specific_fields"]
                             for delta in deltas
@@ -1345,9 +1345,9 @@ def test_chat_over_responses_deployment_guardrail_masks_commentary_email_in_cont
                     assert response.status_code == 200, response.text
                     body: Final = response.json()
                     assert body["choices"][0]["message"]["content"] == masked_note, response.text
-                    assert "commentary" not in (
-                        body["choices"][0]["message"].get("provider_specific_fields") or {}
-                    ), response.text
+                    assert "commentary" not in (body["choices"][0]["message"].get("provider_specific_fields") or {}), (
+                        response.text
+                    )
                     assert body["choices"][0]["finish_reason"] == "tool_calls", response.text
             finally:
                 gateway.client.delete(
@@ -1514,16 +1514,16 @@ def test_chat_over_responses_deployment_keeps_commentary_in_content_on_tool_turn
                         for line in response_body.decode().splitlines()
                         if line.startswith("data: ") and line != "data: [DONE]"
                     )
-                deltas: Final = tuple(
-                    choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ()
-                )
+                deltas: Final = tuple(choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ())
                 finish_reasons: Final = tuple(
                     choice["finish_reason"]
                     for chunk in chunks
                     for choice in chunk.get("choices") or ()
                     if choice.get("finish_reason")
                 )
-                assert "".join(str(delta.get("content") or "") for delta in deltas) == commentary_text, response_body.decode()
+                assert "".join(str(delta.get("content") or "") for delta in deltas) == commentary_text, (
+                    response_body.decode()
+                )
                 assert all(
                     "commentary" not in delta["provider_specific_fields"]
                     for delta in deltas
@@ -1594,12 +1594,54 @@ def test_chat_over_responses_deployment_keeps_commentary_in_content_on_tool_turn
         ], json.dumps(requests_seen[1]["input"])
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.commentary_replayed_as_plain_content_in_long_conversation")
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
 def test_chat_over_responses_deployment_matches_native_chat_shape_across_a_long_conversation(
-    gateway: Gateway,
+    gateway: Gateway, stream: bool
 ) -> None:
     identity: Final = "responses-long-convo-" + uuid.uuid4().hex
     turns: list[Mapping[str, JsonValue]] = []  # mutable-ok: upstream turn counter
+
+    def sse_body(outputs: Sequence[Mapping[str, JsonValue]], turn_number: int) -> bytes:
+        events: list[Mapping[str, JsonValue]] = [  # mutable-ok: ordered event list
+            {
+                "type": "response.created",
+                "response": {
+                    "id": f"resp_{identity}_{turn_number}",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "in_progress",
+                    "model": "gpt-6-sol",
+                },
+            }
+        ]
+        for output_index, item in enumerate(outputs):
+            events.append({"type": "response.output_item.added", "output_index": output_index, "item": item})
+            if item["type"] == "message":
+                for content_index, part in enumerate(item["content"]):
+                    events.append(
+                        {
+                            "type": "response.output_text.delta",
+                            "item_id": item["id"],
+                            "output_index": output_index,
+                            "content_index": content_index,
+                            "delta": part["text"],
+                        }
+                    )
+        events.append(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp_{identity}_{turn_number}",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": outputs,
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                },
+            }
+        )
+        return ("".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n").encode()
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
@@ -1607,87 +1649,86 @@ def test_chat_over_responses_deployment_matches_native_chat_shape_across_a_long_
         assert request.method == "POST" and request.target == "/responses", request.target
         body: Final = json.loads(request.body)
         turns.append(body["input"])
-        outputs: Final = (
-            {
-                1: [
-                    {
-                        "type": "message",
-                        "id": "msg_c1",
-                        "status": "completed",
-                        "role": "assistant",
-                        "phase": "commentary",
-                        "content": [{"type": "output_text", "text": "Checking SF.", "annotations": []}],
-                    },
-                    {
-                        "type": "function_call",
-                        "id": "fc_sf",
-                        "call_id": "call_sf",
-                        "name": "get_weather",
-                        "arguments": '{"city":"SF"}',
-                        "status": "completed",
-                    },
-                ],
-                2: [
-                    {
-                        "type": "reasoning",
-                        "id": "rs_t2",
-                        "encrypted_content": "enc_t2",
-                        "summary": [{"type": "summary_text", "text": "Planning both lookups."}],
-                    },
-                    {
-                        "type": "message",
-                        "id": "msg_c2",
-                        "status": "completed",
-                        "role": "assistant",
-                        "phase": "commentary",
-                        "content": [{"type": "output_text", "text": "Now NYC, weather and time.", "annotations": []}],
-                    },
-                    {
-                        "type": "function_call",
-                        "id": "fc_nyc_weather",
-                        "call_id": "call_nyc_weather",
-                        "name": "get_weather",
-                        "arguments": '{"city":"NYC"}',
-                        "status": "completed",
-                    },
-                    {
-                        "type": "function_call",
-                        "id": "fc_nyc_time",
-                        "call_id": "call_nyc_time",
-                        "name": "get_time",
-                        "arguments": '{"city":"NYC"}',
-                        "status": "completed",
-                    },
-                ],
-                3: [
-                    {
-                        "type": "message",
-                        "id": "msg_c3",
-                        "status": "completed",
-                        "role": "assistant",
-                        "phase": "commentary",
-                        "content": [{"type": "output_text", "text": "Here is the summary.", "annotations": []}],
-                    },
-                    {
-                        "type": "message",
-                        "id": "msg_a3",
-                        "status": "completed",
-                        "role": "assistant",
-                        "phase": "final_answer",
-                        "content": [{"type": "output_text", "text": f'{{"done": "{identity}"}}', "annotations": []}],
-                    },
-                ],
-            }.get(len(turns))
-            or [
+        outputs: Final = {
+            1: [
                 {
                     "type": "message",
-                    "id": "msg_plain",
+                    "id": "msg_c1",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "Anything else?", "annotations": []}],
-                }
-            ]
-        )
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Checking SF.", "annotations": []}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_sf",
+                    "call_id": "call_sf",
+                    "name": "get_weather",
+                    "arguments": '{"city":"SF"}',
+                    "status": "completed",
+                },
+            ],
+            2: [
+                {
+                    "type": "reasoning",
+                    "id": "rs_t2",
+                    "encrypted_content": "enc_t2",
+                    "summary": [{"type": "summary_text", "text": "Planning both lookups."}],
+                },
+                {
+                    "type": "message",
+                    "id": "msg_c2",
+                    "status": "completed",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Now NYC, weather and time.", "annotations": []}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_nyc_weather",
+                    "call_id": "call_nyc_weather",
+                    "name": "get_weather",
+                    "arguments": '{"city":"NYC"}',
+                    "status": "completed",
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_nyc_time",
+                    "call_id": "call_nyc_time",
+                    "name": "get_time",
+                    "arguments": '{"city":"NYC"}',
+                    "status": "completed",
+                },
+            ],
+            3: [
+                {
+                    "type": "message",
+                    "id": "msg_c3",
+                    "status": "completed",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Here is the summary.", "annotations": []}],
+                },
+                {
+                    "type": "message",
+                    "id": "msg_a3",
+                    "status": "completed",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{"type": "output_text", "text": f'{{"done": "{identity}"}}', "annotations": []}],
+                },
+            ],
+        }.get(len(turns)) or [
+            {
+                "type": "message",
+                "id": "msg_plain",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Anything else?", "annotations": []}],
+            }
+        ]
+        if stream:
+            return Reply(body=sse_body(outputs, len(turns)), headers={"content-type": "text/event-stream"})
         return Reply(
             body=json.dumps(
                 {
@@ -1721,11 +1762,95 @@ def test_chat_over_responses_deployment_matches_native_chat_shape_across_a_long_
             {"role": "user", "content": f"Weather in SF? {identity}"}
         ]  # mutable-ok: conversation grows each turn
 
-        def turn(user_message: str | None = None, tool_results: tuple[tuple[str, str], ...] = ()) -> Mapping[str, JsonValue]:
+        def turn(
+            user_message: str | None = None, tool_results: tuple[tuple[str, str], ...] = ()
+        ) -> Mapping[str, JsonValue]:
             for call_id, output in tool_results:
                 messages.append({"role": "tool", "tool_call_id": call_id, "content": output})
             if user_message is not None:
                 messages.append({"role": "user", "content": user_message})
+            if stream:
+                chunks: list[Mapping[str, JsonValue]] = []  # mutable-ok: stream events accumulate
+                with gateway.client.stream(
+                    "POST",
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {gateway.key}"},
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "tools": tools,
+                        "stream": True,
+                        "cache": {"no-cache": True},
+                    },
+                ) as response:
+                    response_body: Final = response.read()
+                    assert response.status_code == 200, response.text
+                    chunks.extend(
+                        json.loads(line.removeprefix("data: "))
+                        for line in response_body.decode().splitlines()
+                        if line.startswith("data: ") and line != "data: [DONE]"
+                    )
+                deltas: Final = tuple(choice["delta"] for chunk in chunks for choice in chunk.get("choices") or ())
+                merged_tool_calls: dict[int, dict[str, JsonValue]] = {}  # mutable-ok: stream accumulator
+                for delta in deltas:
+                    for tool_call in delta.get("tool_calls") or ():
+                        index = int(tool_call.get("index", 0))
+                        entry = merged_tool_calls.setdefault(
+                            index,
+                            {
+                                "id": None,
+                                "type": "function",
+                                "index": index,
+                                "function": {"name": "", "arguments": ""},
+                            },
+                        )
+                        if tool_call.get("id"):
+                            entry["id"] = tool_call["id"]
+                        function_part = tool_call.get("function") or {}
+                        entry["function"]["name"] += str(function_part.get("name") or "")
+                        entry["function"]["arguments"] += str(function_part.get("arguments") or "")
+                stream_message: Final = {
+                    "role": "assistant",
+                    "content": "".join(str(delta.get("content") or "") for delta in deltas) or None,
+                    "tool_calls": tuple(merged_tool_calls[index] for index in sorted(merged_tool_calls)) or None,
+                    "provider_specific_fields": (
+                        {
+                            "commentary": "".join(
+                                str(delta["provider_specific_fields"]["commentary"])
+                                for delta in deltas
+                                if isinstance(delta.get("provider_specific_fields"), dict)
+                                and isinstance(delta["provider_specific_fields"].get("commentary"), str)
+                            )
+                        }
+                        if any(
+                            isinstance(delta.get("provider_specific_fields"), dict)
+                            and "commentary" in delta["provider_specific_fields"]
+                            for delta in deltas
+                        )
+                        else None
+                    ),
+                    "reasoning_items": next(
+                        (delta["reasoning_items"] for delta in deltas if delta.get("reasoning_items")), None
+                    ),
+                    "finish_reason": next(
+                        (
+                            choice["finish_reason"]
+                            for chunk in reversed(chunks)
+                            for choice in chunk.get("choices") or ()
+                            if choice.get("finish_reason")
+                        ),
+                        None,
+                    ),
+                }
+                messages.append(
+                    {
+                        k: v
+                        for k, v in stream_message.items()
+                        if k in ("role", "content", "tool_calls", "provider_specific_fields", "reasoning_items")
+                        and v is not None
+                    }
+                )
+                return {"finish_reason": stream_message["finish_reason"], "message": stream_message}
             response: Final = gateway.request(
                 "POST",
                 "/v1/chat/completions",
@@ -1792,23 +1917,37 @@ def test_chat_over_responses_deployment_matches_native_chat_shape_across_a_long_
             call_output("call_sf", "sunny, 21C"),
             content_message("user", "And NYC, weather plus time"),
         ]
-        assert turns[2] == [
+        reasoning_replay: Final = (
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_t2",
+                    "summary": [{"type": "summary_text", "text": "Planning both lookups."}],
+                    "encrypted_content": "enc_t2",
+                }
+            ]
+            if not stream
+            else []
+        )
+        expected_turn3: Final = [
             *turns[1],
-            {"type": "reasoning", "id": "rs_t2", "summary": [{"type": "summary_text", "text": "Planning both lookups."}], "encrypted_content": "enc_t2"},
+            *reasoning_replay,
             content_message("assistant", "Now NYC, weather and time."),
             function_call("call_nyc_weather", "get_weather", '{"city":"NYC"}'),
             function_call("call_nyc_time", "get_time", '{"city":"NYC"}'),
             call_output("call_nyc_weather", "cloudy, 15C"),
             call_output("call_nyc_time", "14:00"),
         ]
+        # stream clients cannot see delta.reasoning_items today (the generic stream
+        # handler rebuilds deltas without it), so nothing is replayed for them
+        assert turns[2] == expected_turn3
         assert turns[3] == [
-            *turns[2],
+            *expected_turn3,
             content_message("assistant", f'{{"done": "{identity}"}}'),
             content_message("user", "Anything else?"),
         ]
 
 
-@pytest.mark.covers("other.provider_wire.responses_bridge.cursor_route_commentary_fold")
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
 def test_cursor_chat_completions_route_folds_commentary_into_provider_specific_fields(
     gateway: Gateway, stream: bool
@@ -2141,3 +2280,153 @@ def test_chat_over_responses_deployment_end_of_stream_blank_commentary_rewrite(g
                 f"/guardrails/{guardrail_id}", headers={"x-litellm-api-key": gateway.key}
             )
             assert deleted.status_code == 200, deleted.text
+
+
+def test_chat_over_responses_deployment_conversation_switching_between_chat_and_responses(
+    gateway: Gateway,
+) -> None:
+    identity: Final = "responses-switching-" + uuid.uuid4().hex
+    hits: list[tuple[str, Mapping[str, JsonValue]]] = []  # mutable-ok: upstream recorder
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.method == "POST" and request.target in ("/responses", "/chat/completions"), request.target
+        body: Final = json.loads(request.body)
+        hits.append((request.target, body))
+        if request.target == "/chat/completions":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "id": f"chatcmpl_{identity}",
+                        "object": "chat.completion",
+                        "created": 1789788253,
+                        "model": "gpt-6-sol",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "Plain chat answer."},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+                    }
+                ).encode()
+            )
+        responses_count: Final = sum(1 for target, _ in hits if target == "/responses")
+        outputs: Final = {
+            1: [
+                {
+                    "type": "message",
+                    "id": "msg_s1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Checking SF.", "annotations": []}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_sf",
+                    "call_id": "call_sf",
+                    "name": "get_weather",
+                    "arguments": '{"city":"SF"}',
+                    "status": "completed",
+                },
+            ],
+            2: [
+                {
+                    "type": "message",
+                    "id": "msg_s2",
+                    "status": "completed",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Here is the summary.", "annotations": []}],
+                },
+                {
+                    "type": "message",
+                    "id": "msg_s3",
+                    "status": "completed",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{"type": "output_text", "text": f'{{"done": "{identity}"}}', "annotations": []}],
+                },
+            ],
+        }.get(
+            responses_count,
+            [
+                {
+                    "type": "message",
+                    "id": "msg_s4",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done for now.", "annotations": []}],
+                }
+            ],
+        )
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": f"resp_{identity}_{responses_count}",
+                    "object": "response",
+                    "created_at": 1789788253,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": outputs,
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model="openai/gpt-6-sol", api_base=wire.url, api_key="synthetic-openai-key")
+        tools: Final = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather for a city.",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                },
+            }
+        ]
+        messages: list[Mapping[str, JsonValue]] = [
+            {"role": "user", "content": f"Weather in SF? {identity}"}
+        ]  # mutable-ok: conversation grows each turn
+
+        def call(with_tools: bool) -> Mapping[str, JsonValue]:
+            payload: Final = {
+                "model": model,
+                "messages": messages,
+                "reasoning_effort": "low",
+                "cache": {"no-cache": True},
+            }
+            if with_tools:
+                payload["tools"] = tools
+            response: Final = gateway.request("POST", "/v1/chat/completions", payload)
+            assert response.status_code == 200, response.text
+            choice: Final[Mapping[str, JsonValue]] = response.json()["choices"][0]
+            message: Final[Mapping[str, JsonValue]] = choice["message"]
+            messages.append(
+                {
+                    k: v
+                    for k, v in message.items()
+                    if k in ("role", "content", "tool_calls", "provider_specific_fields", "reasoning_items")
+                }
+            )
+            return choice
+
+        call(with_tools=True)
+        messages.append({"role": "tool", "tool_call_id": "call_sf", "content": "sunny, 21C"})
+        call(with_tools=True)
+        messages.append({"role": "user", "content": "Thanks, anything else?"})
+        call(with_tools=False)
+        messages.append({"role": "user", "content": "Wrap up."})
+        call(with_tools=True)
+
+        assert [target for target, _ in hits] == [
+            "/responses",
+            "/responses",
+            "/chat/completions",
+            "/responses",
+        ], [target for target, _ in hits]
+        assert len(hits) == 4
