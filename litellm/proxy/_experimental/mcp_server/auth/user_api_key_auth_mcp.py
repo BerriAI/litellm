@@ -87,6 +87,7 @@ if TYPE_CHECKING:
 
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
+_GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
@@ -285,30 +286,31 @@ def _gateway_dcr_challenge_target(
     return targets[0]
 
 
-def _is_gateway_dcr_challenge_scope(
-    route: str,
+def _cold_start_fallback(
+    request: Request,
+    request_route: str,
     mcp_servers: list[str] | None,
     mcp_auth_header: str | None,
     mcp_server_auth_headers: dict[str, dict[str, str]] | None,
-    exc: Exception,
-    client_ip: str | None,
-) -> bool:
-    """True when an unauthenticated MCP request should receive the RFC 9728 401
-    challenge that advertises the gateway as the authorization server.
-
-    Fires only for a genuine 401 with no client-supplied MCP auth headers (those mean
-    the caller is not a cold-start DCR client), on the scopes the gateway's keyless
-    flow serves: the aggregate ``/mcp`` endpoint, an ``x-mcp-servers``-scoped request
-    (the resource the client configured is still ``/mcp``), or a per-server path whose
-    single target advertises gateway-owned sign-in. Every other named target keeps
-    its existing behavior, failing closed to the original admission error."""
-    if not _is_litellm_auth_admission_error(exc):
-        return False
+    bearer_presented: bool,
+) -> Literal["defer_to_route_challenge", "gateway_challenge"] | None:
+    """Classify the structural cold-start response without inspecting an error."""
     if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
-        return False
-    if len(MCPRequestHandler.extract_target_server_names_from_path(route)) == 0:
-        return True
-    return _gateway_dcr_challenge_target(route, mcp_servers, client_ip) is not None
+        return None
+
+    mcp_servers_from_path: Final = _parse_mcp_server_names_from_path(request_route, mcp_servers)
+    client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
+    if mcp_servers_from_path is not None and (
+        _is_mcp_passthrough_cold_start(mcp_servers_from_path, client_ip=client_ip)
+        or (not bearer_presented and _is_legacy_delegate_cold_start(mcp_servers_from_path, client_ip=client_ip))
+    ):
+        return "defer_to_route_challenge"
+    if (
+        len(MCPRequestHandler.extract_target_server_names_from_path(request_route)) == 0
+        or _gateway_dcr_challenge_target(request_route, mcp_servers, client_ip) is not None
+    ):
+        return "gateway_challenge"
+    return None
 
 
 def _gateway_dcr_challenge(
@@ -353,48 +355,41 @@ def _admission_failure_fallback(
     exc: Exception,
     bearer_presented: bool,
 ) -> UserAPIKeyAuth:
-    """Map a failed LiteLLM admission to its anonymous fallback or challenge.
+    """Apply the structural cold-start response to an admission error."""
+    if not _is_litellm_auth_admission_error(exc):
+        raise exc
 
-    Two fallbacks exist, both gated on a genuine 401 with no client-supplied
-    MCP auth headers. The pass-through cold start (RFC 9728 / MCP
-    Authorization spec discovery return) admits anonymously so the route's
-    401 emitter can produce the per-server challenge. The aggregate
-    gateway-DCR scope converts the failure into the gateway's own
-    resource_metadata challenge, with the RFC 6750 ``invalid_token`` error
-    code when the caller DID present a bearer (an expired gateway session
-    must re-authorize, not retry a dead token). Anything else re-raises the
-    original admission error unchanged."""
-    mcp_servers_from_path: Final = _parse_mcp_server_names_from_path(request_route, mcp_servers)
-    if (
-        mcp_servers_from_path is not None
-        and not _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers)
-        and _is_litellm_auth_admission_error(exc)
-        and (
-            _is_mcp_passthrough_cold_start(
-                mcp_servers_from_path,
-                client_ip=IPAddressUtils.get_mcp_client_ip(request),
-            )
-            or (
-                not bearer_presented
-                and _is_legacy_delegate_cold_start(
-                    mcp_servers_from_path,
-                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                )
-            )
-        )
+    match _cold_start_fallback(
+        request,
+        request_route,
+        mcp_servers,
+        mcp_auth_header,
+        mcp_server_auth_headers,
+        bearer_presented,
     ):
-        verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
-        return UserAPIKeyAuth()
-    if _is_gateway_dcr_challenge_scope(
-        route=request_route,
-        mcp_servers=mcp_servers,
-        mcp_auth_header=mcp_auth_header,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        exc=exc,
-        client_ip=IPAddressUtils.get_mcp_client_ip(request),
-    ):
-        raise _gateway_dcr_challenge(request, request_route, mcp_servers, invalid_token=bearer_presented) from exc
-    raise exc
+        case "defer_to_route_challenge":
+            verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
+            return UserAPIKeyAuth()
+        case "gateway_challenge":
+            raise _gateway_dcr_challenge(
+                request,
+                request_route,
+                mcp_servers,
+                invalid_token=bearer_presented,
+            ) from exc
+        case None:
+            raise exc
+
+
+def _has_litellm_credential_header(headers: Headers) -> bool:
+    if "x-litellm-api-key" in headers or "Authorization" in headers:
+        return True
+
+    from litellm.proxy.proxy_server import general_settings  # pyright: ignore[reportUnknownVariableType]  # legacy map
+
+    settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+    custom_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(settings.get("litellm_key_header_name"))
+    return custom_header_name is not None and custom_header_name in headers
 
 
 @dataclass(frozen=True, slots=True)
@@ -629,6 +624,21 @@ class MCPRequestHandler:
                         bearer_presented=True,
                     )
             else:
+                from litellm.proxy.auth.auth_utils import mark_expected_credential_challenge
+
+                if not _has_litellm_credential_header(headers) and (
+                    _cold_start_fallback(
+                        request=request,
+                        request_route=request_route,
+                        mcp_servers=mcp_servers,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        bearer_presented=False,
+                    )
+                    is not None
+                ):
+                    mark_expected_credential_challenge(request)
+
                 try:
                     validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
                 except (HTTPException, ProxyException) as exc:

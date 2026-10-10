@@ -93,6 +93,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
     prefetch_identity_keys,
 )
 from litellm.proxy.auth.auth_utils import (
+    MissingCredentialError,
     abbreviate_api_key,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
@@ -1966,7 +1967,7 @@ async def user_api_key_auth_builder(
             raise Exception("No api key passed in.")
         elif api_key == "":
             # missing 'Bearer ' prefix
-            raise Exception("Malformed API Key passed in. Ensure Key has `Bearer ` prefix.")
+            raise MissingCredentialError("Malformed API Key passed in. Ensure Key has `Bearer ` prefix.")
 
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) is True:
