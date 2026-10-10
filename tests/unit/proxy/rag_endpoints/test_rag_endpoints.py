@@ -437,7 +437,7 @@ def test_rag_ingest_forwards_team_provider_credentials_without_persisting_them(c
     assert response.status_code == 200, response.json()
     forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
     assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
-    assert forwarded["api_base"] == "https://team-openai.example/v1"
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
     managed_vector_store_table.create.assert_awaited_once()
     saved_data: Final = managed_vector_store_table.create.await_args.kwargs["data"]
     assert saved_data["vector_store_id"] == "vs_new"
@@ -520,6 +520,30 @@ def test_rag_ingest_managed_store_without_credentials_uses_team_provider_credent
     assert response.status_code == 200, response.json()
     forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
     assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+
+
+@pytest.mark.parametrize("blank_credential_name", [None, ""])
+def test_rag_ingest_blank_caller_credential_name_uses_team_provider_credentials(client_team_a, blank_credential_name):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai", "litellm_credential_name": blank_credential_name}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
 
 
 def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(client_internal_user):
@@ -612,6 +636,26 @@ def test_rag_query_managed_store_without_credentials_uses_team_provider_credenti
         client_team_a,
         retrieval_config={"vector_store_id": "registry-store-without-key"},
         managed_stores=(_managed_openai_store("registry-store-without-key", {}),),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_managed_store_with_an_empty_key_uses_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/registry-store-blank-key/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={"vector_store_id": "registry-store-blank-key"},
+        managed_stores=(_managed_openai_store("registry-store-blank-key", {"api_key": ""}),),
         router=_team_provider_router(),
     )
 

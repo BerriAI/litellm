@@ -193,22 +193,23 @@ def _caller_vector_store_options(
     managed_store: LiteLLM_ManagedVectorStore | None,
 ) -> Mapping[str, object]:
     if managed_store is None:
-        return request_vector_store_config
+        return _without_blank_credentials(request_vector_store_config)
     return MappingProxyType(
         {key: value for key, value in request_vector_store_config.items() if key in _MANAGED_STORE_CALLER_OPTIONS}
+    )
+
+
+def _without_blank_credentials(config: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in config.items() if key not in _EXPLICIT_CREDENTIAL_KEYS or value}
     )
 
 
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
     if managed_store is None:
         return MappingProxyType({})
-    return MappingProxyType(
-        {
-            key: value
-            for key, value in build_request_data_from_managed_vector_store(managed_store).items()
-            if value is not None
-        }
-    )
+    stored: Final = build_request_data_from_managed_vector_store(managed_store)
+    return _without_blank_credentials({key: value for key, value in stored.items() if value is not None})
 
 
 def _team_provider_credentials(
