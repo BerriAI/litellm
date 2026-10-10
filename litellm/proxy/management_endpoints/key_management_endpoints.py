@@ -4615,7 +4615,9 @@ def metadata_json_with_limits(
 async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
-    expires: datetime | None = None,  # caller-supplied absolute expiry; wins over `duration`
+    # Typed as `object` because this helper is called with `**data_json` spreads whose
+    # value type is `object`; the caller-supplied absolute expiry (a `datetime`).
+    expires: object = None,
     models: list = [],
     aliases: dict = {},
     config: dict = {},
@@ -4692,6 +4694,9 @@ async def generate_key_helper_fn(
             token = key
         else:
             token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+
+    if expires is not None and not isinstance(expires, datetime):
+        raise ValueError(f"`expires` must be a datetime, got {type(expires).__name__}")
 
     key_expires: Final = (
         expires
