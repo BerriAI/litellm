@@ -203,6 +203,8 @@ class PrismaDBExceptionHandler:
             ),
         ):
             return True
+        if PrismaDBExceptionHandler.is_prisma_engine_internal_error(e):
+            return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return False
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
