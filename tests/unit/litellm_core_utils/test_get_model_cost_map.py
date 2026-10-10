@@ -5,6 +5,7 @@ count actual model entries, not reserved meta keys) and the extraction of the
 """
 
 import asyncio, importlib, importlib.resources as importlib_get_model, json, litellm
+import logging
 import os
 import sys
 import threading
@@ -844,37 +845,155 @@ def test_import_load_reports_why_the_remote_fetch_failed(isolated_litellm_cost_s
     assert source["fallback_reason"].startswith("Remote fetch failed: HTTP 404")
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
-def test_a_process_forked_before_the_remote_map_lands_fetches_it_itself(isolated_litellm_cost_state, monkeypatch):
+def test_a_fetch_resumed_after_fork_adopts_the_remote_map_while_the_inherited_one_hangs(
+    isolated_litellm_cost_state, monkeypatch
+):
     import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+    from litellm.litellm_core_utils import get_model_cost_map as module
 
-    parent_started = threading.Event()
+    inherited_started = threading.Event()
     release = threading.Event()
     body = _remote_map_with("claude-remote-only-test")
-    requests_served = {"count": 0}
+    served = []
 
     def handler(request):
-        requests_served["count"] += 1
-        if requests_served["count"] == 1:
-            parent_started.set()
+        served.append(request)
+        if len(served) == 1:
+            inherited_started.set()
             release.wait(timeout=10)
         return httpx.Response(200, content=body)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     try:
-        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
-        assert parent_started.wait(timeout=10)
-        pid = os.fork()
-        if pid == 0:
-            for thread in _fetch_threads():
-                thread.join(timeout=10)
-            os._exit(0 if "claude-remote-only-test" in litellm.model_cost else 1)
-        _, status = os.waitpid(pid, 0)
+        monkeypatch.setattr(litellm, "model_cost", module.load_model_cost_map_at_import(url=_URL, client=client))
+        assert inherited_started.wait(timeout=10)
+        inherited_thread = module._PendingImportFetch.thread
+        module._resume_import_fetch_after_fork()
+        resumed_thread = module._PendingImportFetch.thread
+        assert resumed_thread is not inherited_thread
+        resumed_thread.join(timeout=10)
+        assert not resumed_thread.is_alive()
+        assert "claude-remote-only-test" in litellm.model_cost
+        assert inherited_thread.is_alive()
     finally:
         _finish_fetch(release)
 
-    assert os.waitstatus_to_exitcode(status) == 0
+    assert len(served) == 2
+
+
+def test_an_edit_written_through_a_stale_reference_during_adoption_survives_it(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm import utils as litellm_utils
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
+    monkeypatch.setattr(litellm_utils, "_runtime_registered_model_cost", {})
+    bundled = load_model_cost_map_at_import(url=_URL, client=client)
+    monkeypatch.setattr(litellm, "model_cost", bundled)
+    original_replay = litellm_utils._LiveDeploymentReplay.callback
+    late_entry = {"litellm_provider": "openai", "mode": "chat"}
+
+    def write_through_the_reference_read_before_the_swap():
+        bundled["my-late-edit"] = late_entry
+        bundled["gpt-4o-mini"] = {**bundled["gpt-4o-mini"], "input_cost_per_token": 42.0}
+        bundled["gpt-4o"] = {**bundled["gpt-4o"], "input_cost_per_token": 42.0}
+        litellm.model_cost["gpt-4o"] = {**litellm.model_cost["gpt-4o"], "input_cost_per_token": 7.0}
+
+    litellm_utils.set_live_deployment_replay(write_through_the_reference_read_before_the_swap)
+    try:
+        assert started.wait(timeout=10)
+    finally:
+        _finish_fetch(release)
+        litellm_utils.set_live_deployment_replay(original_replay)
+
+    assert litellm.model_cost is not bundled
+    assert "claude-remote-only-test" in litellm.model_cost
+    assert litellm.model_cost["my-late-edit"] is late_entry
+    assert litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"] == 42.0
+    assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == 7.0
+
+
+class _ReleaseWhenALookupWaits(logging.Handler):
+    """Lets the held fetch answer only once a lookup is blocked waiting on it, so the lookup provably missed first."""
+
+    def __init__(self, release: threading.Event):
+        super().__init__(level=logging.DEBUG)
+        self.release = release
+        self.waited = threading.Event()
+
+    def emit(self, record):
+        if "waiting for the remote map fetched at import" in record.getMessage():
+            self.waited.set()
+            self.release.set()
+
+
+@pytest.fixture()
+def release_when_a_lookup_waits():
+    from litellm import verbose_logger
+
+    installed = []
+
+    def install(release: threading.Event) -> _ReleaseWhenALookupWaits:
+        handler = _ReleaseWhenALookupWaits(release)
+        verbose_logger.addHandler(handler)
+        installed.append(handler)
+        return handler
+
+    previous_level = verbose_logger.level
+    verbose_logger.setLevel(logging.DEBUG)
+    yield install
+    verbose_logger.setLevel(previous_level)
+    for handler in installed:
+        verbose_logger.removeHandler(handler)
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        pytest.param(lambda: litellm.get_llm_provider("zz-remote-only-test")[1], id="get_llm_provider"),
+        pytest.param(
+            lambda: litellm.get_model_info("zz-remote-only-test", custom_llm_provider="anthropic")["litellm_provider"],
+            id="get_model_info",
+        ),
+    ],
+)
+def test_a_lookup_that_misses_the_bundled_map_waits_for_the_remote_map_fetched_at_import(
+    isolated_litellm_cost_state, monkeypatch, release_when_a_lookup_waits, lookup
+):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("zz-remote-only-test")))
+    waits = release_when_a_lookup_waits(release)
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        assert "zz-remote-only-test" not in litellm.model_cost
+        provider = lookup()
+    finally:
+        _finish_fetch(release)
+
+    assert waits.waited.is_set()
+    assert provider == "anthropic"
+
+
+def test_a_lookup_that_misses_both_maps_still_raises_after_waiting(
+    isolated_litellm_cost_state, monkeypatch, release_when_a_lookup_waits
+):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("zz-remote-only-test")))
+    waits = release_when_a_lookup_waits(release)
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        with pytest.raises(litellm.exceptions.BadRequestError, match="LLM Provider NOT provided"):
+            litellm.get_llm_provider("zz-in-neither-map")
+    finally:
+        _finish_fetch(release)
+
+    assert waits.waited.is_set()
 
 
 def test_import_load_with_the_local_env_override_starts_no_fetch(monkeypatch):
@@ -892,30 +1011,12 @@ def test_import_load_with_the_local_env_override_starts_no_fetch(monkeypatch):
     assert get_model_cost_map_source_info()["is_env_forced"] is True
 
 
-def test_import_litellm_returns_before_the_remote_fetch_finishes(tmp_path):
-    import subprocess
-
-    env = {key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"}
-    env["LITELLM_MODEL_COST_MAP_URL"] = "http://127.0.0.1:9/model_prices.json"
-    probe = (
-        "import litellm\n"
-        "from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info\n"
-        "info = get_model_cost_map_source_info()\n"
-        "print(info['source'], info['fallback_reason'], len(litellm.model_cost) > 100)\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-P", "-c", probe], capture_output=True, text=True, env=env, cwd=tmp_path, timeout=120
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "local Remote fetch in progress True"
-
-
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -925,6 +1026,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -959,6 +1061,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -972,6 +1075,7 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckIsValidDict:
@@ -996,6 +1100,7 @@ class TestCheckIsValidDict:
     def test_should_accept_non_empty_dict(self):
         """Non-empty dict should pass."""
         assert GetModelCostMap._check_is_valid_dict({"model": {}}) is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckModelCountNotReduced:
@@ -1051,6 +1156,7 @@ class TestCheckModelCountNotReduced:
             is True
         )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestValidateModelCostMap:
     """Unit tests for validate_model_cost_map (combines both checks)."""
@@ -1086,6 +1192,7 @@ class TestValidateModelCostMap:
             GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
             is True
         )
+
 
 def _fetch_with_single_outcome(monkeypatch, outcome):
     from litellm.litellm_core_utils import get_model_cost_map as module
@@ -1154,6 +1261,7 @@ class TestGetModelCostMapFallback:
         assert isinstance(result, dict)
         assert len(result) > 0
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBackupModelCostMapExists:
     """Validates the local backup file is always present and valid."""
@@ -1168,6 +1276,7 @@ class TestBackupModelCostMapExists:
         """The backup must contain a reasonable number of models."""
         backup = GetModelCostMap.load_local_model_cost_map()
         assert len(backup) > 100, f"Backup has only {len(backup)} models, expected > 100"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBadHostedModelCostMap:
@@ -1233,11 +1342,13 @@ class TestBadHostedModelCostMap:
         finally:
             litellm.model_cost = original
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -1291,6 +1402,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS_local_testing = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1310,6 +1422,7 @@ _SCALAR_DEFAULTS_local_testing = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
@@ -1333,6 +1446,7 @@ def setup_and_teardown_local_testing():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -1343,6 +1457,7 @@ def test_get_model_cost_map():
         print(litellm.get_model_cost_map(url="fake-url"))
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",

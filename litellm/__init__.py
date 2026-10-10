@@ -563,7 +563,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import (
-    get_model_cost_map,
+    get_model_cost_map as get_model_cost_map,
     load_model_cost_map_at_import,
     mark_litellm_import_complete,
 )
