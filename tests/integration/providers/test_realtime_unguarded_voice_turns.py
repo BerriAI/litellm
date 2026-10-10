@@ -851,6 +851,13 @@ def _spawned_worker(child: psutil.Process) -> bool:
         return False
 
 
+def _exited(process: psutil.Process) -> bool:
+    try:
+        return process.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
 def _workers(root: psutil.Process) -> tuple[psutil.Process, ...]:
     return tuple(
         sorted((child for child in root.children() if _spawned_worker(child)), key=lambda process: process.pid)
@@ -881,7 +888,7 @@ async def _sessions_through_worker_kill(url: str, key: str, root: psutil.Process
         workers: Final = _workers(root)
         assert len(workers) == WORKERS, [process.pid for process in workers]
         workers[0].kill()
-        await asyncio.to_thread(workers[0].wait, 10)
+        await asyncio.to_thread(eventually, lambda: _exited(workers[0]), bool, graceful_stop_seconds())
         turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(OPEN_SESSIONS)))
         return tuple(await asyncio.wait_for(asyncio.gather(*turns), 90))
     finally:
@@ -914,13 +921,13 @@ def test_worker_kill_leaves_the_surviving_sessions_with_only_their_own_frames(ga
             ], sessions
             sent: Final = _sent(_observed(gateway.upstream_url, handle.scenario_id))
             assert _frame_counts(sent) == _frame_counts(_every_client_frame(served)), sent
-            with httpx.Client(base_url=_owned_url(owned), timeout=15, trust_env=False) as client:
+            with httpx.Client(base_url=_owned_url(owned), timeout=graceful_stop_seconds(), trust_env=False) as client:
                 readiness: Final = client.get("/health/readiness")
             assert readiness.status_code == 200, readiness.text
             eventually(
                 lambda: tuple(process.pid for process in _workers(root)),
                 lambda pids: len(pids) == WORKERS and killed_pid not in pids,
-                seconds=60,
+                seconds=graceful_stop_seconds(),
             )
             fresh_session: Final = _drive(
                 _owned_url(owned), f"model={fresh_model}", fresh_key, _client_turns(PUSH_TO_TALK, ("fresh",))
