@@ -29,6 +29,7 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import { credentialLabelsByName } from "./shared/credentialOptions";
+import { CredentialIdentity } from "./shared/CredentialIdentity";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -809,10 +810,13 @@ export default function ModelInfoView({
             <DialogHeader>
               <DialogTitle>Using Existing Credential</DialogTitle>
             </DialogHeader>
-            <p className="text-sm">
-              {credentialLabelsByName(credentialsList).get(modelData.litellm_params.litellm_credential_name ?? "") ??
-                modelData.litellm_params.litellm_credential_name}
-            </p>
+            <CredentialIdentity
+              className="text-sm"
+              credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
+              label={credentialLabelsByName(credentialsList).get(
+                modelData.litellm_params.litellm_credential_name ?? "",
+              )}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
                 Cancel

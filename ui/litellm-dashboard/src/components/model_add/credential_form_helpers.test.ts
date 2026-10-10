@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
-import {
-  buildCredential,
-  resetCredentialFormOnProviderChange,
-  withoutRestrictedFields,
-} from "./credential_form_helpers";
+import { buildCredential, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 
 /**
  * Build a minimal FormInstance stub that records calls. We don't depend
@@ -95,21 +91,33 @@ describe("resetCredentialFormOnProviderChange", () => {
 });
 
 describe("buildCredential", () => {
-  const values = { credential_name: "openai-prod", custom_llm_provider: "openai", api_key: "sk-test" };
+  const submission = {
+    credential_name: "openai-prod",
+    custom_llm_provider: "openai",
+    credential_values: { api_key: "sk-test" },
+  };
 
   it.each([
     ["a label", "Prod OpenAI"],
     ["a cleared label", null],
   ])("sends %s as a top-level display_name, never as a credential value", (_, displayName) => {
-    const formValues = { ...values, display_name: displayName };
-
-    const credential = buildCredential(formValues, withoutRestrictedFields(formValues));
+    const credential = buildCredential({ ...submission, display_name: displayName }, submission.credential_values);
 
     expect(credential.display_name).toBe(displayName);
     expect(credential.credential_values).toEqual({ api_key: "sk-test" });
   });
 
   it("leaves display_name out when the form never set it", () => {
-    expect(buildCredential(values, withoutRestrictedFields(values))).not.toHaveProperty("display_name");
+    expect(buildCredential(submission, submission.credential_values)).not.toHaveProperty("display_name");
+  });
+
+  it("keeps secret keys that share a name with top-level fields inside credential_values", () => {
+    const credentialValues = { api_key: "sk-test", credential_name: "legacy-inner", display_name: "Legacy inner" };
+
+    const credential = buildCredential({ ...submission, display_name: "Prod OpenAI" }, credentialValues);
+
+    expect(credential.credential_name).toBe("openai-prod");
+    expect(credential.display_name).toBe("Prod OpenAI");
+    expect(credential.credential_values).toEqual(credentialValues);
   });
 });

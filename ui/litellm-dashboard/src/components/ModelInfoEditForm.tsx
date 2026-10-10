@@ -15,7 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { credentialLabelsByName, credentialOptions } from "@/components/shared/credentialOptions";
+import { credentialOptions } from "@/components/shared/credentialOptions";
+import { AttachedCredential, CredentialNameHint } from "@/components/shared/CredentialIdentity";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -347,9 +348,6 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
   );
 };
 
-const attachedCredentialLabel = (credentialName: string | null | undefined, credentials: CredentialItem[]): string =>
-  credentialName ? credentialLabelsByName(credentials).get(credentialName) ?? credentialName : "Manual";
-
 const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   localModelData,
   modelData,
@@ -640,21 +638,30 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               {isEditing ? (
                 <FormField control={form.control} name="litellm_credential_name">
                   {({ id, value, onChange }) => (
-                    <SearchSelect
-                      inputId={id}
-                      placeholder="Select or search for existing credentials"
-                      options={credentialOptions(credentialsList)}
-                      value={(value as string | null) ?? ""}
-                      allowClear={false}
-                      onValueChange={(selected) => {
-                        if (selected !== null) onChange(selected === "" ? null : selected);
-                      }}
-                    />
+                    <>
+                      <SearchSelect
+                        inputId={id}
+                        placeholder="Select or search for existing credentials"
+                        options={credentialOptions(credentialsList)}
+                        value={(value as string | null) ?? ""}
+                        allowClear={false}
+                        onValueChange={(selected) => {
+                          if (selected !== null) onChange(selected === "" ? null : selected);
+                        }}
+                      />
+                      <CredentialNameHint
+                        credentialName={value as string | null | undefined}
+                        credentials={credentialsList}
+                      />
+                    </>
                   )}
                 </FormField>
               ) : (
                 <Display>
-                  {attachedCredentialLabel(localModelData.litellm_params?.litellm_credential_name, credentialsList)}
+                  <AttachedCredential
+                    credentialName={localModelData.litellm_params?.litellm_credential_name}
+                    credentials={credentialsList}
+                  />
                 </Display>
               )}
             </div>
