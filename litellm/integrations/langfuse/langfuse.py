@@ -125,15 +125,16 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
     Returns:
         int: The token count, defaulting to 0.
     """
-    value = getattr(usage_obj, standard_name, None)  # rebind-ok: staged fallback lookup
-    if value is None and isinstance(usage_obj, dict):
-        value = usage_obj.get(standard_name)  # rebind-ok: staged fallback lookup
+    if isinstance(usage_obj, dict):
+        usage_dict: dict[str, object] = cast(dict[str, object], usage_obj)
+        value = usage_dict.get(standard_name)
+        if value is None and decision_name is not None:
+            value = usage_dict.get(decision_name)
+        return value if isinstance(value, int) else 0
+    value = cast(Any, getattr(usage_obj, standard_name, None))
     if value is None and decision_name is not None:
-        if isinstance(usage_obj, dict):
-            value = usage_obj.get(decision_name)  # rebind-ok: staged fallback lookup
-        else:
-            value = getattr(usage_obj, decision_name, None)  # rebind-ok: staged fallback lookup
-    return value or 0
+        value = cast(Any, getattr(usage_obj, decision_name, None))
+    return value if isinstance(value, int) else 0
 
 
 def _extract_cache_read_input_tokens(usage_obj: object) -> int:
