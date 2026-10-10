@@ -14,3 +14,6 @@ mod vertex_ai;
 mod minimax;
 #[path = "live/tencent.rs"]
 mod tencent;
+
+#[path = "live/bedrock_mantle.rs"]
+mod bedrock_mantle;

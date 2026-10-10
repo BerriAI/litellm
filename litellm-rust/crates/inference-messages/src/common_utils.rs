@@ -6,6 +6,7 @@ use litellm_llms::{
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     github_copilot::messages::transformation::COPILOT_MESSAGES_CONFIG,
@@ -25,6 +26,7 @@ pub(crate) enum MessagesProvider {
     Anthropic,
     AzureAi,
     Bedrock,
+    BedrockMantle,
     Deepseek,
     Edenai,
     GithubCopilot,
@@ -40,6 +42,7 @@ impl MessagesProvider {
             Self::Anthropic => LlmProviders::Anthropic,
             Self::AzureAi => LlmProviders::AzureAi,
             Self::Bedrock => LlmProviders::Bedrock,
+            Self::BedrockMantle => LlmProviders::BedrockMantle,
             Self::Deepseek => LlmProviders::Deepseek,
             Self::Edenai => LlmProviders::Edenai,
             Self::GithubCopilot => LlmProviders::GithubCopilot,
@@ -56,6 +59,7 @@ impl MessagesProvider {
             Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+            Self::BedrockMantle => &BEDROCK_MANTLE_MESSAGES_CONFIG,
             Self::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
             Self::Edenai => &EDENAI_MESSAGES_CONFIG,
             Self::GithubCopilot => &COPILOT_MESSAGES_CONFIG,
@@ -73,7 +77,11 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
     match provider {
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
+        LlmProviders::Bedrock if model.starts_with("mantle/") => {
+            Some(MessagesProvider::BedrockMantle)
+        }
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::BedrockMantle => Some(MessagesProvider::BedrockMantle),
         LlmProviders::Deepseek => Some(MessagesProvider::Deepseek),
         LlmProviders::Edenai => Some(MessagesProvider::Edenai),
         LlmProviders::GithubCopilot if model.to_ascii_lowercase().contains("claude") => {
