@@ -817,7 +817,7 @@ async def _bill_finished_background_response(response: object, response_id: str)
             llm_router=llm_router,
         ).bill_if_finished(unified_object_id=response_id, status=response.status)
     except Exception as e:
-        verbose_proxy_logger.warning("Billing background response %s on read failed: %s", response_id, e)
+        verbose_proxy_logger.warning("Billing a finished background response on read failed: %s", e)
 
 
 @router.delete(
