@@ -14,7 +14,7 @@ Completion checks text and usage. Streaming consumes SSE to completion and check
 
 Messages setup and assertions live in `inference-messages/tests/live/support.rs`. Provider modules under `tests/live/` select their payloads and tool policy. The shared helpers consume streams completely and reconstruct text, thinking signatures and tool arguments for the follow-up request
 
-The initial provider cases are `vertex_ai` and `edenai`. A registered ignored case is available coverage, not evidence that it passed against that provider
+The initial provider cases are `vertex_ai`, `edenai` and `github_copilot`. A registered ignored case is available coverage, not evidence that it passed against that provider
 
 Run one provider's cases explicitly
 
@@ -33,6 +33,10 @@ For EdenAI, set `LITELLM_LIVE_MESSAGES_EDENAI_MODEL` and `EDENAI_API_KEY`, and s
 
 EdenAI cases live in `inference-messages/tests/live/edenai.rs`. They cover system messages, portable cache hints, provider-reported cost handoff, text streaming, and complete and streaming tool round trips. The cost assertion compares the public response with the execution facts instead of pinning a vendor price
 EdenAI tool cases use automatic selection because current Claude models reject forced `tool_choice`. The test still requires a tool call and verifies its arguments and follow-up response
+
+For GitHub Copilot, set `LITELLM_LIVE_MESSAGES_GITHUB_COPILOT_MODEL` to `github_copilot/<enabled-claude-model>`, a current model enabled on the account. Copilot uses the existing device login under `~/.config/litellm/github_copilot`, or `GITHUB_COPILOT_TOKEN_DIR`. It acquires and refreshes the inference session through the production Rust authentication service. Merely appearing in Copilot's `/models` response does not mean a model's policy is enabled
+
+Copilot cases live in `inference-messages/tests/live/github_copilot.rs`. They cover system messages, caller credential and base isolation, text streaming, and complete and streaming tool round trips. Copilot uses automatic tool selection and the stream helper accepts its final `[DONE]` frame
 
 Other tool cases require a model that supports forced `tool_choice`, except where a provider's section says otherwise. A provider rejection fails the selected case instead of skipping it
 
