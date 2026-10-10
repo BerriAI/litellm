@@ -2114,6 +2114,16 @@ def client(original_function):
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs
             )
+            # Sync integrations still run in Logging.pre_call inside the provider.
+            # Async input callbacks need this event loop; reject before dispatch.
+            if litellm._async_input_callback:
+                details = logging_obj.model_call_details
+                details["model"] = model
+                details["messages"] = logging_obj.messages
+                details["log_event_type"] = "pre_api_call"
+                for callback in tuple(litellm._async_input_callback):
+                    if callable(callback):
+                        await callback(details)
             try:
                 result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
