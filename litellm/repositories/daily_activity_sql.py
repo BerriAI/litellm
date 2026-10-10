@@ -108,10 +108,17 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         _dimension_where(column, included, excluded, dimension_indexes)
         for column, included, excluded in scope.dimension_filters
     )
+    # Mirrors common_daily_activity._is_user_agent_tag; no params, so the index counter is untouched.
+    user_agent_clause: Final = (_USER_AGENT_TAG_EXCLUSION,) if scope.exclude_user_agent_tags else ()
     return (
-        " AND ".join((*conditions, *(condition for condition, _ in dimension_parts if condition))),
+        " AND ".join((*conditions, *(condition for condition, _ in dimension_parts if condition), *user_agent_clause)),
         (*params, *chain.from_iterable(values for _, values in dimension_parts)),
     )
+
+
+_USER_AGENT_TAG_EXCLUSION: Final = (
+    "(tag IS NULL OR NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%'))"
+)
 
 
 def _dimension_where(

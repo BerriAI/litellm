@@ -6672,6 +6672,7 @@ async def get_team_daily_activity(
     tags: str | None = None,
     exclude_tags: str | None = None,
     group_by: Literal["team", "tag"] | None = None,
+    include_user_agent_tags: bool = False,
 ):
     """
     Get daily activity for specific teams or all teams.
@@ -6689,6 +6690,8 @@ async def get_team_daily_activity(
             daily tag spend table restricted to the permitted teams.
         exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
         group_by (Optional[Literal["team", "tag"]]): Entity the breakdown buckets key on. "tag" buckets by tag.
+        include_user_agent_tags (bool): Tag-table reads omit the automatic "User-Agent: ..." tags unless
+            this is true or tags are given explicitly.
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
@@ -6708,6 +6711,7 @@ async def get_team_daily_activity(
         tags=tags,
         exclude_tags=exclude_tags,
         group_by=group_by,
+        include_user_agent_tags=include_user_agent_tags,
     )
     resolved: Final = await TEAM_RESOLVER.resolve(user_api_key_dict, query, prisma_client)
     if isinstance(resolved, ScopeDenied):

@@ -301,10 +301,13 @@ class DailyActivityRepository:
             if scope.exclude_entity_ids
             else {}
         )
-        dimension_conditions: Final = tuple(
-            _dimension_prisma_filter(column, included, excluded)
-            for column, included, excluded in scope.dimension_filters
-            if included is not None or excluded
+        dimension_conditions: Final = (
+            *(
+                _dimension_prisma_filter(column, included, excluded)
+                for column, included, excluded in scope.dimension_filters
+                if included is not None or excluded
+            ),
+            *((_USER_AGENT_TAG_PRISMA_EXCLUSION,) if scope.exclude_user_agent_tags else ()),
         )
         conditions: Final = {
             **({"AND": list(dimension_conditions)} if dimension_conditions else {}),
@@ -324,6 +327,21 @@ class DailyActivityRepository:
             ),
         )
         return DailyRowsPage(total_count=count, rows=tuple(rows))
+
+
+# Prisma twin of daily_activity_sql._USER_AGENT_TAG_EXCLUSION (Prisma has no BTRIM; generated
+# User-Agent tags carry no leading whitespace).
+_USER_AGENT_TAG_PRISMA_EXCLUSION: Final = {
+    "OR": [
+        {"tag": None},
+        {
+            "NOT": [
+                {"tag": {"startsWith": "user-agent:", "mode": "insensitive"}},
+                {"tag": {"startsWith": "user agent:", "mode": "insensitive"}},
+            ]
+        },
+    ]
+}
 
 
 def _dimension_prisma_filter(

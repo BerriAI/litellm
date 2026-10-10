@@ -35,6 +35,7 @@ class EntityQuery:
     tags: tuple[str, ...] | None = None
     exclude_tags: tuple[str, ...] = ()
     group_by: Literal["tag", "team"] | None = None
+    include_user_agent_tags: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,9 @@ async def _resolve_team(
             exclude_team_ids=resolved.scope.exclude_entity_ids,
             tags=query.tags,
             exclude_tags=query.exclude_tags,
+            # Team tag reports are about cost-center tags; the automatic User-Agent tags ride on
+            # every request and would swamp them. An explicit tags= filter is honored as given.
+            exclude_user_agent_tags=query.tags is None and not query.include_user_agent_tags,
         ),
         entity_metadata=None if query.group_by == "tag" else resolved.entity_metadata,
     )
@@ -189,6 +193,8 @@ async def _resolve_tag(
                 exclude_team_ids=resolved.scope.exclude_entity_ids,
                 tags=query.entity_ids,
                 exclude_tags=query.exclude_entity_ids,
+                # a team-scoped tag report: same User-Agent rule as the team endpoints
+                exclude_user_agent_tags=query.entity_ids is None and not query.include_user_agent_tags,
             ),
             entity_metadata=resolved.entity_metadata if query.group_by == "team" else None,
         )
@@ -308,6 +314,7 @@ def _team_query(
     tags: str | None = None,
     exclude_tags: str | None = None,
     group_by: Literal["team", "tag"] | None = None,
+    include_user_agent_tags: bool = False,
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(team_ids),
@@ -321,6 +328,7 @@ def _team_query(
         tags=_query_ids(tags),
         exclude_tags=_query_excluded_ids(exclude_tags),
         group_by=group_by,
+        include_user_agent_tags=include_user_agent_tags,
     )
 
 
@@ -335,6 +343,7 @@ def _tag_query(
     exclude_team_ids: str | None = None,
     exclude_tags: str | None = None,
     group_by: Literal["tag", "team"] | None = None,
+    include_user_agent_tags: bool = False,
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(tags),
@@ -348,6 +357,7 @@ def _tag_query(
         team_ids=_query_ids(team_ids),
         exclude_team_ids=_query_excluded_ids(exclude_team_ids),
         group_by=group_by,
+        include_user_agent_tags=include_user_agent_tags,
     )
 
 

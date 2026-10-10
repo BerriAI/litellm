@@ -16,6 +16,9 @@ Fixture (one day, 2026-07-01; one row per tag x team x key, spend in whole dolla
     move      beta      key-mover       2     2       split by request-time team
     orphan    gone      key-gone        5     5     team "gone" was deleted (no TeamTable row)
     beta-only beta      key-beta        6     6     only beta uses it (proves /tag/list scoping)
+    User-Agent: curl          alpha  key-alpha  100  100   automatic User-Agent tags (generated per request;
+    user-agent: curl/8.4.0    alpha  key-alpha  100  100     both prefixes/cases). Large so a leak into a team
+                                                            tag report is unmistakable; hidden there by default
 
 So: shared = alpha 5 + beta 7 + no-team 4 = 16. alpha (all tags) = 5 + 2 + 3 = 10 tag-rows of spend.
 Real alpha spend is 8 (the 2 multi-tag requests are counted under both tags) -- the documented overcount.
@@ -55,7 +58,10 @@ _TAG_ROWS: Final = (
     ("move", "beta", "key-mover", 2),
     ("orphan", "gone", "key-gone", 5),
     ("beta-only", "beta", "key-beta", 6),
+    ("User-Agent: curl", "alpha", "key-alpha", 100),
+    ("user-agent: curl/8.4.0", "alpha", "key-alpha", 100),
 )
+_UA_TAGS: Final = frozenset(("User-Agent: curl", "user-agent: curl/8.4.0"))
 _TEAMS: Final = (("alpha", "Team Alpha"), ("beta", "Team Beta"))
 # key-mover is beta's now; history above must still say alpha 3 / beta 2.
 _KEYS: Final = (
@@ -290,7 +296,15 @@ async def test_tag_list_team_scope_and_usage_only(monkeypatch: pytest.MonkeyPatc
 
         assert {tag["name"] for tag in alpha.json()} == {"shared", "multi", "move"}
         assert {tag["name"] for tag in beta.json()} == {"shared", "move", "beta-only"}
-        assert {tag["name"] for tag in everything.json()} == {"shared", "multi", "move", "orphan", "beta-only"}
+        # the unscoped list is the full tag catalog and keeps User-Agent tags; only team-scoped lists hide them
+        assert {tag["name"] for tag in everything.json()} == {
+            "shared",
+            "multi",
+            "move",
+            "orphan",
+            "beta-only",
+            *_UA_TAGS,
+        }
         stored: Final = {tag["name"]: tag for tag in alpha.json()}
         assert stored["shared"]["description"] == "stored shared tag"
 
@@ -328,6 +342,56 @@ async def test_no_team_bucket_can_be_filtered_like_any_other_team(monkeypatch: p
 
         assert only_no_team["metadata"]["total_spend"] == 4.0
         assert without_no_team["metadata"]["total_spend"] == 12.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/team/daily/activity", "/team/daily/activity/aggregated"])
+async def test_team_tag_breakdown_hides_user_agent_tags_unless_asked(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    async with _client(monkeypatch, _ADMIN) as client:
+        default: Final = await _get(client, path, team_ids="alpha", group_by="tag")
+        opted_in: Final = await _get(client, path, team_ids="alpha", group_by="tag", include_user_agent_tags="true")
+        explicit: Final = await _get(client, path, team_ids="alpha", tags="User-Agent: curl")
+
+        assert _entities(default) == {"shared": 5.0, "multi": 2.0, "move": 3.0}
+        assert _entities(opted_in) == {
+            "shared": 5.0,
+            "multi": 2.0,
+            "move": 3.0,
+            "User-Agent: curl": 100.0,
+            "user-agent: curl/8.4.0": 100.0,
+        }
+        # an explicit tags= filter is honored even for a User-Agent tag
+        assert explicit["metadata"]["total_spend"] == 100.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/tag/daily/activity", "/tag/daily/activity/aggregated"])
+async def test_team_scoped_tag_report_hides_user_agent_tags_unless_asked(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    async with _client(monkeypatch, _ADMIN) as client:
+        default: Final = await _get(client, path, team_ids="alpha")
+        opted_in: Final = await _get(client, path, team_ids="alpha", include_user_agent_tags="true")
+        unscoped: Final = await _get(client, path, tags="User-Agent: curl")
+
+        assert default["metadata"]["total_spend"] == 10.0
+        assert opted_in["metadata"]["total_spend"] == 210.0
+        # no team filter: the plain Tag tab is unchanged
+        assert unscoped["metadata"]["total_spend"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_tag_list_hides_user_agent_tags_unless_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    async with _client(monkeypatch, _ADMIN) as client:
+        default: Final = await client.get("/tag/list", params={"team_ids": "alpha", "usage_only": "true"})
+        opted_in: Final = await client.get(
+            "/tag/list", params={"team_ids": "alpha", "usage_only": "true", "include_user_agent_tags": "true"}
+        )
+
+        assert {tag["name"] for tag in default.json()} == {"shared", "multi", "move"}
+        assert {tag["name"] for tag in opted_in.json()} == {"shared", "multi", "move", *_UA_TAGS}
 
 
 _LONELY: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="lonely-user", api_key="key-lonely")

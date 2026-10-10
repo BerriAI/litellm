@@ -43,6 +43,8 @@ class DailyActivityScope:
     exclude_team_ids: tuple[str, ...] = ()
     tags: tuple[str, ...] | None = None
     exclude_tags: tuple[str, ...] = ()
+    # drop the automatic "User-Agent: ..." tags (see common_daily_activity._is_user_agent_tag)
+    exclude_user_agent_tags: bool = False
 
     @property
     def dimension_filters(self) -> tuple[tuple[str, tuple[str, ...] | None, tuple[str, ...]], ...]:
@@ -56,6 +58,8 @@ class DailyActivityScope:
             included is not None or excluded for _, included, excluded in self.dimension_filters
         ):
             raise ValueError("Team/tag dimension filters require the daily tag spend table")
+        if self.exclude_user_agent_tags and self.table is not DailyActivityTable.TAG:
+            raise ValueError("exclude_user_agent_tags requires the daily tag spend table")
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
 
