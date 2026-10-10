@@ -21,17 +21,10 @@
             "extra_body": "{}"
         },
         "langfuse.observation.type": "generation",
-        "langfuse.observation.output": {
-            "content": "Hello! How can I assist you today?",
-            "role": "assistant",
-            "tool_calls": null,
-            "function_call": null,
-            "provider_specific_fields": null
-        },
         "langfuse.observation.usage_details": {
             "input": 10,
-            "output": 20,
-            "total": 30,
+            "output": 10,
+            "total": 20,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0
         },

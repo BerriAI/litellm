@@ -4217,6 +4217,53 @@ class TestAddMCPServerAtomicity:
         assert result.rpm == 5
 
     @pytest.mark.asyncio
+    async def test_create_response_hides_stored_credentials(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        payload: Final = NewMCPServerRequest(
+            alias="echo",
+            url="https://echo.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret"},
+        )
+        admin: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+        created_server: Final = generate_mock_mcp_server_db_record(
+            server_id="created-1", alias="echo", auth_type="api_key"
+        ).model_copy(update={"credentials": {"auth_value": "secret"}})
+
+        mock_manager: Final = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free",
+                AsyncMock(return_value=created_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result: Final = await add_mcp_server(payload=payload, user_api_key_dict=admin)
+
+        assert result.server_id == "created-1"
+        assert result.credentials is None
+        assert created_server.credentials == {"auth_value": "secret"}
+        mock_manager.add_server.assert_awaited_once_with(created_server)
+
+    @pytest.mark.asyncio
     async def test_create_500s_and_skips_registry_when_db_write_fails(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,

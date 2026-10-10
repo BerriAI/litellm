@@ -32,7 +32,6 @@ _EXPORT_URL: Final = "https://langfuse.unit/api/public/otel/v1/traces"
 _VOLATILE_ATTRIBUTES: Final = frozenset(
     {
         "langfuse.observation.completion_start_time",
-        "langfuse.observation.cost_details",
         "langfuse.observation.metadata.applied_guardrails",
         "langfuse.observation.metadata.cache_hit",
         "langfuse.observation.metadata.hidden_params",
@@ -41,7 +40,6 @@ _VOLATILE_ATTRIBUTES: Final = frozenset(
         "langfuse.observation.metadata.requester_metadata",
         "langfuse.observation.metadata.response_id",
         "langfuse.observation.metadata.usage_object",
-        "langfuse.observation.usage_details",
     }
 )
 
@@ -112,14 +110,6 @@ def _expected_generation(route: respx.Route, fixture_name: str, trace_id: str) -
     expected_path: Final = Path(__file__).with_name("langfuse_expected_request_body") / fixture_name
     expected: Final = TypeAdapter(dict[str, object]).validate_python(json.loads(expected_path.read_text()))
     actual: Final = _comparable(generations[0])
-    attributes: Final = TypeAdapter(dict[str, object]).validate_python(generations[0]["attributes"])
-    cost_details: Final = TypeAdapter(dict[str, float]).validate_python(attributes["langfuse.observation.cost_details"])
-    usage_details: Final = TypeAdapter(dict[str, int]).validate_python(attributes["langfuse.observation.usage_details"])
-    assert cost_details["total"] >= 0
-    assert usage_details["input"] >= 0
-    assert usage_details["output"] >= 0
-    assert usage_details["total"] >= usage_details["input"]
-    assert usage_details["total"] >= usage_details["output"]
     expected_comparable: Final = _comparable(expected)
     assert actual == expected_comparable, json.dumps(
         {"actual": actual, "expected": expected_comparable}, indent=2, sort_keys=True
@@ -449,6 +439,13 @@ async def test_langfuse_logging_with_router(langfuse_export: tuple[respx.Route, 
     await router.acompletion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hello!"}],
+        mock_response=litellm.ModelResponse(
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
+            model="gpt-3.5-turbo",
+            object="chat.completion",
+            created=1723081200,
+        ).model_dump(),
         metadata={"trace_id": trace_id},
     )
     await _flush_langfuse()

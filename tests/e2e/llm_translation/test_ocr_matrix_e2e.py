@@ -251,17 +251,11 @@ class Case:
     async def run(self, credentials: Mapping[str, object]) -> OCRResponse:
         kwargs: Final = {**self.provider.params, **credentials}
         document: Final = self.document.build()
-        try:
-            response: Final = (
-                await _OCR_CLIENT.aocr(model=self.provider.model, document=document, **kwargs)
-                if self.call == "async"
-                else _OCR_CLIENT.ocr(model=self.provider.model, document=document, **kwargs)
-            )
-        except Exception as exc:
-            reason: Final = str(exc).casefold()
-            if any(value in reason for value in ("quota", "rate limit", "region")):
-                pytest.skip(f"{self.provider.id} rejected the account due to quota or region")
-            raise
+        response: Final = (
+            await _OCR_CLIENT.aocr(model=self.provider.model, document=document, **kwargs)
+            if self.call == "async"
+            else _OCR_CLIENT.ocr(model=self.provider.model, document=document, **kwargs)
+        )
         assert isinstance(response, OCRResponse)
         return response
 
