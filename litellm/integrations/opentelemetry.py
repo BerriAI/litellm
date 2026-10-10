@@ -1714,7 +1714,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self._token_usage_histogram.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
         cost: Final = kwargs.get("response_cost")
-        if self._cost_histogram and cost:
+        if self._cost_histogram and cost is not None:
             self._cost_histogram.record(cost, attributes=common_attrs)
 
         # Record latency metrics (TTFT, TPOT, and Total Generation Time)

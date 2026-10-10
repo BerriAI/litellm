@@ -5961,7 +5961,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             response_obj = json.load(f)
         return kwargs, response_obj
 
-    def _record(self, attributes):
+    def _record(self, attributes, response_cost: float | None = None):
         """Run a real success hook with metrics enabled and return the reader."""
         metric_reader = InMemoryMetricReader()
         meter_provider = MeterProvider(metric_readers=[metric_reader])
@@ -5977,10 +5977,27 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
         otel.tracer = tracer_provider.get_tracer(__name__)
 
         kwargs, response_obj = self._load_fixtures()
+        if response_cost is not None:
+            kwargs["response_cost"] = response_cost
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
         otel._handle_success(kwargs, response_obj, start, end)
         return metric_reader
+
+    def test_zero_cost_is_recorded(self):
+        reader = self._record(None, response_cost=0)
+        data = reader.get_metrics_data()
+        cost_metrics = tuple(
+            metric
+            for resource_metrics in data.resource_metrics
+            for scope_metrics in resource_metrics.scope_metrics
+            for metric in scope_metrics.metrics
+            if metric.name == "gen_ai.usage.cost"
+        )
+
+        self.assertEqual(len(cost_metrics), 1)
+        self.assertEqual(cost_metrics[0].data.data_points[0].sum, 0)
+        self.assertEqual(cost_metrics[0].data.data_points[0].count, 1)
 
     def _keysets(self, reader, metric_name):
         """Attribute-key sets, one per recorded data point of `metric_name`."""
