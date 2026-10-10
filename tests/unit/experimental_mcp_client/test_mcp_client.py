@@ -6,7 +6,7 @@ import os
 import selectors
 import sys
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -15,15 +15,21 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import anyio
 import httpx2
 import pytest
-from mcp import MCPError
+from mcp import ClientSession, MCPError
+from mcp.client.session import ClientRequestContext, ElicitationFnT
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver import MCPServer as UpstreamServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     CONNECTION_CLOSED,
-    INTERNAL_ERROR,
     REQUEST_TIMEOUT,
     CallToolRequestParams,
     CallToolResult,
+    DiscoverResult,
+    ElicitRequestParams,
+    ElicitResult,
     ErrorData,
     Implementation,
     InitializeResult,
@@ -35,12 +41,20 @@ from mcp.types import (
     ServerCapabilities,
 )
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # Add the parent directory to the path so we can import litellm
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCPClient,
+    MCPSigV4Auth,
+    PersistentMCPSession,
+    UpstreamSessionClosedError,
     _first_non_cancelled_cause,
     _TransportContext,
     _TransportStreams,
@@ -137,13 +151,15 @@ async def test_modern_input_request_uses_existing_elicitation_callback(
     modern_caller: bool, sampling: bool, elicitation_mode: str
 ) -> None:
     from queue import SimpleQueue
+
     from mcp.types import (
-        ElicitResult,
-        ElicitRequestParams,
-        TextContent,
         CreateMessageRequestParams,
         CreateMessageResult,
+        ElicitRequestParams,
+        ElicitResult,
+        TextContent,
     )
+
     from litellm.proxy._experimental.mcp_server.interactions import BoundInputRequiredResult
 
     observed: Final[SimpleQueue[str]] = SimpleQueue()
@@ -841,7 +857,9 @@ class TestExecuteSessionOperationSurfacesTransportError:
                     raise _FakeExceptionGroup("transport", [_FakeExceptionGroup("reader", failures)])
 
             self._make_session(session_class, initialize)
-            expected: Final = close_error if failure_phase == "early" else connect_error if failure_phase == "mixed" else cancelled
+            expected: Final = (
+                close_error if failure_phase == "early" else connect_error if failure_phase == "mixed" else cancelled
+            )
             with pytest.raises(type(expected)) as caught:
                 await client._execute_session_operation(self._make_transport(close_transport), AsyncMock(), http_client)
             assert caught.value is expected
@@ -860,7 +878,6 @@ class TestExecuteSessionOperationSurfacesTransportError:
 
         result = await client._execute_session_operation(transport_ctx, _op)
         assert result == "done"
-
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.ClientSession")
@@ -1883,7 +1900,9 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
 
 @pytest.mark.asyncio
 async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+        ClientCredentialsBearerAuth,
+    )
 
     seen = []
 
@@ -2146,14 +2165,21 @@ def test_sse_read_failure_is_preserved() -> None:
 @pytest.mark.parametrize("protocol_version", ["auto", "2025-06-18"])
 @pytest.mark.parametrize("transport", [MCPTransport.sse, MCPTransport.stdio])
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
-async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str, protocol_version: str) -> None:
+async def test_transport_completion_and_normal_messages(
+    transport: MCPTransport, mode: str, protocol_version: str
+) -> None:
     from mcp import ClientSession
+
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()
     read_timeout: Final = 0.2 if mode == "silent" else 30
     client: Final = MCPClient(
-        server_url="https://example.com/sse", transport_type=transport, timeout=read_timeout, logging_callback=logging_callback, protocol_version=protocol_version
+        server_url="https://example.com/sse",
+        transport_type=transport,
+        timeout=read_timeout,
+        logging_callback=logging_callback,
+        protocol_version=protocol_version,
     )
 
     async def operation(session: ClientSession) -> CallToolResult:
@@ -2735,8 +2761,15 @@ def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-c", "import litellm.experimental_mcp_client.client; from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager; print(MCPServerManager.__name__)"],
-        capture_output=True, text=True, timeout=60, check=False,
+        [
+            sys.executable,
+            "-c",
+            "import litellm.experimental_mcp_client.client; from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager; print(MCPServerManager.__name__)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "MCPServerManager"
@@ -2765,12 +2798,35 @@ async def test_discovery_auth_fingerprint_tracks_effective_credentials(resolved:
 
 
 @pytest.mark.asyncio
+async def test_discovery_auth_fingerprint_tracks_aws_sigv4_credential_identity() -> None:
+    def client(access_key_id: str) -> MCPClient:
+        return MCPClient(
+            server_url="https://example.com/mcp",
+            auth_type=MCPAuth.aws_sigv4,
+            aws_auth=MCPSigV4Auth(
+                aws_access_key_id=access_key_id,
+                aws_secret_access_key="private-secret",
+                aws_region_name="us-east-1",
+            ),
+        )
+
+    original: Final = await client("AKIAORIGINAL").discovery_auth_fingerprint()
+    repeated: Final = await client("AKIAORIGINAL").discovery_auth_fingerprint()
+    rotated: Final = await client("AKIAROTATED").discovery_auth_fingerprint()
+    assert original == repeated
+    assert original != rotated
+    assert "AKIAORIGINAL" not in original
+
+
+@pytest.mark.asyncio
 async def test_request_auth_preview_uses_the_same_effective_headers_as_egress() -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 
     client: Final = MCPClient(
-        server_url="https://upstream.example/mcp", auth_type=MCPAuth.bearer_token,
-        resolved_auth=StaticHeaderAuth("Bearer resolved"), extra_headers={"X-Trace": "trace"},
+        server_url="https://upstream.example/mcp",
+        auth_type=MCPAuth.bearer_token,
+        resolved_auth=StaticHeaderAuth("Bearer resolved"),
+        extra_headers={"X-Trace": "trace"},
     )
     request: Final = await client.prepare_request_auth()
     assert request.method == "POST"
@@ -2794,18 +2850,29 @@ async def test_expired_session_preserves_sdk_error_and_next_operation_reinitiali
             return httpx2.Response(202)
         requests.append((payload["method"], request.headers.get("mcp-session-id")))
         if payload["method"] == "initialize":
-            return httpx2.Response(200, headers={"mcp-session-id": f"session-{len(requests)}"}, json={
-                "jsonrpc": "2.0", "id": payload["id"], "result": {
-                    "protocolVersion": "2025-06-18", "capabilities": {},
-                    "serverInfo": {"name": "expiry-test", "version": "1"},
+            return httpx2.Response(
+                200,
+                headers={"mcp-session-id": f"session-{len(requests)}"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "serverInfo": {"name": "expiry-test", "version": "1"},
+                    },
                 },
-            })
+            )
         if len(requests) == 2:
             if rpc_error:
-                return httpx2.Response(404, json={
-                    "jsonrpc": "2.0", "id": payload["id"],
-                    "error": {"code": METHOD_NOT_FOUND, "message": "Tool catalog unavailable"},
-                })
+                return httpx2.Response(
+                    404,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "error": {"code": METHOD_NOT_FOUND, "message": "Tool catalog unavailable"},
+                    },
+                )
             return httpx2.Response(404)
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": []}})
 
@@ -2821,7 +2888,12 @@ async def test_expired_session_preserves_sdk_error_and_next_operation_reinitiali
             streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
         )
     assert result.tools == []
-    assert requests == [("initialize", None), ("tools/list", "session-1"), ("initialize", None), ("tools/list", "session-3")]
+    assert requests == [
+        ("initialize", None),
+        ("tools/list", "session-1"),
+        ("initialize", None),
+        ("tools/list", "session-3"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -3217,16 +3289,32 @@ async def test_configured_upstream_revision_is_offered_and_checked(revision, acc
             assert payload.params["protocolVersion"] == offered
             assert ("sampling" in payload.params["capabilities"]) == callbacks
             assert ("elicitation" in payload.params["capabilities"]) == callbacks
-            return httpx2.Response(200, json={
-                "jsonrpc": "2.0", "id": payload.id,
-                "result": {"protocolVersion": offered if accepted else "unsupported",
-                           "capabilities": {"tools": {}}, "serverInfo": {"name": "upstream", "version": "1"}},
-            })
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": offered if accepted else "unsupported",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "upstream", "version": "1"},
+                    },
+                },
+            )
         assert accepted, "No operation may execute after failed version negotiation"
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}})
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]},
+            },
+        )
 
     client = _MockTransportClient(
-        respond, server_url="https://example.com/mcp", protocol_version=revision,
+        respond,
+        server_url="https://example.com/mcp",
+        protocol_version=revision,
         sampling_callback=AsyncMock() if callbacks else None,
         elicitation_callback=AsyncMock() if callbacks else None,
     )
@@ -3251,7 +3339,7 @@ def test_upstream_protocol_configuration_rejects_unavailable_modes(revision):
 async def test_modern_upstream_requests_are_self_contained_without_initialization(accepted: bool) -> None:
     from queue import SimpleQueue
 
-    from mcp.types import DiscoverResult, ToolsCapability
+    from mcp.types import ToolsCapability
 
     methods: Final[SimpleQueue[str]] = SimpleQueue()
 
@@ -3340,7 +3428,7 @@ async def test_modern_call_emits_listed_argument_headers(paginated: bool, valid_
     from collections.abc import Mapping
     from queue import SimpleQueue
 
-    from mcp.types import DiscoverResult, ToolsCapability
+    from mcp.types import ToolsCapability
 
     calls: Final[SimpleQueue[str]] = SimpleQueue()
 
@@ -3424,6 +3512,7 @@ async def test_modern_call_emits_listed_argument_headers(paginated: bool, valid_
     await asyncio.gather(call_as("Engineering"), call_as("Finance"))
     assert calls.qsize() == (2 if valid_annotation else 0)
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stop", ("page_cap", "repeated_cursor"))
 @pytest.mark.parametrize("schema_available", (False, True))
@@ -3432,7 +3521,7 @@ async def test_modern_call_requires_schema_from_bounded_listing(
 ) -> None:
     from queue import SimpleQueue
 
-    from mcp.types import DiscoverResult, ToolsCapability
+    from mcp.types import ToolsCapability
 
     monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
     methods: Final[SimpleQueue[str]] = SimpleQueue()
@@ -3508,7 +3597,7 @@ async def test_modern_call_requires_schema_from_bounded_listing(
 
 
 def test_modern_call_uses_discovery_deadline_for_multiple_pages() -> None:
-    from mcp.types import DiscoverResult, ToolsCapability
+    from mcp.types import ToolsCapability
 
     loop: Final = _AutojumpClockLoop()
 
@@ -3585,7 +3674,7 @@ def test_modern_call_uses_discovery_deadline_for_multiple_pages() -> None:
 async def test_cancelled_modern_catalog_load_prevents_tool_execution() -> None:
     from queue import SimpleQueue
 
-    from mcp.types import DiscoverResult, ToolsCapability
+    from mcp.types import ToolsCapability
 
     listing_started: Final = asyncio.Event()
     hold_listing: Final = asyncio.Event()
@@ -3624,20 +3713,30 @@ async def test_cancelled_modern_catalog_load_prevents_tool_execution() -> None:
         observed_listing.cancel()
         await asyncio.gather(task, observed_listing, return_exceptions=True)
 
+
 def test_modern_upstream_rejects_legacy_sse_transport() -> None:
     with pytest.raises(ValueError, match="transport"):
         MCPClient(protocol_version="2026-07-28", transport_type=MCPTransport.sse)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method, field, item", [
-    ("tools/list", "tools", {"name": "second", "inputSchema": {"type": "object"}}),
-    ("prompts/list", "prompts", {"name": "second"}),
-    ("resources/list", "resources", {"name": "second", "uri": "status://second"}),
-    ("resources/templates/list", "resourceTemplates", {"name": "second", "uriTemplate": "status://{name}"}),
-])
+@pytest.mark.parametrize(
+    "method, field, item",
+    [
+        ("tools/list", "tools", {"name": "second", "inputSchema": {"type": "object"}}),
+        ("prompts/list", "prompts", {"name": "second"}),
+        ("resources/list", "resources", {"name": "second", "uri": "status://second"}),
+        ("resources/templates/list", "resourceTemplates", {"name": "second", "uriTemplate": "status://{name}"}),
+    ],
+)
 async def test_single_catalog_page_preserves_cursor_metadata_and_request_cursor(method, field, item):
-    from mcp.types import ListToolsRequest, ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams
+    from mcp.types import (
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        ListToolsRequest,
+        PaginatedRequestParams,
+    )
 
     def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method != "POST":
@@ -3676,8 +3775,10 @@ async def test_single_catalog_page_preserves_cursor_metadata_and_request_cursor(
 
     client = _MockTransportClient(respond, server_url="https://upstream.example.com/mcp")
     request_type = {
-        "tools/list": ListToolsRequest, "prompts/list": ListPromptsRequest,
-        "resources/list": ListResourcesRequest, "resources/templates/list": ListResourceTemplatesRequest,
+        "tools/list": ListToolsRequest,
+        "prompts/list": ListPromptsRequest,
+        "resources/list": ListResourcesRequest,
+        "resources/templates/list": ListResourceTemplatesRequest,
     }[method]
     result = await client.list_page(request_type(params=PaginatedRequestParams(cursor="upstream-position")))
     assert result.model_dump(by_alias=True)[field][0]["name"] == "second"
@@ -3691,7 +3792,10 @@ async def test_single_catalog_page_preserves_cursor_metadata_and_request_cursor(
 @pytest.mark.parametrize("cursor", [None, "continuation"])
 async def test_optional_catalog_distinguishes_absent_capability_from_failed_continuation(method, failure, cursor):
     from mcp.types import (
-        ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams,
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        PaginatedRequestParams,
     )
 
     methods = []
@@ -3704,19 +3808,35 @@ async def test_optional_catalog_distinguishes_absent_capability_from_failed_cont
             return httpx2.Response(202)
         methods.append(payload.method)
         if payload.method == "initialize":
-            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {
-                "protocolVersion": LATEST_HANDSHAKE_VERSION,
-                "capabilities": {} if failure == "unadvertised" else {"prompts": {}, "resources": {}},
-                "serverInfo": {"name": "optional", "version": "1"},
-            }})
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {} if failure == "unadvertised" else {"prompts": {}, "resources": {}},
+                        "serverInfo": {"name": "optional", "version": "1"},
+                    },
+                },
+            )
         assert payload.method == method
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "error": {
-            "code": -32601 if failure == "method_missing" else -32603, "message": "Upstream unavailable",
-        }})
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "error": {
+                    "code": -32601 if failure == "method_missing" else -32603,
+                    "message": "Upstream unavailable",
+                },
+            },
+        )
 
     client = _MockTransportClient(respond, server_url="https://upstream.example.com/mcp")
     request_type = {
-        "prompts/list": ListPromptsRequest, "resources/list": ListResourcesRequest,
+        "prompts/list": ListPromptsRequest,
+        "resources/list": ListResourcesRequest,
         "resources/templates/list": ListResourceTemplatesRequest,
     }[method]
     request = request_type(params=PaginatedRequestParams(cursor=cursor))
@@ -3725,7 +3845,11 @@ async def test_optional_catalog_distinguishes_absent_capability_from_failed_cont
             await client.list_page(request)
     else:
         result = await client.list_page(request)
-        collection = {"prompts/list": "prompts", "resources/list": "resources", "resources/templates/list": "resource_templates"}[method]
+        collection: Final = {
+            "prompts/list": "prompts",
+            "resources/list": "resources",
+            "resources/templates/list": "resource_templates",
+        }[method]
         assert getattr(result, collection) == []
         assert result.next_cursor is None
     if failure == "unadvertised":
@@ -3884,3 +4008,937 @@ async def test_modern_elicitation_honors_server_permission(mode: str, enabled: b
             with pytest.raises(MCPError, match="Elicitation is disabled"):
                 await client._request_with_interaction(session, request, None, None, True)
         request.assert_awaited_once_with(None, None)
+
+
+class _StatefulUpstreamClient(MCPClient):
+    """An MCPClient whose streamable-HTTP transport talks to an in-process stateful MCP server."""
+
+    def __init__(self, app: ASGIApp, *, server_url: str, transport_type: MCPTransport) -> None:
+        super().__init__(server_url=server_url, transport_type=transport_type)
+        self._app = app
+
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
+        http_client: Final = self._create_httpx_client_factory(transport=httpx2.ASGITransport(app=self._app))(
+            headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
+        )
+        return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+
+class _CleanupHoldingASGITransport(httpx2.ASGITransport):
+    def __init__(self, app: ASGIApp, cleanup_started: asyncio.Event, release_cleanup: asyncio.Event) -> None:
+        super().__init__(app=app)
+        self._cleanup_started: Final = cleanup_started
+        self._release_cleanup: Final = release_cleanup
+
+    async def aclose(self) -> None:
+        self._cleanup_started.set()
+        await self._release_cleanup.wait()
+        await super().aclose()
+
+
+class _CleanupHoldingStatefulUpstreamClient(_StatefulUpstreamClient):
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        server_url: str,
+        transport_type: MCPTransport,
+        cleanup_started: asyncio.Event,
+        release_cleanup: asyncio.Event,
+    ) -> None:
+        super().__init__(app, server_url=server_url, transport_type=transport_type)
+        self._cleanup_started: Final = cleanup_started
+        self._release_cleanup: Final = release_cleanup
+
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
+        transport: Final = _CleanupHoldingASGITransport(
+            self._app,
+            self._cleanup_started,
+            self._release_cleanup,
+        )
+        http_client: Final = self._create_httpx_client_factory(transport=transport)(
+            headers=self._get_auth_headers(),
+            timeout=httpx2.Timeout(self.timeout),
+        )
+        return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+
+class _InProcessUpstreamClient(MCPClient):
+    def __init__(self, server: UpstreamServer, *, elicitation_callback: ElicitationFnT | None = None) -> None:
+        super().__init__(
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            elicitation_callback=elicitation_callback,
+        )
+        self._server = server
+
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient | None]:
+        @asynccontextmanager
+        async def connected() -> AsyncIterator[_TransportStreams]:
+            server_to_client_send, client_receive = anyio.create_memory_object_stream[SessionMessage | Exception](0)
+            client_to_server_send, server_receive = anyio.create_memory_object_stream[SessionMessage](0)
+            server_task: Final = asyncio.create_task(
+                self._server._lowlevel_server.run(
+                    server_receive,
+                    server_to_client_send,
+                    self._server._lowlevel_server.create_initialization_options(),
+                )
+            )
+            try:
+                yield client_receive, client_to_server_send
+            finally:
+                await client_to_server_send.aclose()
+                await client_receive.aclose()
+                await asyncio.wait_for(server_task, 5)
+
+        return connected(), None
+
+
+class _ElicitationAnswer(BaseModel):
+    label: str
+
+    model_config = ConfigDict(frozen=True)
+
+
+def _stateful_upstream() -> Starlette:
+    service: Final = UpstreamServer("stateful")
+    selected: Final[dict[str, str]] = {}
+
+    @service.tool()
+    def select_project(name: str, ctx: Context) -> str:
+        selected[ctx.headers["mcp-session-id"]] = name
+        return f"selected {name}"
+
+    @service.tool()
+    def create_feature(title: str, ctx: Context) -> str:
+        return f"{selected[ctx.headers['mcp-session-id']]}/{title}"
+
+    return service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+
+def _upstream_with_status_for_method(method: str, status_code: int) -> Starlette:
+    service: Final = UpstreamServer("status upstream")
+
+    @service.tool()
+    def protected_tool() -> str:
+        return "protected"
+
+    app: Final = service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+    async def reject_method(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method == "POST":
+            payload: Final = await request.json()
+            if isinstance(payload, dict) and payload.get("method") == method:
+                return Response(status_code=status_code, headers={"WWW-Authenticate": "Bearer"})
+        return await call_next(request)
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=reject_method)
+    return app
+
+
+def _upstream_with_malformed_response_for_method(method: str) -> Starlette:
+    service: Final = UpstreamServer("malformed response upstream")
+
+    @service.tool()
+    def malformed_tool() -> str:
+        return "unreachable"
+
+    app: Final = service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+    async def malformed_method(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method == "GET":
+            return Response(content="data: {}\n\n", media_type="text/event-stream")
+        if request.method == "POST":
+            payload: Final = await request.json()
+            if isinstance(payload, dict) and payload.get("method") == method:
+                return Response(content="not a JSON-RPC message", media_type="text/event-stream")
+        return await call_next(request)
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=malformed_method)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_keeps_upstream_state_across_tool_calls() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        per_call: Final = await client.call_tool(CallToolRequestParams(name="select_project", arguments={"name": "a"}))
+        assert per_call.is_error is False
+        fresh: Final = await client.call_tool(CallToolRequestParams(name="create_feature", arguments={"title": "b"}))
+        assert fresh.is_error is True, "a fresh upstream session per call must not see the earlier selection"
+
+        session: Final = client.open_persistent_session()
+        try:
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "a"}), persistent_session=session
+            )
+            created: Final = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "b"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False
+        assert created.is_error is False
+        assert created.content[0].text == "a/b"
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed
+
+
+def _client_with_session(
+    app: Starlette,
+    admission: Callable[[], AbstractAsyncContextManager[None]] | None = None,
+) -> tuple[_StatefulUpstreamClient, PersistentMCPSession]:
+    client: Final = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+    return client, client.open_persistent_session(admission)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_one_waiter_for_session_readiness_does_not_cancel_other_waiters() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        initialize_started: Final = asyncio.Event()
+        release_initialize: Final = asyncio.Event()
+
+        async def gated_server(scope: Scope, receive: Receive, send: Send) -> None:
+            async def gated_send(message: Message) -> None:
+                if message["type"] == "http.response.body" and not initialize_started.is_set():
+                    initialize_started.set()
+                    await release_initialize.wait()
+                await send(message)
+
+            await app(scope, receive, gated_send)
+
+        gated_app: Final[ASGIApp] = gated_server
+        client: Final = _StatefulUpstreamClient(
+            gated_app, server_url="http://upstream/mcp", transport_type=MCPTransport.http
+        )
+        session: Final = client.open_persistent_session()
+
+        async def operation(_: ClientSession) -> str:
+            return "ready"
+
+        cancelled_waiter: Final = asyncio.create_task(session.run(operation))
+        remaining_waiter: Final = asyncio.create_task(session.run(operation))
+        try:
+            await asyncio.wait_for(initialize_started.wait(), 5)
+            await asyncio.sleep(0)
+            cancelled_waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_waiter
+            release_initialize.set()
+            assert await asyncio.wait_for(remaining_waiter, 5) == "ready"
+            assert not session.closed
+        finally:
+            release_initialize.set()
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_survives_a_caller_timeout_on_one_operation() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    client.call_tool(
+                        CallToolRequestParams(name="select_project", arguments={"name": "a"}),
+                        persistent_session=session,
+                    ),
+                    timeout=0,
+                )
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "c"}), persistent_session=session
+            )
+            created: Final = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "d"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False, "the session must outlive a timed out call"
+        assert created.content[0].text == "c/d"
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_survives_recoverable_mcp_errors_and_closes_on_connection_closed() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+
+        async def invalid_operation(_: ClientSession) -> str:
+            raise MCPError(code=-32602, message="invalid params")
+
+        try:
+            with pytest.raises(MCPError):
+                await session.run(invalid_operation)
+            assert not session.closed
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "recoverable"}),
+                persistent_session=session,
+            )
+            created: Final = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "still-open"}),
+                persistent_session=session,
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False
+        assert created.content[0].text == "recoverable/still-open"
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+    connection_app: Final = _stateful_upstream()
+    async with connection_app.router.lifespan_context(connection_app):
+        _, session = _client_with_session(connection_app)
+        started: Final = asyncio.Event()
+        release: Final = asyncio.Event()
+
+        async def disconnected_operation(_: ClientSession) -> str:
+            started.set()
+            await release.wait()
+            raise MCPError(code=CONNECTION_CLOSED, message="upstream connection closed")
+
+        async def pending_operation(_: ClientSession) -> str:
+            return "unused"
+
+        active: Final = asyncio.create_task(session.run(disconnected_operation))
+        await asyncio.wait_for(started.wait(), 5)
+        pending: Final = asyncio.create_task(session.run(pending_operation))
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(MCPError) as caught:
+            await asyncio.wait_for(active, 5)
+        assert caught.value.error.code == CONNECTION_CLOSED
+        with pytest.raises((MCPError, UpstreamSessionClosedError)):
+            await asyncio.wait_for(pending, 5)
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_ended_persistent_session_is_not_reusable_during_transport_cleanup() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        cleanup_started: Final = asyncio.Event()
+        release_cleanup: Final = asyncio.Event()
+        client: Final = _CleanupHoldingStatefulUpstreamClient(
+            app,
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            cleanup_started=cleanup_started,
+            release_cleanup=release_cleanup,
+        )
+        session: Final = client.open_persistent_session()
+
+        async def disconnected_operation(_: ClientSession) -> str:
+            raise MCPError(code=CONNECTION_CLOSED, message="upstream connection closed")
+
+        try:
+            with pytest.raises(MCPError) as caught:
+                await asyncio.wait_for(session.run(disconnected_operation), 5)
+            assert caught.value.error.code == CONNECTION_CLOSED
+            await asyncio.wait_for(cleanup_started.wait(), 5)
+
+            assert not session.reusable
+            assert not session.closed
+            session.retire()
+
+            release_cleanup.set()
+            await asyncio.wait_for(session.wait_closed(), 5)
+            assert session.closed
+        finally:
+            release_cleanup.set()
+            if not session.closed:
+                session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_tool_call_preserves_upstream_http_status_error() -> None:
+    app: Final = _upstream_with_status_for_method("tools/call", 401)
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(
+            app,
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+        )
+        session: Final = client.open_persistent_session()
+        try:
+            with pytest.raises(httpx2.HTTPStatusError) as caught:
+                await client.call_tool(
+                    CallToolRequestParams(name="protected_tool", arguments={}),
+                    raise_on_error=True,
+                    persistent_session=session,
+                )
+            assert caught.value.response.status_code == 401
+            assert not session.reusable
+        finally:
+            session.close()
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_remaps_stream_error_over_mcp_error() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(
+            app,
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+        )
+        session: Final = client.open_persistent_session()
+        request: Final = httpx2.Request("POST", "http://upstream/mcp")
+        response: Final = httpx2.Response(401, request=request, headers={"WWW-Authenticate": "Bearer"})
+        http_error: Final = httpx2.HTTPStatusError("401 Unauthorized", request=request, response=response)
+
+        async def operation(_: ClientSession) -> str:
+            stream_error: Final[asyncio.Future[Exception] | None] = session._stream_error
+            assert stream_error is not None
+            stream_error.set_result(http_error)
+            raise MCPError(code=-32603, message="response stream closed")
+
+        try:
+            with pytest.raises(httpx2.HTTPStatusError) as caught:
+                await session.run(operation)
+            assert caught.value is http_error
+            assert not session.reusable
+        finally:
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_ends_when_a_malformed_response_is_remapped() -> None:
+    app: Final = _upstream_with_malformed_response_for_method("tools/call")
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(
+            app,
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+        )
+        session: Final = client.open_persistent_session()
+        try:
+
+            async def ready(_: ClientSession) -> str:
+                return "ready"
+
+            assert await asyncio.wait_for(session.run(ready), 5) == "ready"
+            stream_error: Final[asyncio.Future[Exception] | None] = session._stream_error
+            assert stream_error is not None
+            recorded_stream_error: Final = await asyncio.wait_for(asyncio.shield(stream_error), 5)
+            assert isinstance(recorded_stream_error, ValidationError)
+
+            with pytest.raises(ValidationError) as caught:
+                await client.call_tool(
+                    CallToolRequestParams(name="malformed_tool", arguments={}),
+                    raise_on_error=True,
+                    persistent_session=session,
+                )
+            assert caught.value is recorded_stream_error
+            assert not session.reusable
+            await asyncio.wait_for(session.wait_closed(), 5)
+            assert session.closed
+        finally:
+            if not session.closed:
+                session.close()
+                await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_failed_persistent_initialize_is_not_reusable_during_transport_cleanup() -> None:
+    app: Final = _upstream_with_status_for_method("initialize", 500)
+    async with app.router.lifespan_context(app):
+        cleanup_started: Final = asyncio.Event()
+        release_cleanup: Final = asyncio.Event()
+        client: Final = _CleanupHoldingStatefulUpstreamClient(
+            app,
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+            cleanup_started=cleanup_started,
+            release_cleanup=release_cleanup,
+        )
+        session: Final = client.open_persistent_session()
+        pending: Final = asyncio.create_task(session.run(lambda _: "ready"))
+        try:
+            await asyncio.wait_for(cleanup_started.wait(), 5)
+            assert not session.reusable
+            assert not session.closed
+            release_cleanup.set()
+            with pytest.raises(httpx2.HTTPStatusError):
+                await asyncio.wait_for(pending, 5)
+            await asyncio.wait_for(session.wait_closed(), 5)
+            assert session.closed
+        finally:
+            release_cleanup.set()
+            if not session.closed:
+                session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_routes_elicitation_to_the_current_clients_callback() -> None:
+    service: Final = UpstreamServer("elicitation")
+
+    @service.tool()
+    async def ask_for_label(ctx: Context) -> str:
+        response: Final = await ctx.elicit("What label should be used?", _ElicitationAnswer)
+        return response.data.label if response.data is not None else response.action
+
+    async def first_callback(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+        return ElicitResult(action="accept", content={"label": "first"})
+
+    async def second_callback(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+        return ElicitResult(action="accept", content={"label": "second"})
+
+    first_client: Final = _InProcessUpstreamClient(service, elicitation_callback=first_callback)
+    second_client: Final = _InProcessUpstreamClient(service, elicitation_callback=second_callback)
+    session: Final = first_client.open_persistent_session()
+    try:
+        first: Final = await first_client.call_tool(
+            CallToolRequestParams(name="ask_for_label", arguments={}), persistent_session=session
+        )
+        second: Final = await second_client.call_tool(
+            CallToolRequestParams(name="ask_for_label", arguments={}), persistent_session=session
+        )
+    finally:
+        session.close()
+    assert first.is_error is False and first.content[0].text == "first"
+    assert second.is_error is False and second.content[0].text == "second"
+    await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_without_elicitation_callback_uses_sdk_default() -> None:
+    service: Final = UpstreamServer("elicitation default")
+
+    @service.tool()
+    async def ask_for_label(ctx: Context) -> str:
+        response: Final = await ctx.elicit("What label should be used?", _ElicitationAnswer)
+        return response.data.label if response.data is not None else response.action
+
+    client: Final = _InProcessUpstreamClient(service)
+    per_call: Final = await client.call_tool(CallToolRequestParams(name="ask_for_label", arguments={}))
+    session: Final = client.open_persistent_session()
+    try:
+        persistent: Final = await client.call_tool(
+            CallToolRequestParams(name="ask_for_label", arguments={}), persistent_session=session
+        )
+    finally:
+        session.close()
+    await asyncio.wait_for(session.wait_closed(), 5)
+    assert persistent.model_dump(mode="json") == per_call.model_dump(mode="json")
+    assert "elicitation callback is unavailable" not in str(persistent.model_dump(mode="json"))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_operation_does_not_run_and_session_accepts_a_later_operation() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        first_started: Final = asyncio.Event()
+        release_first: Final = asyncio.Event()
+        cancelled_operation_ran: Final = asyncio.Event()
+
+        async def first_operation(_: ClientSession) -> str:
+            first_started.set()
+            await release_first.wait()
+            return "first"
+
+        async def cancelled_operation(_: ClientSession) -> str:
+            cancelled_operation_ran.set()
+            return "cancelled"
+
+        async def third_operation(_: ClientSession) -> str:
+            return "third"
+
+        first_task: Final = asyncio.create_task(session.run(first_operation))
+        try:
+            await asyncio.wait_for(first_started.wait(), 5)
+            second_task: Final = asyncio.create_task(session.run(cancelled_operation))
+            await asyncio.sleep(0)
+            assert session._queue.qsize() == 1
+            second_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second_task
+            third_task: Final = asyncio.create_task(session.run(third_operation))
+            await asyncio.sleep(0)
+            assert session._queue.qsize() == 2
+            release_first.set()
+            assert await asyncio.wait_for(first_task, 5) == "first"
+            assert await asyncio.wait_for(third_task, 5) == "third"
+            assert not cancelled_operation_ran.is_set()
+            assert not session.closed
+        finally:
+            release_first.set()
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_retiring_persistent_session_drains_in_flight_and_queued_operations() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        first_started: Final = asyncio.Event()
+        release_first: Final = asyncio.Event()
+
+        async def first_operation(_: ClientSession) -> str:
+            first_started.set()
+            await release_first.wait()
+            return "first"
+
+        async def queued_operation(_: ClientSession) -> str:
+            return "queued"
+
+        first_waiter: Final = asyncio.create_task(session.run(first_operation))
+        try:
+            await asyncio.wait_for(first_started.wait(), 5)
+            queued_waiter: Final = asyncio.create_task(session.run(queued_operation))
+            await asyncio.sleep(0)
+            assert session._queue.qsize() == 1
+            session.retire()
+            release_first.set()
+
+            results: Final = await asyncio.wait_for(asyncio.gather(first_waiter, queued_waiter), 5)
+            assert results == ["first", "queued"]
+            await asyncio.wait_for(session.wait_closed(), 5)
+            assert session.closed
+        finally:
+            release_first.set()
+            if not session.closed:
+                session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_timed_out_persistent_operation_waiting_for_admission_is_skipped() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        admission_slots: Final = asyncio.Semaphore(1)
+        admission_requested: Final = asyncio.Event()
+
+        def admission() -> AbstractAsyncContextManager[None]:
+            admission_requested.set()
+            return admission_slots
+
+        _, session = _client_with_session(app, admission)
+        operation_ran: Final = asyncio.Event()
+
+        async def warmup(_: ClientSession) -> str:
+            return "ready"
+
+        async def timed_out_operation(_: ClientSession) -> str:
+            operation_ran.set()
+            return "expired"
+
+        async def later_operation(_: ClientSession) -> str:
+            return "later"
+
+        try:
+            assert await session.run(warmup) == "ready"
+            admission_requested.clear()
+            async with admission_slots:
+                timed_out_call: Final = asyncio.create_task(session.run(timed_out_operation))
+                await asyncio.wait_for(admission_requested.wait(), 1)
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(timed_out_call, 0.05)
+                assert not operation_ran.is_set()
+
+            later_result: Final = await asyncio.wait_for(session.run(later_operation), 1)
+
+            assert later_result == "later"
+            assert session.reusable
+            assert not operation_ran.is_set()
+        finally:
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_holds_admission_until_initialize_completes() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        initialize_seen: Final = asyncio.Event()
+        admission_slots: Final = asyncio.Semaphore(1)
+
+        async def observing_app(scope: Scope, receive: Receive, send: Send) -> None:
+            async def observe_send(message: Message) -> None:
+                if message["type"] == "http.response.body":
+                    initialize_seen.set()
+                await send(message)
+
+            await app(scope, receive, observe_send)
+
+        client: Final = _StatefulUpstreamClient(
+            observing_app,
+            server_url="http://upstream/mcp",
+            transport_type=MCPTransport.http,
+        )
+        session: Final = client.open_persistent_session(lambda: admission_slots)
+
+        async def operation(_: ClientSession) -> str:
+            return "ready"
+
+        run_task: Final = asyncio.create_task(session.run(operation))
+        try:
+            async with admission_slots:
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(initialize_seen.wait(), 0.05)
+                assert not session._ready.done()
+                assert not run_task.done()
+
+            result: Final = await asyncio.wait_for(run_task, 5)
+            assert result == "ready"
+            assert initialize_seen.is_set()
+        finally:
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+            await asyncio.gather(run_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_releases_admission_when_connect_fails() -> None:
+    async def failing_app(_: Scope, __: Receive, ___: Send) -> None:
+        raise httpx2.ConnectError("connect failed")
+
+    client: Final = _StatefulUpstreamClient(
+        failing_app,
+        server_url="http://upstream/mcp",
+        transport_type=MCPTransport.http,
+    )
+    admission_slots: Final = asyncio.Semaphore(1)
+    session: Final = client.open_persistent_session(lambda: admission_slots)
+
+    async def operation(_: ClientSession) -> str:
+        return "unreachable"
+
+    try:
+        with pytest.raises(httpx2.ConnectError, match="connect failed"):
+            await asyncio.wait_for(session.run(operation), 1)
+        await asyncio.wait_for(session.wait_closed(), 1)
+
+        await asyncio.wait_for(admission_slots.acquire(), 0.1)
+        admission_slots.release()
+    finally:
+        session.close()
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_failed_connect_is_not_reusable_during_admission_teardown() -> None:
+    connect_failed: Final = asyncio.Event()
+    admission_exit_started: Final = asyncio.Event()
+    release_admission_exit: Final = asyncio.Event()
+
+    async def failing_app(_: Scope, __: Receive, ___: Send) -> None:
+        connect_failed.set()
+        raise httpx2.ConnectError("connect failed")
+
+    @asynccontextmanager
+    async def blocking_admission() -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            admission_exit_started.set()
+            await release_admission_exit.wait()
+
+    client: Final = _StatefulUpstreamClient(
+        failing_app,
+        server_url="http://upstream/mcp",
+        transport_type=MCPTransport.http,
+    )
+    session: Final = client.open_persistent_session(blocking_admission)
+
+    async def operation(_: ClientSession) -> str:
+        return "unreachable"
+
+    run_task: Final = asyncio.create_task(session.run(operation))
+    try:
+        await asyncio.wait_for(connect_failed.wait(), 1)
+        await asyncio.wait_for(admission_exit_started.wait(), 1)
+
+        assert not run_task.done()
+        assert not session.reusable
+        assert not session.closed
+
+        release_admission_exit.set()
+        with pytest.raises(httpx2.ConnectError, match="connect failed"):
+            await asyncio.wait_for(run_task, 1)
+        await asyncio.wait_for(session.wait_closed(), 1)
+        assert session.closed
+    finally:
+        release_admission_exit.set()
+        session.close()
+        await asyncio.wait_for(session.wait_closed(), 5)
+        await asyncio.gather(run_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_admission_is_acquired_only_when_operation_runs() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        admission_slots: Final = asyncio.Semaphore(2)
+        _, session = _client_with_session(app, lambda: admission_slots)
+        first_started: Final = asyncio.Event()
+        release_first: Final = asyncio.Event()
+        operation_order: Final[list[str]] = []
+
+        async def first_operation(_: ClientSession) -> str:
+            operation_order.append("first")
+            first_started.set()
+            await release_first.wait()
+            return "first"
+
+        async def second_operation(_: ClientSession) -> str:
+            operation_order.append("second")
+            return "second"
+
+        async def third_operation(_: ClientSession) -> str:
+            operation_order.append("third")
+            return "third"
+
+        first_task: Final = asyncio.create_task(session.run(first_operation))
+        second_task: Final = asyncio.create_task(session.run(second_operation))
+        third_task: Final = asyncio.create_task(session.run(third_operation))
+        try:
+            await asyncio.wait_for(first_started.wait(), 5)
+            await asyncio.sleep(0)
+            assert session._queue.qsize() == 2
+            await asyncio.wait_for(admission_slots.acquire(), 0.1)
+            try:
+                assert admission_slots.locked()
+            finally:
+                admission_slots.release()
+            assert operation_order == ["first"]
+
+            release_first.set()
+            results: Final = await asyncio.wait_for(
+                asyncio.gather(first_task, second_task, third_task),
+                5,
+            )
+
+            assert results == ["first", "second", "third"]
+            assert operation_order == ["first", "second", "third"]
+        finally:
+            release_first.set()
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+            await asyncio.gather(first_task, second_task, third_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_retiring_idle_persistent_session_closes_and_rejects_new_operations() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+
+        async def operation(_: ClientSession) -> str:
+            return "ready"
+
+        try:
+            assert await session.run(operation) == "ready"
+            session.retire()
+            await asyncio.wait_for(session.wait_closed(), 1)
+
+            assert session.closed
+            with pytest.raises(UpstreamSessionClosedError):
+                await session.run(operation)
+        finally:
+            if not session.closed:
+                session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_closing_persistent_session_mid_operation_fails_the_waiter_instead_of_hanging() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        started: Final = asyncio.Event()
+
+        async def slow_operation(_: object) -> str:
+            started.set()
+            await asyncio.sleep(30)
+            return "never"
+
+        waiter: Final = asyncio.ensure_future(session.run(slow_operation))
+        await asyncio.wait_for(started.wait(), 5)
+        session.close()
+        with pytest.raises(RuntimeError, match="upstream MCP session closed"):
+            await asyncio.wait_for(waiter, 5)
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_reports_an_upstream_cancellation_as_a_runtime_error_not_a_cancelled_caller() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+
+        async def cancelled_upstream(_: object) -> str:
+            raise asyncio.CancelledError()
+
+        try:
+            with pytest.raises(RuntimeError, match="cancelled"):
+                await asyncio.wait_for(session.run(cancelled_upstream), 5)
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "e"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False, "an upstream cancellation must not be mistaken for a cancelled caller"
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_closing_persistent_session_fails_a_caller_blocked_on_a_full_queue_instead_of_hanging() -> None:
+    from litellm.experimental_mcp_client.client import _MAX_PENDING_OPERATIONS
+
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        started: Final = asyncio.Event()
+
+        async def slow_operation(_: object) -> str:
+            started.set()
+            await asyncio.sleep(30)
+            return "never"
+
+        waiters: Final = tuple(
+            asyncio.ensure_future(session.run(slow_operation)) for _ in range(_MAX_PENDING_OPERATIONS + 2)
+        )
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.sleep(0)
+        session.close()
+        outcomes: Final = await asyncio.wait_for(asyncio.gather(*waiters, return_exceptions=True), 5)
+        assert all(isinstance(outcome, RuntimeError) for outcome in outcomes), outcomes
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_ends_after_a_broken_stream_so_the_next_call_gets_a_fresh_one() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+
+        async def broken_stream(_: object) -> str:
+            raise anyio.BrokenResourceError()
+
+        with pytest.raises(anyio.BrokenResourceError):
+            await asyncio.wait_for(session.run(broken_stream), 5)
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed, "a dead transport must end the session instead of being reused"
