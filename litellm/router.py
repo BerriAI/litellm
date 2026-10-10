@@ -1408,15 +1408,13 @@ class Router:
         # caps them at one per class: without this a discarded router (e.g. the
         # throwaway `user_config` Router built per request) leaks its selectors
         # into every callback list for the life of the process (issue #44575).
-        self._unregister_router_selectors(
-            [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
-            + list(getattr(self, "_override_selectors", {}).values())
-            + [
-                selector
-                for selectors in getattr(self, "_group_selectors", {}).values()
-                for selector in selectors.values()
-            ]
-        )
+        selectors = [
+            getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()
+        ]
+        selectors.extend(getattr(self, "_override_selectors", {}).values())
+        for group in getattr(self, "_group_selectors", {}).values():
+            selectors.extend(group.values())
+        self._unregister_router_selectors(selectors)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
