@@ -2,6 +2,8 @@
 (BYOK + discoverable / pass-through OAuth proxy)."""
 
 import os
+import re
+from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
@@ -819,3 +821,32 @@ def build_upstream_oauth2_token_request(
     if not resource:
         return client_auth
     return TokenEndpointClientAuth(headers=client_auth.headers, body={**client_auth.body, "resource": resource})
+
+
+UPSTREAM_SCOPE_PREFIX: Final = "litellm:mcp_scope:"
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamScope:
+    server_id: str
+    permission: str
+
+
+def encode_upstream_scope(server_id: str, permission: str) -> str:
+    return f"{UPSTREAM_SCOPE_PREFIX}{server_id.encode().hex()}:{permission.encode().hex()}"
+
+
+def decode_upstream_scope(token: str) -> UpstreamScope | None:
+    encoded: Final = token.removeprefix(UPSTREAM_SCOPE_PREFIX).split(":")
+    if not token.startswith(UPSTREAM_SCOPE_PREFIX) or len(encoded) != 2:
+        return None
+    try:
+        server_id: Final = bytes.fromhex(encoded[0]).decode()
+        permission: Final = bytes.fromhex(encoded[1]).decode()
+    except (ValueError, UnicodeError):
+        return None
+    if not server_id or re.fullmatch(r"[!#-\[\]-~]+", permission) is None:
+        return None
+    if encode_upstream_scope(server_id, permission) != token:
+        return None
+    return UpstreamScope(server_id, permission)

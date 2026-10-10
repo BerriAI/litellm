@@ -1915,7 +1915,9 @@ def _redis_that(async_increment, get=None):
     cache.redis_cache.async_increment = async_increment
     cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
     cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
-    cache.redis_cache.async_get_cache = AsyncMock(side_effect=AssertionError("peek must read the client, not the wrapper"))
+    cache.redis_cache.async_get_cache = AsyncMock(
+        side_effect=AssertionError("peek must read the client, not the wrapper")
+    )
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
 
@@ -2069,7 +2071,11 @@ async def test_refresh_of_a_rotated_token_answers_503_before_minting_while_redis
         (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
     )
     rotated = json.loads(
-        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))).body
+        (
+            await _refresh_native(
+                payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1))
+            )
+        ).body
     )["refresh_token"]
 
     minter = _Minter()
@@ -2601,3 +2607,236 @@ async def test_connect_flow_retains_step_up_scope_until_the_vendor_grants_it():
     complete = await _complete_page(response, scoped_server=server, vendor=vendor)
     assert complete.status_code == 303
     assert parse_qs(urlparse(complete.headers["location"]).query)["code"][0].startswith(GATEWAY_AUTH_CODE_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_step_up_requires_the_upstream_grant_without_narrowing_gateway_access():
+    from unittest.mock import AsyncMock
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    server = _scoped_mcp_server()
+    encoded = f"litellm:mcp_scope:{server.server_id.encode().hex()}:{b'tools.write'.hex()}"
+    response = _scoped_authorize(client_id, "https://llm.example.com/mcp", scope=encoded)
+    vendor = AsyncMock(return_value="absent")
+    described = await _describe_page(response, scoped_server=server, vendor=vendor)
+    assert json.loads(described.body)["connected"] is False
+    assert json.loads(described.body)["requested_scopes"] == ["tools.write"]
+    premature = await _complete_page(response, scoped_server=server, vendor=vendor)
+    assert premature.status_code == 400
+    vendor.return_value = "present"
+    completed = await _complete_page(response, scoped_server=server, vendor=vendor)
+    code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    tokens = await _redeem(code, client_id)
+    assert tokens.status_code == 200
+    assert _opened_principal(json.loads(tokens.body)).resource_server_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "litellm:mcp_scope:",
+        "litellm:mcp_scope:aa:bb",
+        "litellm:mcp_scope:6769746875622d6964:20",
+        "litellm:mcp_scope:6964:5A",
+    ],
+)
+async def test_aggregate_step_up_rejects_malformed_permissions(scope):
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _scoped_authorize(client_id, "https://llm.example.com/mcp", scope=scope)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_scope"
+
+
+@pytest.mark.asyncio
+async def test_step_up_validates_every_target_before_credential_reads_and_preserves_each_grant():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    first, second = _scoped_mcp_server("first"), _scoped_mcp_server("second")
+    scopes = " ".join(
+        [encode_upstream_scope(first.server_id, "first.write"), encode_upstream_scope(second.server_id, "second.write")]
+    )
+    response = _scoped_authorize(client_id, "https://llm.example.com", scope=scopes)
+    handle, cookies = _flow_cookie_from(response)
+    vendor = AsyncMock(return_value="absent")
+    reachable = AsyncMock(side_effect=[True, False])
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_id.side_effect = lambda identity: {
+            first.server_id: first,
+            second.server_id: second,
+        }.get(identity)
+        refused = await describe_connect_flow(_request(cookies=cookies), handle, "u1", vendor, reachable)
+        assert refused.status_code == 400
+        vendor.assert_not_awaited()
+        reachable.side_effect = None
+        reachable.return_value = True
+        vendor.side_effect = ["present", "absent"]
+        pending = await describe_connect_flow(_request(cookies=cookies), handle, "u1", vendor, reachable)
+        assert json.loads(pending.body)["server_id"] == second.server_id
+        assert json.loads(pending.body)["requested_scopes"] == ["second.write"]
+        assert [call.args for call in vendor.await_args_list] == [
+            ("u1", first.server_id, ("first.write",)),
+            ("u1", second.server_id, ("second.write",)),
+        ]
+        vendor.reset_mock()
+        wrong_user = await describe_connect_flow(_request(cookies=cookies), handle, "u2", vendor, reachable)
+        assert wrong_user.status_code == 403
+        vendor.assert_not_awaited()
+        vendor.side_effect = None
+        vendor.return_value = "present"
+        complete = await complete_connect_flow(
+            _request(cookies=cookies, method="POST"),
+            handle,
+            "u1",
+            DualCache(),
+            lookup_vendor_credential=vendor,
+            lookup_server_reachability=reachable,
+        )
+        assert complete.status_code == 303
+        assert vendor.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_named_resource_rejects_another_upstreams_permission_before_consent():
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server()
+        response = _scoped_authorize(client_id, SCOPED_RESOURCE, scope=encode_upstream_scope("other-id", "write"))
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_scope"
+
+
+@pytest.mark.parametrize(
+    "identity, permission",
+    [
+        ("server:id/one", "tools.write"),
+        ("snowman-☃", "https://permissions.example/read"),
+        ("id", "!#$%&'()*+,-./:;<=>?@[]^_`{|}~"),
+    ],
+)
+def test_upstream_permission_scope_round_trip_preserves_identity_and_permission(identity, permission):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import decode_upstream_scope, encode_upstream_scope
+
+    encoded = encode_upstream_scope(identity, permission)
+    decoded = decode_upstream_scope(encoded)
+    assert decoded is not None
+    assert (decoded.server_id, decoded.permission) == (identity, permission)
+    assert " " not in encoded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state, expected", [("absent", 400), ("unavailable", 503)])
+async def test_upstream_step_up_cannot_finish_with_an_unproven_grant(state, expected):
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    server = _scoped_mcp_server()
+    response = _scoped_authorize(
+        client_id, "https://llm.example.com/mcp", scope=encode_upstream_scope(server.server_id, "tools.write")
+    )
+    vendor = AsyncMock(return_value=state)
+    completed = await _complete_page(response, scoped_server=server, vendor=vendor)
+    assert completed.status_code == expected
+    assert "location" not in completed.headers
+    vendor.return_value = "present"
+    retried = await _complete_page(response, scoped_server=server, vendor=vendor)
+    assert retried.status_code == 303
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/mcp", "/toolset/analysis/mcp"])
+async def test_sdk_completes_aggregate_step_up_discovery_consent_and_pkce(route):
+    from unittest.mock import AsyncMock
+
+    import httpx2
+    from mcp.client.auth import OAuthClientProvider
+    from mcp.shared.auth import AuthorizationCodeResult, OAuthClientMetadata
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_aggregate_authorization_server_response,
+        oauth_protected_resource_root,
+    )
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+    server = _scoped_mcp_server()
+    storage = AsyncMock()
+    storage.get_tokens.return_value = None
+    storage.get_client_info.return_value = None
+    callback = AsyncMock()
+    vendor = AsyncMock(return_value="absent")
+    cache = DualCache()
+
+    async def consent(url):
+        params = {key: values[0] for key, values in parse_qs(urlparse(url).query).items()}
+        response = aggregate_authorize(request=_request(), session_user_id="u1", **params)
+        described = await _describe_page(response, scoped_server=server, vendor=vendor)
+        assert json.loads(described.body)["requested_scopes"] == ["tools.write"]
+        assert json.loads(described.body)["connected"] is False
+        premature = await _complete_page(response, scoped_server=server, vendor=vendor, cache=cache)
+        assert premature.status_code == 400
+        vendor.return_value = "present"
+        completed = await _complete_page(response, scoped_server=server, vendor=vendor, cache=cache)
+        assert completed.status_code == 303
+        returned = parse_qs(urlparse(completed.headers["location"]).query)
+        callback.return_value = AuthorizationCodeResult(code=returned["code"][0], state=returned["state"][0])
+
+    provider = OAuthClientProvider(
+        server_url=f"https://llm.example.com{route}",
+        client_metadata=OAuthClientMetadata(redirect_uris=[REDIRECT_URI], token_endpoint_auth_method="none"),
+        storage=storage,
+        redirect_handler=consent,
+        callback_handler=callback,
+    )
+    flow = provider.async_auth_flow(httpx2.Request("POST", f"https://llm.example.com{route}"))
+    initial = await anext(flow)
+    challenge = MCPUpstreamAuthError(
+        status_code=403,
+        www_authenticate=None,
+        server_name=server.server_name,
+        server_id=server.server_id,
+        required_scope="tools.write",
+    ).to_http_exception(base_url="https://llm.example.com", request_path=route)
+    request = await flow.asend(httpx2.Response(challenge.status_code, headers=challenge.headers, request=initial))
+    assert request.url.path == "/.well-known/oauth-protected-resource"
+    request = await flow.asend(httpx2.Response(200, json=oauth_protected_resource_root(_request()), request=request))
+    assert request.url.path == "/.well-known/oauth-authorization-server/mcp"
+    request = await flow.asend(
+        httpx2.Response(200, json=_build_aggregate_authorization_server_response(_request(), False), request=request)
+    )
+    assert request.url.path == "/register"
+    registered = await register_aggregate_client(
+        _request("/register", method="POST"), json.loads(request.content), token_exchange_available=False
+    )
+    request = await flow.asend(httpx2.Response(registered.status_code, content=registered.body, request=request))
+    assert request.url.path == "/token"
+    params = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
+    tokens = await _redeem(cache=cache, **params)
+    assert tokens.status_code == 200
+    payload = json.loads(tokens.body)
+    assert _opened_principal(payload).resource_server_id is None
+    retry = await flow.asend(httpx2.Response(200, json=payload, request=request))
+    assert retry.url == initial.url
+    assert retry.headers["authorization"] == f"Bearer {payload['access_token']}"
+    with pytest.raises(StopAsyncIteration):
+        await flow.asend(httpx2.Response(200, json={"result": "write completed"}, request=retry))
+    callback.assert_awaited_once()
+    storage.set_tokens.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "scope",
+    ["tools.write", "litellm:mcp_scope::7772697465", "litellm:mcp_scope:6964:5A", "litellm:mcp_scope:6964:7772 697465"],
+)
+def test_upstream_permission_rejects_noncanonical_tokens(scope):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import decode_upstream_scope
+
+    assert decode_upstream_scope(scope) is None

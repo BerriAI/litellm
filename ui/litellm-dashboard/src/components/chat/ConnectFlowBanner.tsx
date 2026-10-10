@@ -76,12 +76,13 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
         <div className="flex shrink-0 gap-2">
           {vendorServer !== null && (
             <OAuth2ConnectButton
+              key={vendorServer.server_id}
               server={vendorServer}
               accessToken={accessToken}
               onConnect={onConnected}
               scopes={flow?.requested_scopes}
               variant="button"
-              autoStartKey={`litellm-mcp-autostart:${flowHandle}`}
+              autoStartKey={`litellm-mcp-autostart:${flowHandle}:${vendorServer.server_id}`}
             />
           )}
           <form method="POST" action={action}>

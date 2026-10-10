@@ -43,13 +43,14 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   scopes,
 }) => {
   const name = server.server_name ?? server.alias ?? server.server_id;
-  const { startOAuthFlow, status } = useUserMcpOAuthFlow({
+  const flowOptions = {
     accessToken,
     serverId: server.server_id,
     serverAlias: name,
     scopes,
     onSuccess: useCallback(() => onConnect(server.server_id), [onConnect, server.server_id]),
-  });
+  };
+  const { startOAuthFlow, status } = useUserMcpOAuthFlow(flowOptions);
 
   useEffect(() => {
     if (autoStartKey === null || status !== "idle" || getSecureItem(autoStartKey) !== null) return;

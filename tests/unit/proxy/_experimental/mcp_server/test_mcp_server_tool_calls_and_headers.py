@@ -265,7 +265,9 @@ async def test_mcp_server_tool_call_strips_custom_litellm_key_header(_mcp_reques
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("required_scope, http_transport", [(None, False), (None, True), ("tools.write", True)])
-async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_request_ctx, required_scope, http_transport):
+async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(
+    _mcp_request_ctx, required_scope, http_transport
+):
     from starlette.requests import Request
 
     from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
@@ -273,7 +275,7 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
     status_code = 403 if required_scope is not None else 401
     send = AsyncMock()
     response = OAuthScopeResponse(send, "https://gateway.example", "/mcp/pt")
-    request = Request({"type": "http", SCOPE_RESPONSE_KEY: response})
+    request = Request({"type": "http", "headers": [], SCOPE_RESPONSE_KEY: response})
     await response({"type": "http.response.start", "status": 200, "headers": []})
     try:
         from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
@@ -290,7 +292,9 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
         return data
 
     async def mock_call_mcp_tool(*args, **kwargs):
-        raise MCPUpstreamAuthError(status_code=status_code, www_authenticate=None, server_name="pt", required_scope=required_scope)
+        raise MCPUpstreamAuthError(
+            status_code=status_code, www_authenticate=None, server_name="pt", required_scope=required_scope
+        )
 
     mock_logger = MagicMock()
     with patch(
@@ -304,7 +308,8 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
             with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
                 with patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
                     result = await mcp_server_tool_call(
-                        _mcp_request_ctx(request=request if http_transport else None), _call_tool_params("test_tool", {"param": "value"})
+                        _mcp_request_ctx(request=request if http_transport else None),
+                        _call_tool_params("test_tool", {"param": "value"}),
                     )
 
     assert result.is_error is True
@@ -324,7 +329,6 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
     assert start["status"] == (403 if required_scope is not None else 200)
     if required_scope is not None:
         assert b'error="insufficient_scope"' in dict(start["headers"])[b"www-authenticate"]
-
 
 
 def test_prepare_mcp_server_headers_case_insensitive_extra_headers():

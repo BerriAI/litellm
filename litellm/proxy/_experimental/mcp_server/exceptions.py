@@ -4,6 +4,8 @@ from typing import Final
 
 from fastapi import HTTPException
 
+from litellm.proxy._experimental.mcp_server.oauth_utils import encode_upstream_scope
+
 
 class MCPServerURLCredentialsError(HTTPException):
     """A fixed, sanitized URL-credential migration error safe for operator previews."""
@@ -38,11 +40,13 @@ class MCPUpstreamAuthError(Exception):
         www_authenticate: str | None,
         server_name: str,
         required_scope: str | None = None,
+        server_id: str | None = None,
     ) -> None:
         self.status_code = status_code
         self.www_authenticate = www_authenticate
         self.server_name = server_name
         self.required_scope = required_scope
+        self.server_id = server_id
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
     def to_http_exception(
@@ -75,17 +79,31 @@ class MCPUpstreamAuthError(Exception):
         the client originally targeted, matching the path-aware behaviour of
         ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
+        aggregate_step_up: Final = (
+            self.required_scope is not None
+            and request_path is not None
+            and (request_path.rstrip("/") == "/mcp" or request_path.startswith("/toolset/"))
+        )
+        requested_scope: Final = (
+            " ".join(
+                encode_upstream_scope(self.server_id or self.server_name, item) for item in self.required_scope.split()
+            )
+            if aggregate_step_up and self.required_scope
+            else self.required_scope
+        )
         challenge: str | None = self.www_authenticate
         if challenge is None and (self.status_code == 401 or self.required_scope is not None) and base_url:
             prefix: Final = base_url.rstrip("/")
-            if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
+            if aggregate_step_up:
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource"
+            elif request_path and request_path.startswith(f"/{self.server_name}/mcp"):
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
         scoped_challenge: Final = (
             (f'{challenge}, error="insufficient_scope"' if challenge else 'Bearer error="insufficient_scope"')
-            + (f', scope="{self.required_scope}"' if self.required_scope else "")
+            + (f', scope="{requested_scope}"' if requested_scope else "")
             if self.required_scope is not None
             else challenge
         )

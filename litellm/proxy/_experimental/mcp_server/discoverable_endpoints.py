@@ -692,8 +692,8 @@ async def _store_per_user_token_server_side(
         expires_in = None
 
     refresh_token: Final[str | None] = token_response.get("refresh_token") or None
-    raw_scope: Final = token_response.get("scope", requested_scope)
-    scopes: Final[list | None] = raw_scope.split() if isinstance(raw_scope, str) else None
+    raw_scope: Final[object] = token_response.get("scope", requested_scope)
+    scopes: Final[list[str] | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
     try:
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Cannot store per-user OAuth token.")

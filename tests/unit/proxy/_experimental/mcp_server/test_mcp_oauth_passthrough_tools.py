@@ -1,4 +1,5 @@
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
+
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
 import asyncio
@@ -463,7 +464,6 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
     assert "upstream-token-0123456789" not in caplog.text
 
 
-
 @pytest.mark.asyncio
 async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, caplog):
     manager = MCPServerManager()
@@ -722,3 +722,20 @@ async def test_scope_middleware_preserves_non_http_requests():
 
     returned = await finish_scope_response(context, call_next)
     assert returned.content[0].text == "tools/call"
+
+
+@pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
+def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
+    from mcp.shared.auth_utils import check_resource_allowed
+    from urllib.parse import urlsplit
+
+    error = MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write")
+    response = error.to_http_exception("https://gateway.test", path)
+    challenge = response.headers["www-authenticate"]
+    metadata = challenge.split('resource_metadata="', 1)[1].split('"', 1)[0]
+    metadata_path = urlsplit(metadata).path
+    resource_path = metadata_path.removeprefix("/.well-known/oauth-protected-resource")
+    assert check_resource_allowed(
+        requested_resource=f"https://gateway.test{path}",
+        configured_resource=f"https://gateway.test{resource_path}",
+    ), "the SDK must accept the advertised resource before it can reauthorize"

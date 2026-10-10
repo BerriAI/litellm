@@ -6433,6 +6433,7 @@ class MCPServerManager:
                                 www_authenticate=None,
                                 server_name=mcp_server.alias or server_label,
                                 required_scope=required_scope,
+                                server_id=mcp_server.server_id,
                             ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
                         if not relays_upstream_auth or auth_info is None or auth_info[0] != 401:
