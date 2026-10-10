@@ -2757,7 +2757,7 @@ jobs:
         default: standard
       parallelism:
         type: integer
-        default: 4
+        default: 1
       resource_class:
         type: enum
         enum: [large, xlarge]
@@ -3185,6 +3185,7 @@ workflows:
       - integration_contracts:
           name: integration-management
           suite: management
+          parallelism: 4
       - integration_shard_coverage:
           name: integration-management-coverage
           suite: management
@@ -3193,6 +3194,7 @@ workflows:
       - integration_contracts:
           name: integration-accounting
           suite: accounting
+          parallelism: 4
       - integration_shard_coverage:
           name: integration-accounting-coverage
           suite: accounting
@@ -3242,6 +3244,7 @@ workflows:
           name: integration-management-replica
           suite: management
           mode: replica
+          parallelism: 4
       - integration_shard_coverage:
           name: integration-management-replica-coverage
           suite: management
