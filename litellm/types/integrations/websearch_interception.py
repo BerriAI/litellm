@@ -48,6 +48,11 @@ class RichWebSearchInput(TypedDict, total=False):
     """Two to five short keyword queries covering different angles."""
 
 
+class WebSearchDomainFilters(TypedDict, total=False):
+    allowed_domains: ReadOnly[tuple[str, ...]]
+    blocked_domains: ReadOnly[tuple[str, ...]]
+
+
 WebSearchToolResultErrorCode: TypeAlias = Literal[
     "invalid_tool_input",
     "unavailable",

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import Never, ReadOnly
 
 import litellm
@@ -25,10 +26,12 @@ from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
     get_litellm_web_search_tool_openai,
     get_litellm_web_search_tool_responses,
+    get_web_search_domain_filters,
     is_anthropic_native_web_search_tool,
     is_web_search_tool,
     is_web_search_tool_chat_completion,
     is_web_search_tool_responses,
+    resolve_web_search_domain_filters,
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
@@ -53,6 +56,7 @@ from litellm.types.integrations.websearch_interception import (
     RichWebSearchInput,
     SearchFailed,
     SearchOutcome,
+    WebSearchDomainFilters,
     WebSearchInterceptionConfig,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
@@ -95,6 +99,7 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
 _RESPONSE_CONTENT_FIELD: Final = "content"
+_WEB_SEARCH_REQUEST: Final = TypeAdapter(dict[str, object])
 
 _ResponseT: Final = TypeVar("_ResponseT")
 
@@ -381,7 +386,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             None,
         )
 
-        outcome: Final = await self._short_circuit_search_outcome(query, kwargs=kwargs)
+        outcome: Final = await self._short_circuit_search_outcome(
+            query,
+            kwargs=kwargs,
+            domains=resolve_web_search_domain_filters(_WEB_SEARCH_REQUEST.validate_python({"tools": tools})),
+        )
         search_result_text: Final = WebSearchTransformation.search_outcome_text(outcome)
 
         content: Final[list[dict[str, object]]] = []
@@ -477,7 +486,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool in tools:
             if is_web_search_tool(tool):
                 # Convert to LiteLLM standard web search tool
-                converted_tool = get_litellm_web_search_tool_openai()
+                converted_tool = get_litellm_web_search_tool_openai(**get_web_search_domain_filters(tool))
                 converted_tools.append(converted_tool)
                 verbose_logger.debug(
                     "WebSearchInterception: Converted %s (type=%s) to %s",
@@ -649,7 +658,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         converted_tools: Final[list[dict[str, object]]] = []
         for tool in tools:
             if is_web_search_tool(tool):
-                standard_tool = get_litellm_web_search_tool()
+                standard_tool = get_litellm_web_search_tool(
+                    **get_web_search_domain_filters(_WEB_SEARCH_REQUEST.validate_python(tool))
+                )
                 converted_tools.append(standard_tool)
                 verbose_logger.debug(
                     "WebSearchInterception: Converted %s (type=%s) to %s",
@@ -1193,7 +1204,19 @@ class WebSearchInterceptionLogger(CustomLogger):
         search_tasks: Final = [
             (
                 self._execute_search(
-                    tool_call["input"]["query"], kwargs=kwargs, rich=self._rich_search_input(tool_call["input"])
+                    tool_call["input"]["query"],
+                    kwargs=kwargs,
+                    rich=self._rich_search_input(tool_call["input"]),
+                    **resolve_web_search_domain_filters(
+                        _WEB_SEARCH_REQUEST.validate_python(
+                            {
+                                "tools": optional_params["tools"]
+                                if "tools" in optional_params
+                                else kwargs.get("tools"),
+                                "input": tool_call["input"],
+                            }
+                        )
+                    ),
                 )
                 if isinstance(tool_call.get("input"), dict) and tool_call["input"].get("query")
                 else self._create_empty_search_result()
@@ -1413,7 +1436,23 @@ class WebSearchInterceptionLogger(CustomLogger):
             if query:
                 verbose_logger.debug("WebSearchInterception: Queuing search for query='%s'", query)
                 search_tasks.append(
-                    self._execute_search(query, kwargs=kwargs, rich=self._rich_search_input(tool_call["input"]))
+                    self._execute_search(
+                        query,
+                        kwargs=kwargs,
+                        rich=self._rich_search_input(tool_call["input"]),
+                        **resolve_web_search_domain_filters(
+                            _WEB_SEARCH_REQUEST.validate_python(
+                                {
+                                    "tools": (
+                                        anthropic_messages_optional_request_params["tools"]
+                                        if "tools" in anthropic_messages_optional_request_params
+                                        else kwargs.get("tools")
+                                    ),
+                                    "input": tool_call["input"],
+                                }
+                            )
+                        ),
+                    )
                 )
             else:
                 verbose_logger.debug("WebSearchInterception: Tool call %s has no query", tool_call["id"])
@@ -1472,12 +1511,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return patch, search_outcomes
 
-    async def _short_circuit_search_outcome(self, query: str, kwargs: Mapping[str, object] | None) -> SearchOutcome:
+    async def _short_circuit_search_outcome(
+        self, query: str, kwargs: Mapping[str, object] | None, domains: WebSearchDomainFilters
+    ) -> SearchOutcome:
         try:
             result: Final = (
-                await self._execute_search(query)
+                await self._execute_search(query, **domains)
                 if kwargs is None
-                else await self._execute_search(query, kwargs=kwargs)
+                else await self._execute_search(query, kwargs=kwargs, **domains)
             )
         except Exception as e:
             return WebSearchTransformation.search_outcome(e)
@@ -1530,6 +1571,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         query: str,
         kwargs: Mapping[str, object] | None = None,
         rich: RichWebSearchInput | None = None,
+        allowed_domains: Sequence[str] | None = None,
+        blocked_domains: Sequence[str] | None = None,
     ) -> tuple[str, SearchResponse | None]:
         """
         Execute a single web search using router's search tools.
@@ -1601,7 +1644,11 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if rich_objective and "objective" not in configured_search_kwargs:
                     configured_search_kwargs["objective"] = rich_objective
             search_kwargs: Final = MappingProxyType(
-                {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}
+                {
+                    **configured_search_kwargs,
+                    **parent_correlation.as_search_kwargs(),
+                    **({"search_domain_filter": list(allowed_domains)} if allowed_domains is not None else {}),
+                }
             )
             result: Final = (
                 await litellm.asearch(
@@ -1618,12 +1665,19 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
 
             # Format using transformation function
-            search_result_text: Final = WebSearchTransformation.format_search_response(result)
+            filtered_result: Final = WebSearchTransformation.filter_search_response(
+                result, allowed_domains=allowed_domains, blocked_domains=blocked_domains
+            )
+            search_result_text: Final = (
+                "No search results found."
+                if filtered_result is not result and not filtered_result.results
+                else WebSearchTransformation.format_search_response(filtered_result)
+            )
 
             verbose_logger.debug(
                 "WebSearchInterception: Search completed for '%s', got %s chars", query, len(search_result_text)
             )
-            return search_result_text, result
+            return search_result_text, filtered_result
         except Exception as e:
             verbose_logger.error("WebSearchInterception: Search failed for '%s': %s", query, e)
             raise
@@ -1853,7 +1907,23 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             if query:
                 verbose_logger.debug("WebSearchInterception: Queuing search for query='%s'", query)
-                search_tasks.append(self._execute_search(query, kwargs=kwargs, rich=self._rich_search_input(tool_args)))
+                search_tasks.append(
+                    self._execute_search(
+                        query,
+                        kwargs=kwargs,
+                        rich=self._rich_search_input(tool_args),
+                        **resolve_web_search_domain_filters(
+                            _WEB_SEARCH_REQUEST.validate_python(
+                                {
+                                    "tools": optional_params["tools"]
+                                    if "tools" in optional_params
+                                    else kwargs.get("tools"),
+                                    "input": tool_args,
+                                }
+                            )
+                        ),
+                    )
+                )
             else:
                 verbose_logger.debug("WebSearchInterception: Tool call %s has no query", tool_call.get("id"))
                 # Add empty result for tools without query

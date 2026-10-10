@@ -7,6 +7,7 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 import json
 from collections.abc import Sequence
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 from typing_extensions import assert_never
 
@@ -20,6 +21,18 @@ from litellm.types.integrations.websearch_interception import (
     SearchSucceeded,
     WebSearchToolResultErrorCode,
 )
+
+
+def _search_hostname(url: str) -> str:
+    try:
+        parsed: Final = urlsplit(url if "://" in url or url.startswith("//") else f"//{url}")
+        return (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def _matches_search_domain(host: str, domains: Sequence[str]) -> bool:
+    return any(host == domain or host.endswith("." + domain) for domain in domains if domain)
 
 
 class WebSearchTransformation:
@@ -526,6 +539,28 @@ class WebSearchTransformation:
                 return f"Search failed: {message}"
             case _:
                 assert_never(outcome)
+
+    @staticmethod
+    def filter_search_response(
+        result: SearchResponse,
+        allowed_domains: Sequence[str] | None = None,
+        blocked_domains: Sequence[str] | None = None,
+    ) -> SearchResponse:
+        if allowed_domains is None and not blocked_domains:
+            return result
+        allowed: Final = tuple(_search_hostname(domain) for domain in allowed_domains or ())
+        blocked: Final = tuple(_search_hostname(domain) for domain in blocked_domains or ())
+        return result.model_copy(
+            update={
+                "results": [
+                    item
+                    for item in result.results
+                    if (host := _search_hostname(item.url))
+                    and (allowed_domains is None or _matches_search_domain(host, allowed))
+                    and not _matches_search_domain(host, blocked)
+                ]
+            }
+        )
 
     @staticmethod
     def format_search_response(result: SearchResponse) -> str:
