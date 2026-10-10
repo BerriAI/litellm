@@ -2314,8 +2314,9 @@ class ProxyBaseLLMRequestProcessing:
 
         For such a model, hooks other than guardrails and content enforcers run first and may
         rewrite the model. A model that still cannot route raises the routing error before any
-        guardrail runs; otherwise the guardrails run on the rewritten request. The registry
-        read-through is retried only for a model those hooks changed.
+        guardrail runs; otherwise the guardrails run on the rewritten request. A request those
+        hooks or the routing check reject is redacted. The registry read-through is retried only
+        for a model those hooks changed.
         """
         if model_routable:
             self.data = await proxy_logging_obj.pre_call_hook(
@@ -2326,14 +2327,14 @@ class ProxyBaseLLMRequestProcessing:
             )
             return
         model_before_hooks: Final = self.data.get("model")
-        self.data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=self.data,
-            call_type=call_type,
-            skip_guardrails=True,
-            skip_content_enforcers=True,
-        )
         try:
+            self.data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=self.data,
+                call_type=call_type,
+                skip_guardrails=True,
+                skip_content_enforcers=True,
+            )
             await raise_if_model_not_routable(
                 data=self.data,
                 llm_router=llm_router,

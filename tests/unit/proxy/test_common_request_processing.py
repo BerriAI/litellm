@@ -2,7 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -594,108 +594,6 @@ class TestProxyBaseLLMRequestProcessing:
         assert {key: snapshot.body[key] for key in raw_body if key in snapshot.body} == expected_content
         assert persisted_body[input_key][0]["content"] == "later input mutation"
         assert persisted_body["tools"][0]["description"] == "later tool mutation"
-
-    @pytest.mark.asyncio
-    async def test_common_processing_pre_call_logic_rejects_unroutable_model_before_pre_call_hook(self, monkeypatch):
-        from types import SimpleNamespace
-
-        from litellm.proxy.common_utils import registry_read_through
-        from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-
-        processing_obj = ProxyBaseLLMRequestProcessing(data={})
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-
-        async def mock_add_litellm_data_to_request(*args, **kwargs):
-            return {
-                "model": "does-not-exist",
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
-            "add_litellm_data_to_request",
-            mock_add_litellm_data_to_request,
-        )
-        monkeypatch.setattr(
-            registry_read_through,
-            "model_registry_read_through",
-            SimpleNamespace(attempt=AsyncMock(return_value=False)),
-        )
-        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
-                }
-            ]
-        )
-
-        with pytest.raises(ProxyModelNotFoundError) as exc_info:
-            await processing_obj.common_processing_pre_call_logic(
-                request=mock_request,
-                general_settings={},
-                user_api_key_dict=ProxyUserAPIKeyAuth(),
-                proxy_logging_obj=mock_proxy_logging_obj,
-                proxy_config=mock_proxy_config,
-                route_type="acompletion",
-                llm_router=router,
-            )
-
-        assert exc_info.value.status_code == 400
-        mock_proxy_logging_obj.pre_call_hook.assert_awaited_once()
-        hook_kwargs: Final = mock_proxy_logging_obj.pre_call_hook.await_args.kwargs
-        assert hook_kwargs["skip_guardrails"] is True
-        assert hook_kwargs["skip_content_enforcers"] is True
-
-    @pytest.mark.asyncio
-    async def test_common_processing_pre_call_logic_runs_pre_call_hook_for_routable_model(self, monkeypatch):
-        processing_obj = ProxyBaseLLMRequestProcessing(data={})
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {}
-
-        async def mock_add_litellm_data_to_request(*args, **kwargs):
-            return {
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
-            return data
-
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
-            "add_litellm_data_to_request",
-            mock_add_litellm_data_to_request,
-        )
-        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
-                }
-            ]
-        )
-
-        await processing_obj.common_processing_pre_call_logic(
-            request=mock_request,
-            general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(),
-            proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=mock_proxy_config,
-            route_type="acompletion",
-            llm_router=router,
-        )
-
-        mock_proxy_logging_obj.pre_call_hook.assert_awaited_once()
 
     @staticmethod
     def _guardrail_tag_budget_harness(
@@ -10792,6 +10690,11 @@ class _ModelRewritingHook(CustomLogger):
         return data
 
 
+class _RejectingHook(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        raise HTTPException(status_code=403, detail="rejected by hook")
+
+
 class TestPreCallHooksForUnroutableModel:
     @staticmethod
     async def _run(
@@ -10800,36 +10703,39 @@ class TestPreCallHooksForUnroutableModel:
         llm_router: Router | None,
         processor: ProxyBaseLLMRequestProcessing | None = None,
         skip_guardrails: bool = False,
-        read_through_attempt: AsyncMock | None = None,
+        model_db_lookup: Callable[[str], Awaitable[bool]] | None = None,
         extra_body: Mapping[str, object] | None = None,
     ) -> dict:
+        from litellm.proxy import proxy_server
         from litellm.proxy.common_utils import registry_read_through
         from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
-        async def mock_add_litellm_data_to_request(*args, **kwargs):
-            messages: Final = [{"role": "user", "content": "email jane@example.com"}]
-            body: Final = {"model": model, "messages": messages, **copy.deepcopy(dict(extra_body or {}))}
-            return {**body, "proxy_server_request": {"body": copy.deepcopy(body)}}
-
-        monkeypatch.setattr(
-            litellm.proxy.common_request_processing, "add_litellm_data_to_request", mock_add_litellm_data_to_request
-        )
         monkeypatch.setattr(
             registry_read_through,
             "model_registry_read_through",
-            SimpleNamespace(attempt=read_through_attempt or AsyncMock(return_value=False)),
+            registry_read_through.RegistryReadThrough(
+                resync=model_db_lookup or registry_read_through._resync_model_deployments,
+                is_loaded=registry_read_through._model_is_loaded,
+            ),
         )
-        mock_request: Final = MagicMock(spec=Request)
-        mock_request.headers = {}
-        mock_proxy_config: Final = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        target: Final = processor or ProxyBaseLLMRequestProcessing(data={})
+        target.data.update(
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "email jane@example.com"}],
+                **copy.deepcopy(dict(extra_body or {})),
+            }
+        )
+        request: Final = Request(
+            {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": [], "query_string": b""}
+        )
         proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
-        data, _ = await (processor or ProxyBaseLLMRequestProcessing(data={})).common_processing_pre_call_logic(
-            request=mock_request,
+        data, _ = await target.common_processing_pre_call_logic(
+            request=request,
             general_settings={},
             user_api_key_dict=ProxyUserAPIKeyAuth(),
             proxy_logging_obj=proxy_logging_obj,
-            proxy_config=mock_proxy_config,
+            proxy_config=proxy_server.ProxyConfig(),
             route_type="acompletion",
             llm_router=llm_router,
             skip_guardrails=skip_guardrails,
@@ -10892,6 +10798,16 @@ class TestPreCallHooksForUnroutableModel:
         assert (hook.calls, guardrail.models_seen, enforcer.calls) == (1, ["gpt-4o-mini"], 1)
 
     @pytest.mark.asyncio
+    async def test_routable_model_keeps_the_configured_hook_order(self, monkeypatch):
+        guardrail: Final = _CountingGuardrail()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail, _RejectingHook()])
+
+        with pytest.raises(HTTPException):
+            await self._run(monkeypatch, model="gpt-4o-mini", llm_router=self._router())
+
+        assert guardrail.models_seen == ["gpt-4o-mini"]
+
+    @pytest.mark.asyncio
     async def test_fully_blocked_model_is_a_403_without_guardrails(self, monkeypatch):
         guardrail: Final = _CountingGuardrail()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
@@ -10946,6 +10862,22 @@ class TestPreCallHooksForUnroutableModel:
         expected_content: Final = "redacted-by-litellm" if expected else "email jane@example.com"
         assert processor.data["messages"] == [{"role": "user", "content": expected_content}]
         assert processor.data["proxy_server_request"]["body"]["messages"] == processor.data["messages"]
+
+    @pytest.mark.asyncio
+    async def test_request_a_hook_rejects_before_guardrails_is_redacted(self, monkeypatch):
+        guardrail: Final = _CountingGuardrail()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail, _RejectingHook()])
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run(monkeypatch, model="does-not-exist", llm_router=self._router(), processor=processor)
+
+        assert exc_info.value.status_code == 403
+        assert guardrail.models_seen == []
+        assert processor.data["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+        assert processor.data["proxy_server_request"]["body"]["messages"] == processor.data["messages"]
+        logging_obj: Final = processor.data["litellm_logging_obj"]
+        assert logging_obj.standard_callback_dynamic_params.get("turn_off_message_logging") is True
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -11007,12 +10939,16 @@ class TestPreCallHooksForUnroutableModel:
         from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
         monkeypatch.setattr(litellm, "callbacks", [_CountingGuardrail()])
-        attempt: Final = AsyncMock(return_value=False)
+        looked_up: Final = list[str]()
+
+        async def no_db_row(model_name: str) -> bool:
+            looked_up.append(model_name)
+            return False
 
         with pytest.raises(ProxyModelNotFoundError):
-            await self._run(monkeypatch, model="does-not-exist", llm_router=self._router(), read_through_attempt=attempt)
+            await self._run(monkeypatch, model="does-not-exist", llm_router=self._router(), model_db_lookup=no_db_row)
 
-        assert [call.args[0] for call in attempt.await_args_list] == ["does-not-exist"]
+        assert looked_up == ["does-not-exist"]
 
     @pytest.mark.asyncio
     async def test_model_rewritten_by_a_hook_is_read_through_under_its_new_name(self, monkeypatch):
@@ -11023,12 +10959,16 @@ class TestPreCallHooksForUnroutableModel:
             "callbacks",
             [_ModelRewritingHook(source_model="unknown-virtual", target_model="db-only-model")],
         )
-        attempt: Final = AsyncMock(return_value=False)
+        looked_up: Final = list[str]()
+
+        async def no_db_row(model_name: str) -> bool:
+            looked_up.append(model_name)
+            return False
 
         with pytest.raises(ProxyModelNotFoundError):
-            await self._run(monkeypatch, model="unknown-virtual", llm_router=self._router(), read_through_attempt=attempt)
+            await self._run(monkeypatch, model="unknown-virtual", llm_router=self._router(), model_db_lookup=no_db_row)
 
-        assert [call.args[0] for call in attempt.await_args_list] == ["unknown-virtual", "db-only-model"]
+        assert looked_up == ["unknown-virtual", "db-only-model"]
 
     @pytest.mark.asyncio
     async def test_no_router_skips_the_routability_check(self, monkeypatch):

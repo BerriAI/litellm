@@ -1727,18 +1727,8 @@ def _router_with_gpt4o_mini():
 
 
 @pytest.mark.asyncio
-async def test_raise_if_model_not_routable_raises_for_unknown_model(monkeypatch):
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    from litellm.proxy.common_utils import registry_read_through
+async def test_raise_if_model_not_routable_raises_for_unknown_model():
     from litellm.proxy.route_llm_request import raise_if_model_not_routable
-
-    monkeypatch.setattr(
-        registry_read_through,
-        "model_registry_read_through",
-        SimpleNamespace(attempt=AsyncMock(return_value=False)),
-    )
 
     with pytest.raises(ProxyModelNotFoundError) as exc_info:
         await raise_if_model_not_routable(
@@ -1770,20 +1760,8 @@ async def test_raise_if_model_not_routable_raises_for_unknown_model(monkeypatch)
     ],
 )
 @pytest.mark.asyncio
-async def test_raise_if_model_not_routable_reports_body_errors_before_the_model(
-    monkeypatch, data, route_type, expected_error
-):
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    from litellm.proxy.common_utils import registry_read_through
+async def test_raise_if_model_not_routable_reports_body_errors_before_the_model(data, route_type, expected_error):
     from litellm.proxy.route_llm_request import raise_if_model_not_routable
-
-    monkeypatch.setattr(
-        registry_read_through,
-        "model_registry_read_through",
-        SimpleNamespace(attempt=AsyncMock(return_value=False)),
-    )
 
     with pytest.raises(expected_error):
         await raise_if_model_not_routable(
@@ -1831,17 +1809,7 @@ async def test_raise_if_model_not_routable_reports_body_errors_before_the_model(
 )
 @pytest.mark.asyncio
 async def test_raise_if_model_not_routable_allows_routable_requests(monkeypatch, data, route_type, router_mutator):
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    from litellm.proxy.common_utils import registry_read_through
     from litellm.proxy.route_llm_request import raise_if_model_not_routable
-
-    monkeypatch.setattr(
-        registry_read_through,
-        "model_registry_read_through",
-        SimpleNamespace(attempt=AsyncMock(return_value=False)),
-    )
 
     if router_mutator == "wildcard":
         import litellm
