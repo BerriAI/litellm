@@ -411,6 +411,7 @@ class A2AConfig(BaseConfig):
         role: Final = message.get("role", "user")
 
         return {
+            "kind": "message",
             "role": role,
             "parts": [{"kind": "text", "text": str(content)}],
             "messageId": str(uuid.uuid4()),

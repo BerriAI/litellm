@@ -34,6 +34,11 @@ external = [
 # hook signatures inherit `Any` for `response` from CustomLogger, so narrowing them here
 # would break the override rather than describe it.
 "litellm/proxy/guardrails/guardrail_hooks/llm_shield_proxy/llm_shield_proxy.py" = ["ANN401"]
+# `serialize_a2a_data_part`'s `data` param is the payload of an A2A `data`-kind part,
+# which the A2A protocol defines as arbitrary JSON-serializable content with no fixed
+# shape. `object` was not viable: json.dumps requires the narrower JSON-value types,
+# so typing it `object` just moves the Any into a cast at every call site instead.
+"litellm/llms/a2a/common_utils.py" = ["ANN401"]
 
 [lint.mccabe]
 max-complexity = 15
