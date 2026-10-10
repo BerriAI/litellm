@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
 
 import httpx
