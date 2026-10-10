@@ -90,7 +90,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
 
         end_time: Final = datetime.now()
         asyncio.create_task(
-            PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            PassThroughStreamingHandler.route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
                 url_route="/v1/generateContent",

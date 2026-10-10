@@ -24,11 +24,13 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.types.llms.base import LiteLLMBaseModel
 
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
     "forbidden",
+    "rate_limited",
     "timeout",
     "unreachable",
     "upstream_error",
@@ -64,6 +66,7 @@ class AggregateToolListing(NamedTuple):
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
     next_cursor: str | None = None
+    ttl_ms: int = 0
 
 
 def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response | httpx2.Response]:
@@ -125,6 +128,8 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     if isinstance(exc, MCPUpstreamAuthError):
         tag: Final = "forbidden" if exc.status_code == 403 else "auth_required"
         return ServerListFault(tag=tag, status_code=exc.status_code)
+    if isinstance(exc, ProxyRateLimitError):
+        return ServerListFault(tag="rate_limited", status_code=429)
     if isinstance(exc, TimeoutError):
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):
@@ -152,7 +157,7 @@ def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
-        case "auth_required" | "forbidden" | "timeout" | "unreachable" | "upstream_error" | "internal":
+        case "auth_required" | "forbidden" | "rate_limited" | "timeout" | "unreachable" | "upstream_error" | "internal":
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
@@ -170,6 +175,8 @@ def list_fault_http_status(fault: ServerListFault) -> int:
             return fault.status_code or 401
         case "forbidden":
             return 403
+        case "rate_limited":
+            return 429
         case "timeout":
             return 504
         case "unreachable" | "upstream_error":

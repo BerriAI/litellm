@@ -11,8 +11,9 @@ from typing import Final
 
 import httpx
 import psutil
+import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.process import owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 
 _RESPONSES_JSON_SCENARIO: Final = "audit-chaos-responses"
 _RESPONSES_STREAM_SCENARIO: Final = "audit-chaos-responses-stream"
@@ -145,6 +146,7 @@ def _worker_pids(log: Path) -> tuple[int, ...]:
     return tuple(int(match) for match in _WORKER_PID.findall(log.read_text()))
 
 
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 def test_proxy_survives_worker_kill_mid_burst(tmp_path: Path) -> None:
     with gateway_from_environment() as upstream_gateway:
         directory: Final = tmp_path

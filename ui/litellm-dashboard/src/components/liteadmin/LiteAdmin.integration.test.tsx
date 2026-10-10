@@ -11,6 +11,7 @@ import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMe
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
 import LiteAdmin, { LiteAdminFrame } from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const { transport } = vi.hoisted(() => {
   const transport = vi.fn<typeof fetch>();
@@ -117,6 +118,7 @@ function renderWidget(Menu?: ComponentType<{ onLogout: () => void }>) {
 }
 
 interface GatewayOptions {
+  models?: ModelGroup[];
   write?: () => Promise<Response>;
   read?: () => Promise<Response>;
   settings?: { target: string; status: number } | ((request: Request) => Promise<Response>);
@@ -139,7 +141,7 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
     }
     if (path.endsWith("/model_group/info"))
       return json({
-        data: [
+        data: options.models ?? [
           { model_group: "a-embedding", mode: "embedding" },
           { model_group: "chat-model", mode: "chat" },
         ],
@@ -162,6 +164,7 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
       return options.write ? options.write() : json({ team_id: "team-1", max_budget: body.max_budget });
     if (path.endsWith("/key/generate"))
       return options.write ? options.write() : json({ key: NEW_KEY, key_alias: "Widget key" });
+    if (path.endsWith("/key/update")) return json(body);
     throw new Error(`Unexpected request: ${request.url}`);
   });
   return requests;
@@ -418,6 +421,55 @@ describe("LiteAdmin in the gateway", () => {
 
     expect(await screen.findByText("Team spend chart")).toBeInTheDocument();
     expect(within(screen.getByLabelText("LiteAdmin conversation")).queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("defaults to eligible Sonnet and preserves a manual choice across catalog refresh", async () => {
+    const requests = gateway([answer("Default selected."), answer("Manual choice retained.")], {
+      models: [
+        { model_group: "claude-sonnet-5-5", mode: "embedding", providers: ["anthropic"] },
+        { model_group: "openrouter/anthropic/claude-sonnet-5.5", mode: "chat", providers: ["openrouter"] },
+        { model_group: "chat-model", mode: "chat" },
+      ],
+    });
+    const { client } = renderWidget();
+    fireEvent.click(await screen.findByRole("button", { name: "LiteAdmin" }));
+    await waitFor(() => expect(screen.getByPlaceholderText("Ask LiteAdmin…")).toBeEnabled());
+    send("Use the default");
+    await screen.findByText("Default selected.");
+    expect(requests.find((request) => request.url.endsWith("/chat/completions"))?.body.model).toBe(
+      "openrouter/anthropic/claude-sonnet-5.5",
+    );
+    await selectModel();
+    await act(async () => client.invalidateQueries({ queryKey: ["liteadmin-models"] }));
+    send("Keep my selection");
+    await screen.findByText("Manual choice retained.");
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.model).toBe(
+      "chat-model",
+    );
+  });
+
+  it("reviews the explicit team removal, sends nothing on cancel and detaches on confirmation", async () => {
+    const key = "a".repeat(64);
+    const proposal = toolReply("key_detach_from_team", { key });
+    const requests = gateway([proposal, proposal, answer("Detached the key.")]);
+    renderWidget();
+    await openWidget();
+    send("Remove the key from its team");
+    const review = await screen.findByRole("region", {
+      name: "Remove a virtual key from its team without deleting the key",
+    });
+    expect(review).toHaveTextContent("team id");
+    expect(review).toHaveTextContent("null");
+    fireEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+    await screen.findByText("Cancelled");
+    expect(requests.filter((request) => request.url.endsWith("/key/update"))).toHaveLength(0);
+    send("Detach it now");
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm change" }));
+    await screen.findByText("Detached the key.");
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(requests.filter((request) => request.url.endsWith("/key/update")).map(({ body }) => body)).toEqual([
+      { key, team_id: null },
+    ]);
   });
 
   it("keeps a single inline action through review, close/reopen and one confirmed write", async () => {

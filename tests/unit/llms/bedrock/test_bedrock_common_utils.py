@@ -1989,3 +1989,19 @@ class TestBedrockGovCloudSupport:
         """Test that GovCloud Titan models use Invoke API"""
         route = BedrockModelInfo.get_bedrock_route(model_name)
         assert route == "invoke"
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_event_decoder_reports_only_missing_aws_dependency(missing):
+    from unittest.mock import patch
+    from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
+
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            BedrockEventStreamDecoderBase()
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure

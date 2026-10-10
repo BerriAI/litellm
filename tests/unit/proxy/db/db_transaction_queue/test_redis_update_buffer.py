@@ -675,7 +675,7 @@ class _ListRedis:
 async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
     redis = _ListRedis()
     buffer = RedisUpdateBuffer(redis_cache=redis)
-    buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "old"}, {"request_id": "mid"}], max_rows=2) is True
     assert await buffer.store_spend_logs_in_redis([{"request_id": "new"}], max_rows=2) is True
@@ -697,7 +697,7 @@ async def test_store_spend_logs_in_redis_reports_failure_without_redis():
 async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_enabled():
     redis = _ListRedis()
     buffer = RedisUpdateBuffer(redis_cache=redis)
-    buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=False)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=False)
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
     assert redis.rows == []

@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct AudioTranscriptionResponseData {
     pub text: String,
 }

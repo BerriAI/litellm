@@ -19,12 +19,13 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_model,
     can_org_access_model,
     can_project_access_model,
     can_team_access_model,
+    check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -37,9 +38,9 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfigWrite,
     resolve_complexity_router_config_write,
 )
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.router import Deployment, updateDeployment
 
 if TYPE_CHECKING:
@@ -75,7 +76,7 @@ class _MemberOpenSourceClassifierConfig(LiteLLMBaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str
     api_key: None = None
     api_base: None = None
@@ -222,7 +223,7 @@ async def authorize_member_auto_router_dependencies(
             llm_router=llm_router,
             prisma_client=prisma_client,
         )
-        await _check_team_member_model_access(
+        await check_team_member_model_access(
             model=model,
             team_object=team,
             valid_token=scoped_actor,

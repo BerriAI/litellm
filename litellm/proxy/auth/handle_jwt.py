@@ -75,6 +75,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.auth.user_api_key_auth import is_jwt as is_jwt_token
 
 from .auth_checks import (
     TeamNotFoundError,
@@ -276,10 +277,7 @@ class JWTHandler:
 
     @staticmethod
     def is_jwt(token: str | None) -> bool:
-        if token is None:
-            return False
-        parts: Final = token.split(".")
-        return len(parts) == 3
+        return is_jwt_token(token=token)
 
     @staticmethod
     def get_unverified_claims(token: str) -> dict | None:
@@ -1648,6 +1646,10 @@ class JWTAuthManager:
         ):
             return True
 
+        team_metadata: Final = (team_object.metadata or {}) if team_object else {}
+        if RouteChecks.matching_denied_passthrough_route(route=route, metadata_sources=(team_metadata,)) is not None:
+            return False
+
         if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes):
             return True
 
@@ -1655,11 +1657,16 @@ class JWTAuthManager:
         # so beyond the JWT config grant above, only the selected team's metadata grants access.
         return RouteChecks.check_passthrough_route_access(
             route=route,
-            user_api_key_dict=UserAPIKeyAuth(team_metadata=(team_object.metadata or {}) if team_object else {}),
+            user_api_key_dict=UserAPIKeyAuth(team_metadata=team_metadata),
         )
 
     @staticmethod
-    def _raise_team_passthrough_route_denial(route: str) -> None:
+    def _raise_team_passthrough_route_denial(route: str, team_object: LiteLLM_TeamTable | None) -> None:
+        denied_route: Final = RouteChecks.matching_denied_passthrough_route(
+            route=route, metadata_sources=((team_object.metadata if team_object else None),)
+        )
+        if denied_route is not None:
+            raise RouteChecks.passthrough_route_denied_exception(route=route, denied_route=denied_route)
         raise HTTPException(
             status_code=403,
             detail=(
@@ -1683,7 +1690,7 @@ class JWTAuthManager:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
-        denied_auth_enforced_pass_through_route = False
+        denied_pass_through_team: LiteLLM_TeamTable | None = None
 
         if not team_ids:
             if (
@@ -1733,7 +1740,7 @@ class JWTAuthManager:
                             team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
                         ):
                             is_allowed = False
-                            denied_auth_enforced_pass_through_route = True
+                            denied_pass_through_team = team_object
                         verbose_proxy_logger.debug(
                             "JWT team route check: team_id=%s, route=%s, is_allowed=%s", team_id, route, is_allowed
                         )
@@ -1742,8 +1749,8 @@ class JWTAuthManager:
             except Exception:
                 continue
 
-        if denied_auth_enforced_pass_through_route:
-            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
+        if denied_pass_through_team is not None:
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=denied_pass_through_team)
 
         if requested_model and (any_claim_team_resolved or not jwt_handler.litellm_jwtauth.team_claim_fallback):
             # Claim resolved but no model access, or fallback disabled — deny.
@@ -2788,7 +2795,7 @@ class JWTAuthManager:
             request_method=request_method,
             team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
         ):
-            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=selected_team_object)
 
         # Extract alias fields for resolution (if configured)
         org_alias: Final = handler.get_org_alias(token=jwt_valid_token, default_value=None)
@@ -2858,7 +2865,7 @@ class JWTAuthManager:
                 request_method=request_method,
                 team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
             ):
-                JWTAuthManager._raise_team_passthrough_route_denial(route=route)
+                JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=team_object)
         elif selected_team_id is None:
             (
                 team_id,

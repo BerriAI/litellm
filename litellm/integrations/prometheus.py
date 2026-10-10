@@ -21,6 +21,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
+    AUTH_OBJECTS_TARGET,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -49,13 +50,9 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.proxy._types import (
-    LiteLLM_DeletedVerificationToken,
-    LiteLLM_TeamTable,
-    LiteLLM_UserTable,
-    UserAPIKeyAuth,
-)
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.user import LiteLLM_UserTable
+from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -69,6 +66,7 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
@@ -689,6 +687,24 @@ class PrometheusLogger(CustomLogger):
                 "litellm_team_rate_limit_used_metric",
                 "Requests or tokens the Team has consumed in the current rate limit window, by rate_limit_type",
                 labelnames=self.get_labels_for_metric("litellm_team_rate_limit_used_metric"),
+            )
+
+            self.litellm_project_model_rate_limit_allowed_metric = self._gauge_factory(
+                "litellm_project_model_rate_limit_allowed_metric",
+                (
+                    "Configured rate limit for the Project on the requested model in the current window "
+                    "(model_rpm_limit / model_tpm_limit / model_itpm_limit / model_otpm_limit), by rate_limit_type"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_project_model_rate_limit_allowed_metric"),
+            )
+
+            self.litellm_project_model_rate_limit_used_metric = self._gauge_factory(
+                "litellm_project_model_rate_limit_used_metric",
+                (
+                    "Requests or tokens the Project has consumed on the requested model in the current rate limit "
+                    "window, by rate_limit_type"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_project_model_rate_limit_used_metric"),
             )
 
             ########################################
@@ -1541,6 +1557,8 @@ class PrometheusLogger(CustomLogger):
             model_group=standard_logging_payload["model_group"],
             team=user_api_team,
             team_alias=user_api_team_alias,
+            project_id=standard_logging_payload["metadata"].get("user_api_key_project_id"),
+            project_alias=standard_logging_payload["metadata"].get("user_api_key_project_alias"),
             org_id=user_api_key_org_id,
             org_alias=user_api_key_org_alias,
             user=user_id,
@@ -1627,7 +1645,7 @@ class PrometheusLogger(CustomLogger):
             model_id=enum_values.model_id,
         )
 
-        self._set_key_and_team_rate_limit_metrics(
+        self._set_v3_rate_limit_allowed_and_used_metrics(
             standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
             enum_values=enum_values,
         )
@@ -2232,65 +2250,139 @@ class PrometheusLogger(CustomLogger):
             return None
         return value
 
-    def _set_key_and_team_rate_limit_metrics(
+    def _set_v3_rate_limit_allowed_and_used_metrics(
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
     ) -> None:
-        """
-        Export the key-level and team-level RPM / TPM limit and current window
-        usage from the ``x-ratelimit-{api_key,team}-{limit,remaining}-*``
-        headers the v3 rate limiter mirrors into the logging payload. The
-        limiter already read these counters (from Redis when configured) on
-        the request path, so no extra store lookup happens here. Descriptors
-        without a configured limit emit no header, so their series is removed
-        rather than left at the value from before the limit was dropped.
-        """
+        """Export v3 rate-limit limits and window usage from mirrored logging headers."""
         descriptor_gauges: Final[
-            tuple[tuple[Literal["api_key", "team"], DEFINED_PROMETHEUS_METRICS, Gauge, Gauge], ...]
+            tuple[
+                tuple[
+                    Literal[
+                        "api_key",
+                        "team",
+                        "model_per_project",
+                        "model_per_project_itpm",
+                        "model_per_project_otpm",
+                    ],
+                    Literal["requests", "tokens"],
+                    Literal["requests", "tokens", "input_tokens", "output_tokens"],
+                    DEFINED_PROMETHEUS_METRICS,
+                    Gauge,
+                    Gauge,
+                ],
+                ...,
+            ]
         ] = (
             (
                 "api_key",
+                "requests",
+                "requests",
+                "litellm_api_key_rate_limit_allowed_metric",
+                self.litellm_api_key_rate_limit_allowed_metric,
+                self.litellm_api_key_rate_limit_used_metric,
+            ),
+            (
+                "api_key",
+                "tokens",
+                "tokens",
                 "litellm_api_key_rate_limit_allowed_metric",
                 self.litellm_api_key_rate_limit_allowed_metric,
                 self.litellm_api_key_rate_limit_used_metric,
             ),
             (
                 "team",
+                "requests",
+                "requests",
                 "litellm_team_rate_limit_allowed_metric",
                 self.litellm_team_rate_limit_allowed_metric,
                 self.litellm_team_rate_limit_used_metric,
             ),
+            (
+                "team",
+                "tokens",
+                "tokens",
+                "litellm_team_rate_limit_allowed_metric",
+                self.litellm_team_rate_limit_allowed_metric,
+                self.litellm_team_rate_limit_used_metric,
+            ),
+            (
+                "model_per_project",
+                "requests",
+                "requests",
+                "litellm_project_model_rate_limit_allowed_metric",
+                self.litellm_project_model_rate_limit_allowed_metric,
+                self.litellm_project_model_rate_limit_used_metric,
+            ),
+            (
+                "model_per_project",
+                "tokens",
+                "tokens",
+                "litellm_project_model_rate_limit_allowed_metric",
+                self.litellm_project_model_rate_limit_allowed_metric,
+                self.litellm_project_model_rate_limit_used_metric,
+            ),
+            (
+                "model_per_project_itpm",
+                "tokens",
+                "input_tokens",
+                "litellm_project_model_rate_limit_allowed_metric",
+                self.litellm_project_model_rate_limit_allowed_metric,
+                self.litellm_project_model_rate_limit_used_metric,
+            ),
+            (
+                "model_per_project_otpm",
+                "tokens",
+                "output_tokens",
+                "litellm_project_model_rate_limit_allowed_metric",
+                self.litellm_project_model_rate_limit_allowed_metric,
+                self.litellm_project_model_rate_limit_used_metric,
+            ),
         )
-        for descriptor_key, metric_name, allowed_gauge, used_gauge in descriptor_gauges:
-            for rate_limit_type in ("requests", "tokens"):
-                self._set_rate_limit_allowed_and_used_gauges(
-                    standard_logging_payload=standard_logging_payload,
-                    enum_values=enum_values,
-                    descriptor_key=descriptor_key,
-                    metric_name=metric_name,
-                    allowed_gauge=allowed_gauge,
-                    used_gauge=used_gauge,
-                    rate_limit_type=rate_limit_type,
-                )
+        for (
+            descriptor_key,
+            header_rate_limit_type,
+            rate_limit_type,
+            metric_name,
+            allowed_gauge,
+            used_gauge,
+        ) in descriptor_gauges:
+            self._set_rate_limit_allowed_and_used_gauges(
+                standard_logging_payload=standard_logging_payload,
+                enum_values=enum_values,
+                descriptor_key=descriptor_key,
+                header_rate_limit_type=header_rate_limit_type,
+                metric_name=metric_name,
+                allowed_gauge=allowed_gauge,
+                used_gauge=used_gauge,
+                rate_limit_type=rate_limit_type,
+            )
 
     def _set_rate_limit_allowed_and_used_gauges(
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
-        descriptor_key: Literal["api_key", "team"],
+        descriptor_key: Literal[
+            "api_key",
+            "team",
+            "model_per_project",
+            "model_per_project_itpm",
+            "model_per_project_otpm",
+        ],
+        header_rate_limit_type: Literal["requests", "tokens"],
         metric_name: DEFINED_PROMETHEUS_METRICS,
         allowed_gauge: Gauge,
         used_gauge: Gauge,
-        rate_limit_type: Literal["requests", "tokens"],
+        rate_limit_type: Literal["requests", "tokens", "input_tokens", "output_tokens"],
     ) -> None:
         limit: Final = self._get_int_from_v3_rate_limit_headers(
             standard_logging_payload=standard_logging_payload,
-            header_name=f"x-ratelimit-{descriptor_key}-limit-{rate_limit_type}",
+            header_name=f"x-ratelimit-{descriptor_key}-limit-{header_rate_limit_type}",
         )
         remaining: Final = self._get_int_from_v3_rate_limit_headers(
             standard_logging_payload=standard_logging_payload,
-            header_name=f"x-ratelimit-{descriptor_key}-remaining-{rate_limit_type}",
+            header_name=f"x-ratelimit-{descriptor_key}-remaining-{header_rate_limit_type}",
         )
         labelled_values: Final = replace(enum_values, rate_limit_type=rate_limit_type)
         labelnames: Final = self.get_labels_for_metric(metric_name)
@@ -3833,7 +3925,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _list_key_helper,
+            list_key_helper,
         )
         from litellm.proxy.proxy_server import prisma_client
 
@@ -3847,7 +3939,7 @@ class PrometheusLogger(CustomLogger):
             list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken],
             int | None,
         ]:
-            key_list_response: Final = await _list_key_helper(
+            key_list_response: Final = await list_key_helper(
                 prisma_client=prisma_client,
                 page=page,
                 size=page_size,

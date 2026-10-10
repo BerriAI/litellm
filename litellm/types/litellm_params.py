@@ -87,6 +87,13 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    github_copilot_auth_type: str | None = None
+    github_copilot_user_session: object | None = None
+    token_exchange_endpoint: str | None = None
+    token_exchange_profile: str | None = None
+    token_exchange_scope: str | None = None
+    token_exchange_audience: str | None = None
+    fireworks_forward_user_id: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -348,14 +355,23 @@ class AgenticLoopState:
     code_interpreter_converted_stream: bool | None = field(
         default=None, metadata=wire("_code_interpreter_interception_converted_stream")
     )
+    code_interpreter_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_stream_options")
+    )
     websearch_emit_native_blocks: bool | None = field(
         default=None, metadata=wire("_websearch_interception_emit_native_blocks")
     )
     websearch_converted_stream: bool | None = field(
         default=None, metadata=wire("_websearch_interception_converted_stream")
     )
+    websearch_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_websearch_interception_stream_options")
+    )
     headroom_converted_stream: bool | None = field(
         default=None, metadata=wire("_headroom_interception_converted_stream")
+    )
+    headroom_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_headroom_interception_stream_options")
     )
 
 

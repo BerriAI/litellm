@@ -39,6 +39,7 @@ class MCPOAuthMetadata(LiteLLMBaseModel):
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
+    client_id_metadata_document_supported: bool | None = None
     authorization_response_iss_parameter_supported: bool = False
     discovered_issuer: str | None = None
     """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
@@ -120,6 +121,7 @@ class MCPServer(LiteLLMBaseModel):
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
+    client_id_metadata_document_supported: bool | None = None
     authorization_response_iss_parameter_supported: bool = False
     dcr_issuer: str | None = None
     dcr_server_url: str | None = None
@@ -237,6 +239,7 @@ class MCPServer(LiteLLMBaseModel):
     # Max concurrent outbound tool calls to this server; excess calls queue.
     # None or a value <= 0 means unlimited.
     max_concurrent_requests: int | None = None
+    rpm: int | None = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
     # enabled.  Set by ``MCPServerManager.assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two

@@ -12,8 +12,11 @@ from litellm.llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.mark.serial
@@ -920,3 +923,25 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
     # Also verify openai-compatible headers are included
     assert "x-ratelimit-limit-tokens" in headers
     assert "x-ratelimit-remaining-tokens" in headers
+
+
+@pytest.mark.parametrize(
+    "model", ["gpt-5", "gpt-5-turbo", "GPT-5", "azure/gpt-5", "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o"]
+)
+def test_azure_gpt_models_resolve_to_responses_config_with_temperature(model: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.AZURE, model=model)
+    assert type(config) is AzureOpenAIResponsesAPIConfig
+    assert "temperature" in config.get_supported_openai_params(model)
+
+
+@pytest.mark.parametrize("model", ["o1", "o3"])
+def test_azure_o_series_resolves_to_o_series_config_without_temperature(model: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.AZURE, model=model)
+    assert type(config) is AzureOpenAIOSeriesResponsesAPIConfig
+    assert "temperature" not in config.get_supported_openai_params(model)
+
+
+def test_openai_gpt5_resolves_to_responses_config_with_temperature() -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.OPENAI, model="gpt-5")
+    assert type(config) is OpenAIResponsesAPIConfig
+    assert "temperature" in config.get_supported_openai_params("gpt-5")

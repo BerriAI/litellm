@@ -1114,7 +1114,7 @@ class TestDeferredStreamingClosure:
         with (
             patch("litellm.callbacks", [guardrail]),
             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                "litellm.proxy.utils.check_and_merge_model_level_guardrails",
                 side_effect=mock_merge,
             ),
         ):
@@ -1178,7 +1178,7 @@ class TestDeferredStreamingClosure:
         with (
             patch("litellm.callbacks", [guardrail_a, guardrail_b]),
             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                "litellm.proxy.utils.check_and_merge_model_level_guardrails",
                 side_effect=mock_merge,
             ),
         ):
@@ -1216,7 +1216,7 @@ class TestDeferredStreamingClosure:
             raise RuntimeError("Simulated init failure")
 
         with patch(
-            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+            "litellm.proxy.utils.check_and_merge_model_level_guardrails",
             side_effect=exploding_merge,
         ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(

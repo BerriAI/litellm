@@ -31,22 +31,29 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
+    conflicting_capture_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
+    stored_capture_entries,
 )
-from litellm.proxy.common_utils.callback_utils import (
-    _CALLBACK_VAR_ENCRYPTED_PREFIX,
+from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
+    _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
-from litellm.proxy.litellm_pre_call_utils import (
-    _get_validated_callback_metadata,
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
+    get_validated_callback_metadata,
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
+from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  # legacy module exports
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    refresh_cached_team,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 
@@ -114,7 +121,7 @@ def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
         return
     for key in tuple(callbacks.callback_vars):
         value = callbacks.callback_vars[key]
-        if is_sensitive_callback_key(key) or str(value).startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        if is_sensitive_callback_key(key) or str(value).startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
             callbacks.callback_vars[key] = _CALLBACK_VARS_REDACTED
 
 
@@ -147,7 +154,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
         for entry in logging_entries if isinstance(logging_entries, list) else ():
             if not isinstance(entry, dict):
                 continue
-            callback = _get_validated_callback_metadata(item=entry, source="team-level read")
+            callback = get_validated_callback_metadata(item=entry, source="team-level read")
             if callback is None:
                 continue
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)
@@ -283,6 +290,9 @@ async def add_team_callbacks(
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+        - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
+          An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
+          "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
@@ -346,11 +356,19 @@ async def add_team_callbacks(
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.
         decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+        stored_capture: Final = stored_capture_entries(decrypted_logging)
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
         scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
         if scope_error is not None:
             raise _callback_config_error(scope_error)
+        capture_error: Final = conflicting_capture_error(
+            data.callback_name,
+            data.callback_vars,
+            stored_capture,
+        )
+        if capture_error is not None:
+            raise _callback_config_error(capture_error)
         # One entry has to own a credential family end to end. The entries are
         # flattened into one dict before a request reads them, so an entry
         # naming only a destination would pair with a key written on another
@@ -399,7 +417,7 @@ async def add_team_callbacks(
             raise _callback_error(400, f"Team id = {team_id} does not exist. Please use a different team id.")
 
         # Without this a newly registered callback stays dormant for existing keys.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=new_team_row,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -529,7 +547,7 @@ async def delete_team_callback(
 
         # Request-time callback resolution reads the cached team, so without this
         # the removed callback keeps firing for live keys until the cache expires.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=updated_team,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -671,7 +689,7 @@ async def disable_team_logging(
 
         # Request-time callback resolution reads the cached team, so without this
         # the DB says logging is off while live keys keep sending until it expires.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=updated_team,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,

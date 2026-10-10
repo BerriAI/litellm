@@ -3954,7 +3954,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
         iterator._ambiguous_tool_call_indexes = set()
-        iterator._next_tool_output_index = 1
+        iterator._next_output_index = 0
+        iterator._message_output_index = None
+        iterator._reasoning_output_index = None
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
         iterator.responses_api_request = {}
@@ -4456,7 +4458,7 @@ class TestEnsureOutputItemContentPartAdded:
                     Choices(
                         finish_reason=finish_reason,
                         index=0,
-                        message=Message(content="", role="assistant"),
+                        message=Message(content="Partial answer", role="assistant"),
                     )
                 ],
                 usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),

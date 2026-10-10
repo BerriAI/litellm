@@ -43,7 +43,7 @@ def classify(category: str, changed: list[str]) -> str:
 DOCS = ["README.md", "docs/my_website/index.mdx", "litellm/anywhere.md"]
 CLIENT = ["ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
-CI = [".github/workflows/test-litellm-ui-unit.yml"]
+CI = [".github/workflows/test-unit.yml"]
 
 
 @pytest.mark.parametrize(
@@ -62,6 +62,8 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("provider-harness", ["tests/e2e/provider_cache.py"], "run"),
         ("provider-harness", ["tests/e2e/conftest.py"], "run"),
         ("provider-harness", ["tests/e2e/e2e_http.py"], "run"),
+        ("provider-harness", ["tests/e2e_harness/test_provider_edge.py"], "run"),
+        ("provider-harness", ["tests/e2e_harness/logging/test_datadog_reader.py"], "skip"),
         ("provider-harness", ["tests/code_coverage_tests/test_provider_cache.py"], "run"),
         ("provider-harness", ["tests/code_coverage_tests/test_provider_replay_harness.py"], "run"),
         ("provider-harness", [".circleci/config.yml"], "run"),
@@ -142,6 +144,7 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
     (
         ("litellm/caching/redis_cache.py", "run"),
         ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
+        ("tests/integration/sdk/test_redis_cluster_iam_auth.py", "run"),
         (".circleci/config.yml", "run"),
         ("uv.lock", "run"),
         ("litellm/router.py", "skip"),

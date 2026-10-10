@@ -195,7 +195,7 @@ If a step is missing, the test is not done. That is the whole pattern
 
 ## Style: lay the pattern down in a class
 
-Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test; each method is one behavior. Think of it as documenting the contract, with the rough intent being
+Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test. Each method is one behavior. Think of it as documenting the contract, with the rough intent being
 
 ```python
 # pseudo-code to convey intent
@@ -211,9 +211,9 @@ class TestPromptCompression:
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
 
-That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from; it creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
+That snippet only conveys intent. What you actually write uses the real harness: the `client` fixture for your suite, the `scoped_key` fixture for an auto-deleted key, typed pydantic bodies from `models.py`, and `unwrap(...)` on the tagged-union result. `tests/e2e/llm_translation/test_custom_pricing_e2e.py` is the reference to copy from. It creates a scoped key, drives a real gemini call, polls `/spend/logs` to a deadline for the cost-breakdown row, then asserts the input and output costs match the configured custom rates and that a sibling deployment kept its own price. Read it before writing yours
 
-## Use the shared transport; never touch requests directly
+## Use the shared transport, never touch requests directly
 
 Every HTTP call goes through the shared transport, never through `requests.*` in a test. `e2e_http.py` is the only module permitted to call `requests.*`, and that is enforced in CI by `tests/code_coverage_tests/check_e2e_no_raw_requests.py`. A test that imports requests will fail the check
 
@@ -227,15 +227,15 @@ The shape is layered so tests stay declarative
 
 Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `ProxyClient` (as `.proxy`) and adds suite-specific routes. Cleanup runs through that same `ProxyClient`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
-Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
+Request and response bodies are typed pydantic models in `models.py`. Only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself lives in `tests/e2e_harness/` and runs without a proxy (`LITELLM_MASTER_KEY=sk-harness uv run pytest tests/e2e_harness`). A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Pre-commit steps
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py` or `tests/e2e_harness/**/*.py`
 
 2. Add the models your test needs to the config your local proxy loads
 
@@ -260,7 +260,7 @@ The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthr
 
 Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
 
-Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage
+Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the provider-edge and fixture tests at the root of `tests/e2e_harness/` with `--noconftest -o "pythonpath=tests/e2e tests/e2e_harness"`; they need only synthetic HTTP providers and temporary fixture storage
 
 
 ## MCP OAuth happy path

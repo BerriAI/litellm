@@ -1,17 +1,11 @@
 from base_llm_unit_tests import BaseLLMChatTest
 
-
 class TestBedrockGPTOSS(BaseLLMChatTest):
-    test_json_response_format = None
 
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "bedrock/converse/openai.gpt-oss-20b-1:0",
         }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
     def test_function_calling_with_tool_response(self):
         """Bedrock GPT-OSS intermittently emits truncated toolUse.input deltas on
@@ -23,15 +17,3 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         """
         pass
 
-
-    def test_prompt_caching(self):
-        """
-        Remove override once we have access to Bedrock prompt caching
-        """
-        pass
-
-    async def test_completion_cost(self):
-        """
-        Bedrock GPT-OSS models are flaky and occasionally report 0 token counts in api response
-        """
-        pass

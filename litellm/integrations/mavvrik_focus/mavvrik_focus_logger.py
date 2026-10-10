@@ -20,6 +20,7 @@ overwrite each other within the same day, producing incomplete data.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
@@ -28,6 +29,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAVVRIK_FOCUS_EXPORT_JOB_NAME
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -83,7 +85,8 @@ def _is_empty_metrics_marker(marker: object | None) -> bool:
 class MavvrikFocusLogger(FocusLogger):
     """FOCUS-based export logger that routes to the Mavvrik destination."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime, **kwargs: Any) -> None:
+        self._clock: Final = clock
         frequency: Final = os.getenv("MAVVRIK_FOCUS_FREQUENCY", "daily").lower()
         if frequency != "daily":
             raise ValueError(
@@ -174,7 +177,7 @@ class MavvrikFocusLogger(FocusLogger):
         # metricsMarker may be a Unix timestamp (int/float) or an ISO date string.
         marker: Final = await destination.get_metrics_marker()
 
-        now: Final = datetime.now(timezone.utc)
+        now: Final = self._clock()
         yesterday: Final = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
 
         last_ingested: Final = _parse_metrics_marker(marker)

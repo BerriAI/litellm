@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
@@ -256,6 +257,23 @@ class _ProviderHTTPException(Protocol):
     llm_provider: str
 
 
+_ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
+    raw_body: Final[object] = getattr(original_exception, "body", None)
+    try:
+        body: Final = (
+            _ERROR_BODY_ADAPTER.validate_python(raw_body)
+            if raw_body is not None
+            else _ERROR_BODY_ADAPTER.validate_json(getattr(original_exception, "message", ""))
+        )
+        error: Final = _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
+    except ValidationError:
+        return None
+    return error if error.get("code") == "cyber_policy" else None
+
+
 def _litellm_proxy_response(
     original_exception: _ProviderHTTPException, custom_llm_provider: str
 ) -> httpx.Response | None:
@@ -284,6 +302,15 @@ def _map_openai_exception(
     extra_information: str,
 ) -> None:
     response: Final = _litellm_proxy_response(original_exception, custom_llm_provider)
+    if (cyber_policy_body := _openai_cyber_policy_body(original_exception)) is not None:
+        raise ContentPolicyViolationError(
+            message=f"ContentPolicyViolationError: {exception_provider} - {original_exception}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            response=response,
+            litellm_debug_info=extra_information,
+            body=dict(cyber_policy_body),
+        )
     # custom_llm_provider is openai, make it OpenAI
     message = get_error_message(error_obj=original_exception)
     if message is None:
@@ -2147,7 +2174,10 @@ def _map_openrouter_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
-    if hasattr(original_exception, "status_code"):
+    received_status: Final = hasattr(original_exception, "status_code") and not getattr(
+        original_exception, "status_code_is_synthesized", False
+    )
+    if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(
                 message=f"{exception_provider} - {error_str}",
@@ -2373,6 +2403,10 @@ def exception_type(
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
+    if isinstance(original_exception, ImportError) and (
+        original_exception.name in ("boto3", "botocore") or custom_llm_provider in ("bedrock", "bedrock_mantle")
+    ):
+        return original_exception
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
     mappable_exception: Final[_ProviderHTTPException] = cast("_ProviderHTTPException", original_exception)
@@ -2395,9 +2429,9 @@ def exception_type(
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
-                    redact_secret_string(str(original_exception.message))
+                    redact_secret_string(str(mappable_exception.message))
                     if _ENABLE_SECRET_REDACTION
-                    else str(original_exception.message)
+                    else str(mappable_exception.message)
                 )
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__

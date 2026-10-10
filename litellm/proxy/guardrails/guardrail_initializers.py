@@ -18,7 +18,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
-        checks=litellm_params.checks,
+        checks=litellm_params.checks if isinstance(litellm_params.checks, BedrockChecksConfigModel) else None,
         content_filter_threshold=litellm_params.content_filter_threshold,
         prompt_attack_threshold=litellm_params.prompt_attack_threshold,
         pii_confidence_threshold=litellm_params.pii_confidence_threshold,
@@ -134,7 +134,7 @@ def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) ->
 
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     explicit_filter_scope: Final = litellm_params.presidio_filter_scope
@@ -163,7 +163,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         params.update(overrides)
         # Passed outside the heterogeneous params dict so the argument keeps
         # its precise int | None type.
-        callback: Final = _OPTIONAL_PresidioPIIMasking(
+        callback: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
             **params,
         )

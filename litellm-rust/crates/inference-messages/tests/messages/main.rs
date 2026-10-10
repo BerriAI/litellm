@@ -5,7 +5,7 @@ use std::{
 
 use litellm_http::{HttpSettings, Resolution};
 use litellm_inference_messages::{
-    Error, MessagesCall, MessagesShaping,
+    Error, MessagesCall, MessagesSettings, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_inference_testing::RecordingSecrets;
@@ -81,6 +81,7 @@ fn call() -> MessagesCall {
         api_key: None,
         api_base: None,
         custom_llm_provider: Some("anthropic".into()),
+        litellm_params: Default::default(),
         extra_headers: None,
         provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),

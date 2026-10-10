@@ -4,7 +4,7 @@ import os
 import queue
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -383,6 +383,55 @@ def peer_of(kind: PeerKind, *, rich: bool = False) -> Iterator[McpPeer]:
             yield candidate
 
 
+@contextmanager
+def stateful_mcp_peer() -> Generator[McpPeer]:
+    service: Final = MCPServer("integration-stateful")
+    selected: Final[dict[str, str]] = {}  # mutable-ok: per-session state the upstream keeps across tool calls
+
+    def upstream_session(ctx: Context) -> str:
+        assert ctx.headers is not None, "stateful upstream requires HTTP request headers"
+        return ctx.headers["mcp-session-id"]
+
+    @service.tool()
+    def select_project(name: str, ctx: Context) -> str:
+        selected[upstream_session(ctx)] = name
+        return f"selected {name}"
+
+    @service.tool()
+    def create_feature(title: str, ctx: Context) -> str:
+        project: Final = selected.get(upstream_session(ctx))
+        if project is None:
+            raise ValueError("no project selected in this session")
+        return f"{project}/{title}"
+
+    app: Final = service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+
+    async def capture(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "GET":
+            await Response(status_code=405)(scope, receive, send)
+            return
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        body: Final = await StarletteRequest(scope, receive).body()
+        observed.put({"body": json.loads(body) if body else None, "headers": dict(scope["headers"])})
+        message: Final[Message] = {"type": "http.request", "body": body, "more_body": False}
+        pending: Final = iter((message,))
+
+        async def replay() -> Message:
+            return next(pending, {"type": "http.disconnect"})
+
+        await app(scope, replay, send)
+
+    with asgi_server(capture) as url:
+        yield McpPeer(url + "/mcp", observed)
+
+
 def register_mcp(scenario: Scenario, peer: McpPeer, alias: str, **fields: object) -> str:
     response: Final = scenario.gateway.request(
         "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration(), **fields}
@@ -427,10 +476,18 @@ def tool_names(gateway: Gateway, key: str, identity: str) -> dict[str, str]:
     }
 
 
-def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]) -> httpx.Response:
+def call_tool(
+    gateway: Gateway,
+    key: str,
+    identity: str,
+    name: str,
+    arguments: dict[str, object],
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> httpx.Response:
     return gateway.client.post(
         "/mcp-rest/tools/call",
-        headers={"x-litellm-api-key": key},
+        headers={"x-litellm-api-key": key, **(headers or {})},
         json={"server_id": identity, "name": name, "arguments": arguments},
     )
 
@@ -628,6 +685,7 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
 def paginated_mcp_peer(
     *,
     page_size: int = 1,
+    ttl_ms: int = 0,
     repeat_cursor: bool = False,
     fail_listing: bool = False,
     fail_continuation: bool = False,
@@ -664,6 +722,8 @@ def paginated_mcp_peer(
     async def tools(context, params):
         indexes, cursor = window(params)
         return ListToolsResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
             tools=[
                 Tool(
                     name=f"add{index}",
@@ -682,12 +742,18 @@ def paginated_mcp_peer(
     async def prompts(context, params):
         indexes, cursor = window(params)
         return ListPromptsResult(
-            prompts=[Prompt(name=f"prompt{index}") for index in indexes], next_cursor=cursor, meta=metadata
+            ttl_ms=ttl_ms,
+            cache_scope="public",
+            prompts=[Prompt(name=f"prompt{index}") for index in indexes],
+            next_cursor=cursor,
+            meta=metadata,
         )
 
     async def resources(context, params):
         indexes, cursor = window(params)
         return ListResourcesResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
             resources=[Resource(name=f"resource{index}", uri=f"status://item{index}") for index in indexes],
             next_cursor=cursor,
             meta=metadata,
@@ -696,6 +762,8 @@ def paginated_mcp_peer(
     async def templates(context, params):
         indexes, cursor = window(params)
         return ListResourceTemplatesResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
             resource_templates=[
                 ResourceTemplate(name=f"template{index}", uri_template=f"status{index}://{{item}}") for index in indexes
             ],

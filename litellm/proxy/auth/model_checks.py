@@ -13,7 +13,7 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import get_valid_models
+from litellm.utils import ProviderConfigManager, get_valid_models
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -45,7 +45,14 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
-    return None
+
+    try:
+        llm_provider: Final = LlmProviders(provider)
+    except ValueError:
+        return None
+    if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
+        return None
+    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
 
 
 def _get_models_from_access_groups(
@@ -296,7 +303,12 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
         ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
         model_prefix: Final = wildcard_suffix.replace("*", "")
 
-        is_partial_filter: Final = any(wc_model.startswith(model_prefix) for wc_model in wildcard_models)
+        deployment_repeats_prefix: Final = litellm_params is not None and litellm_params.model.endswith(
+            f"/{wildcard_suffix}"
+        )
+        is_partial_filter: Final = deployment_repeats_prefix or any(
+            wc_model.startswith(model_prefix) for wc_model in wildcard_models
+        )
         if is_partial_filter:
             filtered_wildcard_models = [wc_model for wc_model in wildcard_models if wc_model.startswith(model_prefix)]
             wildcard_models = filtered_wildcard_models
@@ -307,7 +319,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     known_providers: Final = {provider.value for provider in LlmProviders}
     suffix_appended_wildcard_models: Final = []
     for model in wildcard_models:
-        if not model.startswith(wildcard_provider_prefix):
+        if not model.startswith(f"{wildcard_provider_prefix}/"):
             # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
             # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
             # multiple instances), replace that existing provider prefix instead of stacking

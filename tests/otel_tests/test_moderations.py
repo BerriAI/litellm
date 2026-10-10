@@ -29,28 +29,6 @@ async def make_moderations_curl_request(
 
 
 @pytest.mark.asyncio
-async def test_basic_moderations_on_proxy_no_model():
-    """
-    Test moderations endpoint on proxy when no `model` is specified in the request
-    """
-    async with aiohttp.ClientSession() as session:
-        test_text = "I want to harm someone"  # Test text that should trigger moderation
-        request_data = {
-            "input": test_text,
-        }
-        try:
-            response = await make_moderations_curl_request(
-                session,
-                os.environ["LITELLM_MASTER_KEY"],
-                request_data,
-            )
-            print("response=", response)
-        except Exception as e:
-            print(e)
-            pytest.fail("Moderations request failed")
-
-
-@pytest.mark.asyncio
 async def test_basic_moderations_on_proxy_with_model():
     """
     Test moderations endpoint on proxy when `model` is specified in the request

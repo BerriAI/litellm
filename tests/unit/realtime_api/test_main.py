@@ -14,7 +14,6 @@ from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
-from typing import List
 
 
 @pytest.fixture
@@ -658,6 +657,47 @@ async def test_arealtime_drops_model_from_the_upstream_url_only_for_transcriptio
     assert connect.url == expected_backend_url
 
 
+async def _vertex_health_check_connect_for(monkeypatch: pytest.MonkeyPatch, api_base: str | None) -> _CapturingConnect:
+    async def fake_token_resolver(
+        credentials: object, project_id: str | None, custom_llm_provider: str
+    ) -> tuple[str, str]:
+        return "access-token", project_id or ""
+
+    monkeypatch.setattr(realtime_main, "vertex_access_token_resolver", fake_token_resolver)
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gemini-3.8-live",
+            custom_llm_provider="vertex_ai",
+            api_key=None,
+            api_base=api_base,
+            model_params={
+                "vertex_project": "proj-1",
+                "vertex_credentials": "fake-credentials",
+                "vertex_location": "us",
+            },
+        )
+    return connect
+
+
+@pytest.mark.asyncio
+async def test_vertex_health_check_sends_no_tls_argument_to_a_plain_ws_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connect: Final = await _vertex_health_check_connect_for(monkeypatch, "http://127.0.0.1:8080")
+    assert connect.url == "ws://127.0.0.1:8080/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    assert connect.kwargs["ssl"] is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_health_check_keeps_tls_for_the_multi_region_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    connect: Final = await _vertex_health_check_connect_for(monkeypatch, None)
+    assert connect.url == (
+        "wss://aiplatform.us.rep.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+    assert connect.kwargs["ssl"] is not None
+
+
 BLOCKED_PHRASE = "XSECRETBLOCKTESTPHRASEX"
 
 
@@ -687,11 +727,14 @@ async def _build_streaming(client_events, backend_ws):
     client_ws.send_text = send_text
     client_ws.receive_text = input_queue.get
 
-    logging_obj = MagicMock()
-    logging_obj.pre_call = MagicMock()
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.success_handler = MagicMock()
-    logging_obj.model_call_details = {}
+    logging_obj: Final = MagicMock(
+        pre_call=MagicMock(),
+        async_success_handler=AsyncMock(),
+        success_handler=MagicMock(),
+        dispatch_success_handlers=AsyncMock(),
+        dispatch_failure_handlers=AsyncMock(),
+        model_call_details={},
+    )
 
     streaming = RealTimeStreaming(
         websocket=client_ws,
@@ -713,7 +756,7 @@ async def test_voice_transcript_blocked_by_guardrail():
     guardrail = _make_guardrail(GuardrailEventHooks.realtime_input_transcription)
     litellm.callbacks = [guardrail]
 
-    client_events: List[dict] = []
+    client_events: list[dict] = []
 
     # Build the transcript event that would come from the OpenAI backend
     transcript_event = json.dumps(

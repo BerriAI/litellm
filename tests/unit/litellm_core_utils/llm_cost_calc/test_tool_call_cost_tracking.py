@@ -384,15 +384,15 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     Regression for the provider-prefix fallback in _handle_web_search_cost. When the initial
     get_model_info lookup fails for a "/"-containing model, the retry re-resolves model_info from
     the prefix and must adopt that prefix's provider for routing. Otherwise an unrelated model
-    (here OpenRouter, which carries no web search pricing) is re-resolved but still routed through
+    (here Azure, which carries no web search pricing) is re-resolved but still routed through
     the request's vertex_ai Gemini calculator, which charges its $0.035 per_prompt default for a
     model that should cost nothing for web search.
     """
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    model = "openrouter/google/gemini-3.1-flash-lite"
+    model = "azure/gpt-4o"
     model_info = litellm.get_model_info(model)
-    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["litellm_provider"] == "azure"
     assert not model_info.get("search_context_cost_per_query")
 
     usage = Usage(
@@ -591,4 +591,3 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 )
 
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
-

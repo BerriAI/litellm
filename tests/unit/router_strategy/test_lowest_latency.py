@@ -4,14 +4,19 @@
 #    the ModelResponse branch, so the raw timedelta used to leak into the
 #    latency list and break the Redis cache sync). Issue #33169.
 
+import copy
 import json
+import sys
 from datetime import datetime, timedelta
+from typing import Final
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
 
@@ -27,7 +32,7 @@ KWARGS = {
 }
 
 
-def _embedding_response():
+def _embedding_response() -> litellm.EmbeddingResponse:
     return litellm.EmbeddingResponse(
         model="gemini-embedding-001",
         data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
@@ -92,7 +97,7 @@ async def test_async_embedding_latency_is_json_serializable():
     json.dumps({"latency": latencies})
 
 
-def _chat_response(completion_tokens: int):
+def _chat_response(completion_tokens: int) -> litellm.ModelResponse:
     return litellm.ModelResponse(
         model="gpt-4o-mini",
         choices=[
@@ -476,3 +481,983 @@ async def test_runtime_routing_strategy_args_update_is_a_noop_without_a_selector
 
     assert router.routing_strategy_args == {"ttl": 5}
     assert await _pick_streaming(router) == FAST_TTFT_ID
+
+
+FROZEN_NOW = datetime(2026, 1, 15, 12, 30, 15)
+FROZEN_EPOCH = FROZEN_NOW.timestamp()
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW if tz is None else FROZEN_NOW.astimezone(tz)
+
+
+@pytest.fixture
+def frozen_latency_clock(monkeypatch):
+    monkeypatch.setattr("litellm.router_strategy.lowest_latency.datetime", _FrozenDatetime)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_latency_memory_leak(sync_mode):
+    """
+    Test to make sure there's no memory leak caused by lowest latency routing
+
+    - make 10 calls -> check memory
+    - make 11th call -> no change in memory
+    """
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 50}}
+    end_time = start_time + 5
+    for _ in range(10):
+        if sync_mode:
+            lowest_latency_logger.log_success_event(
+                response_obj=response_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        else:
+            await lowest_latency_logger.async_log_success_event(
+                response_obj=response_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+    latency_key = f"{model_group}_map"
+    cache_value = copy.deepcopy(test_cache.get_cache(key=latency_key))
+
+    if sync_mode:
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    new_cache_value = test_cache.get_cache(key=latency_key)
+    assert get_size(new_cache_value) <= get_size(cache_value), (
+        f"Memory leak detected in function call! new_cache size={get_size(new_cache_value)}, old cache size={get_size(cache_value)}"
+    )
+
+
+def get_size(obj, seen=None):
+    size = sys.getsizeof(obj)
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    seen.add(obj_id)
+    if isinstance(obj, dict):
+        size += sum([get_size(v, seen) for v in obj.values()])
+        size += sum([get_size(k, seen) for k in obj.keys()])
+    elif hasattr(obj, "__dict__"):
+        size += get_size(obj.__dict__, seen)
+    elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, bytearray)):
+        size += sum([get_size(i, seen) for i in obj])
+    return size
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+def test_latency_updated():
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 50}}
+    end_time = start_time + 5
+    lowest_latency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    latency_key = f"{model_group}_map"
+    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+def test_get_available_deployments():
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
+            "model_info": {"id": "1234"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
+            "model_info": {"id": "5678"},
+        },
+    ]
+    lowest_latency_logger = LowestLatencyLoggingHandler(router_cache=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 50}}
+    end_time = start_time + 3
+    lowest_latency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    deployment_id = "5678"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 20}}
+    end_time = start_time + 2
+    lowest_latency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    print(lowest_latency_logger.get_available_deployments(model_group=model_group, healthy_deployments=model_list))
+    assert (
+        lowest_latency_logger.get_available_deployments(model_group=model_group, healthy_deployments=model_list)[
+            "model_info"
+        ]["id"]
+        == "5678"
+    )
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+def test_router_get_available_deployments():
+    """
+    Test if routers 'get_available_deployments' returns the fastest deployment
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )
+
+    deployment_id = 1
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 50}}
+    end_time = start_time + 3
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    deployment_id = 2
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 20}}
+    end_time = start_time + 2
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    print(router.get_available_deployment(model="azure-model"))
+    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
+
+
+@pytest.mark.parametrize("buffer", [0, 1])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_lowest_latency_routing_buffer(buffer):
+    """
+    Allow shuffling calls within a certain latency buffer
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+        routing_strategy_args={"lowest_latency_buffer": buffer},
+    )
+
+    deployment_id = 1
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 50}}
+    end_time = start_time + 3
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    deployment_id = 2
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        }
+    }
+    start_time = FROZEN_EPOCH
+    response_obj = {"usage": {"total_tokens": 20}}
+    end_time = start_time + 2
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    selected_deployments = {}
+    for _ in range(50):
+        print(router.get_available_deployment(model="azure-model"))
+        selected_deployments[router.get_available_deployment(model="azure-model")["model_info"]["id"]] = 1
+
+    if buffer == 0:
+        assert len(selected_deployments.keys()) == 1
+    else:
+        assert len(selected_deployments.keys()) == 2
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_lowest_latency_routing_time_to_first_token(sync_mode):
+    """
+    If a deployment has
+    - a fast time to first token
+    - slow latency/output token
+
+    test if:
+    - for streaming, the deployment with fastest time to first token is picked
+    - for non-streaming, fastest overall deployment is picked
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )
+    deployment_id = 1
+    start_time = FROZEN_NOW
+    one_second_later = start_time + timedelta(seconds=1)
+
+    three_seconds_later = start_time + timedelta(seconds=3)
+    four_seconds_later = start_time + timedelta(seconds=4)
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        },
+        "stream": True,
+        "completion_start_time": one_second_later,
+    }
+
+    response_obj = litellm.ModelResponse(usage=litellm.Usage(completion_tokens=50, total_tokens=50))
+    end_time = four_seconds_later
+
+    if sync_mode:
+        router.lowestlatency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await router.lowestlatency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    deployment_id = 2
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        },
+        "stream": True,
+        "completion_start_time": three_seconds_later,
+    }
+    response_obj = litellm.ModelResponse(usage=litellm.Usage(completion_tokens=50, total_tokens=50))
+    end_time = three_seconds_later
+    if sync_mode:
+        router.lowestlatency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await router.lowestlatency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    """
+    TESTING
+
+    - expect deployment 1 to be picked for streaming
+    - expect deployment 2 to be picked for non-streaming
+    """
+    selected_deployments = {}
+    for _ in range(3):
+        print(router.get_available_deployment(model="azure-model"))
+        selected_deployments[router.get_available_deployment(model="azure-model")["model_info"]["id"]] = 1
+
+    assert len(selected_deployments.keys()) == 1
+    assert "2" in list(selected_deployments.keys())
+
+    selected_deployments = {}
+    for _ in range(50):
+        print(router.get_available_deployment(model="azure-model"))
+        selected_deployments[
+            router.get_available_deployment(model="azure-model", request_kwargs={"stream": True})["model_info"]["id"]
+        ] = 1
+
+    assert len(selected_deployments.keys()) == 1
+    assert "1" in list(selected_deployments.keys())
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+def test_latency_list_trimming_discards_oldest_entry():
+    """
+    When the latency list reaches max_latency_list_size, the oldest entry is
+    discarded to make room for new entries. The newest entry is appended at
+    the end of the list.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    latencies_to_add = []
+    for i in range(max_size + 1):
+        start_time = FROZEN_EPOCH
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        expected_latency = float(i + 1)
+        end_time = start_time + expected_latency
+        latencies_to_add.append(expected_latency)
+
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = test_cache.get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size, f"Expected {max_size} entries, got {len(latency_list)}"
+
+    newest_latency = latencies_to_add[-1]
+    oldest_latency = latencies_to_add[0]
+    tolerance = 0.1
+
+    assert abs(latency_list[-1] - newest_latency) < tolerance, (
+        f"Newest latency {newest_latency} should be at end, got {latency_list[-1]}"
+    )
+
+    for latency in latency_list:
+        assert abs(latency - oldest_latency) > tolerance, (
+            f"Oldest latency {oldest_latency} should have been discarded, found {latency}"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_latency_list_trimming_discards_oldest_entry_async():
+    """
+    Async counterpart: the oldest entry is discarded when the latency list is
+    trimmed.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    latencies_to_add = []
+    for i in range(max_size + 1):
+        start_time = FROZEN_EPOCH
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        expected_latency = float(i + 1)
+        end_time = start_time + expected_latency
+        latencies_to_add.append(expected_latency)
+
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = await test_cache.async_get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size
+
+    newest_latency = latencies_to_add[-1]
+    oldest_latency = latencies_to_add[0]
+    tolerance = 0.1
+
+    assert abs(latency_list[-1] - newest_latency) < tolerance, (
+        f"Newest latency {newest_latency} should be at end of list"
+    )
+
+    for latency in latency_list:
+        assert abs(latency - oldest_latency) > tolerance, f"Oldest latency {oldest_latency} should have been discarded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_timeout_penalty_discards_oldest_entry():
+    """
+    Timeout penalties (1000.0) are appended to the latency list and, when the
+    list is full, the oldest entry is discarded.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    for i in range(max_size):
+        start_time = FROZEN_EPOCH
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        end_time = start_time + float(i + 1)
+
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    timeout_kwargs = {
+        **kwargs,
+        "exception": litellm.Timeout(message="Request timed out", model="test-model", llm_provider="test"),
+    }
+
+    await lowest_latency_logger.async_log_failure_event(
+        kwargs=timeout_kwargs,
+        response_obj=None,
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 30,
+    )
+
+    latency_key = f"{model_group}_map"
+    cached_data = await test_cache.async_get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size
+
+    assert latency_list[-1] == 1000.0, f"Timeout penalty should be at end of list, got {latency_list[-1]}"
+
+    tolerance = 0.1
+    for latency in latency_list[:-1]:
+        assert abs(latency - 1.0) > tolerance, f"Oldest latency 1.0 should have been discarded, found {latency}"
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+def test_list_order_preserved_after_multiple_trims():
+    """
+    After many trims, the list still holds the most recent `max_size` entries
+    in insertion order (oldest at index 0, newest at index -1).
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    all_latencies = []
+    for i in range(10):
+        start_time = FROZEN_EPOCH
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        expected_latency = float(i + 1)
+        end_time = start_time + expected_latency
+        all_latencies.append(expected_latency)
+
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = test_cache.get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size
+
+    expected_remaining = all_latencies[-max_size:]
+    tolerance = 0.1
+
+    for i, expected in enumerate(expected_remaining):
+        assert abs(latency_list[i] - expected) < tolerance, f"At index {i}, expected ~{expected}, got {latency_list[i]}"
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("frozen_latency_clock")
+async def test_usage_limits_filter_sync_and_async_logging(async_mode: bool) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    model_group: Final = "usage-limits"
+    deployments: Final = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-4o-mini", "rpm": 1},
+            "model_info": {"id": "rpm-limited"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-4o-mini", "tpm": 1},
+            "model_info": {"id": "tpm-limited"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "rpm": 3,
+                "tpm": 1000,
+            },
+            "model_info": {"id": "available"},
+        },
+    ]
+    response: Final = _chat_response(completion_tokens=4)
+
+    log_kwargs: Final = tuple(
+        {
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": deployment_id},
+            }
+        }
+        for deployment_id in ("rpm-limited", "tpm-limited")
+    )
+    for kwargs in log_kwargs:
+        if async_mode:
+            await handler.async_log_success_event(
+                kwargs=kwargs,
+                response_obj=response,
+                start_time=FROZEN_EPOCH,
+                end_time=FROZEN_EPOCH + 1,
+            )
+        else:
+            handler.log_success_event(
+                kwargs=kwargs,
+                response_obj=response,
+                start_time=FROZEN_EPOCH,
+                end_time=FROZEN_EPOCH + 1,
+            )
+
+    selected: Final = (
+        await handler.async_get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "check"}],
+        )
+        if async_mode
+        else handler.get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "check"}],
+        )
+    )
+    assert selected is not None
+    assert selected["model_info"]["id"] == "available"
+
+    blocked: Final = (
+        await handler.async_get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments[:2],
+            messages=[{"role": "user", "content": "check"}],
+        )
+        if async_mode
+        else handler.get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=deployments[:2],
+            messages=[{"role": "user", "content": "check"}],
+        )
+    )
+    assert blocked is None
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+async def test_router_uses_lowest_latency_deployment() -> None:
+    model_group: Final = "latency-routing"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": _chat_response(completion_tokens=4),
+                },
+                "model_info": {"id": "slow"},
+            },
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": _chat_response(completion_tokens=4),
+                },
+                "model_info": {"id": "fast"},
+            },
+        ],
+        routing_strategy="latency-based-routing",
+        num_retries=0,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "slow"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 10,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "fast"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 1,
+    )
+
+    selected: Final = router.get_available_deployment(model=model_group)
+    response: Final = await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "latency check"}],
+    )
+
+    assert selected["model_info"]["id"] == "fast"
+    assert response._hidden_params["model_id"] == "fast"
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+async def test_router_streaming_uses_lowest_latency_deployment() -> None:
+    model_group: Final = "streaming-latency-routing"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": "Hello world",
+                },
+                "model_info": {"id": "slow"},
+            },
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "mock_response": "Hello world",
+                },
+                "model_info": {"id": "fast"},
+            },
+        ],
+        routing_strategy="latency-based-routing",
+        num_retries=0,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "slow"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 10,
+    )
+    router.lowestlatency_logger.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": model_group},
+                "model_info": {"id": "fast"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=FROZEN_EPOCH,
+        end_time=FROZEN_EPOCH + 1,
+    )
+    selected: Final = router.get_available_deployment(model=model_group)
+    response: Final = await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "streaming latency check"}],
+        stream=True,
+    )
+    chunks: Final = tuple([chunk async for chunk in response])
+
+    assert selected["model_info"]["id"] == "fast"
+    assert response._hidden_params["model_id"] == "fast"
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in chunks
+    ) == "Hello world"
+
+
+def test_latency_cache_honors_custom_ttl() -> None:
+    clock: Final = Mock(return_value=100.0)
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    handler: Final = LowestLatencyLoggingHandler(
+        router_cache=cache, routing_args={"ttl": 3}
+    )
+
+    handler.log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"model_group": "ttl-group"},
+                "model_info": {"id": "deployment"},
+            }
+        },
+        response_obj={"usage": {"total_tokens": 1}},
+        start_time=100.0,
+        end_time=101.0,
+    )
+
+    latency_key: Final = "ttl-group_map"
+    cached: Final = cache.get_cache(key=latency_key)
+    assert isinstance(cached, dict)
+    assert cached["deployment"]["latency"] == [1.0]
+    assert cache.in_memory_cache.ttl_dict[latency_key] == 103.0
+
+    clock.return_value = 104.0
+    assert cache.get_cache(key=latency_key) is None
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+async def test_router_model_group_usage_increases_by_logged_tokens() -> None:
+    model_group: Final = "usage-group"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "tpm": 100,
+                    "mock_response": _chat_response(completion_tokens=5),
+                },
+                "model_info": {"id": "usage-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "usage check"}],
+    )
+    initial_usage: Final = await router.get_model_group_usage(model_group=model_group)
+    await router.acompletion(
+        model=model_group,
+        messages=[{"role": "user", "content": "usage check"}],
+    )
+    updated_usage: Final = await router.get_model_group_usage(model_group=model_group)
+
+    assert updated_usage[0] == initial_usage[0] + 15

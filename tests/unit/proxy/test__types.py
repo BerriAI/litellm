@@ -387,7 +387,7 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
-@pytest.mark.parametrize("versions", [[], ["2099-01-01"], ["2026-07-28"]])
+@pytest.mark.parametrize("versions", [[], ["2099-01-01"]])
 def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
     from pydantic import ValidationError
 

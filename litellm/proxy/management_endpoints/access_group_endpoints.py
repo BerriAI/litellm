@@ -17,11 +17,15 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.auth.auth_checks import (
-    _cache_access_object,
-    _cache_key_object,
-    _cache_team_object,
-    _get_team_object_from_cache,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _cache_team_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _get_team_object_from_cache,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    cache_access_object,
+    cache_key_object,
+    cache_team_object,
+    get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
@@ -166,9 +170,9 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
 
 def _require_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
     """Admin Viewer parity: PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY may read."""
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -303,7 +307,7 @@ async def _cache_access_group_record(record: _AccessGroupRecord) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     access_group_table: Final = _record_to_access_group_table(record)
-    await _cache_access_object(
+    await cache_access_object(
         access_group_id=record.access_group_id,
         access_group_table=access_group_table,
         user_api_key_cache=user_api_key_cache,
@@ -408,7 +412,7 @@ async def _patch_team_caches_add_access_group(
 ) -> None:
     """Patch cached team objects to include access_group_id."""
     for team_id in team_ids:
-        cached_team = await _get_team_object_from_cache(
+        cached_team = await get_team_object_from_cache(
             key=f"team_id:{team_id}",
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
@@ -421,7 +425,7 @@ async def _patch_team_caches_add_access_group(
             cached_team.access_group_ids = list(cached_team.access_group_ids) + [access_group_id]
         else:
             continue
-        await _cache_team_object(
+        await cache_team_object(
             team_id=team_id,
             team_table=cached_team,
             user_api_key_cache=user_api_key_cache,
@@ -437,14 +441,14 @@ async def _patch_team_caches_remove_access_group(
 ) -> None:
     """Patch cached team objects to remove access_group_id."""
     for team_id in team_ids:
-        cached_team = await _get_team_object_from_cache(
+        cached_team = await get_team_object_from_cache(
             key=f"team_id:{team_id}",
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
         if cached_team is not None and cached_team.access_group_ids:
             cached_team.access_group_ids = [ag for ag in cached_team.access_group_ids if ag != access_group_id]
-            await _cache_team_object(
+            await cache_team_object(
                 team_id=team_id,
                 team_table=cached_team,
                 user_api_key_cache=user_api_key_cache,
@@ -473,7 +477,7 @@ async def _patch_key_caches_add_access_group(
             cached_key.access_group_ids = list(cached_key.access_group_ids) + [access_group_id]
         else:
             continue
-        await _cache_key_object(
+        await cache_key_object(
             hashed_token=token,
             user_api_key_obj=cached_key,
             user_api_key_cache=user_api_key_cache,
@@ -496,7 +500,7 @@ async def _patch_key_caches_remove_access_group(
         )
         if cached_key is not None and cached_key.access_group_ids:
             cached_key.access_group_ids = [ag for ag in cached_key.access_group_ids if ag != access_group_id]
-            await _cache_key_object(
+            await cache_key_object(
                 hashed_token=token,
                 user_api_key_obj=cached_key,
                 user_api_key_cache=user_api_key_cache,

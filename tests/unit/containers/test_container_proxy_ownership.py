@@ -425,7 +425,7 @@ async def test_should_validate_owner_and_forward_decoded_id_for_multipart_upload
         async def base_process_llm_request(self, **kwargs):
             return captured["data"]
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     monkeypatch.setattr(
@@ -499,7 +499,7 @@ async def test_should_forward_decoded_container_id_for_proxy_retrieve(monkeypatc
         async def base_process_llm_request(self, **kwargs):
             return captured["data"]
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -554,7 +554,7 @@ async def test_should_record_container_owner_inside_create_endpoint(monkeypatch)
         async def base_process_llm_request(self, **kwargs):
             return response
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     record_owner = AsyncMock(return_value=response)
@@ -608,7 +608,7 @@ async def test_should_not_route_owner_record_errors_through_llm_error_handler(
         async def base_process_llm_request(self, **kwargs):
             return _container("cntr_provider")
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise AssertionError("ownership errors should not use LLM error handler")
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -668,7 +668,7 @@ async def test_should_return_response_when_owner_recording_raises_unexpected(
         async def base_process_llm_request(self, **kwargs):
             return created
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise AssertionError("upstream-create errors only")
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
@@ -772,7 +772,7 @@ async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch)
         async def base_process_llm_request(self, **kwargs):
             return captured["data"]
 
-        async def _handle_llm_api_exception(self, **kwargs):
+        async def handle_llm_api_exception(self, **kwargs):
             raise kwargs["e"]
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)

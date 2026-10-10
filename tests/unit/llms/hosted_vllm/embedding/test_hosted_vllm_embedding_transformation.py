@@ -6,9 +6,11 @@ especially ensuring that encoding_format is not included when not provided.
 """
 
 import json
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
+import respx
 
 
 import litellm
@@ -326,3 +328,23 @@ class TestHostedVLLMEmbeddingTransformation:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+
+def test_hosted_vllm_embedding_posts_to_the_env_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://hosted-vllm.test")
+    route: Final = respx_mock.post("http://hosted-vllm.test/embeddings").respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.5, 0.25]}],
+            "model": "jina-embeddings-v3",
+            "usage": {"prompt_tokens": 2, "total_tokens": 2},
+        }
+    )
+
+    response: Final = litellm.embedding(model="hosted_vllm/jina-embeddings-v3", input=["Hello world"])
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {"model": "jina-embeddings-v3", "input": ["Hello world"]}
+    assert response.data[0]["embedding"] == [0.5, 0.25]

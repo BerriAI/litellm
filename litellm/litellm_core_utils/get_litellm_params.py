@@ -32,6 +32,14 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
+    {
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+        "token_exchange_audience",
+    }
+)
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -67,12 +75,16 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            "github_copilot_auth_type",
+            "github_copilot_user_session",
+            "fireworks_forward_user_id",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
     | ANTHROPIC_WIF_KWARGS_KEYS
     | OPENAI_WIF_KWARGS_KEYS
+    | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 

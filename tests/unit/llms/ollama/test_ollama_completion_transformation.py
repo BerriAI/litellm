@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._uuid import uuid
@@ -596,6 +597,28 @@ class TestOllamaConfig:
 
 
 class TestOllamaTextCompletionResponseIterator:
+    def test_every_chunk_of_one_stream_carries_the_same_response_id(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        ollama_chunks: Final = (
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "thinking": "Hm", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "Hel", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "lo", "done": False},
+        )
+
+        results: Final = tuple(iterator.chunk_parser(chunk) for chunk in ollama_chunks)
+
+        ids: Final = {result.id for result in results if isinstance(result, ModelResponseStream)}
+        assert len(results) == len(ollama_chunks) and len(ids) == 1, ids
+        assert next(iter(ids)).startswith("chatcmpl-")
+        other: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        other_result: Final = other.chunk_parser(ollama_chunks[2])
+        assert isinstance(other_result, ModelResponseStream) and other_result.id not in ids
+
     def test_chunk_parser_with_thinking_field(self):
         """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
         iterator = OllamaTextCompletionResponseIterator(
@@ -864,3 +887,36 @@ def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> N
     data = _transform_image_request(payload, "png")
 
     assert data["images"] == [payload]
+
+
+def test_ollama_vision_model_sends_the_image_beside_the_user_prompt(respx_mock: respx.MockRouter) -> None:
+    image_base64: Final = _image_base64("PNG")
+    route: Final = respx_mock.post("http://ollama.test:11434/api/generate").respond(
+        json={
+            "model": "llama3.2-vision:11b",
+            "response": "A white square",
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="ollama/llama3.2-vision:11b",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Whats in this image?"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                ],
+            }
+        ],
+        api_base="http://ollama.test:11434",
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["model"] == "llama3.2-vision:11b"
+    assert body["images"] == [image_base64]
+    assert body["prompt"] == "### User:\nWhats in this image?\n\n"
+    assert response.choices[0].message.content == "A white square"

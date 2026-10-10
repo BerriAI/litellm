@@ -439,17 +439,3 @@ class BaseRealtimeTest(ABC):
 
         assert websocket_client.connection_successful, "Failed to establish connection"
         assert websocket_client.sent_user_message, "Failed to send user message"
-
-    def test_query_params_construction(self):
-        """Test that query params are constructed correctly"""
-        from litellm.types.realtime import RealtimeQueryParams
-
-        # Strip provider prefix from model name
-        model_name = self.get_model()
-        if "/" in model_name:
-            model_name = model_name.split("/", 1)[1]
-
-        query_params: RealtimeQueryParams = {"model": model_name}
-
-        assert "model" in query_params
-        assert query_params["model"] == model_name

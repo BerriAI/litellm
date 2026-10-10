@@ -416,11 +416,11 @@ def _provider_output_file_id(output_file_id: str) -> str:
     llm_output_file_id, model-encoded ids decode to the raw provider id, raw ids pass through.
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
     )
 
-    unified_file_id: Final = _is_base64_encoded_unified_file_id(output_file_id)
+    unified_file_id: Final = is_base64_encoded_unified_file_id(output_file_id)
     if not unified_file_id:
         return get_original_file_id(output_file_id)
     try:

@@ -14,7 +14,10 @@ use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
 pub use litellm_inference::RouteError as Error;
-pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
+pub use types::{
+    MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, litellm_params,
+    messages_body,
+};
 
 #[derive(Clone)]
 pub struct MessagesRoute {

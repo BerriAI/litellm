@@ -21,9 +21,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 [dependencies]
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
-litellm-traces.workspace = true
-litellm-traces-cache.workspace = true
-litellm-traces-clickhouse.workspace = true
+litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
@@ -48,6 +46,7 @@ litellm-llms.workspace = true
 litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "hashicorp", "cyberark"] }
 litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
+litellm-router-types.workspace = true
 litellm-host-python.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true

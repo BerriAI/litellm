@@ -71,15 +71,25 @@ class CacheMode(str, Enum):
 
 
 #### LiteLLM.Completion / Embedding Cache ####
+def _is_conversation_item(item: object) -> bool:
+    if isinstance(item, BaseModel):
+        return True
+    if not isinstance(item, Mapping):
+        return False
+    block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
+    return block.get("type") != "file"
+
+
 def _request_message_count(kwargs: Mapping[str, object]) -> int:
-    """Chat and Messages API `messages`, else Responses API `input` items; embedding `input` strings count as none"""
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
     messages: Final = kwargs.get("messages")
     if isinstance(messages, list):
         return len(messages)
     input_items: Final = kwargs.get("input")
     if not isinstance(input_items, list):
         return 0
-    return sum(1 for item in input_items if isinstance(item, (Mapping, BaseModel)))
+    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
+    return sum(1 for item in items if _is_conversation_item(item))
 
 
 class Cache:

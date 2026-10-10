@@ -52,7 +52,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-from .cisco_ai_defense_mcp import _CiscoAIDefenseMcpMixin
+from .cisco_ai_defense_mcp import (  # noqa: F401  # legacy module exports
+    CiscoAIDefenseMcpMixin,
+    _CiscoAIDefenseMcpMixin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
@@ -116,7 +119,7 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
-class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
+class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     """
     Cisco AI Defense guardrail integration.
 

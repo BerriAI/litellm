@@ -38,7 +38,7 @@ else:
     PrismaClient = Any
 
 
-class PROXY_LiteLLMManagedVectorStores(
+class _PROXY_LiteLLMManagedVectorStores(
     CustomLogger, BaseManagedResource[VectorStoreCreateResponse]
 ):
     """
@@ -462,4 +462,4 @@ class PROXY_LiteLLMManagedVectorStores(
             parent_otel_span=parent_otel_span,
             resource_id_key="vector_store_id",
         )
-_PROXY_LiteLLMManagedVectorStores = PROXY_LiteLLMManagedVectorStores
+PROXY_LiteLLMManagedVectorStores = _PROXY_LiteLLMManagedVectorStores

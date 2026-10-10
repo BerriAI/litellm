@@ -12,6 +12,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -264,7 +265,7 @@ async def make_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -355,7 +356,7 @@ def make_sync_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -440,6 +441,7 @@ class _EventStreamTally:
 
 class AWSEventStreamDecoder:
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model

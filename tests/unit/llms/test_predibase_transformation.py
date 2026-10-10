@@ -2,7 +2,9 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.predibase.chat.handler import PredibaseChatCompletion
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
 from litellm.llms.predibase.common_utils import PredibaseError
@@ -113,6 +115,24 @@ def test_predibase_get_complete_url_with_tenant_id_key():
 
     assert "tenant-xyz" in url
     assert url.endswith("/generate")
+
+
+def test_predibase_authentication_error_does_not_expose_the_api_key(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post(
+        "https://serving.app.predibase.com/c4768f95/deployments/v2/llms/llama-3-8b-instruct/generate"
+    ).mock(return_value=httpx.Response(401, json={"message": "invalid API key"}))
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        litellm.completion(
+            model="predibase/llama-3-8b-instruct",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            predibase_tenant_id="c4768f95",
+            api_key="hf-rawapikey",
+            max_retries=0,
+        )
+
+    assert "hf-rawapikey" not in str(exc_info.value)
+    assert route.calls.last.request.headers["Authorization"] == "Bearer hf-rawapikey"
 
 
 def test_predibase_transform_response_success_best_of(monkeypatch):

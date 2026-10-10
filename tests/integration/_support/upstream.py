@@ -11,13 +11,20 @@ import zlib
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, cast
 
 import httpx
 import uvicorn
-from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
+from _fake_openai_endpoint_server import (
+    chat_completions,
+    completions,
+    embeddings,
+    health,
+    moderations,
+    triton_embeddings,
+)
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -38,7 +45,6 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
 INTERNAL_FIELDS: Final = frozenset(
     {
         "litellm_params",
@@ -269,8 +275,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        cases_file: Final = JSON_OBJECT.validate_json(CASES_FILE.read_bytes())
-        return JSONResponse(cases_file["cost_map"])
+        return JSONResponse(COST_MAP_ENTRIES)
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(
@@ -440,6 +445,37 @@ class Provider:
             while pending:
                 await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
 
+    async def gemini_live(self, websocket: WebSocket) -> None:
+        authorization: Final = websocket.headers.get("authorization", "")
+        scenario_id: Final = websocket.headers.get("x-goog-user-project", "")
+        self.observations.put(
+            Observation(
+                websocket.url.path,
+                authorization,
+                {"host": websocket.headers.get("host", "")},
+                "WEBSOCKET",
+                scenario_id,
+            )
+        )
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, RealtimeResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        pending: Final = deque(response.events)
+        async for message in websocket.iter_json():
+            payload: Final = JSON_OBJECT.validate_python(message)
+            self.observations.put(
+                Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", scenario_id)
+            )
+            if "setup" in payload:
+                await websocket.send_json({"setupComplete": {}})
+                continue
+            if not _GEMINI_LIVE_TRIGGERS.intersection(payload):
+                continue
+            while pending:
+                await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
+
     @staticmethod
     def _response(response: StoredResponse, scenario_id: str) -> Response:
         unique_id: Final = f"{scenario_id}-{uuid.uuid4().hex[:8]}"
@@ -519,6 +555,7 @@ class Provider:
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
+                Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
                 Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),
@@ -539,6 +576,7 @@ class Provider:
                 WebSocketRoute("/openai/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/realtime", self.realtime),
                 WebSocketRoute("/v1/asr/realtime", self.muse_realtime),
+                WebSocketRoute(GEMINI_LIVE_PATH, self.gemini_live),
             ]
         )
 
@@ -562,6 +600,8 @@ def _interaction_body(interaction_id: str, state: InteractionState) -> dict[str,
 
 
 _REALTIME_TRIGGERS: Final = frozenset({"response.create", "input_audio_buffer.commit"})
+_GEMINI_LIVE_TRIGGERS: Final = frozenset({"clientContent", "realtimeInput"})
+GEMINI_LIVE_PATH: Final = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 _TRANSCRIPTION_UPDATE_REFUSED: Final = "Passing a realtime session update to a transcription session is not allowed."
 _REALTIME_UPDATE_REFUSED: Final = "Passing a transcription session update to a realtime session is not allowed."
 _NESTED_TURN_DETECTION_TYPE: Final = "session.audio.input.turn_detection.type"
