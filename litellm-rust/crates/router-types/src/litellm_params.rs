@@ -49,8 +49,16 @@ pub struct LitellmParams {
     pub use_chat_completions_api: Option<bool>,
     pub litellm_credential_name: Option<String>,
     pub provider_affinity_header: Option<String>,
+    #[serde(skip)]
+    pub github_copilot_session: Option<GithubCopilotSession>,
     #[serde(flatten)]
     pub extra: ExtraParams,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GithubCopilotSession {
+    pub token: SecretValue,
+    pub api_base: String,
 }
 
 impl LitellmParams {

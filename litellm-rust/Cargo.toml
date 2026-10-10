@@ -39,7 +39,6 @@ litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
-litellm-auth-copilot = { path = "crates/auth-copilot" }
 litellm-secrets = { path = "crates/secrets" }
 litellm-secrets-types = { path = "crates/secrets-types" }
 litellm-secrets-aws = { path = "crates/secrets-aws" }
