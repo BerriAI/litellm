@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 from unittest.mock import MagicMock, call, patch
 
@@ -2180,3 +2181,124 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+    @pytest.mark.asyncio
+    async def test_stale_token_inside_safety_margin_refreshes_before_use(self):
+        """A token a few seconds from expiry must be refreshed before it is handed out.
+        Google rejects it with ACCESS_TOKEN_EXPIRED at the edge, so serving it with only
+        a background refresh fails the request that triggered the refresh."""
+        import datetime
+
+        from litellm.constants import VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
+
+        clock = _FakeClock(datetime.datetime(2026, 1, 1, 12, 0, 0))
+        creds = _FakeGoogleCredentials(clock)
+        vertex_base = VertexBase()
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=creds),
+            patch("time.time", side_effect=clock.timestamp),
+        ):
+            first_token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id="project-1", custom_llm_provider="vertex_ai"
+            )
+            clock.now = creds.expiry - datetime.timedelta(seconds=VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS / 2)
+
+            token, project = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id="project-1", custom_llm_provider="vertex_ai"
+            )
+
+        assert first_token == "token-1"
+        assert token == "token-2"
+        assert project == "project-1"
+        assert creds.refresh_calls == 2
+
+    @pytest.mark.asyncio
+    async def test_stale_token_outside_safety_margin_is_served_while_refreshing(self):
+        """A STALE token with comfortable time left keeps the zero-latency path."""
+        import datetime
+
+        from google.auth import _helpers as google_auth_helpers
+
+        from litellm.constants import VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
+
+        stale_window = google_auth_helpers.REFRESH_THRESHOLD.total_seconds()
+        if VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS >= stale_window:
+            pytest.skip("the configured margin covers the whole STALE window, there is no zero-latency path to test")
+        seconds_left = (VERTEX_AI_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS + stale_window) / 2
+
+        clock = _FakeClock(datetime.datetime(2026, 1, 1, 12, 0, 0))
+        creds = _FakeGoogleCredentials(clock)
+        vertex_base = VertexBase()
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=creds),
+            patch("time.time", side_effect=clock.timestamp),
+        ):
+            await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id="project-1", custom_llm_provider="vertex_ai"
+            )
+            clock.now = creds.expiry - datetime.timedelta(seconds=seconds_left)
+
+            token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id="project-1", custom_llm_provider="vertex_ai"
+            )
+            assert token == "token-1"
+            await asyncio.gather(*vertex_base._background_refresh_tasks.values())
+
+        assert creds.refresh_calls == 2
+        assert creds.token == "token-2"
+
+
+class _FakeClock:
+    """The one clock both the module (through time.time) and the fake credential read."""
+
+    def __init__(self, now: datetime.datetime):
+        self.now = now
+
+    def timestamp(self) -> float:
+        return self.now.replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
+class _FakeGoogleCredentials:
+    """Stands in for google.oauth2 credentials: the frozen clock decides FRESH / STALE / INVALID
+    the way google-auth does, and refresh() mints the next token an hour out."""
+
+    def __init__(self, clock: _FakeClock):
+        import datetime
+
+        self._clock = clock
+        self._refresh_threshold = datetime.timedelta(minutes=3, seconds=45)
+        self.token: str | None = None
+        self.expiry = clock.now
+        self.refresh_calls = 0
+        self.project_id = "project-1"
+        self.quota_project_id = "project-1"
+
+    @property
+    def token_state(self):
+        from google.auth.credentials import TokenState
+
+        if self.token is None or self._clock.now >= self.expiry:
+            return TokenState.INVALID
+        if self._clock.now >= self.expiry - self._refresh_threshold:
+            return TokenState.STALE
+        return TokenState.FRESH
+
+    @property
+    def expired(self) -> bool:
+        return self._clock.now >= self.expiry - self._refresh_threshold
+
+    @property
+    def valid(self) -> bool:
+        return self.token is not None and not self.expired
+
+    def refresh(self, request) -> None:
+        import datetime
+
+        self.refresh_calls += 1
+        self.token = f"token-{self.refresh_calls}"
+        self.expiry = self._clock.now + datetime.timedelta(hours=1)
