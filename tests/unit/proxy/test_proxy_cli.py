@@ -22,6 +22,7 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+from litellm.constants import DEFAULT_WORKER_HEALTHCHECK_TIMEOUT_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
@@ -152,6 +153,25 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+            assert args["timeout_worker_healthcheck"] == DEFAULT_WORKER_HEALTHCHECK_TIMEOUT_SECONDS
+
+    def test_worker_healthcheck_timeout_on_uvicorn_without_the_parameter(self, capsys):
+        class _OldUvicornConfig:
+            def __init__(self, timeout_keep_alive=None):
+                pass
+
+        with patch("uvicorn.Config", _OldUvicornConfig):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+            assert "timeout_worker_healthcheck" not in args
+            assert capsys.readouterr().out == ""
+
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000, timeout_worker_healthcheck=15
+            )
+            assert "timeout_worker_healthcheck" not in args
+            assert "requires uvicorn>=0.37.0" in capsys.readouterr().out
 
     @staticmethod
     def _uvicorn_access_info_enabled(args: dict) -> bool:
