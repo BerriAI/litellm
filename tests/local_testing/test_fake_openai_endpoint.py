@@ -28,7 +28,7 @@ from tests.fake_openai_endpoint import (
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _MIGRATED_FILES = (
-    "tests/llm_translation/test_triton.py",
+    "tests/integration/translation/test_triton.py",
     "tests/local_testing/test_completion.py",
 )
 

@@ -349,6 +349,16 @@ model_list:
       model: openrouter/typesafe/jev-1.13
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openrouter-key
+  - model_name: openrouter/anthropic/claude-sonnet-4
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
+  - model_name: openrouter/google/gemini-3.1-flash-image
+    litellm_params:
+      model: openrouter/google/gemini-3.1-flash-image
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
   - model_name: cloudflare/@cf/cloudflare/clef
     litellm_params:
       model: cloudflare/@cf/cloudflare/clef

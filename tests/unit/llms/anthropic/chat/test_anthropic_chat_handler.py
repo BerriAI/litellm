@@ -578,6 +578,93 @@ def test_text_only_streaming_has_index_zero():
             assert parsed.choices[0].index == 0, f"Expected index=0, got {parsed.choices[0].index}"
 
 
+def _anthropic_sse(*events: dict) -> bytes:
+    return b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_streamed_completion_sets_assistant_role_on_exactly_one_chunk(respx_mock):
+    stream_body: Final = _anthropic_sse(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_role_once",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I will call the tool."}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_role_once", "name": "call_me_please", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"a_number": "sixty-five thousand"}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 20}},
+        {"type": "message_stop"},
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Call the tool and say what you are doing first."}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_me_please",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a_number": {"type": "string"}},
+                        "required": ["a_number"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+        client=HTTPHandler(),
+    )
+    roles: Final = tuple(chunk.choices[0].delta.role for chunk in response if chunk.choices)
+
+    assert tuple(role for role in roles if role is not None) == ("assistant",)
+    assert roles[0] == "assistant"
+
+
+def test_streaming_citation_delta_is_provider_specific():
+    citation = {
+        "type": "char_location",
+        "cited_text": "The grass is green.",
+        "document_index": 0,
+        "document_title": "My Document",
+        "start_char_index": 0,
+        "end_char_index": 19,
+    }
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    parsed = iterator.chunk_parser(
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "citations_delta", "citation": citation},
+        }
+    )
+
+    assert parsed.choices[0].delta.provider_specific_fields == {"citation": citation}
+
+
 def test_message_delta_without_usage_returns_chunk_with_no_usage():
     iterator: Final = ModelResponseIterator(None, sync_stream=True)
 

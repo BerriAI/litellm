@@ -1442,3 +1442,66 @@ def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_thinking_merges_into_content_with_think_tags() -> None:
+    frames: Final = (
+        _converse_event_frame("messageStart", {"role": "assistant"}),
+        _converse_event_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "I am a helpful assistant, "}}},
+        ),
+        _converse_event_frame(
+            "contentBlockDelta",
+            {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "the user wants to know who I am"}}},
+        ),
+        _converse_event_frame(
+            "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "c2lnbmF0dXJl"}}}
+        ),
+        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _converse_event_frame(
+            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}
+        ),
+        _converse_event_frame(
+            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "I am a helpful assistant"}}
+        ),
+        _converse_event_frame("contentBlockStop", {"contentBlockIndex": 1}),
+        _converse_event_frame("messageStop", {"stopReason": "end_turn"}),
+        _converse_event_frame(
+            "metadata",
+            {"usage": {"inputTokens": 12, "outputTokens": 30, "totalTokens": 42}, "metrics": {"latencyMs": 100}},
+        ),
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            content=b"".join(frames),
+            headers={"content-type": "application/vnd.amazon.eventstream"},
+            request=request,
+        )
+
+    response: Final = await litellm.acompletion(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "Hello who is this?"}],
+        stream=True,
+        max_tokens=1080,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        merge_reasoning_content_in_choices=True,
+        aws_access_key_id="AKIATHINKINGKEY",
+        aws_secret_access_key="thinking-secret",
+        aws_region_name="us-west-2",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert requests[0].url.raw_path == b"/model/us.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse-stream"
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
+        "<think>I am a helpful assistant, the user wants to know who I am</think>"
+        "Hi I am Anthropic, I am a helpful assistant"
+    )
+    assert [getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in chunks] == [None] * len(chunks)

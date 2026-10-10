@@ -6188,6 +6188,112 @@ def test_azure_embedding_exceptions():
     assert str(exc_info.value) == "Mock error"
 
 
+def test_completion_ensure_alternating_roles_sends_continue_messages(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "https://adb-alternating.cloud.databricks.com/serving-endpoints"
+    route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-databricks",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "databricks-meta-llama-3-1-70b-instruct",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Sure"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 40, "completion_tokens": 1, "total_tokens": 41},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="databricks/databricks-meta-llama-3-1-70b-instruct",
+        messages=[
+            {"role": "user", "content": "Hello!"},
+            {"role": "assistant", "content": "Hello! How can I assist you today?"},
+            {"role": "user", "content": "What is Databricks?"},
+            {"role": "user", "content": "What is Azure?"},
+            {"role": "assistant", "content": "I don't know anyything, do you?"},
+            {"role": "assistant", "content": "I can't repeat sentences."},
+        ],
+        user_continue_message={"role": "user", "content": "Ok"},
+        assistant_continue_message={"role": "assistant", "content": "Please continue"},
+        ensure_alternating_roles=True,
+        api_base=api_base,
+        api_key="dapi-offline",
+        num_retries=0,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "databricks-meta-llama-3-1-70b-instruct",
+        "messages": [
+            {"role": "user", "content": "Hello!"},
+            {"role": "assistant", "content": "Hello! How can I assist you today?"},
+            {"role": "user", "content": "What is Databricks?"},
+            {"role": "assistant", "content": "Please continue"},
+            {"role": "user", "content": "What is Azure?"},
+            {"role": "assistant", "content": "I don't know anyything, do you?"},
+            {"role": "user", "content": "Ok"},
+            {"role": "assistant", "content": "I can't repeat sentences."},
+            {"role": "user", "content": "Ok"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk(
+    sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model: Final = "gpt-5.6"
+    events: Final = (
+        {
+            "id": "chatcmpl-text",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "reply"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-text",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
+    )
+    stream_body: Final = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=stream_body, headers={"content-type": "text/event-stream"})
+    )
+    request: Final = {
+        "model": f"openai/{model}",
+        "prompt": "Hello, world!",
+        "api_key": "offline",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "num_retries": 0,
+        "max_retries": 0,
+    }
+
+    chunks: Final = (
+        list(litellm.text_completion(**request))
+        if sync_mode
+        else [chunk async for chunk in await litellm.atext_completion(**request)]
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "model": model,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert "".join(chunk.choices[0].text or "" for chunk in chunks) == "reply"
+    final_usage: Final = chunks[-1].usage
+    assert (final_usage.prompt_tokens, final_usage.completion_tokens, final_usage.total_tokens) == (3, 2, 5)
+
 
 def test_model_alias_map_resolves_the_outbound_model(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

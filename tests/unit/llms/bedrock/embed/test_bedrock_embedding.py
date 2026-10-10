@@ -1,11 +1,13 @@
 import json
 import asyncio
 import os
+from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import httpx
+import respx
 
 import litellm
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
@@ -1339,6 +1341,123 @@ def test_marengo_3_text_image_without_media_source_is_a_bad_request():
             api_key="test-bearer-token-12345",
             input_type="text_image",
         )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_marengo_text_embedding_calls_bedrock_and_parses_vector(
+    respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.twelvelabs.marengo-embed-2-7-v1%3A0/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embedding": [0.2, 0.4, 0.6],
+                "embeddingOption": "visual-text",
+                "startSec": 0.0,
+                "endSec": 1.0,
+                "inputTextTokenCount": 5,
+            },
+        )
+    )
+
+    embedding_kwargs: Final = {
+        "model": "bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+        "input": ["Hello world from LiteLLM with TwelveLabs Marengo!"],
+        "aws_access_key_id": "AKIAEMBEDDINGKEY",
+        "aws_secret_access_key": "embedding-secret",
+        "aws_region_name": "us-west-2",
+        "timeout": 7.0,
+    }
+    response: Final = (
+        litellm.embedding(**embedding_kwargs) if sync_mode else await litellm.aembedding(**embedding_kwargs)
+    )
+
+    assert route.calls[0].request.url.path == "/model/us.twelvelabs.marengo-embed-2-7-v1:0/invoke"
+    assert route.calls[0].request.extensions["timeout"] == {"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}
+    assert json.loads(route.calls[0].request.content) == {
+        "inputType": "text",
+        "inputText": "Hello world from LiteLLM with TwelveLabs Marengo!",
+        "textTruncate": "end",
+    }
+    assert response.data[0]["embedding"] == [0.2, 0.4, 0.6]
+    assert response.data[0]["index"] == 0
+    assert response.data[0]["object"] == "embedding"
+
+
+@pytest.mark.parametrize(
+    ("region_env_var", "expected_region"),
+    [("AWS_REGION_NAME", "ap-south-1"), ("AWS_REGION", "eu-central-1")],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_marengo_text_embedding_resolves_region_from_env(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    region_env_var: str,
+    expected_region: str,
+) -> None:
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setenv(region_env_var, expected_region)
+    route: Final = respx_mock.post(
+        f"https://bedrock-runtime.{expected_region}.amazonaws.com/model/us.twelvelabs.marengo-embed-2-7-v1%3A0/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embedding": [0.2, 0.4, 0.6], "embeddingOption": "visual-text", "inputTextTokenCount": 5},
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+        input=["Hello world"],
+        aws_access_key_id="AKIAEMBEDDINGKEY",
+        aws_secret_access_key="embedding-secret",
+        client=HTTPHandler(),
+    )
+
+    assert route.calls[0].request.url.host == f"bedrock-runtime.{expected_region}.amazonaws.com"
+    assert response.data[0]["embedding"] == [0.2, 0.4, 0.6]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_marengo_image_embedding_sends_media_source_and_parses_vector(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.twelvelabs.marengo-embed-2-7-v1%3A0/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embedding": [0.1, 0.3, 0.5],
+                "embeddingOption": "visual-text",
+                "startSec": 0.0,
+                "endSec": 1.0,
+                "inputTextTokenCount": 2,
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+        input=["data:image/png;base64,ZHVjaw=="],
+        input_type="image",
+        aws_access_key_id="AKIAEMBEDDINGKEY",
+        aws_secret_access_key="embedding-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "inputType": "image",
+        "mediaSource": {"base64String": "ZHVjaw=="},
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.3, 0.5]
+    assert response.data[0]["index"] == 0
+    assert response.data[0]["object"] == "embedding"
 
 
 @pytest.mark.parametrize(

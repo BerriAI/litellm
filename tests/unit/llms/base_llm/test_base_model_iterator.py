@@ -3,10 +3,15 @@ Tests for BaseModelResponseIterator - specifically testing that empty SSE lines 
 and non-string objects (e.g. Pydantic BaseModel events from the Responses API) pass through.
 """
 
+import json
+from collections.abc import AsyncIterator
+from typing import Final
+
 import pytest
 from pydantic import BaseModel
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.types.utils import GenericStreamingChunk
 
 
@@ -256,3 +261,47 @@ async def test_aclose_is_noop_without_http_response():
     )
 
     await iterator.aclose()
+
+
+_PREFIXED_BYTE_FRAMES: Final = (
+    b"event: completion\ndata: "
+    + json.dumps(
+        {
+            "id": "chatcmpl-bytes",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-5.5",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}],
+        }
+    ).encode(),
+    b"data: [DONE]",
+)
+
+
+async def _aiter_frames(frames: tuple[bytes, ...]) -> AsyncIterator[bytes]:
+    for frame in frames:
+        yield frame
+
+
+async def _collect_prefixed_byte_frames(sync_mode: bool) -> list[object]:
+    if sync_mode:
+        return list(
+            OpenAIChatCompletionStreamingHandler(streaming_response=iter(_PREFIXED_BYTE_FRAMES), sync_stream=True)
+        )
+    return [
+        chunk
+        async for chunk in OpenAIChatCompletionStreamingHandler(
+            streaming_response=_aiter_frames(_PREFIXED_BYTE_FRAMES), sync_stream=False
+        )
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_bytes_chunk_with_text_before_data_prefix_is_parsed(sync_mode: bool) -> None:
+    chunks: Final = await _collect_prefixed_byte_frames(sync_mode)
+
+    assert len(chunks) == 2
+    assert chunks[0].id == "chatcmpl-bytes"
+    assert chunks[0].choices[0].delta.content == "Hello"
+    assert chunks[1]["is_finished"] is True

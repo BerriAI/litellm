@@ -12,12 +12,15 @@ import json
 
 import httpx
 import pytest
+import respx
 
 
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import litellm
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 class TestAgentCoreAcceptHeader:
@@ -1219,3 +1222,50 @@ def test_bedrock_agentcore_with_custom_params():
         # Body should just contain the prompt
         assert "prompt" in request_data
         assert request_data["prompt"] == "Explain machine learning in simple terms"
+
+
+_AGENTCORE_SSE_BODY: Final = (
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"Machine learning lets "}}}}\n\n'
+    'data: {"event":{"contentBlockDelta":{"delta":{"text":"computers learn from data."}}}}\n\n'
+    'data: {"event":{"metadata":{"usage":{"inputTokens":9,"outputTokens":7,"totalTokens":16}}}}\n\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        (
+            "application/json",
+            json.dumps(
+                {
+                    "result": {
+                        "role": "assistant",
+                        "content": [{"text": "Machine learning lets computers learn from data."}],
+                    }
+                }
+            ),
+        ),
+        ("text/event-stream", _AGENTCORE_SSE_BODY),
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_agentcore_runtime_response_becomes_assistant_message(
+    content_type: str, body: str, respx_mock: respx.Router
+) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
+        "arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A888602223428%3Aruntime%2Fhosted_agent_13sf6-cALnp38iZD/invocations"
+    ).mock(return_value=httpx.Response(200, content=body.encode(), headers={"content-type": content_type}))
+
+    response: Final = litellm.completion(
+        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/"
+        "hosted_agent_13sf6-cALnp38iZD",
+        messages=[{"role": "user", "content": "Explain machine learning in simple terms"}],
+        aws_access_key_id="AKIAAGENTCOREKEY",
+        aws_secret_access_key="agentcore-secret",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content)["prompt"] == "Explain machine learning in simple terms"
+    assert response.choices[0].message.content == "Machine learning lets computers learn from data."
+    assert response.choices[0].finish_reason == "stop"

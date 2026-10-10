@@ -1,9 +1,12 @@
+import datetime
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.types.rerank import RerankResponse
 
@@ -69,4 +72,37 @@ def test_map_cohere_rerank_params_returns_every_cohere_param():
         "rank_fields": None,
         "return_documents": True,
         "max_chunks_per_doc": None,
+    }
+
+
+def test_transform_rerank_response_preserves_response_shape() -> None:
+    response: Final = CohereRerankConfig().transform_rerank_response(
+        model="rerank-v4.0-pro",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "id": "rerank-1",
+                "results": [{"index": 2, "relevance_score": 0.995, "document": {"text": "Paris"}}],
+                "meta": {
+                    "api_version": {"version": "2"},
+                    "billed_units": {"search_units": 1},
+                },
+            },
+        ),
+        model_response=RerankResponse(),
+        logging_obj=Logging(
+            model="rerank-v4.0-pro",
+            messages=[],
+            stream=False,
+            call_type="rerank",
+            start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+            litellm_call_id="rerank-test-call",
+            function_id="rerank-test-function",
+        ),
+    )
+
+    assert response.model_dump() == {
+        "id": "rerank-1",
+        "results": [{"index": 2, "relevance_score": 0.995, "document": {"text": "Paris"}}],
+        "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
     }

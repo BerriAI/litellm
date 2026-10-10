@@ -76,7 +76,7 @@ def logger(monkeypatch: pytest.MonkeyPatch) -> RecordingLogger:
 
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[1]
-PDF_PATH: Final = TESTS_DIR / "llm_translation" / "fixtures" / "dummy.pdf"
+PDF_PATH: Final = TESTS_DIR / "fixtures" / "dummy.pdf"
 PNG_PATH: Final = TESTS_DIR / "image_gen_tests" / "test_image.png"
 PINNED_CDN: Final = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0"
 PDF_URL: Final = f"{PINNED_CDN}/tests/llm_translation/fixtures/dummy.pdf"
@@ -298,5 +298,4 @@ async def test_ocr(case: Case, monkeypatch: pytest.MonkeyPatch, logger: Recordin
     response: Final = await case.run(credentials)
     _assert_ocr_response(response, case.provider.model, case.document.expected_text)
     _assert_logged(await logger.wait_for_call(), response, case.provider.model, response.model, case.call)
-
 

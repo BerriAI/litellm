@@ -272,6 +272,24 @@ class ChatTool(BaseModel):
     function: ChatToolFunction
 
 
+class AnthropicToolBody(BaseModel, frozen=True):
+    type: Literal["computer_20250124", "web_fetch_20250910", "text_editor_20250728", "url", "mcp"]
+    name: str | None = None
+    function: dict[str, JsonValue] | None = None
+    max_uses: int | None = None
+    url: str | None = None
+    authorization_token: str | None = None
+    server_label: str | None = None
+    server_url: str | None = None
+    require_approval: str | None = None
+    headers: dict[str, str] | None = None
+
+
+class AnthropicExtraBody(BaseModel, frozen=True):
+    tools: Sequence[AnthropicToolBody] | None = None
+    web_search_options: dict[str, JsonValue] | None = None
+
+
 class McpChatTool(BaseModel):
     """An MCP server attached to a chat completion (OpenAI `type: "mcp"` tool).
     `server_url` selects the gateway-registered server by its alias suffix; with
@@ -283,6 +301,10 @@ class McpChatTool(BaseModel):
     require_approval: str
     server_label: str | None = None
     allowed_tools: list[str] | None = None
+
+
+class GeminiUrlContextTool(BaseModel, frozen=True):
+    urlContext: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ToolCallFunction(BaseModel):
@@ -340,7 +362,7 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
-    tools: Sequence[ChatTool | McpChatTool] | None = None
+    tools: Sequence[ChatTool | McpChatTool | GeminiUrlContextTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     include_guardrail_response: bool | None = None
@@ -467,6 +489,15 @@ class GuardrailInformationEntry(BaseModel):
     duration: float | None = None
 
 
+class GeminiUrlMetadata(BaseModel, frozen=True):
+    retrievedUrl: str
+    urlRetrievalStatus: str
+
+
+class GeminiUrlContextMetadata(BaseModel, frozen=True):
+    urlMetadata: Sequence[GeminiUrlMetadata]
+
+
 class ChatResponse(BaseModel):
     id: str | None = None
     object: str | None = None
@@ -475,6 +506,7 @@ class ChatResponse(BaseModel):
     usage: Usage | None = None
     service_tier: str | None = None
     guardrail_information: list[GuardrailInformationEntry] | None = None
+    vertex_ai_url_context_metadata: Sequence[GeminiUrlContextMetadata] | None = None
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------

@@ -2174,3 +2174,45 @@ def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
         "title": "Person",
         "type": "object",
     }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_prompt_caching_anthropic_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    route: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_anthropic_cache_response(cache_read_input_tokens=0, cache_creation_input_tokens=1545),
+        )
+    )
+    cached_block: Final = {"type": "text", "text": "example text" * 512, "cache_control": {"type": "ephemeral"}}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant that explains the content of the given text."}
+            ],
+        },
+        {"role": "user", "content": [cached_block]},
+    ]
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        temperature=0.5,
+    )
+
+    _assert_databricks_request(route.calls.last.request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "databricks-claude-3-7-sonnet"
+    assert "stream" not in request_body
+    assert request_body["messages"][1]["content"] == [cached_block]
+    assert response.model == "databricks/claude-3-7-sonnet"
+    assert response.usage.prompt_tokens == 1549
+    assert response.usage.completion_tokens == 117
+    assert response.usage.total_tokens == 1666
+    assert response.usage.cache_read_input_tokens == 0
+    assert response.usage.cache_creation_input_tokens == 1545
