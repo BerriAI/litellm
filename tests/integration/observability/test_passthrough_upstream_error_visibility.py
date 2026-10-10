@@ -3,14 +3,17 @@ import json
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qsl, urlsplit
 
+from google import genai
+from google.genai import types
 import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, NotFoundError, OpenAI
 from pydantic import JsonValue
 
@@ -599,3 +602,348 @@ def test_budget_rejected_call_keeps_budget_normalized_error(gateway: Gateway, tm
                 )
             )
             assert len(budget_rows) == 1, budget_rows
+
+
+_GEMINI_REPLY: Final[dict[str, JsonValue]] = {
+    "candidates": [{"content": {"parts": [{"text": "scripted gemini"}], "role": "model"}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
+}
+_GEMINI_SSE: Final = (f"data: {json.dumps(_GEMINI_REPLY)}\r\n\r\n".encode(),)
+_GEMINI_BODY: Final[dict[str, JsonValue]] = {
+    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+    "systemInstruction": {"parts": [{"text": "be terse"}]},
+    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 32, "thinkingConfig": {"thinkingBudget": 0}},
+}
+_GEMINI_SDK_BODY: Final[dict[str, JsonValue]] = {
+    **_GEMINI_BODY,
+    "systemInstruction": {"parts": [{"text": "be terse"}], "role": "user"},
+}
+
+
+def _upstream_query(request: Request) -> tuple[str, list[tuple[str, str]]]:
+    split: Final = urlsplit(request.target)
+    return split.path, parse_qsl(split.query, keep_blank_values=True)
+
+
+def test_gemini_passthrough_both_auth_spellings_swap_the_virtual_key_for_the_proxy_key(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    def respond(request: Request) -> Reply:
+        if ":streamGenerateContent" in request.target:
+            return Reply(chunks=_GEMINI_SSE, content_type="text/event-stream")
+        return Reply(body=json.dumps(_GEMINI_REPLY).encode())
+
+    path: Final = tmp_path / "gemini-auth-spellings.yaml"
+    model_path: Final = "/v1beta/models/gemini-2.5-flash"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.scenario() as scenario:
+                key: Final = scenario.key()
+                sent: Final[list[httpx.Request]] = []
+                client: Final = genai.Client(
+                    api_key=key,
+                    http_options=types.HttpOptions(
+                        base_url=f"{str(candidate.client.base_url).rstrip('/')}/gemini",
+                        client_args={"event_hooks": {"request": [sent.append]}, "timeout": 30, "trust_env": False},
+                    ),
+                )
+                generated: Final = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents="hi",
+                    config=types.GenerateContentConfig(
+                        system_instruction="be terse",
+                        temperature=0.2,
+                        max_output_tokens=32,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+                streamed_text: Final = "".join(
+                    chunk.text or ""
+                    for chunk in client.models.generate_content_stream(
+                        model="gemini-2.5-flash",
+                        contents="hi",
+                        config=types.GenerateContentConfig(
+                            system_instruction="be terse",
+                            temperature=0.2,
+                            max_output_tokens=32,
+                            thinking_config=types.ThinkingConfig(thinking_budget=0),
+                        ),
+                    )
+                )
+                assert generated.text == "scripted gemini", generated
+                assert streamed_text == "scripted gemini", streamed_text
+                assert len(sent) == 2, sent
+                assert all(request.headers.get("x-goog-api-key") == key for request in sent), sent
+                assert parse_qsl(sent[1].url.query.decode(), keep_blank_values=True) == [("alt", "sse")], sent[1].url
+                query_spelling: Final = candidate.client.post(
+                    f"/gemini{model_path}:generateContent", params={"key": key}, json=_GEMINI_BODY
+                )
+                assert query_spelling.status_code == 200, query_spelling.text
+                assert query_spelling.json() == _GEMINI_REPLY, query_spelling.text
+                with candidate.client.stream(
+                    "POST",
+                    f"/gemini{model_path}:streamGenerateContent",
+                    params={"key": key, "alt": "sse"},
+                    json=_GEMINI_BODY,
+                ) as streamed_response:
+                    streamed: Final = streamed_response.read()
+                    assert streamed_response.status_code == 200, streamed
+                assert streamed == b"".join(_GEMINI_SSE), streamed
+                received: Final = wire.drain()
+                assert [(request.method, *_upstream_query(request)) for request in received] == [
+                    ("POST", f"{model_path}:generateContent", [("key", "scripted")]),
+                    ("POST", f"{model_path}:streamGenerateContent", [("alt", "sse"), ("key", "scripted")]),
+                    ("POST", f"{model_path}:generateContent", [("key", "scripted")]),
+                    ("POST", f"{model_path}:streamGenerateContent", [("key", "scripted"), ("alt", "sse")]),
+                ], received
+                for upstream, sdk_request in zip(received[:2], sent, strict=True):
+                    sdk_body: Final = json.loads(sdk_request.content)
+                    assert json.loads(upstream.body) == sdk_body, upstream.body
+                    assert sdk_body == _GEMINI_SDK_BODY, sdk_request.content
+                for request in received[2:]:
+                    assert json.loads(request.body) == _GEMINI_BODY, request.body
+                for request in received:
+                    assert {name: value for name, value in request.headers.items() if key in value} == {}, (
+                        request.headers
+                    )
+                    assert "x-goog-api-key" not in request.headers, request.headers
+                    assert key not in request.target, request.target
+
+
+_CHAT_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "chatcmpl-scripted",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "scripted chat"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+}
+_RESPONSE_OBJECT: Final[dict[str, JsonValue]] = {
+    "id": "resp_scripted",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-4o-mini",
+    "output": [
+        {
+            "id": "msg_scripted",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {
+        "input_tokens": 5,
+        "output_tokens": 3,
+        "total_tokens": 8,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+}
+_RESPONSE_EVENTS: Final[tuple[dict[str, JsonValue], ...]] = (
+    {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {**_RESPONSE_OBJECT, "status": "in_progress", "output": []},
+    },
+    {
+        "type": "response.output_text.delta",
+        "sequence_number": 1,
+        "item_id": "msg_scripted",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "scripted response",
+        "logprobs": [],
+    },
+    {"type": "response.completed", "sequence_number": 2, "response": _RESPONSE_OBJECT},
+)
+_RESPONSE_SSE: Final = tuple(
+    f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in _RESPONSE_EVENTS
+)
+_ASSISTANTS_PAGE: Final[dict[str, JsonValue]] = {
+    "object": "list",
+    "data": [
+        {
+            "id": "asst_scripted",
+            "object": "assistant",
+            "created_at": 1,
+            "name": "scripted",
+            "description": None,
+            "model": "gpt-4o-mini",
+            "instructions": None,
+            "tools": [],
+            "metadata": {},
+        }
+    ],
+    "first_id": "asst_scripted",
+    "last_id": "asst_scripted",
+    "has_more": False,
+}
+
+
+def _openai_peer(request: Request) -> Reply:
+    if request.target.startswith("/v1/assistants"):
+        return Reply(body=json.dumps(_ASSISTANTS_PAGE).encode())
+    if request.target == "/v1/chat/completions":
+        return Reply(body=json.dumps(_CHAT_REPLY).encode())
+    if json.loads(request.body).get("stream") is True:
+        return Reply(chunks=_RESPONSE_SSE, content_type="text/event-stream")
+    return Reply(body=json.dumps(_RESPONSE_OBJECT).encode())
+
+
+def _openai_sdk(candidate: Gateway, key: str, prefix: str, sent: list[httpx.Request]) -> OpenAI:
+    return OpenAI(
+        api_key=key,
+        base_url=f"{str(candidate.client.base_url).rstrip('/')}{prefix}/v1",
+        max_retries=0,
+        http_client=httpx.Client(timeout=30, trust_env=False, event_hooks={"request": [sent.append]}),
+    )
+
+
+def _assert_openai_upstream_auth(request: Request, key: str) -> None:
+    assert request.headers["authorization"] == "Bearer scripted", request.headers
+    assert {name: value for name, value in request.headers.items() if key in value} == {}, request.headers
+    assert key.encode() not in request.body, request.body
+
+
+def _assert_openai_sdk_request(
+    wire: Wire,
+    sent: list[httpx.Request],
+    key: str,
+    method: str,
+    target: str,
+    expected_body: dict[str, JsonValue] | None,
+) -> Request:
+    received: Final = wire.drain()
+    assert [(request.method, request.target) for request in received] == [(method, target)], received
+    assert len(sent) == 1, sent
+    client_request: Final = sent[0]
+    upstream: Final = received[0]
+    _assert_openai_upstream_auth(upstream, key)
+    if expected_body is None:
+        assert client_request.content == b"", client_request.content
+        assert upstream.body == b"", upstream.body
+    else:
+        assert json.loads(client_request.content) == expected_body, client_request.content
+        assert json.loads(upstream.body) == expected_body, upstream.body
+    return upstream
+
+
+_OPENAI_CHAT_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "hi"}],
+    "user": "end-user-1",
+    "store": True,
+    "temperature": 0.2,
+}
+_OPENAI_RESPONSES_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "input": "hi",
+    "store": False,
+    "user": "end-user-1",
+    "temperature": 0.2,
+}
+_OPENAI_RESPONSES_STREAM_BODY: Final[dict[str, JsonValue]] = {
+    **_OPENAI_RESPONSES_BODY,
+    "stream": True,
+}
+
+
+@pytest.mark.parametrize(
+    ("base_path", "surface"),
+    [
+        pytest.param("/openai", "chat", id="openai-chat"),
+        pytest.param("/openai_passthrough", "chat", id="openai-passthrough-chat"),
+        pytest.param("/openai_passthrough", "responses", id="openai-passthrough-responses"),
+        pytest.param("/openai_passthrough", "responses-stream", id="openai-passthrough-responses-stream"),
+        pytest.param("/openai", "assistants", id="openai-assistants"),
+        pytest.param("/openai_passthrough", "assistants", id="openai-passthrough-assistants"),
+    ],
+)
+def test_openai_passthrough_sdk_success_on_both_aliases_forwards_the_native_request(
+    gateway: Gateway, tmp_path: Path, base_path: str, surface: str
+) -> None:
+    path: Final = tmp_path / "openai-success.yaml"
+    with wire_server(_openai_peer) as wire:
+        _openai_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.scenario() as scenario:
+                key: Final = scenario.key()
+                sent: Final[list[httpx.Request]] = []
+                with _openai_sdk(candidate, key, base_path, sent) as sdk:
+                    if surface == "chat":
+                        chat: Final = sdk.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": "hi"}],
+                            user="end-user-1",
+                            store=True,
+                            temperature=0.2,
+                        )
+                        assert chat.model_dump(exclude_unset=True) == _CHAT_REPLY, chat
+                        _assert_openai_sdk_request(wire, sent, key, "POST", "/v1/chat/completions", _OPENAI_CHAT_BODY)
+                    elif surface == "responses":
+                        response: Final = sdk.responses.create(
+                            model="gpt-4o-mini",
+                            input="hi",
+                            store=False,
+                            user="end-user-1",
+                            temperature=0.2,
+                        )
+                        assert response.output_text == "scripted response", response
+                        assert response.id == "resp_scripted", response
+                        _assert_openai_sdk_request(wire, sent, key, "POST", "/v1/responses", _OPENAI_RESPONSES_BODY)
+                    elif surface == "responses-stream":
+                        events: Final = tuple(
+                            sdk.responses.create(
+                                model="gpt-4o-mini",
+                                input="hi",
+                                store=False,
+                                user="end-user-1",
+                                temperature=0.2,
+                                stream=True,
+                            )
+                        )
+                        streamed_text: Final = "".join(
+                            event.delta for event in events if event.type == "response.output_text.delta"
+                        )
+                        final: Final = next(event.response for event in events if event.type == "response.completed")
+                        assert [event.type for event in events] == [event["type"] for event in _RESPONSE_EVENTS], events
+                        assert streamed_text == "scripted response", events
+                        assert final.output_text == "scripted response", final
+                        _assert_openai_sdk_request(
+                            wire, sent, key, "POST", "/v1/responses", _OPENAI_RESPONSES_STREAM_BODY
+                        )
+                    else:
+                        assistants: Final = sdk.beta.assistants.list(limit=2, order="desc")
+                        assert [assistant.id for assistant in assistants.data] == ["asst_scripted"], assistants
+                        upstream: Final = _assert_openai_sdk_request(
+                            wire,
+                            sent,
+                            key,
+                            "GET",
+                            "/v1/assistants?limit=2&order=desc",
+                            None,
+                        )
+                        assert upstream.headers["openai-beta"] == "assistants=v2", upstream.headers
+
+
+def test_openai_passthrough_responses_metadata_reaches_upstream(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: /openai_passthrough/v1/responses drops the native metadata field before forwarding upstream")
+    path: Final = tmp_path / "openai-metadata.yaml"
+    with wire_server(_openai_peer) as wire:
+        _openai_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.scenario() as scenario:
+                sent: Final[list[httpx.Request]] = []
+                with _openai_sdk(candidate, scenario.key(), "/openai_passthrough", sent) as sdk:
+                    sdk.responses.create(model="gpt-4o-mini", input="hi", metadata={"session": "scripted"})
+            received: Final = wire.drain()
+            assert [json.loads(request.body) for request in received] == [json.loads(sent[0].content)], received
