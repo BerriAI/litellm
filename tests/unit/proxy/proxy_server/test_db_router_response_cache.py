@@ -53,7 +53,7 @@ async def test_db_router_rebuild_serves_same_caller_from_cache_and_isolates_call
     litellm_main = importlib.import_module("litellm.main")
     original_mock_completion = litellm_main.mock_completion
 
-    def tracked_mock_completion(*args, **kwargs):
+    def tracked_mock_completion(*args: Any, **kwargs: Any) -> Any:
         nonlocal provider_calls
         provider_calls += 1
         return original_mock_completion(*args, **kwargs)
