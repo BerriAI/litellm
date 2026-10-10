@@ -599,14 +599,17 @@ class Cache:
             )
             if isinstance(source, Mapping)
         )
-        authenticated_namespace: str | None = None
+        authenticated_namespace: str | None = None  # rebind-ok: populated once while scanning trusted auth metadata
         try:
             from litellm.proxy._types import UserAPIKeyAuth
         except ImportError:
-            UserAPIKeyAuth = None  # type: ignore[assignment,misc]
+
+            class UserAPIKeyAuth:  # pragma: no cover - proxy types are available in proxy deployments
+                pass
+
         for metadata in metadata_sources:
             auth_object: object | None = metadata.get("user_api_key_auth")
-            if UserAPIKeyAuth is not None and isinstance(auth_object, UserAPIKeyAuth):
+            if isinstance(auth_object, UserAPIKeyAuth):
                 identity_fields: Final = {
                     "api_key": getattr(auth_object, "api_key", None),
                     "team_id": getattr(auth_object, "team_id", None),
@@ -619,13 +622,13 @@ class Cache:
                 identity = json.dumps(identity_fields, sort_keys=True, default=str, separators=(",", ":"))
                 authenticated_namespace = "caller:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
                 break
-        if authenticated_namespace is not None:
-            namespace: str | None = ":".join(
-                value for value in (self.namespace, authenticated_namespace) if isinstance(value, str) and value
-            )
-        else:
-            metadata: Final = next(iter(metadata_sources), {})
-            namespace = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
+        namespace: Final[str | None] = (
+            ":".join(value for value in (self.namespace, authenticated_namespace) if isinstance(value, str) and value)
+            if authenticated_namespace is not None
+            else dynamic_cache_control.get("namespace")
+            or next(iter(metadata_sources), {}).get("redis_namespace")
+            or self.namespace
+        )
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
