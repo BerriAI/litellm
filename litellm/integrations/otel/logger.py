@@ -748,7 +748,8 @@ class OpenTelemetryV2(CustomLogger):
                     # path's ``async_pre_call_hook``). Idempotent.
                     set_request_root_span(server_span)
                     for key, value in bag.items():
-                        server_span.set_attribute(key, value)
+                        if is_recordable_span(server_span) and server_span.is_recording():
+                            server_span.set_attribute(key, value)
         except Exception:
             pass
 
