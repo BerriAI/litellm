@@ -1,7 +1,8 @@
 import traceback
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.router_utils.fallback_event_handlers import attempted_retries_for_request
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
@@ -58,6 +60,14 @@ class PassThroughStreamContext:
     passthrough_success_handler_obj: PassThroughEndpointLogging
     url_route: str
     start_time: datetime
+
+
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _litellm_params(litellm_logging_obj: LiteLLMLoggingObj) -> Mapping[str, object]:
+    litellm_params: Final[object] = getattr(litellm_logging_obj, "litellm_params", None)
+    return litellm_params if isinstance(litellm_params, Mapping) else _NO_LITELLM_PARAMS  # pyright: ignore[reportUnknownVariableType]  # Logging.litellm_params is untyped
 
 
 class PassThroughStreamingHandler:
@@ -151,6 +161,8 @@ class PassThroughStreamingHandler:
         )
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
+        opened_with_params: Final = _litellm_params(litellm_logging_obj)
+        opened_on_attempt: Final = attempted_retries_for_request(opened_with_params)
 
         def _build_logging_coroutine() -> Coroutine[None, None, None]:
             return resolved_route_streaming_logging(
@@ -265,7 +277,12 @@ class PassThroughStreamingHandler:
             # the caller before this generator starts (see
             # _log_passthrough_upstream_failure); logging them again here as
             # a success would double-log the same request.
-            if not logging_scheduled and raw_bytes and response.status_code < 400:
+            closing_params: Final = _litellm_params(litellm_logging_obj)
+            superseded_by_retry: Final = (
+                closing_params is not opened_with_params
+                and attempted_retries_for_request(closing_params) > opened_on_attempt
+            )
+            if not logging_scheduled and raw_bytes and response.status_code < 400 and not superseded_by_retry:
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
