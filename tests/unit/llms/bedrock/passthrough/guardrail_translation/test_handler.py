@@ -1650,6 +1650,9 @@ class TestConverseRewriteRegressions:
                     },
                 ],
                 "additionalModelRequestFields": {"prompt": "extra"},
+                "toolConfig": {
+                    "tools": [{"toolSpec": {"name": "search", "inputSchema": {"json": {"type": "object"}}}}]
+                },
             },
         }
         guard = _make_guardrail({})
@@ -1658,6 +1661,7 @@ class TestConverseRewriteRegressions:
         inputs = guard.apply_guardrail.call_args.kwargs["inputs"]
         assert inputs["texts"] == ["result"]
         assert inputs["structured_messages"] == [{"role": "tool", "tool_call_id": "t1", "content": "result"}]
+        assert "tools" not in inputs
 
     @pytest.mark.asyncio
     async def test_ambiguous_string_over_multiple_blocks_fails_closed_without_mutation(self):
@@ -1779,6 +1783,303 @@ class TestConverseRewriteRegressions:
         guard.skip_tool_message_in_guardrail = skip_tool
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
         assert result == data
+        guard.apply_guardrail.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tool_result_image_part_is_skipped_when_mapping_the_text_part(self):
+        image = {"image": {"format": "png", "source": {"bytes": "iVBORw0KGgo="}}}
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "card 4111"}, image]}}],
+                    }
+                ]
+            },
+        }
+        guard = _make_guardrail(
+            {"structured_messages": [{"role": "tool", "tool_call_id": "t1", "content": "card [CARD]"}]}
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [
+            {"toolResult": {"toolUseId": "t1", "content": [{"text": "card [CARD]"}, image]}}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_joined_tool_result_row_is_accepted_when_the_flat_texts_reproduce_it(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "toolResult": {
+                                    "toolUseId": "t1",
+                                    "content": [{"text": "found 4111"}, {"json": {"card": "4111"}}],
+                                }
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        guard = _make_guardrail(
+            {
+                "texts": ["found [CARD]", "[CARD]"],
+                "structured_messages": [
+                    {"role": "tool", "tool_call_id": "t1", "content": 'found [CARD]\n{"card": "[CARD]"}'}
+                ],
+            }
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [
+            {"toolResult": {"toolUseId": "t1", "content": [{"text": "found [CARD]"}, {"json": {"card": "[CARD]"}}]}}
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", ["system", "user"])
+    async def test_flattened_multi_block_row_is_accepted_when_the_flat_texts_reproduce_it(self, role):
+        blocks = [{"text": "Order details."}, {"text": "card 4111"}]
+        body = (
+            {"system": blocks, "messages": [{"role": "user", "content": [{"text": "hi"}]}]}
+            if role == "system"
+            else {"messages": [{"role": "user", "content": blocks}]}
+        )
+        data = {"endpoint": "model/test/converse", "data": body}
+        rows = [{"role": role, "content": "Order details.\ncard [CARD]"}]
+        texts = ["Order details.", "card [CARD]"]
+        if role == "system":
+            rows.append({"role": "user", "content": [{"type": "text", "text": "hi"}]})
+            texts.append("hi")
+        guard = _make_guardrail({"texts": texts, "structured_messages": rows})
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        written = result["data"]["system"] if role == "system" else result["data"]["messages"][0]["content"]
+        assert written == [{"text": "Order details."}, {"text": "card [CARD]"}]
+
+    @pytest.mark.asyncio
+    async def test_flat_text_mask_wins_over_a_changed_but_unmasked_structured_leaf(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "card 4111 on file."}, {"text": "Alice"}]}]},
+        }
+        guard = _make_guardrail(
+            {
+                "texts": ["card [CARD] on file.", "Alice"],
+                "structured_messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "card 4111 on file. "},
+                            {"type": "text", "text": "[NAME]"},
+                        ],
+                    }
+                ],
+            }
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [{"text": "card [CARD] on file."}, {"text": "[NAME]"}]
+
+    @pytest.mark.asyncio
+    async def test_texts_that_do_not_line_up_with_the_request_are_ignored_next_to_structured_rows(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "system": [{"text": "You are a support bot."}],
+                "messages": [
+                    {"role": "user", "content": [{"text": "My name is Ann."}]},
+                    {"role": "assistant", "content": [{"text": "Hi Ann."}]},
+                    {"role": "user", "content": [{"text": "card 4111 ok"}]},
+                ],
+            },
+        }
+        guard = _make_guardrail(
+            {
+                "texts": ["My name is Ann.", "card [CARD] ok"],
+                "structured_messages": [
+                    {"role": "system", "content": [{"type": "text", "text": "You are a support bot."}]},
+                    {"role": "user", "content": [{"type": "text", "text": "My name is Ann."}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "Hi Ann."}]},
+                    {"role": "user", "content": [{"type": "text", "text": "card [CARD] ok"}]},
+                ],
+            }
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["system"] == [{"text": "You are a support bot."}]
+        assert result["data"]["messages"] == [
+            {"role": "user", "content": [{"text": "My name is Ann."}]},
+            {"role": "assistant", "content": [{"text": "Hi Ann."}]},
+            {"role": "user", "content": [{"text": "card [CARD] ok"}]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_structured_messages_that_are_not_rows_fall_back_to_texts(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "4111"}]}]},
+        }
+        guard = _make_guardrail({"texts": ["[CARD]"], "structured_messages": {"evaluation": {"action": "Redact"}}})
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [{"text": "[CARD]"}]
+
+    @pytest.mark.asyncio
+    async def test_skip_tool_keeps_tool_call_arguments_out_of_structured_rows(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"text": "Checking."},
+                            {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "4111"}}},
+                        ],
+                    },
+                    {"role": "user", "content": [{"text": "thanks"}]},
+                ]
+            },
+        }
+        guard = _make_guardrail({})
+        guard.skip_tool_message_in_guardrail = True
+        await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert guard.apply_guardrail.call_args.kwargs["inputs"]["structured_messages"] == [
+            {"role": "assistant", "content": [{"type": "text", "text": "Checking."}]},
+            {"role": "user", "content": [{"type": "text", "text": "thanks"}]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unchanged_structured_rows_keep_the_flat_text_write_back(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "4111"}, {"text": "Alice"}]}]},
+        }
+        guard = _make_guardrail(
+            {
+                "texts": ["[CARD]"],
+                "structured_messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "4111"}, {"type": "text", "text": "Alice"}]}
+                ],
+            }
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [{"text": "[CARD]"}, {"text": "Alice"}]
+
+    @pytest.mark.asyncio
+    async def test_rows_returned_when_none_were_sent_are_ignored(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "4111"}, "not a block"]}]},
+        }
+        guard = _make_guardrail({"texts": ["[CARD]"], "structured_messages": [{"role": "user", "content": "[CARD]"}]})
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert "structured_messages" not in guard.apply_guardrail.call_args.kwargs["inputs"]
+        assert result["data"]["messages"][0]["content"] == [{"text": "[CARD]"}, "not a block"]
+
+    @pytest.mark.asyncio
+    async def test_missing_structured_row_fails_closed_without_mutation(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "hello"}]},
+                    {"role": "assistant", "content": [{"text": "hi"}]},
+                    {"role": "user", "content": [{"text": "4111"}]},
+                ]
+            },
+        }
+        original = copy.deepcopy(data)
+        guard = _make_guardrail(
+            {
+                "texts": ["hello", "hi", "[CARD]"],
+                "structured_messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                ],
+            }
+        )
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert data == original
+
+    @pytest.mark.asyncio
+    async def test_flattened_row_after_a_turn_the_texts_emptied_fails_closed(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "hello"}]},
+                    {"role": "assistant", "content": [{"text": "hi"}]},
+                    {"role": "user", "content": [{"text": "card"}, {"text": "4111"}]},
+                ]
+            },
+        }
+        guard = _make_guardrail(
+            {
+                "texts": ["hello", "", "card", "[CARD]"],
+                "structured_messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+                    {"role": "user", "content": "card\n[CARD]"},
+                ],
+            }
+        )
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+    @pytest.mark.asyncio
+    async def test_joined_tool_result_row_the_flat_texts_do_not_reproduce_fails_closed(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"toolResult": {"toolUseId": "t1", "content": [{"text": "found 4111"}, {"text": "ok"}]}}
+                        ],
+                    }
+                ]
+            },
+        }
+        original = copy.deepcopy(data)
+        guard = _make_guardrail(
+            {"structured_messages": [{"role": "tool", "tool_call_id": "t1", "content": "found [CARD]\nok"}]}
+        )
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert data == original
+
+    @pytest.mark.asyncio
+    async def test_flat_mask_written_into_the_sent_texts_list_still_wins(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "ssn 123 email a@b.c"}]}]},
+        }
+
+        def mask_in_place(inputs: dict, **_: object) -> dict:
+            inputs["texts"][0] = "ssn [SSN] email a@b.c"
+            rows = copy.deepcopy(inputs["structured_messages"])
+            rows[0]["content"][0]["text"] = "ssn 123 email [EMAIL]"
+            return {**inputs, "structured_messages": rows}
+
+        guard = _make_guardrail({})
+        guard.apply_guardrail = AsyncMock(side_effect=lambda inputs, **kwargs: mask_in_place(inputs))
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [{"text": "ssn [SSN] email a@b.c"}]
+
+    @pytest.mark.asyncio
+    async def test_snake_case_block_keys_are_not_read_as_converse_fields(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"guard_content": {"text": {"text": "4111"}}}]}]},
+        }
+        original = copy.deepcopy(data)
+        guard = _make_guardrail({"structured_messages": [{"role": "user", "content": "[CARD]"}]})
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result == original
         guard.apply_guardrail.assert_not_called()
 
 

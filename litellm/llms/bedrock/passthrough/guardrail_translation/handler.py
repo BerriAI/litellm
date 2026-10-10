@@ -2,6 +2,7 @@ import copy
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial, reduce
 from itertools import chain, groupby
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
@@ -37,8 +38,8 @@ if TYPE_CHECKING:
     from litellm.llms.pass_through.guardrail_translation.handler import (
         PassThroughEndpointHandler,
     )
-    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
@@ -168,7 +169,7 @@ def _extract_converse_texts(
 
 
 class _ConverseModel(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
 
 class _ConverseGuardText(_ConverseModel):
@@ -263,7 +264,11 @@ class _ConvertedMessage:
 
 _IndexedBlock: TypeAlias = tuple[_BlockRef, _ConverseContentBlock]
 _TEXT_PARTS: Final = TypeAdapter(tuple[ChatCompletionTextObject, ...])
+_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_ITEMS: Final = TypeAdapter(Sequence[object])
+_PARSED_JSON: Final = TypeAdapter(object)
 _TextEdit: TypeAlias = tuple[_BlockRef, object]
+_JsonPair: TypeAlias = tuple[tuple[str | int, ...], object, object]
 
 
 def _indexed_blocks(message_index: int | None, blocks: Sequence[_ConverseContentBlock]) -> tuple[_IndexedBlock, ...]:
@@ -282,15 +287,17 @@ def _refs(text_blocks: Sequence[tuple[_BlockRef, str]]) -> tuple[_BlockRef, ...]
     return tuple(ref for ref, _ in text_blocks)
 
 
+def _scannable_tool_parts(tool_result: _ConverseToolResult) -> tuple[tuple[int, _ConverseToolResultContent], ...]:
+    return tuple(
+        (index, part) for index, part in enumerate(tool_result.content) if part.text or part.json_value is not None
+    )
+
+
 def _converse_tool_message(tool_result: _ConverseToolResult) -> ChatCompletionToolMessage:
     return ChatCompletionToolMessage(
         role="tool",
         tool_call_id=tool_result.tool_use_id,
-        content="\n".join(
-            part.text or json.dumps(part.json_value)
-            for part in tool_result.content
-            if part.text or part.json_value is not None
-        ),
+        content="\n".join(part.text or json.dumps(part.json_value) for _, part in _scannable_tool_parts(tool_result)),
     )
 
 
@@ -328,10 +335,14 @@ def _converse_user_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_Converted
     )
 
 
-def _converse_assistant_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_ConvertedMessage, ...]:
+def _converse_assistant_messages(
+    blocks: Sequence[_IndexedBlock], include_tool_calls: bool
+) -> tuple[_ConvertedMessage, ...]:
     text_blocks: Final = _text_blocks(blocks)
     content: Final = list(_text_content(text_blocks))
-    tool_calls: Final = [_converse_tool_call(block.tool_use) for _, block in blocks if block.tool_use]
+    tool_calls: Final = [
+        _converse_tool_call(block.tool_use) for _, block in blocks if block.tool_use and include_tool_calls
+    ]
     if tool_calls:
         message: Final = ChatCompletionAssistantMessage(
             role="assistant", content=content or None, tool_calls=tool_calls
@@ -348,16 +359,20 @@ def _converse_assistant_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_Conv
     return (_ConvertedMessage(ChatCompletionAssistantMessage(role="assistant", content=content), _refs(text_blocks)),)
 
 
-def _converse_message(message_index: int, message: _ConverseMessage) -> tuple[_ConvertedMessage, ...]:
+def _converse_message(
+    message_index: int, message: _ConverseMessage, include_tool_calls: bool
+) -> tuple[_ConvertedMessage, ...]:
     blocks: Final = _indexed_blocks(message_index, message.content)
     if message.role == "assistant":
-        return _converse_assistant_messages(blocks)
+        return _converse_assistant_messages(blocks, include_tool_calls)
     return _converse_user_messages(blocks)
 
 
-def _converse_structured_messages(request: _ConverseRequest) -> tuple[_ConvertedMessage, ...]:
+def _converse_structured_messages(request: _ConverseRequest, include_tool_calls: bool) -> tuple[_ConvertedMessage, ...]:
     converted: Final = tuple(
-        chain.from_iterable(_converse_message(index, message) for index, message in enumerate(request.messages))
+        chain.from_iterable(
+            _converse_message(index, message, include_tool_calls) for index, message in enumerate(request.messages)
+        )
     )
     system_blocks: Final = _text_blocks(_indexed_blocks(None, request.system))
     if not system_blocks:
@@ -366,143 +381,269 @@ def _converse_structured_messages(request: _ConverseRequest) -> tuple[_Converted
     return (_ConvertedMessage(system, _refs(system_blocks)), *converted)
 
 
+def _without(mapping: Mapping[str, object], key: str) -> tuple[tuple[str, object], ...]:
+    return tuple(sorted(((name, value) for name, value in mapping.items() if name != key), key=lambda item: item[0]))
+
+
 def _without_content(message: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
-    return tuple(sorted(((key, value) for key, value in message.items() if key != "content"), key=lambda item: item[0]))
+    return _without(message, "content")
+
+
+def _fields(message: AllMessageValues) -> Mapping[str, object]:
+    return message
+
+
+def _as_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def _returned_text_parts(message: Mapping[str, object]) -> tuple[str, ...] | None:
-    content = message.get("content")
+    content: Final = message.get("content")
     if isinstance(content, str):
         return (content,)
     try:
-        parts: Final = _TEXT_PARTS.validate_python(message.get("content"))
+        parts: Final = _TEXT_PARTS.validate_python(content)
     except ValidationError:
         return None
     return tuple(part["text"] for part in parts)
+
+
+def _merged_edits(children: Sequence[tuple[_TextEdit, ...] | None]) -> tuple[_TextEdit, ...] | None:
+    if any(child is None for child in children):
+        return None
+    return tuple(chain.from_iterable(child for child in children if child is not None))
+
+
+def _json_children(path: tuple[str | int, ...], original: object, returned: object) -> tuple[_JsonPair, ...] | None:
+    original_object: Final = _as_object(original)
+    returned_object: Final = _as_object(returned)
+    if original_object is not None and returned_object is not None:
+        if original_object.keys() != returned_object.keys():
+            return None
+        return tuple(((*path, key), value, returned_object[key]) for key, value in original_object.items())
+    original_items: Final = _as_items(original)
+    returned_items: Final = _as_items(returned)
+    if original_items is None or returned_items is None or len(original_items) != len(returned_items):
+        return None
+    return tuple(((*path, index), value, returned_items[index]) for index, value in enumerate(original_items))
 
 
 def _json_edits(
     ref: _BlockRef, path: tuple[str | int, ...], original: object, returned: object
 ) -> tuple[_TextEdit, ...] | None:
     """Only write changed leaves, preserving independent flat-text redactions."""
-    if original == returned:
-        return ()
-    if isinstance(original, dict) and isinstance(returned, dict) and original.keys() == returned.keys():
-        children = [_json_edits(ref, (*path, key), value, returned[key]) for key, value in original.items()]
-    elif isinstance(original, list) and isinstance(returned, list) and len(original) == len(returned):
-        children = [_json_edits(ref, (*path, index), value, returned[index]) for index, value in enumerate(original)]
-    elif isinstance(original, str) and isinstance(returned, str):
-        return ((_BlockRef(ref.message_index, ref.block_index, path), returned),)
-    else:
+    pending: Final[list[_JsonPair]] = [(path, original, returned)]  # mutable-ok: work stack instead of recursion
+    edits: Final[list[_TextEdit]] = []  # mutable-ok: collects the leaves the work stack visits
+    while pending:
+        leaf_path, before, after = pending.pop()
+        if before == after:
+            continue
+        if isinstance(before, str) and isinstance(after, str):
+            edits.append((_BlockRef(ref.message_index, ref.block_index, leaf_path), after))
+            continue
+        if (children := _json_children(leaf_path, before, after)) is None:
+            return None
+        pending.extend(children)
+    return tuple(edits)
+
+
+def _as_items(value: object) -> Sequence[object] | None:
+    if not isinstance(value, list):
         return None
-    if any(child is None for child in children):
+    try:
+        return _ITEMS.validate_python(value)
+    except ValidationError:
         return None
-    return tuple(edit for child in children if child is not None for edit in child)
+
+
+def _tool_part_edits(
+    ref: _BlockRef, index: int, part: _ConverseToolResultContent, text: str
+) -> tuple[_TextEdit, ...] | None:
+    if part.text:
+        return ((_BlockRef(ref.message_index, ref.block_index, ("toolResult", "content", index, "text")), text),)
+    try:
+        value: Final = _PARSED_JSON.validate_json(text)
+    except ValidationError:
+        return None
+    return _json_edits(ref, ("toolResult", "content", index, "json"), part.json_value, value)
 
 
 def _tool_result_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
     if converted.tool_result is None or _without_content(returned) != _without_content(converted.message):
         return None
     ref, result = converted.tool_result
-    texts = _returned_text_parts(returned)
-    # A joined string cannot be split safely across multiple source blocks.
-    if texts is None or len(texts) != len(result.content):
+    texts: Final = _returned_text_parts(returned)
+    parts: Final = _scannable_tool_parts(result)
+    if texts is None or len(texts) != len(parts):
         return None
-    edits: list[_TextEdit] = []
-    for index, (part, text) in enumerate(zip(result.content, texts)):
-        if part.text:
-            if text != part.text:
-                edits.append(
-                    (_BlockRef(ref.message_index, ref.block_index, ("toolResult", "content", index, "text")), text)
-                )
-        elif part.json_value is not None:
-            try:
-                value = json.loads(text)
-            except ValueError:
-                return None
-            changes = _json_edits(ref, ("toolResult", "content", index, "json"), part.json_value, value)
-            if changes is None:
-                return None
-            edits.extend(changes)
-        else:
-            return None
-    return tuple(edits)
+    return _merged_edits(tuple(_tool_part_edits(ref, index, part, text) for (index, part), text in zip(parts, texts)))
+
+
+def _call_function(call: object) -> Mapping[str, object] | None:
+    call_object: Final = _as_object(call)
+    return _as_object(call_object.get("function")) if call_object is not None else None
+
+
+def _tool_call_edits(
+    tool_use: tuple[_BlockRef, _ConverseToolUse], before: object, after: object
+) -> tuple[_TextEdit, ...] | None:
+    if before == after:
+        return ()
+    before_call: Final = _as_object(before)
+    after_call: Final = _as_object(after)
+    before_function: Final = _call_function(before)
+    after_function: Final = _call_function(after)
+    if before_call is None or after_call is None or before_function is None or after_function is None:
+        return None
+    arguments: Final = after_function.get("arguments")
+    if (
+        not isinstance(arguments, str)
+        or _without(after_call, "function") != _without(before_call, "function")
+        or _without(after_function, "arguments") != _without(before_function, "arguments")
+    ):
+        return None
+    try:
+        value: Final = _PARSED_JSON.validate_json(arguments)
+    except ValidationError:
+        return None
+    ref, tool = tool_use
+    return _json_edits(ref, ("toolUse", "input"), tool.tool_input, value)
+
+
+def _tool_calls_edits(
+    tool_uses: Sequence[tuple[_BlockRef, _ConverseToolUse]], before: object, after: object
+) -> tuple[_TextEdit, ...] | None:
+    before_calls: Final = _as_items(before)
+    after_calls: Final = _as_items(after)
+    if before_calls is None or after_calls is None or len(before_calls) != len(after_calls):
+        return None
+    return _merged_edits(
+        tuple(
+            _tool_call_edits(tool_use, original, returned)
+            for tool_use, original, returned in zip(tool_uses, before_calls, after_calls)
+        )
+    )
+
+
+def _content_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
+    original: Final = _fields(converted.message)
+    if returned.get("content") == original.get("content"):
+        return ()
+    texts: Final = _returned_text_parts(returned)
+    before_texts: Final = _returned_text_parts(original)
+    if texts is None or before_texts is None or len(texts) != len(converted.text_blocks):
+        return None
+    return tuple((ref, text) for ref, before, text in zip(converted.text_blocks, before_texts, texts) if text != before)
 
 
 def _message_text_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
-    if not isinstance(returned, Mapping):
-        return None
     if returned == converted.message:
         return ()
     if converted.tool_result is not None:
         return _tool_result_edits(converted, returned)
-    edits: list[_TextEdit] = []
-    original = converted.message
-    comparable = dict(returned)
-    if converted.tool_uses:
-        calls = comparable.get("tool_calls")
-        original_calls = original.get("tool_calls")
-        if not isinstance(calls, list) or not isinstance(original_calls, list) or len(calls) != len(original_calls):
-            return None
-        for (ref, tool), before, after in zip(converted.tool_uses, original_calls, calls):
-            if before == after:
-                continue
-            if not isinstance(after, dict) or not isinstance(after.get("function"), dict):
-                return None
-            expected = copy.deepcopy(before)
-            expected["function"]["arguments"] = after["function"].get("arguments")
-            if expected != after or not isinstance(after["function"].get("arguments"), str):
-                return None
-            try:
-                arguments = json.loads(after["function"]["arguments"])
-            except ValueError:
-                return None
-            changes = _json_edits(ref, ("toolUse", "input"), tool.tool_input, arguments)
-            if changes is None:
-                return None
-            edits.extend(changes)
-        comparable["tool_calls"] = original_calls
-    if _without_content(comparable) != _without_content(original):
+    original_calls: Final = _fields(converted.message).get("tool_calls")
+    call_edits: Final = (
+        _tool_calls_edits(converted.tool_uses, original_calls, returned.get("tool_calls"))
+        if converted.tool_uses
+        else ()
+    )
+    comparable: Final = {**returned, "tool_calls": original_calls} if converted.tool_uses else returned
+    if call_edits is None or _without_content(comparable) != _without_content(converted.message):
         return None
-    if comparable.get("content") != original.get("content"):
-        texts = _returned_text_parts(comparable)
-        before_texts = _returned_text_parts(original)
-        if texts is None or before_texts is None or len(texts) != len(converted.text_blocks):
-            return None
-        edits.extend(
-            (ref, text) for ref, before, text in zip(converted.text_blocks, before_texts, texts) if text != before
-        )
-    return tuple(edits)
+    return _merged_edits((call_edits, _content_edits(converted, comparable)))
+
+
+def _leaf(body: Mapping[str, Any], ref: _BlockRef) -> _StringHolder:
+    blocks: Final = body["system"] if ref.message_index is None else body["messages"][ref.message_index]["content"]
+    block: Final = blocks[ref.block_index]
+    if not ref.path:
+        return (block, "text") if block.get("text") else (block["guardContent"]["text"], "text")
+    return reduce(lambda node, key: node[key], ref.path[:-1], block), ref.path[-1]
+
+
+def _leaf_identity(holder: _StringHolder) -> tuple[int, str | int]:
+    container, key = holder
+    return id(container), key
+
+
+def _changed_leaves(
+    holders: Sequence[_StringHolder], texts: Sequence[str], guardrailed_texts: Sequence[str]
+) -> frozenset[tuple[int, str | int]]:
+    return frozenset(
+        _leaf_identity(holder) for holder, before, after in zip(holders, texts, guardrailed_texts) if after != before
+    )
+
+
+def _texts_applied_view(
+    body: Mapping[str, Any], texts: Sequence[str], skip_system: bool, skip_tool: bool, scan_only_tool_results: bool
+) -> tuple[_ConvertedMessage, ...]:
+    rewritten: Final = copy.deepcopy(dict(body))
+    _, holders = _extract_converse_texts(rewritten, skip_system, skip_tool, scan_only_tool_results)
+    _write_back_texts(texts, holders)
+    return _converse_structured_messages(_ConverseRequest.model_validate(rewritten), not skip_tool)
+
+
+def _same_content(expected: Mapping[str, object], returned: Mapping[str, object]) -> bool:
+    if expected.get("content") == returned.get("content"):
+        return True
+    expected_parts: Final = _returned_text_parts(expected)
+    returned_parts: Final = _returned_text_parts(returned)
+    return (
+        expected_parts is not None
+        and returned_parts is not None
+        and "\n".join(expected_parts) == "\n".join(returned_parts)
+    )
+
+
+def _reproduces(rewritten: _ConvertedMessage, returned: Mapping[str, object] | None) -> bool:
+    """Whether the flat-text rewrite already yields the row the guardrail returned."""
+    return (
+        returned is not None
+        and _without_content(returned) == _without_content(rewritten.message)
+        and _same_content(rewritten.message, returned)
+    )
 
 
 def _structured_text_edits(
+    leaf: Callable[[_BlockRef], _StringHolder],
     converted: Sequence[_ConvertedMessage],
     scoped_indices: Sequence[int],
-    returned: Sequence[Mapping[str, object]],
-) -> tuple[_TextEdit, ...] | None:
+    returned: Sequence[object],
+    flat_changes: frozenset[tuple[int, str | int]],
+    flat_view: Callable[[], tuple[_ConvertedMessage, ...]],
+) -> tuple[tuple[_StringHolder, object], ...] | None:
+    """
+    Structured edits for the leaves the flat texts left unchanged.
+
+    A row whose rewrite cannot be mapped back onto its Converse blocks is accepted only when
+    the flat-text rewrite already produces it.
+    """
     if len(returned) != len(scoped_indices):
         return None
-    per_message: Final = tuple(
-        _message_text_edits(converted[index], message) for index, message in zip(scoped_indices, returned)
+    rows: Final = tuple(_as_object(message) for message in returned)
+    proposed: Final = tuple(
+        _message_text_edits(converted[index], row) if row is not None else None
+        for index, row in zip(scoped_indices, rows)
     )
-    if any(edits is None for edits in per_message):
-        return None
-    return tuple(chain.from_iterable(edits for edits in per_message if edits is not None))
+    unmapped: Final = tuple((index, row) for index, row, edits in zip(scoped_indices, rows, proposed) if edits is None)
+    if unmapped:
+        view: Final = flat_view()
+        if len(view) != len(converted):
+            return None
+        if not all(_reproduces(view[index], row) for index, row in unmapped):
+            return None
+    resolved: Final = tuple(
+        (leaf(ref), text) for ref, text in chain.from_iterable(edits for edits in proposed if edits is not None)
+    )
+    return tuple((holder, text) for holder, text in resolved if _leaf_identity(holder) not in flat_changes)
 
 
-def _write_back_structured_texts(body: Mapping[str, Any], edits: Sequence[_TextEdit]) -> None:
-    for ref, text in edits:
-        blocks = body["system"] if ref.message_index is None else body["messages"][ref.message_index]["content"]
-        block = blocks[ref.block_index]
-        if ref.path:
-            target = block
-            for key in ref.path[:-1]:
-                target = target[key]
-            target[ref.path[-1]] = text
-        elif "text" in block:
-            block["text"] = text
-        else:
-            block["guardContent"]["text"]["text"] = text
+def _write_back_structured_texts(edits: Sequence[tuple[_StringHolder, object]]) -> None:
+    for (container, key), text in edits:
+        container[key] = text
 
 
 def _converse_tools(request: _ConverseRequest) -> tuple[ChatCompletionToolParam, ...]:
@@ -555,8 +696,8 @@ def _extract_converse_output_texts(
 
 
 def _write_back_texts(
-    guardrailed_texts: list[str],
-    holders: list[_StringHolder],
+    guardrailed_texts: Sequence[str],
+    holders: Sequence[_StringHolder],
 ) -> None:
     if len(guardrailed_texts) < len(holders):
         verbose_proxy_logger.warning(
@@ -827,7 +968,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool, scan_only_tool_results)
         converse_request: Final = _parse_converse_request(lambda: _ConverseRequest.model_validate(body))
-        converted: Final = _converse_structured_messages(converse_request) if converse_request else ()
+        converted: Final = _converse_structured_messages(converse_request, not skip_tool) if converse_request else ()
         structured_messages: Final = tuple(item.message for item in converted)
         scoped_message_indices: Final = scoped_structured_message_indices(
             structured_messages,
@@ -839,12 +980,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not texts and not scoped_message_indices:
             return data
 
-        inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        inputs: Final = GenericGuardrailAPIInputs(texts=list(texts))
         if scoped_message_indices:
             inputs["structured_messages"] = copy.deepcopy(
                 [structured_messages[index] for index in scoped_message_indices]
             )
-        tools: Final = _converse_tools(converse_request) if converse_request else ()
+        tools: Final = _converse_tools(converse_request) if converse_request and not scan_only_tool_results else ()
         if tools:
             inputs["tools"] = list(tools)
         model: Final = data.get("model")
@@ -859,16 +1000,33 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
         guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-        edits: tuple[_TextEdit, ...] = ()
         guardrailed_messages: Final = guardrailed_inputs.get("structured_messages")
-        if guardrailed_messages is not None:
-            proposed_edits = _structured_text_edits(converted, scoped_message_indices, guardrailed_messages)
-            if proposed_edits is None:
-                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-            edits = proposed_edits
-        if guardrailed_texts:
-            _write_back_texts(guardrailed_texts, holders)
-        _write_back_structured_texts(body, edits)
+        sent_messages: Final = [structured_messages[index] for index in scoped_message_indices]
+        rewritten_rows: Final = (
+            guardrailed_messages
+            if sent_messages and isinstance(guardrailed_messages, list) and guardrailed_messages != sent_messages
+            else None
+        )
+        applied_texts: Final = (
+            texts if rewritten_rows is not None and len(guardrailed_texts) != len(texts) else guardrailed_texts
+        )
+        edits: Final = (
+            ()
+            if rewritten_rows is None
+            else _structured_text_edits(
+                partial(_leaf, body),
+                converted,
+                scoped_message_indices,
+                rewritten_rows,
+                _changed_leaves(holders, texts, applied_texts),
+                partial(_texts_applied_view, body, applied_texts, skip_system, skip_tool, scan_only_tool_results),
+            )
+        )
+        if edits is None:
+            raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
+        if applied_texts:
+            _write_back_texts(applied_texts, holders)
+        _write_back_structured_texts(edits)
 
         return data
 
