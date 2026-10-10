@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -611,19 +611,21 @@ class TestTruncateFallbackErrorDetail:
         assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000
 
 
-class TestFormatFallbackOutcomeMessage:
-    def test_a_short_model_group_is_named_in_full(self):
-        assert format_fallback_outcome_message("gpt-group", None, "") == (
-            "\n\nLiteLLM: model group 'gpt-group' failed with the error above. No fallback was attempted."
-        )
+def test_a_short_model_group_is_named_in_full() -> None:
+    assert format_fallback_outcome_message("gpt-group", None, "") == (
+        "\n\nLiteLLM: model group 'gpt-group' failed with the error above. No fallback was attempted."
+    )
 
-    def test_a_megabyte_model_group_is_named_with_a_bounded_prefix(self):
-        model_group = "m" * 1_000_000
 
-        message = format_fallback_outcome_message(model_group, None, "")
+def test_a_megabyte_model_group_is_named_with_a_bounded_prefix() -> None:
+    model_group: Final = "m" * 1_000_000
 
-        assert len(message) < 3_000
-        assert f"model group '{truncate_fallback_error_detail(model_group)}' failed with the error above" in message
+    message: Final = format_fallback_outcome_message(model_group, None, "")
+
+    assert len(message) < 3_000
+    assert "model group '" + "m" * 100 in message
+    assert "[truncated " in message
+    assert "No fallback was attempted." in message
 
 
 class TestWarnOnProviderCredentialMismatch:
