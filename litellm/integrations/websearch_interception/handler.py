@@ -1826,7 +1826,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: list[dict],
         tool_calls: list[dict],
         optional_params: dict,
-        kwargs: dict,
+        kwargs: dict[str, object],
         response_format: str = "openai",
     ) -> AgenticLoopRequestPatch:
         """Execute litellm.search() and build chat-completion rerun patch."""
@@ -1912,7 +1912,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in internal_params
         }
 
-        custom_llm_provider: Final = kwargs["custom_llm_provider"] if "custom_llm_provider" in kwargs else ""
+        custom_llm_provider: Final = kwargs.get("custom_llm_provider")
         full_model_name: Final = qualify_provider_stripped_model(
             model, custom_llm_provider if isinstance(custom_llm_provider, str) else ""
         )
