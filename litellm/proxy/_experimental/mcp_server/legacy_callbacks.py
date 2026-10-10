@@ -33,6 +33,10 @@ class ElicitationCallback(Protocol):
     async def __call__(self, context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData: ...
 
 
+def has_active_mcp_request_context() -> bool:
+    return get_active_mcp_request_ctx() is not None
+
+
 def create_sampling_callback(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,
@@ -109,8 +113,7 @@ def get_scope_response() -> OAuthScopeResponse | None:
     return scope_response_from_request(context.request) if context is not None else None
 
 
-async def record_upstream_tool_authorization(response: httpx2.Response) -> None:
-    pending: Final = get_scope_response()
+async def record_upstream_tool_authorization(response: httpx2.Response, *, pending: OAuthScopeResponse | None) -> None:
     if pending is None or not pending.pending or not response.is_success or response.request.method != "POST":
         return
     try:

@@ -547,7 +547,7 @@ async def test_scope_authorization_releases_progress_without_waiting_for_tool_re
         OAuthScopeResponse,
     )
 
-    from litellm.proxy._experimental.mcp_server.legacy_callbacks import record_upstream_tool_authorization
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response, record_upstream_tool_authorization
 
     send = AsyncMock()
     gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
@@ -559,10 +559,10 @@ async def test_scope_authorization_releases_progress_without_waiting_for_tool_re
         progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
         await asyncio.sleep(0)
         for method, status in [("initialize", 200), ("tools/list", 200), ("tools/call", 403)]:
-            await record_upstream_tool_authorization(httpx2.Response(status, request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": method})))
+            await record_upstream_tool_authorization(httpx2.Response(status, request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": method})), pending=get_scope_response())
             assert gate.pending
         unread = httpx2.Request("POST", "https://upstream.example/mcp", content=iter([b'{"method":"tools/call"}']))
-        await record_upstream_tool_authorization(httpx2.Response(200, request=unread))
+        await record_upstream_tool_authorization(httpx2.Response(200, request=unread), pending=get_scope_response())
         assert gate.pending
         # Use the actual HTTP response hook contract, before reading the tool response body.
         from litellm.experimental_mcp_client.client import MCPClient
@@ -691,7 +691,7 @@ async def test_scope_challenges_are_isolated_between_concurrent_requests():
             if denied:
                 gate.deny(MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write"))
             else:
-                await record_upstream_tool_authorization(httpx2.Response(200, request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": "tools/call"})))
+                await record_upstream_tool_authorization(httpx2.Response(200, request=httpx2.Request("POST", "https://upstream.example/mcp", json={"method": "tools/call"})), pending=get_scope_response())
             await gate({"type": "http.response.body", "body": b"done"})
             return send.await_args_list[0].args[0]["status"]
         finally:

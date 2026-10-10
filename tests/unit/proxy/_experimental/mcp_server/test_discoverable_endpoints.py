@@ -13904,8 +13904,11 @@ async def test_managed_scope_code_cannot_cross_oauth_boundaries(jwt_oauth_identi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", [])])
-async def test_managed_refresh_retains_only_the_actual_grant(jwt_oauth_identity, monkeypatch, respx_mock, scope, expected):
+@pytest.mark.parametrize("scope, requested_scope, expected", [
+    (None, None, ["tools.read", "tools.write"]), ("tools.read", None, ["tools.read"]), ("", None, []),
+    (None, "tools.write", ["tools.write"]), ("tools.read", "tools.write", ["tools.read"]), ("", "tools.write", []),
+])
+async def test_managed_refresh_retains_only_the_actual_grant(jwt_oauth_identity, monkeypatch, respx_mock, scope, requested_scope, expected):
     from types import SimpleNamespace
 
     from litellm.proxy import proxy_server
@@ -13930,11 +13933,14 @@ async def test_managed_refresh_retains_only_the_actual_grant(jwt_oauth_identity,
     request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
     await endpoints.exchange_token_with_server(
         request, server, "refresh_token", code=None, redirect_uri=None, client_id="scope-client", client_secret=None,
-        code_verifier=None, refresh_token="owner-refresh",
+        code_verifier=None, refresh_token="owner-refresh", scope=requested_scope,
     )
     saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
     assert saved is not None and saved.get("scopes") == expected
     assert upstream.call_count == 1
+    from urllib.parse import parse_qs
+    sent = parse_qs(upstream.calls.last.request.content.decode())
+    assert sent.get("scope") == ([requested_scope] if requested_scope else None)
 
 
 @pytest.mark.asyncio

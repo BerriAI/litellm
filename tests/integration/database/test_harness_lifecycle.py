@@ -16,6 +16,7 @@ from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
 from queue import SimpleQueue
 from threading import Event
+from tempfile import TemporaryDirectory
 from types import FrameType
 from typing import Final, Literal
 
@@ -38,6 +39,7 @@ from tests.integration._support.database_relay import (
     held_statement_relay,
 )
 from tests.integration._support.runtime import configure_executor
+from tests.integration._support.sharding import ShardExecution, shard_errors
 
 
 class ExitRecord(TypedDict):
@@ -282,75 +284,173 @@ def test_seeded_collection_reuses_scoped_fixtures_and_executes_every_case(tmp_pa
     )
 
 
-def test_partitioned_collection_reuses_unparametrized_fixtures_and_executes_every_case(tmp_path: Path) -> None:
+@pytest.mark.parametrize("workers", (1, 2))
+@pytest.mark.parametrize("subset", (False, True))
+def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
+    tmp_path: Path, workers: int, subset: bool
+) -> None:
     events: Final = tmp_path / "events.txt"
-    probe: Final = tmp_path / "test_fixture_probe.py"
-    probe.write_text(
-        "import pytest\nfrom pathlib import Path\n"
-        f"EVENTS = Path({str(events)!r})\n"
-        "def record(value):\n"
-        "    with EVENTS.open('a') as output:\n"
-        "        output.write(value + '\\n')\n"
-        "@pytest.fixture(scope='module')\n"
-        "def shared():\n"
-        "    record('start shared')\n"
-        "    yield 'shared'\n"
-        "    record('stop shared')\n"
-        "@pytest.mark.parametrize('number', range(4))\n"
-        "def test_shared(shared, number):\n"
-        "    assert shared == 'shared'\n"
-        "    record('shared ' + str(number))\n"
-        "@pytest.mark.parametrize('number', range(8))\n"
-        "def test_plain(number):\n"
-        "    record('plain ' + str(number))\n"
+    root: Final = Path(__file__).resolve().parents[3]
+    with TemporaryDirectory(prefix="native-selection-", dir=Path(__file__).parent) as directory:
+        probe: Final = Path(directory) / "test_fixture_probe.py"
+        plain: Final = Path(directory) / "test_plain_probe.py"
+        probe.write_text(
+            "import pytest\nfrom pathlib import Path\n"
+            f"EVENTS = Path({str(events)!r})\n"
+            "def record(value):\n"
+            "    with EVENTS.open('a') as output:\n"
+            "        output.write(value + '\\n')\n"
+            "@pytest.fixture(scope='module')\n"
+            "def shared():\n"
+            "    record('start shared')\n"
+            "    yield 'shared'\n"
+            "    record('stop shared')\n"
+            "@pytest.mark.parametrize('number', range(4))\n"
+            "@pytest.mark.xdist_group('shared')\n"
+            "def test_shared(shared, number):\n"
+            "    assert shared == 'shared'\n"
+            "    record('shared ' + str(number))\n"
+        )
+        plain.write_text(
+            "import pytest\nfrom pathlib import Path\n"
+            f"EVENTS = Path({str(events)!r})\n"
+            "@pytest.mark.parametrize('number', range(8))\n"
+            "def test_plain(number):\n"
+            "    with EVENTS.open('a') as output:\n"
+            "        output.write('plain ' + str(number) + '\\n')\n"
+            "def test_existing_skip():\n"
+            "    pytest.skip('retained skip identity')\n"
+        )
+        selections: Final = (str(probe.relative_to(root)), str(plain.relative_to(root)), "")
+        candidates: Final = (
+            (f"{selections[0]}::test_shared[1]", f"{selections[1]}::test_existing_skip") if subset else selections[:2]
+        )
+        listed: Final = subprocess.run(
+            (sys.executable, "-P", "tests/integration/run.py", "database", "--list", *candidates),
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert listed.returncode == 0, listed.stdout + listed.stderr
+        assert tuple(listed.stdout.splitlines()) == tuple(sorted(selections[:2]))
+        outputs: Final = tuple(tmp_path / str(index) for index in range(3))
+        files: Final = tuple(tmp_path / f"selection-{index}.txt" for index in range(3))
+        for selection, path in zip(selections, files, strict=True):
+            path.write_text(selection + "\n" if selection else "")
+        results: Final = tuple(
+            subprocess.run(
+                (
+                    sys.executable,
+                    "-P",
+                    "-m",
+                    "pytest",
+                    *candidates,
+                    "--noconftest",
+                    "-p",
+                    "tests.integration.conftest",
+                    "-o",
+                    "addopts=",
+                    "--integration-shard-count=3",
+                    f"--integration-shard-index={index}",
+                    f"--integration-shard-files={files[index]}",
+                    "--integration-order-seed=1848224111",
+                    "--hypothesis-seed=4106601",
+                    "--timeout=15",
+                    *(("-n", str(workers), "--dist=loadgroup") if workers > 1 else ()),
+                    "-q",
+                ),
+                cwd=root,
+                env={
+                    **{
+                        name: value
+                        for name, value in os.environ.items()
+                        if name
+                        not in (
+                            "INTEGRATION_RESULTS_DIR",
+                            "INTEGRATION_ROUTING",
+                            "GITHUB_ACTIONS",
+                            "PYTEST_XDIST_WORKER",
+                        )
+                    },
+                    "INTEGRATION_RESULTS_DIR": str(outputs[index]),
+                    "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
+                },
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            for index in range(3)
+        )
+        assert all(result.returncode == 0 for result in results), tuple(
+            result.stdout + result.stderr for result in results
+        )
+        executions: Final = tuple(
+            ShardExecution.model_validate_json((output / "execution.json").read_text()) for output in outputs
+        )
+        assert shard_errors(executions, 3) == ()
+        assert len(executions[0].inventory) == (2 if subset else 13)
+        assert executions[2].collected == ()
+        assert executions[2].complete
+        assert len(executions[1].skipped) == 1
+        assert executions[1].skipped[0].endswith("::test_existing_skip")
+    observed: Final = tuple(events.read_text().splitlines())
+    assert observed.count("start shared") == observed.count("stop shared") == 1
+    assert sorted(event for event in observed if event.startswith("shared ")) == (
+        ["shared 1"] if subset else [f"shared {index}" for index in range(4)]
     )
-    (tmp_path / "partition_probe.py").write_text(
-        "from integration._support.ordering import case_shards, collected_case\n"
-        "def pytest_collection_modifyitems(config, items):\n"
-        "    shards = case_shards(tuple(collected_case(item) for item in items), 3)\n"
-        "    selected = shards[config.getoption('integration_shard_index')]\n"
-        "    items[:] = tuple(item for item in items if item.nodeid in selected)\n"
+    assert sorted(event for event in observed if event.startswith("plain ")) == (
+        [] if subset else [f"plain {index}" for index in range(8)]
     )
-    results: Final = tuple(
-        subprocess.run(
+
+
+@pytest.mark.parametrize("assignment", ("absent", "missing", "foreign"))
+def test_invalid_native_selections_fail_before_any_case_runs(
+    tmp_path: Path, assignment: Literal["absent", "missing", "foreign"]
+) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    events: Final = tmp_path / "executed.txt"
+    selection: Final = tmp_path / "node-files.txt"
+    if assignment == "foreign":
+        selection.write_text("tests/integration/database/test_unknown.py\n")
+    with TemporaryDirectory(prefix="invalid-selection-", dir=Path(__file__).parent) as directory:
+        probe: Final = Path(directory) / "test_probe.py"
+        probe.write_text(f"from pathlib import Path\ndef test_case():\n    Path({str(events)!r}).write_text('ran')\n")
+        result: Final = subprocess.run(
             (
                 sys.executable,
                 "-P",
                 "-m",
                 "pytest",
-                str(probe),
+                str(probe.relative_to(root)),
+                "--noconftest",
                 "-p",
                 "tests.integration.conftest",
-                "-p",
-                "partition_probe",
-                "--integration-shard-count=3",
-                f"--integration-shard-index={index}",
-                "--integration-order-seed=1848224111",
-                "--timeout=15",
+                "-o",
+                "addopts=",
+                "--integration-shard-count=2",
+                "--integration-shard-index=0",
+                *((f"--integration-shard-files={selection}",) if assignment != "absent" else ()),
                 "-q",
             ),
+            cwd=root,
             env={
                 **{
                     name: value
                     for name, value in os.environ.items()
-                    if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING")
+                    if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING", "GITHUB_ACTIONS")
                 },
-                "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", ""))),
+                "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
             },
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=15,
             check=False,
         )
-        for index in range(3)
-    )
-    assert all(result.returncode == 0 for result in results), tuple(result.stdout + result.stderr for result in results)
-    observed: Final = tuple(events.read_text().splitlines())
-    assert observed.count("start shared") == observed.count("stop shared") == 1
-    assert sorted(event for event in observed if event.startswith("shared ")) == [
-        f"shared {index}" for index in range(4)
-    ]
-    assert sorted(event for event in observed if event.startswith("plain ")) == [f"plain {index}" for index in range(8)]
+        assert result.returncode == pytest.ExitCode.USAGE_ERROR, result.stdout + result.stderr
+        assert not events.exists()
 
 
 @pytest.mark.parametrize("entrypoint", ("gateway", "refused"))

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from litellm import Router
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -35,25 +36,132 @@ from litellm.proxy.management_endpoints.common_utils import (
     update_metadata_fields,
     user_api_key_has_admin_view,
     user_has_admin_privileges,
+    upsert_budget_and_membership,
 )
 from litellm.types.utils import BudgetConfig
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_patch",
+    [
+        {"tpm_limit": 200},
+        {"model_max_budget": {}, "tpm_limit": 5},
+    ],
+)
+async def test_shared_default_clone_keeps_inheriting_updated_team_model_caps(
+    budget_patch: dict[str, object],
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
+    from litellm.proxy._types import LiteLLM_TeamMembership
+
+    source_caps = {"claude-sonnet-4-6": {"max_budget": 3.0, "budget_duration": "1d"}}
+    default_caps = {"claude-sonnet-4-6": {"max_budget": 1.0, "budget_duration": "1d"}}
+    budget_table = SimpleNamespace(
+        find_unique=AsyncMock(
+            return_value=SimpleNamespace(
+                model_dump=MagicMock(
+                    return_value={
+                        "budget_id": "default-budget",
+                        "model_max_budget": source_caps,
+                        "tpm_limit": 100,
+                    }
+                )
+            )
+        ),
+        create=AsyncMock(return_value=SimpleNamespace(budget_id="private-budget")),
+    )
+    membership_table = SimpleNamespace(upsert=AsyncMock())
+    tx = SimpleNamespace(litellm_budgettable=budget_table, litellm_teammembership=membership_table)
+    token = UserAPIKeyAuth(user_id="member-1", team_id="team-1")
+
+    await upsert_budget_and_membership(
+        tx,
+        team_id="team-1",
+        user_id="member-1",
+        existing_budget_id="default-budget",
+        user_api_key_dict=token,
+        budget_patch=budget_patch,
+        team_default_budget_id="default-budget",
+    )
+
+    budget_table.create.assert_awaited_once()
+    membership_table.upsert.assert_awaited_once()
+    assert budget_table.create.await_args.kwargs["data"]["tpm_limit"] == budget_patch["tpm_limit"]
+    model_max_budget: Final = budget_table.create.await_args.kwargs["data"]["model_max_budget"]
+    assert isinstance(model_max_budget, str)
+    assert model_max_budget == "{}"
+    membership = LiteLLM_TeamMembership(
+        user_id="member-1",
+        team_id="team-1",
+        budget_id="private-budget",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="private-budget", model_max_budget={}),
+    )
+    user_api_key_cache: Final = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+    await user_api_key_cache.async_set_cache(
+        key="team_member_default_budget:default-budget",
+        value=LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=default_caps),
+        model_type=LiteLLM_BudgetTable,
+    )
+    team_object = SimpleNamespace(
+        team_id="team-1",
+        metadata={"team_member_budget_id": "default-budget"},
+    )
+
+    await _load_team_member_default_model_budget(
+        user_api_key_auth_obj=token,
+        team_object=team_object,
+        prisma_client=MagicMock(),
+        user_api_key_cache=user_api_key_cache,
+        skip_budget_checks=False,
+        proxy_logging_obj=None,
+    )
+
+    assert token.team_member_model_max_budget == default_caps
+
+
+@pytest.mark.asyncio
+async def test_empty_model_budget_patch_on_team_default_keeps_membership_attached() -> None:
+    tx: Final = MagicMock()
+    tx.litellm_budgettable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            model_dump=MagicMock(
+                return_value={
+                    "budget_id": "default-budget",
+                    "max_budget": 10.0,
+                    "model_max_budget": {"claude-sonnet-4-6": {"max_budget": 1.0}},
+                }
+            )
+        )
+    )
+    tx.litellm_budgettable.create = AsyncMock()
+    tx.litellm_budgettable.update = AsyncMock()
+    tx.litellm_teammembership.upsert = AsyncMock()
+    tx.litellm_teammembership.update = AsyncMock()
+
+    await upsert_budget_and_membership(
+        tx,
+        team_id="team-1",
+        user_id="member-1",
+        existing_budget_id="default-budget",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+        budget_patch={"model_max_budget": {}},
+        team_default_budget_id="default-budget",
+    )
+
+    tx.litellm_budgettable.create.assert_not_awaited()
+    tx.litellm_budgettable.update.assert_not_awaited()
+    tx.litellm_teammembership.upsert.assert_not_awaited()
+    tx.litellm_teammembership.update.assert_not_awaited()
+
+
 class TestUpdateMetadataFieldsEmptyCollections:
-    """
-    Regression tests for issue #20304.
-
-    The UI sends empty arrays (`[]`) for enterprise-only fields like
-    guardrails, policies, and logging even when the user hasn't configured
-    these features.  The backend must not treat empty collections as an
-    intent to use the feature, and therefore must not trigger the premium
-    license check.
-
-    However, empty collections must still be written into metadata so that
-    users can intentionally clear a previously-set field (e.g. removing all
-    guardrails by sending `guardrails: []`).
-    """
-
     @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_empty_list_does_not_trigger_premium_check(self, mock_premium_check):
         """Empty lists for premium fields must not trigger the premium check."""
