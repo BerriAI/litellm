@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from types import MappingProxyType
+from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
 
 import httpx
@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_arize_otlp_protocol_value,
+    validate_capture_message_content_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -89,6 +90,7 @@ from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterC
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VAR,
     AzureSpillover,
     CallTypes,
     CostBreakdown,
@@ -1165,77 +1167,24 @@ from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E4
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    AllowedVectorStoreIndexItem as AllowedVectorStoreIndexItem,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    GenerateKeyRequest as GenerateKeyRequest,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    KeyRequestBase as KeyRequestBase,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    LiteLLMKeyType as LiteLLMKeyType,  # noqa: PLC0414  # public re-export
+)
 from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E402  # re-export after the definitions above
     GenerateRequestBase as GenerateRequestBase,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E402  # re-export after the definitions above
     LiteLLM_ObjectPermissionBase as LiteLLM_ObjectPermissionBase,  # noqa: PLC0414  # public re-export
 )
-
-
-class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
-    index_name: str
-    index_permissions: list[Literal["read", "write"]]
-
-
-class KeyRequestBase(GenerateRequestBase):
-    key: str | None = None
-    tpd_limit: int | None = None
-    default_estimated_output_tokens: PositiveInt | None = None
-    default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
-    budget_id: str | None = None
-    end_user_budget_id: str | None = None
-    tags: list[str] | None = None
-    disable_global_guardrails: bool | None = None
-    enable_prompt_caching: bool | None = None
-    throttle_on_budget_exceeded: bool | None = None
-    enforced_params: list[str] | None = None
-    allowed_routes: list[Any] | None = []
-    allowed_passthrough_routes: list[object] | None = None
-    denied_passthrough_routes: list[str] | None = None
-    allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
-    rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
-        None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
-    )
-    tpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
-        None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
-    )
-    router_settings: UpdateRouterConfig | None = None
-    access_group_ids: list[str] | None = None
-
-
-class LiteLLMKeyType(str, enum.Enum):
-    """
-    Enum for key types that determine what routes a key can access
-    """
-
-    LLM_API = "llm_api"  # Can call LLM API routes (chat/completions, embeddings, etc.)
-    MANAGEMENT = "management"  # Can call management routes (user/team/key management)
-    READ_ONLY = "read_only"  # Can only call info/read routes
-    DEFAULT = "default"  # Uses default allowed routes
-
-
-class GenerateKeyRequest(KeyRequestBase):
-    soft_budget: float | None = None
-    send_invite_email: bool | None = None
-    key_type: LiteLLMKeyType | None = Field(
-        default=LiteLLMKeyType.DEFAULT,
-        description="Type of key that determines default allowed routes.",
-    )
-    auto_rotate: bool | None = Field(default=False, description="Whether this key should be automatically rotated")
-    rotation_interval: str | None = Field(
-        default=None,
-        description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
-    )
-    organization_id: str | None = None
-    project_id: str | None = None
-
-    @field_validator("team_id", "organization_id", "project_id", mode="before")
-    @classmethod
-    def treat_cleared_id_as_unset(cls, v: object) -> object:
-        if v == "":
-            return None
-        return v
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -1280,65 +1229,12 @@ class GenerateKeyResponse(KeyRequestBase):
         return values
 
 
-def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: raw before-validator payload
-    return isinstance(value, Mapping)
-
-
-class UpdateKeyRequest(KeyRequestBase):
-    # Note: the defaults of all Params here MUST BE NONE
-    # else they will get overwritten
-    duration: str | None = None
-    spend: float | None = None
-    soft_budget: float | None = None
-    metadata: dict[Any, Any] | None = None
-    temp_budget_increase: float | None = None
-    temp_budget_expiry: datetime | None = None
-    auto_rotate: bool | None = None
-    rotation_interval: str | None = None
-    organization_id: str | None = None
-
-    project_id: str | None = Field(
-        default=None,
-        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def drop_blank_team_id(cls, values: object) -> object:
-        if _is_mapping(values) and values.get("team_id") == "":
-            return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
-        return values
-
-    @field_validator("organization_id", mode="before")
-    @classmethod
-    def treat_cleared_organization_id_as_unset(cls, v: object) -> object:
-        if v == "":
-            return None
-        return v
-
-    @model_validator(mode="after")
-    def validate_temp_budget(self) -> "UpdateKeyRequest":
-        if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
-            if self.temp_budget_increase is None or self.temp_budget_expiry is None:
-                raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
-        return self
-
-    @model_validator(mode="after")
-    def validate_key_identifier(self) -> "UpdateKeyRequest":
-        if self.key is None and self.key_alias is None:
-            raise ValueError("either key or key_alias must be provided")
-        return self
-
-
-class RegenerateKeyRequest(GenerateKeyRequest):
-    # This needs to be different from UpdateKeyRequest, because "key" is optional for this
-    key: str | None = None
-    new_key: str | None = None
-    duration: str | None = None
-    spend: float | None = None
-    metadata: dict[Any, Any] | None = None
-    new_master_key: str | None = None
-    grace_period: str | None = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    RegenerateKeyRequest as RegenerateKeyRequest,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    UpdateKeyRequest as UpdateKeyRequest,  # noqa: PLC0414  # public re-export
+)
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
@@ -1790,41 +1686,12 @@ class ListSkillsRequest(LiteLLMPydanticObjectBase):
     offset: int | None = 0
 
 
-class NewUserRequestTeam(LiteLLMPydanticObjectBase):
-    team_id: str
-    max_budget_in_team: float | None = None
-    user_role: Literal["user", "admin"] = "user"
-
-
-class NewUserRequest(GenerateRequestBase):
-    max_budget: float | None = None
-    user_email: str | None = None
-    user_alias: str | None = None
-    user_role: (
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-        | None
-    ) = None
-    teams: list[str] | list[NewUserRequestTeam] | None = None
-    auto_create_key: bool = True  # flag used for returning a key as part of the /user/new response
-    send_invite_email: bool | None = None
-    sso_user_id: str | None = None
-    organizations: list[str] | None = None
-    password: str | None = None
-
-    @field_validator("password")
-    @classmethod
-    def password_not_supported(cls, value: str | None) -> str | None:
-        if value is not None:
-            raise ValueError(
-                "password cannot be set via /user/new. Users set their own password through an "
-                "invitation link (POST /invitation/new)."
-            )
-        return value
+from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
+    NewUserRequest as NewUserRequest,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
+    NewUserRequestTeam as NewUserRequestTeam,  # noqa: PLC0414  # public re-export
+)
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1846,36 +1713,12 @@ class NewUserResponse(GenerateKeyResponse):
     updated_at: datetime | None = None
 
 
-class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with BulkUpdateUserRequest
-    # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
-    password: str | None = Field(default=None, repr=False)
-    spend: float | None = None
-    metadata: dict[object, object] | None = None
-    user_alias: str | None = None
-    user_role: (
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-        | None
-    ) = None
-    max_budget: float | None = None
-
-
-class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
-    # Note: the defaults of all Params here MUST BE NONE
-    # else they will get overwritten
-    user_id: str | None = None
-    user_email: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
+from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
+    UpdateUserRequest as UpdateUserRequest,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
+    UpdateUserRequestNoUserIDorEmail as UpdateUserRequestNoUserIDorEmail,  # noqa: PLC0414  # public re-export
+)
 
 
 class ChangePasswordRequest(LiteLLMPydanticObjectBase):
@@ -2204,7 +2047,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
-        valid_keys: Final = set(StandardCallbackDynamicParams.__annotations__.keys())
+        valid_keys: Final = {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR}
         for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
@@ -2216,6 +2059,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_span_scope_value(callback_vars[key])
             if key == "arize_otlp_protocol":
                 validate_arize_otlp_protocol_value(callback_vars[key])
+            if key == CAPTURE_MESSAGE_CONTENT_VAR:
+                validate_capture_message_content_value(callback_vars[key])
         return values
 
 
@@ -3455,10 +3300,6 @@ class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sen
     user_email: str | None = None
 
 
-class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
-    key_count: int = 0
-
-
 from litellm.models.access_group import (  # noqa: E402
     LiteLLM_AccessGroupTable as LiteLLM_AccessGroupTable,
 )
@@ -3472,6 +3313,9 @@ from litellm.models.spend_logs import (  # noqa: E402
     LiteLLM_SpendLogs as LiteLLM_SpendLogs,
 )
 from litellm.models.tag import LiteLLM_TagTable as LiteLLM_TagTable  # noqa: E402
+from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
+    LiteLLM_UserTableWithKeyCount as LiteLLM_UserTableWithKeyCount,  # noqa: PLC0414  # public re-export
+)
 
 AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
@@ -4247,16 +4091,9 @@ class OrganizationAddMemberResponse(LiteLLMPydanticObjectBase):
     updated_organization_memberships: list[LiteLLM_OrganizationMembershipTable]
 
 
-class MemberDeleteRequest(LiteLLMPydanticObjectBase):
-    user_id: str | None = None
-    user_email: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
+from litellm.types.proxy.management_endpoints.team_endpoints import (  # noqa: E402  # re-export after the definitions above
+    MemberDeleteRequest as MemberDeleteRequest,  # noqa: PLC0414  # public re-export
+)
 
 
 class MemberUpdateResponse(LiteLLMPydanticObjectBase):
