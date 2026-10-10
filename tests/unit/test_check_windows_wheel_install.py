@@ -2,7 +2,7 @@ import zipfile
 
 import pytest
 
-from check_windows_wheel_install import (
+from tests.windows_tests.check_windows_wheel_install import (
     MAX_DIRECTORY_PATH,
     MAX_PATH,
     WORST_CASE_PREFIX,
@@ -29,9 +29,7 @@ def test_flags_entry_one_char_over_budget(tmp_path):
 
 def test_allows_entry_exactly_at_budget(tmp_path):
     at_limit = "a" * FILE_BUDGET
-    assert (
-        overlong_install_paths(_wheel(tmp_path, at_limit, "litellm/__init__.py")) == []
-    )
+    assert overlong_install_paths(_wheel(tmp_path, at_limit, "litellm/__init__.py")) == []
 
 
 def test_flags_directory_one_char_over_create_directory_limit(tmp_path):
