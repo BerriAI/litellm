@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -15,6 +15,7 @@ import litellm
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionsResponse,
@@ -1508,6 +1509,28 @@ def test_sync_decisions_fetch_and_inline_remote_images_for_cloudflare(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_remote_image_downloads_use_the_callers_timeout(
+    sync: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
+    image_route: Final = respx_mock.get(_REMOTE_IMAGE_URL).respond(
+        content=b"\x89PNG\r\n\x1a\n", headers={"content-type": "image/png"}
+    )
+    respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    request_kwargs: Final = {**_image_requests(_REMOTE_IMAGE_URL)[1], "model": "cloudflare/clef", "timeout": 7.0}
+
+    if sync:
+        litellm.decisions(**request_kwargs)
+    else:
+        await litellm.adecisions(**request_kwargs)
+
+    assert image_route.calls.last.request.extensions["timeout"] == httpx.Timeout(7.0).as_dict()
+
+
+@pytest.mark.asyncio
 async def test_remote_input_images_reach_openai_unfetched(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, async_only_image_fetch
 ) -> None:
@@ -1562,6 +1585,120 @@ async def test_images_are_dropped_from_the_wire_under_drop_params(
         "state": _SCREEN_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
+
+
+_MALFORMED_IMAGES: Final[tuple[object, ...]] = (
+    _PNG_DATA_URL,
+    [{"url": _PNG_DATA_URL}],
+    [{"type": "image_url", "image_url": {"url": _PNG_DATA_URL}}],
+    [{"content_type": "image/png", "base64": "AA==", "detail": "high"}],
+)
+_MALFORMED_IMAGE_IDS: Final = ("bare_string", "url_object", "chat_image_url", "extra_key")
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("images", _MALFORMED_IMAGES, ids=_MALFORMED_IMAGE_IDS)
+def test_malformed_images_are_rejected_before_http(
+    images: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=r"(?s)Invalid Decisions request.*images"):
+        litellm.decisions(model="cloudflare/clef", state=_SCREEN_TEXT, questions=_SYSTEMONE_PREDICATE, images=images)
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("images", _MALFORMED_IMAGES, ids=_MALFORMED_IMAGE_IDS)
+async def test_malformed_images_are_dropped_from_the_wire_under_drop_params(
+    images: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="cloudflare/clef", state=_SCREEN_TEXT, questions=_SYSTEMONE_PREDICATE, images=images, drop_params=True
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "clef",
+        "state": _SCREEN_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("images", "drop_params"), (([], False), ([_PNG_DATA_URL], True)), ids=("empty", "drop_params")
+)
+async def test_images_next_to_input_are_ignored_when_empty_or_when_params_are_dropped(
+    images: Sequence[str], drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        images=images,
+        drop_params=drop_params,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_dropping_the_only_input_images_is_rejected_before_http(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=r"\['input_image'\].*leaves no input") as caught:
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[{"role": "user", "content": [{"type": "input_image", "image_url": _PNG_DATA_URL}]}],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+def test_remote_image_urls_with_an_uppercase_scheme_are_inlined_for_cloudflare(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    png: Final = b"\x89PNG\r\n\x1a\n"
+    image_route: Final = respx_mock.get(_REMOTE_IMAGE_URL).respond(content=png, headers={"content-type": "image/png"})
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    litellm.decisions(
+        model="cloudflare/clef",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_REMOTE_IMAGE_URL.replace("https://", "HTTPS://")],
+    )
+
+    assert image_route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["images"] == [
+        f"data:image/png;base64,{base64.b64encode(png).decode()}"
+    ]
 
 
 @pytest.mark.asyncio

@@ -163,7 +163,7 @@ def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) ->
         dict.fromkeys(
             image
             for image in _input_images(decision_input)
-            if isinstance(image, str) and image.startswith(_REMOTE_URL_PREFIXES)
+            if isinstance(image, str) and image.lower().startswith(_REMOTE_URL_PREFIXES)
         )
     )
 

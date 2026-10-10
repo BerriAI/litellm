@@ -29,6 +29,8 @@ from litellm.llms.openai.decisions.transformation import ir_to_openai_response, 
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsBase64Image,
+    DecisionsImage,
+    DecisionsIRMessages,
     DecisionsIRRequest,
     DecisionsIRResponse,
     DecisionsJSON,
@@ -53,6 +55,9 @@ _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapt
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
+)
+_IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
+    tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
 _HANDLER: Final = BaseLLMHTTPHandler()
 
@@ -99,12 +104,14 @@ def _validate_request(
     *,
     state: DecisionsJSON | None,
     questions: DecisionsQuestions | None,
-    images: DecisionsImages | None,
+    images: tuple[DecisionsImage, ...],
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
 ) -> DecisionsRequestFormat:
     if decision_input is None:
-        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions, "images": images})
+        return _SYSTEMONE_REQUEST_ADAPTER.validate_python(
+            {"state": state, "questions": questions, "images": images or None}
+        )
     return _OPENAI_REQUEST_ADAPTER.validate_python(
         {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
     )
@@ -130,8 +137,22 @@ def _request_safety_identifier(safety_identifier: object, kwargs: Mapping[str, o
     return None
 
 
+def _request_images(images: object, kwargs: Mapping[str, object]) -> tuple[DecisionsImage, ...]:
+    if not _drops_params(kwargs):
+        return _IMAGES_ADAPTER.validate_python(images) or ()
+    try:
+        return _IMAGES_ADAPTER.validate_python(images) or ()
+    except ValidationError:
+        return ()
+
+
 @dataclass(frozen=True, slots=True)
 class _UnsupportedParams:
+    names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NoInputLeftAfterDrop:
     names: tuple[str, ...]
 
 
@@ -162,14 +183,17 @@ def _provider_ir_request(
     safety_identifier: str | None,
     provider_config: BaseDecisionsConfig,
     kwargs: Mapping[str, object],
-) -> DecisionsIRRequest | _UnsupportedParams:
+) -> DecisionsIRRequest | _UnsupportedParams | _NoInputLeftAfterDrop:
     ir_request: Final = _ir_request(request, safety_identifier)
     unsupported: Final = _unsupported_params(ir_request, provider_config)
     if not unsupported:
         return ir_request
-    if _drops_params(kwargs):
-        return _without_unsupported_params(ir_request, provider_config)
-    return _UnsupportedParams(names=unsupported)
+    if not _drops_params(kwargs):
+        return _UnsupportedParams(names=unsupported)
+    supported: Final = _without_unsupported_params(ir_request, provider_config)
+    if isinstance(supported.input, DecisionsIRMessages) and not supported.input.messages:
+        return _NoInputLeftAfterDrop(names=unsupported)
+    return supported
 
 
 def _prepare_call(
@@ -206,7 +230,7 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         )
-    if images is not None and decision_input is not None:
+    if images and decision_input is not None and not _drops_params(kwargs):
         raise litellm.BadRequestError(
             message=(
                 "images belongs to the System One format; with input (OpenAI format), "
@@ -224,7 +248,7 @@ def _prepare_call(
         request: Final = _validate_request(
             state=state,
             questions=questions,
-            images=images,
+            images=_request_images(images, kwargs) if decision_input is None else (),
             decision_input=decision_input,
             safety_identifier=request_safety_identifier,
         )
@@ -262,6 +286,15 @@ def _prepare_call(
                 f"{provider} does not support parameters: {list(ir_request.names)}, for model={model}. "
                 "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
                 "`litellm_settings:\n drop_params: true`\n"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
+    if isinstance(ir_request, _NoInputLeftAfterDrop):
+        raise litellm.BadRequestError(
+            message=(
+                f"{provider} does not support parameters: {list(ir_request.names)}, for model={model}, "
+                "and dropping them leaves no input to decide on"
             ),
             model=model,
             llm_provider=provider,
@@ -309,14 +342,16 @@ def _with_remote_images_inlined(call: _DecisionsCall) -> _DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
-    return _with_data_urls(call, MappingProxyType({url: convert_url_to_base64(url) for url in remote_urls}))
+    return _with_data_urls(
+        call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
+    )
 
 
 async def _async_with_remote_images_inlined(call: _DecisionsCall) -> _DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
-    data_urls: Final = await async_convert_urls_to_base64(remote_urls)
+    data_urls: Final = await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
     return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 

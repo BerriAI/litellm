@@ -744,6 +744,44 @@ def test_images_to_a_text_only_deployment_are_dropped_when_it_drops_params(
     }
 
 
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_malformed_images_are_refused_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch,
+        {
+            "model": "cloudflare/clef",
+            "api_key": "cloudflare-key",
+            "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+            "drop_params": deployment_drops_params,
+        },
+    )
+    upstream: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone", json={**_IMAGE_REQUEST_BODIES[1], "images": [{"url": _PNG_DATA_URL}]}
+    )
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "images" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
 def _decisions_feature() -> LazyFeature:
     return next(feature for feature in LAZY_FEATURES if feature.name == "decisions")
 
