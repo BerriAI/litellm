@@ -2395,22 +2395,9 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
     assume_role_aws_session_name: str | None = None
 
 
-class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings for a specific guardrail on a passthrough endpoint.
-
-    Allows field-level targeting for guardrail execution.
-    """
-
-    request_fields: list[str] | None = Field(
-        default=None,
-        description="JSONPath expressions for input field targeting (pre_call). Examples: 'query', 'documents[*].text', 'messages[*].content'. If not specified, guardrail runs on entire request payload.",
-    )
-    response_fields: list[str] | None = Field(
-        default=None,
-        description="JSONPath expressions for output field targeting (post_call). Examples: 'results[*].text', 'output'. If not specified, guardrail runs on entire response payload.",
-    )
-
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (  # noqa: E402  # public re-export
+    PassThroughGuardrailSettings as PassThroughGuardrailSettings,  # noqa: PLC0414  # public re-export
+)
 
 # Type alias for the guardrails dict: guardrail_name -> settings (or None for defaults)
 PassThroughGuardrailsConfig = dict[str, PassThroughGuardrailSettings | None]
