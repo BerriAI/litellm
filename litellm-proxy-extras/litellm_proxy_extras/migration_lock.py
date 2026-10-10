@@ -1,4 +1,5 @@
 import random
+import re
 import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -7,25 +8,50 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras.prisma_toolchain import MIGRATION_LOCK_TIMEOUT_ENV_VAR, migration_lock_timeout
+from litellm_proxy_extras.prisma_toolchain import (
+    MIGRATION_LOCK_TIMEOUT_ENV_VAR,
+    migration_ddl_lock_timeout,
+    migration_lock_timeout,
+)
 
 MIGRATION_LOCK_KEY: Final = int.from_bytes(b"llm_mig2", "big")
+_LOCK_TIMEOUT_PINNED_RE: Final = re.compile(r"(?:-c\s*|--)lock_timeout=")
 
 if TYPE_CHECKING:
     import psycopg
 
 
-def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
-    database_url: Final = environment.get("DATABASE_URL")
-    direct_url: Final = environment.get("DIRECT_URL")
-    if not database_url or not direct_url:
-        return environment
+def _migration_url(database_url: str, direct_url: "str | None") -> str:
+    if not direct_url:
+        return database_url
     schema: Final = next((value for key, value in parse_qsl(urlsplit(database_url).query) if key == "schema"), "public")
     direct: Final = urlsplit(direct_url)
     parameters: Final = tuple((key, value) for key, value in parse_qsl(direct.query) if key != "schema")
+    return urlunsplit(direct._replace(query=urlencode((*parameters, ("schema", schema)))))
+
+
+def _with_ddl_lock_timeout(url: str) -> str:
+    split: Final = urlsplit(url)
+    pairs: Final = tuple(parse_qsl(split.query))
+    if any(key == "pgbouncer" and value == "true" for key, value in pairs):
+        return url
+    existing: Final = next((value for key, value in pairs if key == "options"), "")
+    if _LOCK_TIMEOUT_PINNED_RE.search(existing):
+        return url
+    timeout_ms: Final = max(1, int(migration_ddl_lock_timeout() * 1000))
+    options: Final = f"{existing} -c lock_timeout={timeout_ms}".strip()
+    rewritten: Final = tuple((key, value) for key, value in pairs if key != "options") + (("options", options),)
+    return urlunsplit(split._replace(query=urlencode(rewritten)))
+
+
+def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
+    database_url: Final = environment.get("DATABASE_URL")
+    if not database_url:
+        return environment
+    migration_url: Final = _migration_url(database_url, environment.get("DIRECT_URL"))
     return {
         **environment,
-        "DATABASE_URL": urlunsplit(direct._replace(query=urlencode((*parameters, ("schema", schema))))),
+        "DATABASE_URL": _with_ddl_lock_timeout(migration_url),
     }
 
 
