@@ -1,13 +1,19 @@
 """Tests for litellm.litellm_core_utils.fallback_utils."""
 
-import pytest
+import json
+from typing import Final
+
 import httpx
+import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
 )
+from litellm.main import acompletion as python_acompletion
+from litellm.main import completion as python_completion
 
 
 @pytest.mark.asyncio
@@ -167,3 +173,274 @@ def test_process_response_headers_ignores_preserve_flag_for_httpx_headers():
     result = process_response_headers(raw, preserve_litellm_internal_headers=True)
     assert "x-litellm-attempted-fallbacks" not in result
     assert result["llm_provider-x-litellm-attempted-fallbacks"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_bad_models(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "model unavailable",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "fallback unavailable",
+                        "type": "authentication_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+        )
+    )
+
+    with pytest.raises(Exception, match="All fallback attempts failed"):
+        await python_acompletion(
+            model="openai/first",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            fallbacks=["openai/second"],
+        )
+
+    assert len(route.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_basic(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "model unavailable",
+                        "type": "authentication_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "second",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "fallback answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "fallback answer"
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_empty_list(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            404,
+            json={
+                "error": {
+                    "message": "model unavailable",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "model_not_found",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(litellm.NotFoundError, match="model unavailable"):
+        await python_acompletion(
+            model="openai/first",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            fallbacks=[],
+        )
+
+    assert len(route.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_none_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                500,
+                json={
+                    "error": {
+                        "message": "temporary failure",
+                        "type": "server_error",
+                        "param": None,
+                        "code": "server_error",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "second",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "recovered answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "recovered answer"
+    assert len(route.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallbacks_with_dict_config(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": "invalid key",
+                        "type": "authentication_error",
+                        "param": None,
+                        "code": "invalid_api_key",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "first",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "authenticated answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="invalid-key",
+        fallbacks=[{"api_key": "fallback-key"}],
+    )
+
+    assert response.choices[0].message.content == "authenticated answer"
+    assert tuple(call.request.headers["authorization"] for call in route.calls) == (
+        "Bearer invalid-key",
+        "Bearer fallback-key",
+    )
+
+
+def test_completion_fallbacks_sync(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "model unavailable",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "model_not_found",
+                    }
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-fallback",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "second",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "sync fallback answer"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            ),
+        )
+    )
+
+    response: Final = python_completion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "sync fallback answer"
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")

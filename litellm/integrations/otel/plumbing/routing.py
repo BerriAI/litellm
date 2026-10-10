@@ -282,7 +282,8 @@ class TenantTracerCache:
             self._providers.move_to_end(cache_key)
             return cached
         built: Final = build_tracer_provider(
-            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+            self._routed_config(credential_headers, project_headers, endpoint, service_name),
+            strip_message_content=not self._config.capture_span_content,
         )
         self._providers[cache_key] = built
         return built

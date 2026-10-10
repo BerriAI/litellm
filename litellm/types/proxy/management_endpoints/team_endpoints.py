@@ -1,24 +1,33 @@
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from litellm.proxy._types import (
-    KeyManagementRoutes,
-    LiteLLM_DeletedTeamTable,
-    LiteLLM_TeamMembership,
-    LiteLLM_TeamTable,
-    Member,
-    MemberDeleteRequest,
-)
+from litellm.models.team import LiteLLM_DeletedTeamTable, LiteLLM_TeamTable, Member
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.auth.user_roles import KeyManagementRoutes
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
 
 MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
 MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
+
+
+class MemberDeleteRequest(LiteLLMPydanticObjectBase):
+    user_id: str | None = None
+    user_email: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
 
 
 class GetTeamMemberPermissionsRequest(LiteLLMBaseModel):

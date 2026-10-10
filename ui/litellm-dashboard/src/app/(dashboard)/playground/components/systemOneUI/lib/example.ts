@@ -1,4 +1,39 @@
 import type { DecisionRequest, SystemOneRequest } from "./schemas";
+import type { OpenAIDecisionsRequest } from "./openAIDecisions";
+import { parseJson } from "./validatePayload";
+
+type PresetChoice = {
+  type: "choice";
+  instructions: string;
+  criteria: Record<string, string>;
+};
+
+type PresetNoul = {
+  type: "noul";
+  instructions: string;
+  criteria?: { true: string; false: string };
+};
+
+type PresetScore = {
+  type: "score";
+  instructions: string;
+  criteria: string[];
+};
+
+export type PresetQuestion = PresetChoice | PresetNoul | PresetScore;
+
+export type PresetRequest = {
+  state: string;
+  questions: Record<string, PresetQuestion>;
+};
+
+type PresetEndpoint = "/v1/decisions" | "/v1/systemone";
+
+export interface DecisionPreset {
+  id: string;
+  label: string;
+  request: PresetRequest;
+}
 
 export const SYSTEM_ONE_EXAMPLE = {
   model: "jev-latest",
@@ -37,6 +72,132 @@ export const SYSTEM_ONE_EXAMPLE = {
   },
 } satisfies SystemOneRequest;
 
-export const PLACEHOLDER_DECISION_MODEL = "your-decision-model";
+const { model: _exampleModel, ...bugTriage }: SystemOneRequest & PresetRequest = SYSTEM_ONE_EXAMPLE;
 
-export const decisionsExample = (model: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });
+const supportRouting = {
+  state:
+    "Hi, I was charged twice for my team plan this month and the second charge pushed my card over its limit. I need the duplicate refunded today and want to know why it happened.",
+  questions: {
+    department: {
+      type: "choice",
+      instructions: "Which team should handle this ticket?",
+      criteria: {
+        billing: "Invoices, charges, refunds, and plan changes",
+        technical: "Bugs, errors, outages, and integration help",
+        account: "Login, permissions, and profile settings",
+        sales: "Pricing questions and new purchases",
+      },
+    },
+  },
+} satisfies PresetRequest;
+
+const moderation = {
+  state:
+    "This guide is garbage and whoever wrote it should be fired. The fix that actually works is setting stream=false, took me two days to figure that out.",
+  questions: {
+    breaks_rules: {
+      type: "noul",
+      instructions: "Does this comment break the community guidelines?",
+      criteria: {
+        true: "Insults, harassment, slurs, or threats aimed at a person",
+        false: "Blunt or frustrated but still about the content",
+      },
+    },
+  },
+} satisfies PresetRequest;
+
+const leadScoring = {
+  state:
+    "Inbound form: VP Engineering at a 400 person fintech. Running a self hosted gateway today, evaluating replacements this quarter, budget approved, needs SSO and audit logs.",
+  questions: {
+    fit: {
+      type: "score",
+      instructions: "How well does this lead fit our ideal customer?",
+      criteria: [
+        "No fit, wrong market or no budget",
+        "Weak fit, early curiosity only",
+        "Possible fit, needs discovery",
+        "Strong fit, active evaluation",
+        "Ideal fit, ready to buy this quarter",
+      ],
+    },
+  },
+} satisfies PresetRequest;
+
+export const DECISION_PRESETS: readonly DecisionPreset[] = [
+  { id: "bug-triage", label: "Triage a bug report", request: bugTriage },
+  { id: "support-routing", label: "Route a support ticket", request: supportRouting },
+  { id: "moderation", label: "Moderate a forum comment", request: moderation },
+  { id: "lead-scoring", label: "Score a sales lead", request: leadScoring },
+];
+
+const toOpenAIQuestion = (name: string, question: PresetQuestion): OpenAIDecisionsRequest["questions"][number] => {
+  switch (question.type) {
+    case "choice":
+      return {
+        type: "choice",
+        name,
+        instructions: question.instructions,
+        choices: Object.entries(question.criteria).map(([value, description]) => ({ value, description })),
+      };
+    case "noul":
+      return { type: "predicate", name, instructions: question.instructions };
+    case "score":
+      return {
+        type: "score",
+        name,
+        instructions: question.instructions,
+        levels: question.criteria.map((description, index) => ({ label: String(index), description })),
+      };
+  }
+};
+
+export const toSystemOneRequest = (request: PresetRequest, model?: string): DecisionRequest => ({ model, ...request });
+
+export const toOpenAIDecisionsRequest = (request: PresetRequest, model?: string): OpenAIDecisionsRequest => ({
+  model,
+  input: request.state,
+  questions: Object.entries(request.questions).map(([name, question]) => toOpenAIQuestion(name, question)),
+});
+
+export const presetPayload = (preset: DecisionPreset, endpoint: PresetEndpoint, model?: string): string =>
+  JSON.stringify(
+    endpoint === "/v1/decisions"
+      ? toOpenAIDecisionsRequest(preset.request, model)
+      : toSystemOneRequest(preset.request, model),
+    null,
+    2,
+  );
+
+const stableJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+      : item,
+  );
+
+const withoutModel = (value: unknown): string => {
+  const { model: _model, ...rest } = (value ?? {}) as Record<string, unknown>;
+  return stableJson(rest);
+};
+
+export const matchPreset = (endpoint: PresetEndpoint, raw: string): DecisionPreset | undefined => {
+  const json = parseJson(raw);
+  if (!json.ok) {
+    return undefined;
+  }
+  const current = withoutModel(json.value);
+  return DECISION_PRESETS.find((preset) => withoutModel(JSON.parse(presetPayload(preset, endpoint))) === current);
+};
+
+export const emptyPayload = (endpoint: PresetEndpoint, model?: string): string =>
+  JSON.stringify(
+    endpoint === "/v1/decisions" ? { model, input: "", questions: [] } : { model, state: "", questions: {} },
+    null,
+    2,
+  );
+
+export const decisionsExample = (model?: string): DecisionRequest => toSystemOneRequest(bugTriage, model);
+
+export const openAIDecisionsExample = (model?: string): OpenAIDecisionsRequest =>
+  toOpenAIDecisionsRequest(bugTriage, model);

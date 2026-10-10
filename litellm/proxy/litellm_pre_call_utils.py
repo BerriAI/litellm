@@ -227,6 +227,7 @@ from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VAR,
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
@@ -975,6 +976,8 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
+        if var == CAPTURE_MESSAGE_CONTENT_VAR:
+            continue
         # New Relic routing reads these from the trusted-vars overlay with no
         # callback-name check, so scope them to the newrelic entry: a team that
         # put newrelic_* under a different callback never asked for New Relic and
@@ -1162,7 +1165,6 @@ def resolve_tenant_otel_destinations(
     span still routes to the tenant's credentials the way it did then.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
-    from litellm.integrations.otel.presets.destinations import destination_for
 
     if not is_otel_v2_enabled():
         return ()
@@ -1186,23 +1188,28 @@ def resolve_tenant_otel_destinations(
         for name in dict.fromkeys(
             callback.callback_name for callback in callbacks if callback.callback_type != "failure"
         )
-        if (
-            destination := destination_for(
-                name,
-                _tenant_otel_params(
-                    MappingProxyType(
-                        {
-                            var: value
-                            for callback in callbacks
-                            if callback.callback_name == name
-                            for var, value in callback.callback_vars.items()
-                        }
-                    )
-                ),
-                _tenant_service_name(user_api_key_dict),
+        if (destination := _tenant_destination(name, callbacks, _tenant_service_name(user_api_key_dict))) is not None
+    )
+
+
+def _tenant_destination(
+    name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
+) -> "OtelDestination | None":
+    from litellm.integrations.otel.model.config import parse_capture_message_content
+    from litellm.integrations.otel.presets.destinations import destination_for
+
+    callback_vars: Final = MappingProxyType(
+        dict(
+            itertools.chain.from_iterable(
+                callback.callback_vars.items() for callback in callbacks if callback.callback_name == name
             )
         )
-        is not None
+    )
+    return destination_for(
+        name,
+        _tenant_otel_params(callback_vars),
+        service_name,
+        parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
     )
 
 
@@ -2508,6 +2515,9 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_user_max_budget"] = user_api_key_dict.user_max_budget
     user_model_budget: Final = user_api_key_dict.user_model_max_budget
     data[_metadata_variable_name]["user_api_key_user_model_max_budget"] = user_model_budget  # rebind-ok: out-param
+    data[_metadata_variable_name][  # rebind-ok: adds member budget for spend tracking
+        "user_api_key_team_member_model_max_budget"
+    ] = user_api_key_dict.team_member_model_max_budget
     data[_metadata_variable_name].update(carried_budget_metadata(user_api_key_dict))
 
     data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
