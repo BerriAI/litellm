@@ -109,7 +109,11 @@ const AllModelsTab = ({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [pausingModelId, setPausingModelId] = useState<string | null>(null);
 
-  const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
+  // Scoped by the view mode, not just by the team picker: in "all available
+  // models" the team must not narrow the query, or the tab shows the current
+  // team's models under a heading that promises every model the user can reach.
+  const teamIdForQuery =
+    modelViewMode === "current_team" && selectedTeamValue !== PERSONAL_TEAM_VALUE ? selectedTeamValue : undefined;
   const isConcreteModelGroup =
     Boolean(selectedModelGroup) &&
     selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
@@ -218,7 +222,10 @@ const AllModelsTab = ({
   };
 
   const handleViewModeChange = (value: ModelViewMode) => {
-    void setTableState({ view_mode: value });
+    // `page: null` like every other handler that changes the result set --
+    // without it, switching view while past page 1 keeps the old page number
+    // against a different, usually shorter, list.
+    void setTableState({ view_mode: value, page: null });
   };
 
   const resetFilters = () => {
