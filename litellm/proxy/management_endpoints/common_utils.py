@@ -272,6 +272,29 @@ def check_disable_global_guardrails_caller_permission(
 _check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
 
 
+def check_require_trace_id_caller_permission(
+    require_trace_id: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    metadata_sent: bool,
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final = existing_metadata is not None and existing_metadata.get("require_trace_id") is True
+    metadata_value: Final = metadata is not None and metadata.get("require_trace_id") is True
+    requested: Final = (
+        require_trace_id if require_trace_id is not None else (metadata_value if metadata_sent else stored)
+    )
+    if requested is stored:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `require_trace_id` on a team."},
+    )
+
+
 def team_member_has_permission(
     user_api_key_dict: UserAPIKeyAuth,
     team_obj: LiteLLM_TeamTable,

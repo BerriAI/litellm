@@ -26,6 +26,7 @@ from litellm_proxy_extras.request_log_indexes import (
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 from psycopg import sql
 from psycopg.abc import Params, QueryNoTemplate
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import class_row
 
 pytestmark = pytest.mark.timeout(900)
@@ -608,19 +609,22 @@ def test_the_serving_proxy_setup_applies_the_inert_migrations_and_builds_no_inde
 def test_a_role_that_may_not_create_indexes_is_logged_and_left_for_the_next_job_run(
     scratch_database: str, caplog: pytest.LogCaptureFixture
 ) -> None:
+    role: Final = f"spend_logs_reader_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
-        conn.execute("CREATE ROLE spend_logs_reader LOGIN PASSWORD 'reader'")
-        conn.execute("GRANT USAGE ON SCHEMA public TO spend_logs_reader")
-        conn.execute('GRANT SELECT ON "LiteLLM_SpendLogs" TO spend_logs_reader')
-    reader_url: Final = scratch_database.replace("postgres:postgres@", "spend_logs_reader:reader@", 1)
+        conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'reader'").format(sql.Identifier(role)))
+        conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
+        conn.execute(sql.SQL('GRANT SELECT ON "LiteLLM_SpendLogs" TO {}').format(sql.Identifier(role)))
+    reader_url: Final = make_conninfo(scratch_database, user=role, password="reader")
     try:
+        with psycopg.connect(reader_url) as reader:
+            assert reader.execute("SELECT current_user").fetchone() == (role,)
         with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
             assert ensure_request_log_indexes(reader_url, "public") is False
     finally:
         with psycopg.connect(scratch_database, autocommit=True) as conn:
-            conn.execute("DROP OWNED BY spend_logs_reader")
-            conn.execute("DROP ROLE spend_logs_reader")
+            conn.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+            conn.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
     assert "leaving them for the next index build" in caplog.text
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {}
 
