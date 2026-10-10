@@ -12,6 +12,7 @@ const SCORE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }
 
 interface ResponseViewProps {
   response?: SystemOneResponse | OpenAIDecisionsResponse;
+  view?: "form" | "json";
   fallbackModel?: string;
   latencyMs?: number;
   error?: string;
@@ -114,7 +115,87 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
   );
 }
 
-export default function ResponseView({ response, fallbackModel, latencyMs, error, isLoading }: ResponseViewProps) {
+function OpenAIAnswerDetails({ answer }: { answer: OpenAIDecisionsResponse["answers"][number] }) {
+  switch (answer.type) {
+    case "refusal":
+      return <p className="text-sm text-muted-foreground">Model refused to answer</p>;
+    case "predicate":
+      return <AnswerDetails answer={{ type: "noul", noul: answer.probability }} />;
+    case "choice":
+      return (
+        <AnswerDetails
+          answer={{
+            type: "choice",
+            choice: String(answer.choice),
+            confidence: answer.confidence,
+            probabilities: Object.fromEntries(
+              answer.probabilities.map(({ value, probability }) => [String(value), probability]),
+            ),
+          }}
+        />
+      );
+    case "score":
+      return (
+        <AnswerDetails
+          answer={{
+            type: "score",
+            score: answer.score,
+            confidence: answer.confidence,
+            probabilities: Object.fromEntries(
+              answer.probabilities.map(({ value, probability }) => [String(value), probability]),
+            ),
+            legend: Object.fromEntries(answer.probabilities.map(({ value, label }) => [String(value), label])),
+          }}
+        />
+      );
+  }
+}
+
+function RawResponse({ response }: { response: NonNullable<ResponseViewProps["response"]> }) {
+  return (
+    <section aria-label="Decisions response JSON">
+      <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
+        {JSON.stringify(response, null, 2)}
+      </pre>
+    </section>
+  );
+}
+
+function AnswerCards({ answers }: { answers: SystemOneResponse["answers"] | OpenAIDecisionsResponse["answers"] }) {
+  const cards = Array.isArray(answers)
+    ? answers.map((answer, index) => ({
+        id: index,
+        name: answer.name ?? `Question ${index + 1}`,
+        type: answer.type,
+        details: <OpenAIAnswerDetails answer={answer} />,
+      }))
+    : Object.entries(answers).map(([id, answer]) => ({
+        id,
+        name: id,
+        type: answer.type,
+        details: <AnswerDetails answer={answer} />,
+      }));
+  return cards.map(({ id, name, type, details }) => (
+    <Card key={id} size="sm">
+      <CardHeader>
+        <CardTitle className="font-mono">{name}</CardTitle>
+        <CardAction>
+          <Badge variant="secondary">{type}</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>{details}</CardContent>
+    </Card>
+  ));
+}
+
+export default function ResponseView({
+  response,
+  view = "form",
+  fallbackModel,
+  latencyMs,
+  error,
+  isLoading,
+}: ResponseViewProps) {
   const [showRaw, setShowRaw] = useState(false);
 
   if (isLoading) {
@@ -155,7 +236,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="grid gap-1">
-            <CardTitle>Calibrated probabilities</CardTitle>
+            <CardTitle>{view === "json" ? "Response JSON" : "Calibrated probabilities"}</CardTitle>
             {model && <CardDescription>{model}</CardDescription>}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -169,29 +250,8 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
         </div>
       </CardHeader>
       <CardContent className="grid gap-3">
-        {Array.isArray(response.answers) ? (
-          <section aria-label="Decisions response JSON" className="grid gap-2">
-            <h3 className="text-sm font-medium">Response JSON</h3>
-            <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
-              {JSON.stringify(response, null, 2)}
-            </pre>
-          </section>
-        ) : (
-          Object.entries(response.answers).map(([id, answer]) => (
-            <Card key={id} size="sm">
-              <CardHeader>
-                <CardTitle className="font-mono">{id}</CardTitle>
-                <CardAction>
-                  <Badge variant="secondary">{answer.type}</Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent>
-                <AnswerDetails answer={answer} />
-              </CardContent>
-            </Card>
-          ))
-        )}
-        {!Array.isArray(response.answers) && (
+        {view === "json" ? <RawResponse response={response} /> : <AnswerCards answers={response.answers} />}
+        {view === "form" && (
           <Collapsible open={showRaw} onOpenChange={setShowRaw}>
             <CollapsibleTrigger
               render={
@@ -202,9 +262,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
               }
             />
             <CollapsibleContent>
-              <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
-                {JSON.stringify(response, null, 2)}
-              </pre>
+              <RawResponse response={response} />
             </CollapsibleContent>
           </Collapsible>
         )}

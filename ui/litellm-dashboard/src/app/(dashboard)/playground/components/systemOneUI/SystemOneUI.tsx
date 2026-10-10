@@ -18,6 +18,7 @@ import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
 import ResponseView from "./ResponseView";
 import SystemOneForm from "./SystemOneForm";
+import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
 import { validateSystemOnePayload, validateOpenAIDecisionsPayload } from "./lib/validatePayload";
 import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
 
@@ -207,7 +208,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               <RotateCcw />
               Reset example
             </Button>
-            {(view === "json" || endpoint === "/v1/decisions") && (
+            {view === "json" && (
               <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
                 <Code />
                 Format JSON
@@ -229,7 +230,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <AlertTitle>{endpoint}</AlertTitle>
           <AlertDescription>
             {endpoint === "/v1/decisions"
-              ? "Uses input and a questions array with predicate, choice, and score questions. Edit the request JSON and inspect the response JSON in the OpenAI Decisions format."
+              ? "Uses input and a questions array with predicate, choice, and score questions. Edit the form or JSON and inspect the response JSON in the OpenAI Decisions format."
               : "Uses state and a questions object with noul, choice, and score questions in the System One format."}{" "}
             Pick a decision model under Model, or omit model to use the proxy&apos;s configured default.{" "}
             <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
@@ -245,47 +246,55 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
 
       <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
         <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="Decisions request editor">
-          {validated.endpoint === "/v1/decisions" ? (
-            <JsonEditor
-              value={rawPayload}
-              onChange={handlePayloadChange}
-              validation={validation}
-              label="Decisions JSON payload"
-              placeholder="Paste or write a /v1/decisions request"
-            />
-          ) : (
-            <Tabs
-              value={view}
-              onValueChange={(value) => (value === "form" || value === "json") && setView(value)}
-              className="min-h-0 flex-1"
-            >
-              <TabsList aria-label="Request editor view">
-                <TabsTrigger value="form">Form</TabsTrigger>
-                <TabsTrigger value="json">JSON</TabsTrigger>
-              </TabsList>
-              <TabsContent value="form" className="flex min-h-0 flex-col">
+          <Tabs
+            value={view}
+            onValueChange={(value) => (value === "form" || value === "json") && setView(value)}
+            className="min-h-0 flex-1"
+          >
+            <TabsList aria-label="Request editor view">
+              <TabsTrigger value="form">Form</TabsTrigger>
+              <TabsTrigger value="json">JSON</TabsTrigger>
+            </TabsList>
+            <TabsContent value="form" className="flex min-h-0 flex-col">
+              {validated.endpoint === "/v1/decisions" ? (
+                <OpenAIDecisionsForm
+                  value={rawPayload}
+                  onChange={handlePayloadChange}
+                  validation={validated.validation}
+                  onOpenJson={() => setView("json")}
+                />
+              ) : (
                 <SystemOneForm
                   value={rawPayload}
                   onChange={handlePayloadChange}
                   validation={validated.validation}
                   onOpenJson={() => setView("json")}
                 />
-              </TabsContent>
-              <TabsContent value="json" className="flex min-h-0 flex-col">
-                <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
-              </TabsContent>
-            </Tabs>
-          )}
+              )}
+            </TabsContent>
+            <TabsContent value="json" className="flex min-h-0 flex-col">
+              <JsonEditor
+                value={rawPayload}
+                onChange={handlePayloadChange}
+                validation={validation}
+                label={endpoint === "/v1/decisions" ? "Decisions JSON payload" : "System One JSON payload"}
+                placeholder={`Paste or write a ${endpoint} request`}
+              />
+            </TabsContent>
+          </Tabs>
         </section>
         <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
           <ResponseView
             response={systemOne.data?.response}
+            view={view}
             fallbackModel={validation.payload?.model}
             latencyMs={systemOne.data?.latencyMs}
             error={systemOne.error?.message}
             isLoading={isLoading}
           />
-          {validated.endpoint === "/v1/systemone" && <QuestionBreakdown payload={validated.validation.payload} />}
+          {view === "form" && validated.endpoint === "/v1/systemone" && (
+            <QuestionBreakdown payload={validated.validation.payload} />
+          )}
         </section>
       </div>
     </div>

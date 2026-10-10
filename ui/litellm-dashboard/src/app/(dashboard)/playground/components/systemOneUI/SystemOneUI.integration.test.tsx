@@ -159,7 +159,7 @@ describe("SystemOneUI integration", () => {
     });
   });
 
-  it("sends the selected endpoint's real shape and displays the native Decisions response JSON", async () => {
+  it("sends each endpoint's real shape and switches existing responses between cards and JSON without resending", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
@@ -179,7 +179,7 @@ describe("SystemOneUI integration", () => {
       input: expect.any(String),
       questions: expect.arrayContaining([expect.objectContaining({ type: "predicate" })]),
     });
-    expect(screen.queryByRole("tab", { name: "Form" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Form" })).toBeInTheDocument();
     const payload = {
       model: "jev-latest",
       input: "An outage",
@@ -201,11 +201,27 @@ describe("SystemOneUI integration", () => {
     expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/decisions$/);
     expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).toEqual(payload);
 
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    expect(screen.getByRole("meter", { name: "Yes probability" })).toHaveAttribute("aria-valuenow", "95");
+    expect(screen.queryByRole("region", { name: "Decisions response JSON" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    expect(screen.getByRole("region", { name: "Decisions response JSON" })).toHaveTextContent('"probability": 0.95');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
     await selectEndpoint("/v1/systemone");
     expect(screen.getByRole("textbox", { name: "System One JSON payload" })).toHaveValue(systemOneDraft);
     expect(screen.queryByRole("region", { name: "Decisions response JSON" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Decisions response JSON" })).toHaveTextContent(
+      '"choice": "technical"',
+    );
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    expect(screen.getByText("Selected choice")).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "technical probability" })).toHaveAttribute("aria-valuenow", "90");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch.mock.calls[1]?.[0]).toMatch(/\/v1\/systemone$/);
     expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body as string)).toEqual(JSON.parse(systemOneDraft));
 
@@ -220,6 +236,7 @@ describe("SystemOneUI integration", () => {
   it("validates /v1/decisions independently and preserves an invalid draft across switches", async () => {
     render(<SystemOneUI accessToken="session-key" />);
     await selectEndpoint("/v1/decisions");
+    await userEvent.click(screen.getByRole("tab", { name: "JSON" }));
     const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" });
     fireEvent.change(editor, { target: { value: "{" } });
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
@@ -229,6 +246,180 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toHaveValue("{");
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("offers a Decisions form that sends input and typed questions and stays in sync with JSON", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValueOnce(
+      createResponse({
+        model: "jev-latest",
+        answers: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      }),
+    );
+    render(<SystemOneUI accessToken="session-key" />);
+    await selectEndpoint("/v1/decisions");
+    expect(screen.getByRole("tab", { name: "Form" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: "Format JSON" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "Login is broken" } });
+    const firstQuestion = within(screen.getByRole("group", { name: "Question 1" }));
+    fireEvent.change(firstQuestion.getByRole("textbox", { name: "Question name" }), { target: { value: "team" } });
+    fireEvent.change(firstQuestion.getByRole("textbox", { name: "Instructions" }), {
+      target: { value: "Which team owns this?" },
+    });
+    fireEvent.change(firstQuestion.getByRole("textbox", { name: "Choice 1 value" }), {
+      target: { value: "infra" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Safety identifier" }), {
+      target: { value: "qa-session" },
+    });
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" });
+    const payload = JSON.parse((editor as HTMLTextAreaElement).value);
+    expect(payload).toMatchObject({ input: "Login is broken", safety_identifier: "qa-session" });
+    const expectedQuestion = {
+      name: "team",
+      type: "choice",
+      instructions: "Which team owns this?",
+      choices: expect.arrayContaining([expect.objectContaining({ value: "infra" })]),
+    };
+    expect(payload.questions[0]).toMatchObject(expectedQuestion);
+    expect(payload).not.toHaveProperty("state");
+    fireEvent.change(editor, { target: { value: JSON.stringify({ ...payload, input: "Fixed in JSON" }) } });
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("Fixed in JSON");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/decisions$/);
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).toEqual({ ...payload, input: "Fixed in JSON" });
+    expect(await screen.findByRole("button", { name: "Raw response" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    expect(screen.getByRole("region", { name: "Decisions response JSON" })).toBeInTheDocument();
+  });
+
+  it("adds and removes Decisions questions, boolean choices and score levels without stale fields", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    await selectEndpoint("/v1/decisions");
+    const question = (index: number) => within(screen.getByRole("group", { name: `Question ${index}` }));
+    const pick = async (control: HTMLElement, label: string) => {
+      control.focus();
+      await user.keyboard("{ArrowDown}");
+      await user.click(await screen.findByRole("option", { name: label, exact: true }));
+    };
+    await user.click(screen.getByRole("button", { name: "Add question" }));
+    fireEvent.change(question(4).getByRole("textbox", { name: "Instructions" }), {
+      target: { value: "Should we escalate?" },
+    });
+    await pick(question(4).getByRole("combobox", { name: "Answer type" }), "Choice");
+    await user.click(question(4).getByRole("button", { name: "Remove choice 1" }));
+    expect(question(4).getByRole("textbox", { name: "Choice 1 value" })).toHaveValue("option_2");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await user.click(question(4).getByRole("button", { name: "Add choice" }));
+    await pick(question(4).getByRole("combobox", { name: "Choice 1 value type" }), "false (boolean)");
+    fireEvent.change(question(4).getByRole("textbox", { name: "Choice 1 description" }), {
+      target: { value: "Not urgent" },
+    });
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const choicePayload = JSON.parse(
+      (screen.getByRole("textbox", { name: "Decisions JSON payload" }) as HTMLTextAreaElement).value,
+    );
+    const expectedChoice = {
+      type: "choice",
+      name: "question_1",
+      instructions: "Should we escalate?",
+      choices: [{ value: false, description: "Not urgent" }, { value: "option_1" }],
+    };
+    expect(choicePayload.questions[3]).toEqual(expectedChoice);
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    await pick(question(4).getByRole("combobox", { name: "Answer type" }), "Score");
+    fireEvent.change(question(4).getByRole("textbox", { name: "Level 1 label" }), { target: { value: "low" } });
+    fireEvent.change(question(4).getByRole("textbox", { name: "Level 1 description" }), {
+      target: { value: "No impact" },
+    });
+    await user.click(question(4).getByRole("button", { name: "Add level" }));
+    await user.click(question(4).getByRole("button", { name: "Remove level 2" }));
+    expect(question(4).getByRole("textbox", { name: "Level 2 label" })).toHaveValue("2");
+    await user.click(question(2).getByRole("button", { name: "Remove question 2" }));
+    expect(question(3).getByRole("textbox", { name: "Instructions" })).toHaveValue("Should we escalate?");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const scorePayload = JSON.parse(
+      (screen.getByRole("textbox", { name: "Decisions JSON payload" }) as HTMLTextAreaElement).value,
+    );
+    expect(scorePayload.questions).toHaveLength(3);
+    const expectedScore = {
+      type: "score",
+      name: "question_1",
+      instructions: "Should we escalate?",
+      levels: [{ label: "low", description: "No impact" }, { label: "2" }],
+    };
+    expect(scorePayload.questions[2]).toEqual(expectedScore);
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    await pick(question(3).getByRole("combobox", { name: "Answer type" }), "Predicate");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const predicatePayload = JSON.parse(
+      (screen.getByRole("textbox", { name: "Decisions JSON payload" }) as HTMLTextAreaElement).value,
+    );
+    expect(predicatePayload.questions[2]).toEqual({
+      type: "predicate",
+      name: "question_1",
+      instructions: "Should we escalate?",
+    });
+  });
+
+  it("preserves message input and extra fields in the Decisions form, including across routes and reset", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    await selectEndpoint("/v1/decisions");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const payload = {
+      model: "jev-latest",
+      metadata: { source: "playground" },
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Is this urgent?" },
+            { type: "input_image", image_url: "https://example.com/image.png" },
+          ],
+        },
+      ],
+      questions: [{ type: "predicate", name: null, instructions: "Old instructions" }],
+    };
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), {
+      target: { value: JSON.stringify(payload) },
+    });
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    expect(screen.getByRole("button", { name: "Edit input in JSON" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Instructions" }), { target: { value: "Is it urgent?" } });
+    await selectEndpoint("/v1/systemone");
+    const nativeInput = (screen.getByRole("textbox", { name: "Input" }) as HTMLTextAreaElement).value;
+    await selectEndpoint("/v1/decisions");
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue("Is it urgent?");
+    await user.click(screen.getByRole("button", { name: "Edit input in JSON" }));
+    const next = JSON.parse(
+      (screen.getByRole("textbox", { name: "Decisions JSON payload" }) as HTMLTextAreaElement).value,
+    );
+    expect(next).toEqual({ ...payload, questions: [{ ...payload.questions[0], instructions: "Is it urgent?" }] });
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    await user.click(screen.getByRole("button", { name: "Reset example" }));
+    expect(screen.getByRole("textbox", { name: "Input" })).toBeInTheDocument();
+    expect(screen.getAllByRole("group", { name: /Question \d/ })).toHaveLength(3);
+    await selectEndpoint("/v1/systemone");
+    expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue(nativeInput);
+  });
+
+  it("keeps malformed Decisions JSON intact when switching to its form", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    await selectEndpoint("/v1/decisions");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Decisions JSON payload" }), { target: { value: "{" } });
+    await user.click(screen.getByRole("tab", { name: "Form" }));
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Edit in JSON" }));
+    expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toHaveValue("{");
   });
 
   it.each(["success", "error"])("cancels the previous endpoint request and ignores a late %s", async (outcome) => {
@@ -255,7 +446,7 @@ describe("SystemOneUI integration", () => {
     await waitFor(() => expect(queryClient.isMutating()).toBe(0));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("stale-model")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Form" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
@@ -277,6 +468,7 @@ describe("SystemOneUI integration", () => {
       questions: { has_repro_steps: { type: "noul" } },
     });
     await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("tab", { name: "Form" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
     expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
   });
@@ -452,6 +644,7 @@ describe("SystemOneUI integration", () => {
     });
 
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("tab", { name: "Form" }));
     expect(screen.getByText("Enter a valid request to preview its state and questions.")).toBeInTheDocument();
   });
 
@@ -468,6 +661,7 @@ describe("SystemOneUI integration", () => {
     });
     fireEvent.change(editor, { target: { value: draft } });
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    await user.click(screen.getByRole("tab", { name: "Form" }));
     expect(screen.getByText(/"text": "Help"/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Send" }));
