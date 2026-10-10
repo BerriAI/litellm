@@ -3636,6 +3636,71 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         error_spans = [s for s in spans if s.status.status_code == StatusCode.ERROR]
         self.assertTrue(error_spans, "Expected at least one span with ERROR status")
 
+    @parameterized.expand(
+        [
+            (
+                "own_span_error_information",
+                False,
+                {
+                    "error_str": "litellm.ServiceUnavailableError: upstream returned 503",
+                    "error_information": {
+                        "error_class": "ServiceUnavailableError",
+                        "error_message": "upstream returned 503",
+                    },
+                },
+                "upstream returned 503",
+            ),
+            (
+                "own_span_error_str_only",
+                False,
+                {"error_str": "litellm.ServiceUnavailableError: upstream returned 503"},
+                "litellm.ServiceUnavailableError: upstream returned 503",
+            ),
+            (
+                "parent_span_error_information",
+                True,
+                {
+                    "error_information": {
+                        "error_class": "ServiceUnavailableError",
+                        "error_message": "upstream returned 503",
+                    }
+                },
+                "upstream returned 503",
+            ),
+        ]
+    )
+    def test_handle_failure_error_status_carries_the_error_message(
+        self, _name: str, has_parent_span: bool, error_fields: dict, expected_description: str
+    ):
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer("litellm")
+        active_parent_span = (
+            trace.use_span(tracer_provider.get_tracer("proxy").start_span("parent_span"), end_on_exit=True)
+            if has_parent_span
+            else contextlib.nullcontext()
+        )
+        start = datetime.now(timezone.utc)
+        end = start + timedelta(seconds=1)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {"id": "test-id", "call_type": "completion", "metadata": {}, **error_fields},
+            "exception": Exception("upstream returned 503"),
+        }
+
+        with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}), active_parent_span:
+            otel._handle_failure(kwargs, None, start, end)
+
+        error_spans = [s for s in span_exporter.get_finished_spans() if s.status.status_code == trace.StatusCode.ERROR]
+        self.assertEqual(len(error_spans), 1)
+        self.assertEqual(error_spans[0].name, "parent_span" if has_parent_span else "litellm_request")
+        self.assertEqual(error_spans[0].status.description, expected_description)
+
 
 class TestRawSpanAttributeIsolation(unittest.TestCase):
     """Issue #3: raw_gen_ai_request span should only contain provider-specific
