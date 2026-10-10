@@ -111,6 +111,8 @@ class DecisionModelGuardrail(CustomGuardrail):
         router_provider: Callable[[], Router | None] | None = None,
         timeout: float | None = None,
         max_concurrent_decision_calls: int = 8,
+        streaming_end_of_stream_only: bool = False,
+        streaming_sampling_rate: int = 5,
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base init takes untyped **kwargs
             guardrail_name=guardrail_name,
@@ -127,6 +129,8 @@ class DecisionModelGuardrail(CustomGuardrail):
         self._router_provider = router_provider or default_router_provider
         self.timeout = timeout
         self._max_concurrent_decision_calls = max_concurrent_decision_calls
+        self.streaming_end_of_stream_only = streaming_end_of_stream_only
+        self.streaming_sampling_rate = streaming_sampling_rate
         self._semaphores_by_loop: dict[AbstractEventLoop, Semaphore] = {}  # mutable-ok: per-loop semaphore registry
 
     @classmethod

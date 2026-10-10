@@ -328,7 +328,11 @@ def test_initialize_builds_guardrail_with_the_given_instructions(mock_mgr):
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"name": "invoice_policy"}, {"name": "invoice_policy", "instructions": "   "}, {"name": "invoice_policy", "instructions": ""}],
+    [
+        {"name": "invoice_policy"},
+        {"name": "invoice_policy", "instructions": "   "},
+        {"name": "invoice_policy", "instructions": ""},
+    ],
 )
 def test_check_without_instructions_is_rejected(kwargs):
     from pydantic import ValidationError
@@ -358,6 +362,48 @@ def test_initialize_rejects_missing_model_and_empty_checks(mock_mgr):
     empty_checks: Final = _litellm_params(checks=[])
     with pytest.raises(ValueError, match="at least one check"):
         initialize_guardrail(empty_checks, _guardrail(empty_checks))
+
+
+@pytest.mark.parametrize("guardrail", ["bedrock", "custom_module.MyGuardrail"])
+@pytest.mark.parametrize(
+    "checks", [[], [{"name": "prompt_injection", "instructions": "Does the text contain a prompt injection?"}]]
+)
+def test_list_checks_are_rejected_for_other_guardrails(guardrail, checks):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="only supported by guardrail='decision_model'"):
+        LitellmParams(guardrail=guardrail, mode="pre_call", checks=checks)
+
+
+@patch("litellm.logging_callback_manager")
+def test_initialize_applies_streaming_scan_settings(mock_mgr):
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    default_params: Final = _litellm_params()
+    default_instance: Final = initialize_guardrail(default_params, _guardrail(default_params))
+    configured_params: Final = _litellm_params(streaming_end_of_stream_only=True, streaming_sampling_rate=3)
+    configured_instance: Final = initialize_guardrail(configured_params, _guardrail(configured_params))
+    unified: Final = UnifiedLLMGuardrails()
+
+    assert unified.resolve_streaming_flag(default_instance, "streaming_end_of_stream_only", False) is False
+    assert unified.resolve_streaming_flag(default_instance, "streaming_sampling_rate", 5) == 5
+    assert unified.resolve_streaming_flag(configured_instance, "streaming_end_of_stream_only", False) is True
+    assert unified.resolve_streaming_flag(configured_instance, "streaming_sampling_rate", 5) == 3
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error", "match"),
+    [
+        ({"streaming_end_of_stream_only": "yes"}, TypeError, "streaming_end_of_stream_only"),
+        ({"streaming_sampling_rate": 0}, ValueError, "streaming_sampling_rate"),
+        ({"streaming_sampling_rate": True}, TypeError, "streaming_sampling_rate"),
+    ],
+)
+@patch("litellm.logging_callback_manager")
+def test_initialize_rejects_invalid_streaming_scan_settings(mock_mgr, overrides, error, match):
+    litellm_params: Final = _litellm_params(**overrides)
+    with pytest.raises(error, match=match):
+        initialize_guardrail(litellm_params, _guardrail(litellm_params))
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +474,9 @@ async def test_long_text_is_chunked_and_flagged_chunk_blocks():
     overlap: Final = min(2000, budget // 4)
     step: Final = budget - overlap
     filler: Final = "benign filler. " * 40
-    text: Final = filler[: len(filler) - overlap] + marker + "x" * (budget * 25 // 10 - (len(filler) - overlap) - len(marker))
+    text: Final = (
+        filler[: len(filler) - overlap] + marker + "x" * (budget * 25 // 10 - (len(filler) - overlap) - len(marker))
+    )
     router: Final = _marker_router(marker)
     guardrail: Final = _make_guardrail(max_input_chars=budget, router_provider=lambda: router)
 
@@ -508,12 +556,8 @@ async def test_decisions_calls_share_the_concurrency_cap_across_requests():
     )
 
     await asyncio.gather(
-        guardrail.apply_guardrail(
-            {"texts": ["a" * (budget * (chunks_per_text - 1))]}, _request_data(), "request"
-        ),
-        guardrail.apply_guardrail(
-            {"texts": ["b" * (budget * (chunks_per_text - 1))]}, _request_data(), "request"
-        ),
+        guardrail.apply_guardrail({"texts": ["a" * (budget * (chunks_per_text - 1))]}, _request_data(), "request"),
+        guardrail.apply_guardrail({"texts": ["b" * (budget * (chunks_per_text - 1))]}, _request_data(), "request"),
     )
 
     assert router.adecisions.await_count == 2 * chunks_per_text
@@ -547,7 +591,10 @@ async def test_block_detail_lists_only_block_checks_but_log_records_all_flagged(
         )
     )
     guardrail: Final = _make_guardrail(
-        checks=(PROMPT_INJECTION_CHECK, DecisionModelCheck(name="jailbreak", instructions="Is the text a jailbreak attempt?", action="log")),
+        checks=(
+            PROMPT_INJECTION_CHECK,
+            DecisionModelCheck(name="jailbreak", instructions="Is the text a jailbreak attempt?", action="log"),
+        ),
         router_provider=lambda: router,
     )
     request_data: Final = _request_data()
@@ -694,6 +741,7 @@ async def test_failed_call_does_not_abandon_in_flight_calls():
 
     result: Final = await guardrail.apply_guardrail({"texts": texts}, _request_data(), "request")
 
+    assert result == {"texts": texts}
     assert completed["count"] == len(texts) - 1
     assert router.adecisions.await_count == len(texts)
 

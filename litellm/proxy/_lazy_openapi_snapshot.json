@@ -11682,7 +11682,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.",
+              "description": "Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
               "title": "Max Concurrent Decision Calls"
             },
             "max_input_chars": {
@@ -14202,7 +14202,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.",
+              "description": "Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
               "title": "Max Concurrent Decision Calls"
             },
             "max_input_chars": {

@@ -1174,7 +1174,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     max_concurrent_decision_calls: int | None = Field(
         default=None,
         gt=0,
-        description="Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.",
+        description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
     extra_headers: list[str] | None = Field(
@@ -1381,6 +1381,14 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
         ):
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_checks_list_for_guardrail(self) -> "LitellmParams":
+        if isinstance(self.checks, tuple) and self.guardrail != SupportedGuardrailIntegrations.DECISION_MODEL.value:
+            raise ValueError(
+                f"checks as a list is only supported by guardrail='decision_model', got guardrail={self.guardrail!r}"
+            )
         return self
 
     def __init__(self, **kwargs) -> None:

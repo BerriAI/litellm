@@ -46,7 +46,16 @@ class DecisionModelGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     max_concurrent_decision_calls: int = Field(
         default=8,
         gt=0,
-        description="Maximum decisions calls in flight at once across all requests on this guardrail. Calls beyond it wait for a free slot",
+        description="Maximum decisions calls in flight at once on this guardrail in each proxy worker. Calls beyond it wait for a free slot",
+    )
+    streaming_end_of_stream_only: bool = Field(
+        default=False,
+        description="For streamed responses, skip the scan every streaming_sampling_rate chunks and score the assembled response once at end of stream",
+    )
+    streaming_sampling_rate: int = Field(
+        default=5,
+        ge=1,
+        description="For streamed responses, score the accumulated response every Nth chunk. Each scan is a decisions call",
     )
 
     @staticmethod

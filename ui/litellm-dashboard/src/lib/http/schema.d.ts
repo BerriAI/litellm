@@ -26709,7 +26709,7 @@ export interface components {
             mask_response_content?: boolean | null;
             /**
              * Max Concurrent Decision Calls
-             * @description Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
              */
             max_concurrent_decision_calls?: number | null;
             /**
@@ -36086,7 +36086,7 @@ export interface components {
             mask_response_content?: boolean | null;
             /**
              * Max Concurrent Decision Calls
-             * @description Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
              */
             max_concurrent_decision_calls?: number | null;
             /**

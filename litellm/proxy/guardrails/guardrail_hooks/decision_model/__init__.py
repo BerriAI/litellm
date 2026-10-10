@@ -40,6 +40,26 @@ def _parse_checks(raw_checks: object) -> tuple[DecisionModelCheck, ...]:
     return tuple(checks)
 
 
+def _streaming_end_of_stream_only(litellm_params: LitellmParams) -> bool:
+    value: Final[object] = getattr(litellm_params, "streaming_end_of_stream_only", None)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise TypeError(f"decision_model guardrail streaming_end_of_stream_only must be a boolean, got {value!r}")
+    return value
+
+
+def _streaming_sampling_rate(litellm_params: LitellmParams) -> int:
+    value: Final[object] = getattr(litellm_params, "streaming_sampling_rate", None)
+    if value is None:
+        return 5
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"decision_model guardrail streaming_sampling_rate must be an integer, got {value!r}")
+    if value < 1:
+        raise ValueError(f"decision_model guardrail streaming_sampling_rate must be at least 1, got {value}")
+    return value
+
+
 def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) -> DecisionModelGuardrail:
     import litellm
 
@@ -63,6 +83,8 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         max_input_chars=litellm_params.max_input_chars or 24000,
         timeout=litellm_params.timeout,
         max_concurrent_decision_calls=litellm_params.max_concurrent_decision_calls or 8,
+        streaming_end_of_stream_only=_streaming_end_of_stream_only(litellm_params),
+        streaming_sampling_rate=_streaming_sampling_rate(litellm_params),
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback
