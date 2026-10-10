@@ -101,8 +101,8 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         update_headers_with_anthropic_beta(headers, request)
     }
 
-    fn wire_body(&self, body: Value, headers: Headers) -> (Value, Headers) {
-        (portable_cache_control(body), headers)
+    fn wire_body(&self, body: Value) -> Value {
+        portable_cache_control(body)
     }
 
     fn reported_cost(&self, response: &MessagesResponse) -> Option<serde_json::Number> {
