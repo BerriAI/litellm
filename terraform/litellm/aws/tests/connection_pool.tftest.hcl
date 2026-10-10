@@ -116,12 +116,10 @@ run "gateway_starts_through_the_pool_aware_launcher" {
 
   assert {
     condition = alltrue([
-      strcontains(local.gateway_launch_cmd, "exec python -m gateway.launch --host 0.0.0.0 --port 4000 --workers 4"),
-      strcontains(local.gateway_launch_cmd, "exec ddtrace-run python -m gateway.launch --host 0.0.0.0 --port 4000 --workers 4"),
-      !strcontains(local.gateway_launch_cmd, "uvicorn gateway.main:app"),
-      local.gateway_proxy_overrides.command[0] == local.gateway_launch_cmd,
+      local.component_overrides.gateway.command == tolist(["gateway", "--workers", "4"]),
+      !can(local.component_overrides.gateway.entryPoint),
     ])
-    error_message = "The gateway must start through gateway.launch (with and without ddtrace) so the pooler starts once before uvicorn forks the workers."
+    error_message = "The gateway must start through the image's gateway component with the configured worker count so the pooler starts once before uvicorn forks the workers."
   }
 }
 

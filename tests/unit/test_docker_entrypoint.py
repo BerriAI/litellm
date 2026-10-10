@@ -14,8 +14,10 @@ from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DOCKER_ENTRYPOINT: Final = REPO_ROOT / "docker-entrypoint.sh"
 DOCKERFILE: Final = REPO_ROOT / "Dockerfile"
-TERRAFORM_ECS: Final = REPO_ROOT / "terraform" / "litellm" / "aws" / "ecs.tf"
-TERRAFORM_CLOUDRUN: Final = REPO_ROOT / "terraform" / "litellm" / "gcp" / "cloudrun.tf"
+TERRAFORM_MODULES: Final = {
+    "aws": REPO_ROOT / "terraform" / "litellm" / "aws",
+    "gcp": REPO_ROOT / "terraform" / "litellm" / "gcp",
+}
 
 IMAGE_ENTRYPOINT_PATH: Final = "/app/docker-entrypoint.sh"
 STUBBED_EXECUTABLES: Final = ("ddtrace-run", "uvicorn", "python", "litellm", "nginx")
@@ -36,17 +38,25 @@ _STUB_TEMPLATE: Final = """#!/bin/sh
 
 _ENTRYPOINT_RE: Final = re.compile(r"^ENTRYPOINT\s+(\[.*\])\s*$", re.MULTILINE)
 _CMD_RE: Final = re.compile(r"^CMD\s+(\[.*\])\s*$", re.MULTILINE)
-_APP_TARGET_RE: Final = re.compile(r"(?:gateway|backend)\.main:app|gateway\.launch")
-_TF_STRING_LOCAL_RE: Final = re.compile(r'^\s*(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$', re.MULTILINE)
-_TF_INTERPOLATION_RE: Final = re.compile(r"\$\{(local|var)\.(\w+)\}")
+_TF_ENTRYPOINT_LOCAL_RE: Final = re.compile(r'^\s*image_entrypoint\s*=\s*"([^"]*)"\s*$', re.MULTILINE)
+_TF_WORD: Final = r'(?:"[^"\s]*"|tostring\(var\.\w+\)|\$\{var\.\w+\}|[\w.-]+)'
+_TF_ENTRYPOINT_CALL_RE: Final = re.compile(rf"exec \$\{{local\.image_entrypoint\}}((?: {_TF_WORD})+)")
+_TF_COMPONENT_LIST_RE: Final = re.compile(
+    rf"(?:command|args|gateway|backend|ui|migrations|metrics|collector)\s*=\s*"
+    rf'\[\s*("(?:proxy|gateway|backend|ui|migrations|metrics|collector)"(?:\s*,\s*{_TF_WORD})*)\s*\]'
+)
+_TF_VAR_RE: Final = re.compile(r"tostring\(var\.(\w+)\)|\$\{var\.(\w+)\}")
 
-TERRAFORM_LAUNCH_SITES: Final = {TERRAFORM_ECS: 2, TERRAFORM_CLOUDRUN: 2}
-TERRAFORM_VAR_STUBS: Final = {"gateway_num_workers": "2"}
-COMPONENT_LAUNCHERS: Final = {
-    "gateway": ("python", "-m", "gateway.launch"),
-    "backend": ("uvicorn", "backend.main:app"),
+TERRAFORM_VAR_STUBS: Final = {"gateway_num_workers": "2", "gateway_metrics_port": "9464"}
+TERRAFORM_WORKLOADS: Final = frozenset({"gateway", "backend", "ui", "migrations", "metrics", "collector"})
+COMPONENT_BINARIES: Final = {
+    "gateway": "python",
+    "backend": "uvicorn",
+    "ui": "nginx",
+    "migrations": "python",
+    "metrics": "python",
+    "collector": "python",
 }
-_MAX_INTERPOLATION_PASSES: Final = 5
 
 
 def _write_stubs(bin_dir: Path, names: tuple[str, ...]) -> None:
@@ -84,28 +94,22 @@ def _run_entrypoint(
     return tuple(record.read_text().splitlines()) if record.exists() else ()
 
 
-def _run_shell_command(command: str, bin_dir: Path, record: Path, use_ddtrace: str | None) -> tuple[str, ...]:
-    env = _entrypoint_env(bin_dir, record, {"USE_DDTRACE": use_ddtrace})
-    result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
-    return tuple(record.read_text().splitlines()) if record.exists() else ()
+def _tf_word(word: str) -> str:
+    var = _TF_VAR_RE.fullmatch(word)
+    if var is not None:
+        return TERRAFORM_VAR_STUBS[var.group(1) or var.group(2)]
+    return word.strip('"')
 
 
-def _resolve_tf_local(terraform_file: Path, name: str) -> str:
-    values = {
-        m.group(1): m.group(2).replace('\\"', '"') for m in _TF_STRING_LOCAL_RE.finditer(terraform_file.read_text())
-    }
-
-    assert name in values, f"{terraform_file} defines no {name} local"
-    resolved = values[name]
-    for _ in range(_MAX_INTERPOLATION_PASSES):
-        if "${" not in resolved:
-            return resolved
-        resolved = _TF_INTERPOLATION_RE.sub(
-            lambda m: values[m.group(2)] if m.group(1) == "local" else TERRAFORM_VAR_STUBS[m.group(2)],
-            resolved,
+def _terraform_component_argvs(module_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (tf.name, tuple(_tf_word(word) for word in words))
+        for tf in sorted(module_dir.glob("*.tf"))
+        for words in (
+            *(m.group(1).split() for m in _TF_ENTRYPOINT_CALL_RE.finditer(tf.read_text())),
+            *(re.split(r"\s*,\s*", m.group(1)) for m in _TF_COMPONENT_LIST_RE.finditer(tf.read_text())),
         )
-    raise AssertionError(f"{terraform_file}:{name} still has unresolved interpolations: {resolved}")
+    )  # comprehension-ok: the two regex scans over one file read are clearer inline than as a generator helper
 
 
 def _entrypoint_argv(dockerfile: Path) -> tuple[str, ...]:
@@ -434,62 +438,30 @@ def test_creates_a_missing_prometheus_multiproc_dir(tmp_path: Path) -> None:
     assert missing.is_dir()
 
 
-@pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
-@pytest.mark.parametrize("component", ["gateway", "backend"])
-@pytest.mark.parametrize("use_ddtrace", [*TRUTHY_USE_DDTRACE, *FALSY_USE_DDTRACE])
-def test_terraform_launch_command_matches_the_script_contract(
-    terraform_file: Path, component: str, use_ddtrace: str | None, tmp_path: Path
-) -> None:
-    launcher = COMPONENT_LAUNCHERS[component]
-    app_target = " ".join(launcher[1:])
-    command = _resolve_tf_local(terraform_file, f"{component}_launch_cmd")
+@pytest.mark.parametrize("module", TERRAFORM_MODULES, ids=str)
+def test_terraform_hands_every_workload_to_the_image_entrypoint(module: str) -> None:
+    argvs = _terraform_component_argvs(TERRAFORM_MODULES[module])
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(parents=True)
-    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "python"))
-    from_terraform = _run_shell_command(command, bin_dir, tmp_path / "terraform.txt", use_ddtrace)
-
-    from_script = _run_entrypoint((component,), tmp_path / "script", use_ddtrace=use_ddtrace)
-
-    assert from_terraform[0] == from_script[0], (
-        f"{terraform_file} disagrees with the script on USE_DDTRACE={use_ddtrace}"
-    )
-    assert from_terraform[2] == from_script[2], f"{terraform_file} disagrees with the script on the openai integration"
-    assert app_target in from_terraform[1]
-    assert app_target in from_script[1]
-    assert "gateway.main:app" not in from_terraform[1], f"{terraform_file} bypasses the gateway.launch supervisor"
-
-    if use_ddtrace in TRUTHY_USE_DDTRACE:
-        assert from_terraform[0] == "exec=ddtrace-run"
-        assert from_terraform[1].startswith(f"args={launcher[0]} ")
-        assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=False"
-    else:
-        assert from_terraform[0] == f"exec={launcher[0]}"
-        assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=<unset>"
+    assert {argv[0] for _, argv in argvs} == TERRAFORM_WORKLOADS, f"{module} workloads: {argvs}"
+    for tf in TERRAFORM_MODULES[module].glob("*.tf"):
+        for entrypoint_path in _TF_ENTRYPOINT_LOCAL_RE.findall(tf.read_text()):
+            assert entrypoint_path == _entrypoint_argv(DOCKERFILE)[0], f"{tf} execs a path the image does not ship"
 
 
-@pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
-def test_terraform_routes_every_launch_site_through_a_traced_command(terraform_file: Path) -> None:
-    launch_sites = tuple(line for line in terraform_file.read_text().splitlines() if _APP_TARGET_RE.search(line))
+@pytest.mark.parametrize("module", TERRAFORM_MODULES, ids=str)
+@pytest.mark.parametrize("use_ddtrace", ["true", None])
+def test_the_entrypoint_accepts_every_terraform_argv(module: str, use_ddtrace: str | None, tmp_path: Path) -> None:
+    for index, (tf, argv) in enumerate(_terraform_component_argvs(TERRAFORM_MODULES[module])):
+        component, *extra = argv
+        recorded = _run_entrypoint(argv, tmp_path / str(index), use_ddtrace=use_ddtrace)
 
-    assert len(launch_sites) == TERRAFORM_LAUNCH_SITES[terraform_file], (
-        f"{terraform_file} launch-site count changed; re-check each one honors USE_DDTRACE"
-    )
-    for line in launch_sites:
-        assert "ddtrace-run" in line, f"{terraform_file} launches uvicorn without honoring USE_DDTRACE: {line.strip()}"
-
-    body = terraform_file.read_text()
-    for component in ("gateway", "backend"):
-        assert f"local.{component}_launch_cmd" in body, (
-            f"{terraform_file} defines a {component} launch command but never uses it"
-        )
-
-
-@pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
-def test_terraform_does_not_depend_on_the_entrypoint_script(terraform_file: Path) -> None:
-    assert IMAGE_ENTRYPOINT_PATH not in terraform_file.read_text(), (
-        f"{terraform_file} depends on a script that images predating it do not ship"
-    )
+        expected_exec = "ddtrace-run" if use_ddtrace and component != "ui" else COMPONENT_BINARIES[component]
+        assert recorded[0] == f"exec={expected_exec}", f"{module}/{tf} {argv}: {recorded}"
+        assert recorded[1].endswith(" ".join(extra)), f"{module}/{tf} {argv} drops its flags: {recorded[1]}"
+        if component == "gateway":
+            assert extra == ["--workers", TERRAFORM_VAR_STUBS["gateway_num_workers"]], f"{module}/{tf}: {argv}"
+        if component == "metrics":
+            assert extra == ["--port", TERRAFORM_VAR_STUBS["gateway_metrics_port"]], f"{module}/{tf}: {argv}"
 
 
 def test_help_prints_the_header_comment_block_without_shell_source(tmp_path: Path) -> None:
