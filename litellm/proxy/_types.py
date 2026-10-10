@@ -21,7 +21,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
+from typing_extensions import (
+    NotRequired,
+    ReadOnly,
+    Required,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the raw payload a before-validator receives
+)
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
@@ -1192,8 +1198,8 @@ class KeyRequestBase(GenerateRequestBase):
     enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
-    allowed_routes: list | None = []
-    allowed_passthrough_routes: list | None = None
+    allowed_routes: list[Any] | None = []
+    allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
@@ -1282,13 +1288,17 @@ class GenerateKeyResponse(KeyRequestBase):
         return values
 
 
+def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: raw before-validator payload
+    return isinstance(value, Mapping)
+
+
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     duration: str | None = None
     spend: float | None = None
     soft_budget: float | None = None
-    metadata: dict | None = None
+    metadata: dict[Any, Any] | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
     auto_rotate: bool | None = None
@@ -1303,7 +1313,7 @@ class UpdateKeyRequest(KeyRequestBase):
     @model_validator(mode="before")
     @classmethod
     def drop_blank_team_id(cls, values: object) -> object:
-        if isinstance(values, Mapping) and values.get("team_id") == "":
+        if _is_mapping(values) and values.get("team_id") == "":
             return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
         return values
 
@@ -1334,7 +1344,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     new_key: str | None = None
     duration: str | None = None
     spend: float | None = None
-    metadata: dict | None = None
+    metadata: dict[Any, Any] | None = None
     new_master_key: str | None = None
     grace_period: str | None = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
 
