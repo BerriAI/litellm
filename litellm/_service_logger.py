@@ -346,7 +346,9 @@ class ServiceLogging(CustomLogger):
                 redact_redis_error,  # noqa: PLC0415  # redis_cache imports this module; a module-scope import would be circular
             )
 
-            error_message = redact_redis_error(error) if isinstance(error, Exception) else error_message
+            error_message = (  # rebind-ok: narrows the message derived above, like the three assignments that produced it
+                redact_redis_error(error) if isinstance(error, Exception) else error_message
+            )
 
         payload: Final = ServiceLoggerPayload(
             is_error=True,
