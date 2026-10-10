@@ -105,7 +105,7 @@ def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_
 class _UsageObject(Protocol):
     """Token-count surface the Langfuse logger reads off a response usage payload."""
 
-    def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
+    def get(self, key: str, /) -> int | None: ...
 
 
 def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str | None = None) -> int:
@@ -126,14 +126,14 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
         int: The token count, defaulting to 0.
     """
     if isinstance(usage_obj, dict):
-        usage_dict = cast("dict[str, object]", usage_obj)
-        if (dict_value := usage_dict.get(standard_name)) is None and decision_name is not None:
-            decision_value = usage_dict.get(decision_name)
-            return decision_value if isinstance(decision_value, int) else 0
+        usage_proto: Final[_UsageObject] = cast("_UsageObject", usage_obj)  # cast-ok: plain dict at runtime, narrowed by isinstance; _UsageObject only describes .get
+        if (dict_value := usage_proto.get(standard_name)) is None and decision_name is not None:
+            decision_dict_value: Final = usage_proto.get(decision_name)
+            return decision_dict_value if isinstance(decision_dict_value, int) else 0
         return dict_value if isinstance(dict_value, int) else 0
     if (attr_value := getattr(usage_obj, standard_name, None)) is None and decision_name is not None:
-        decision_value = getattr(usage_obj, decision_name, None)
-        return decision_value if isinstance(decision_value, int) else 0
+        decision_attr_value: Final = getattr(usage_obj, decision_name, None)
+        return decision_attr_value if isinstance(decision_attr_value, int) else 0
     return attr_value if isinstance(attr_value, int) else 0
 
 
