@@ -179,14 +179,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
-        """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
+        """Raise small positive max_output_tokens up to the OpenAI Responses API minimum.
 
         OpenAI's Responses API rejects max_output_tokens below 16 for every model
         (not gpt-5 specific), so a client like Claude Code that sends a max_tokens=1
-        warmup probe on model switch would otherwise 400. Values that are None or
+        warmup probe on model switch would otherwise 400. Only positive values
+        below the minimum are clamped; non-positive values pass through so the
+        provider's validation error surfaces to the caller, and None or values
         already at/above the minimum are returned unchanged.
         """
-        if isinstance(max_output_tokens, int) and max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
+        if isinstance(max_output_tokens, int) and 0 < max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
             return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
         return max_output_tokens
 
