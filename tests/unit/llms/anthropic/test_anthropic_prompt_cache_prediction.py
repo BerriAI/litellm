@@ -25,6 +25,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     parse_cache_plan,
     parse_observed_cache,
     parse_prompt,
+    prepare_native_baseline_body,
     resolve_baseline_prediction_target,
     resolve_prediction_target,
     supported_prediction_headers,
@@ -53,6 +54,24 @@ def _body() -> dict[str, JsonValue]:
             {"type": "text", "text": "A cacheable prefix", "cache_control": {"type": "ephemeral"}}
         ]}],
     }
+
+
+@pytest.mark.parametrize("source", ("headers", "extra_headers", "provider_specific_header"))
+@pytest.mark.parametrize("name,value,supported", (
+    ("anthropic-beta", "unmodeled-cache-policy", False),
+    ("anthropic-version", "2099-01-01", False),
+    ("anthropic-version", DEFAULT_ANTHROPIC_API_VERSION, True),
+))
+def test_native_baseline_preparation_preserves_header_eligibility(
+    source: str, name: str, value: str, supported: bool,
+) -> None:
+    headers: Final = {name: value}
+    request: Final = {
+        **_body(), "max_tokens": 16,
+        source: {"custom_llm_provider": "anthropic", "extra_headers": headers}
+        if source == "provider_specific_header" else headers,
+    }
+    assert (prepare_native_baseline_body(request, _MODEL) is not None) == supported
 
 
 @pytest.mark.parametrize("version", [None, "2099-01-01", DEFAULT_ANTHROPIC_API_VERSION])

@@ -224,6 +224,7 @@ jobs:
               tests/unit/llms/test_oss_decision.py
               tests/unit/llms/test_polling_url_origin_match.py
               tests/unit/llms/test_predibase_transformation.py
+              tests/unit/llms/test_prompt_cache_estimation.py
               tests/unit/llms/a2a
               tests/unit/llms/aiml
               tests/unit/llms/aiohttp_openai

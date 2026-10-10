@@ -15,6 +15,7 @@ from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, Valid
 
 import litellm
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     is_anthropic_oauth_key,
@@ -33,11 +34,14 @@ from litellm.router_utils.baseline_request import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ProviderSpecificHeader
 from litellm.utils import supports_thinking_cache_preservation
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
+_PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]] = TypeAdapter(
+    ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None
+)
 _MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 _SYSTEM: Final = TypeAdapter(str | list[dict[str, JsonValue]] | None)
 _counter: Final = AnthropicCountTokensHandler()
@@ -637,6 +641,17 @@ def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> M
         return None
     source: Final = {**parameters, "messages": request.get("messages"), "stream": request.get("stream", False)}
     try:
+        headers: Final = {
+            **_HEADERS.validate_python(request.get("headers") or {}),
+            **_HEADERS.validate_python(request.get("extra_headers") or {}),
+            **_HEADERS.validate_python(
+                ProviderSpecificHeaderUtils.get_provider_specific_headers(  # pyright: ignore[reportUnknownMemberType]  # header owner returns an untyped dict validated here
+                    _PROVIDER_HEADERS.validate_python(request.get("provider_specific_header")), "anthropic"
+                )
+            ),
+        }
+        if not supported_prediction_headers(headers):
+            return None
         owned: Final = _JSON_OBJECT.validate_python(source)
         context: Final = {**{k: v for k, v in request.items() if k not in ("metadata", "litellm_metadata")}, **owned}
         resolved_model: Final = litellm.get_llm_provider(model=model, custom_llm_provider="anthropic")[0]

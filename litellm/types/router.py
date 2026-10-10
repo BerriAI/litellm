@@ -1255,7 +1255,7 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 class BaselineRouteStamp:
     router_name: str
     baseline_model: str
-    baseline_deployment_id: str
+    baseline_deployment_id: str | None
     request_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
 
 
