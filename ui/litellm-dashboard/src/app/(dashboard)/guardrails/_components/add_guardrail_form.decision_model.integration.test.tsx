@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,8 +78,12 @@ describe("AddGuardrailForm decision model questions", () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     await renderDecisionModel(user);
 
-    await user.click(await screen.findByLabelText("Decision Provider"));
+    expect(await screen.findByLabelText("Decision Provider")).toHaveTextContent("Select a provider");
+    await user.click(screen.getByLabelText("Decision Provider"));
     await user.click(await screen.findByText("TypeSafe"));
+    expect(
+      within(screen.getByLabelText("Decision Provider")).getByRole("img", { name: "TypeSafe logo" }),
+    ).toBeVisible();
     await user.click(await screen.findByLabelText("Decision Model"));
     expect(await screen.findByTitle("jev-latest")).toBeInTheDocument();
     expect(screen.queryByTitle("gpt-5")).not.toBeInTheDocument();

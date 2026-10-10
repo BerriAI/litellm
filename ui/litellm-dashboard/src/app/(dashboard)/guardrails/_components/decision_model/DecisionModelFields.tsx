@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { asText, GuardrailField, labelWithHint, requiredRule, type GuardrailFormControl } from "../GuardrailFormField";
 import { duplicateDecisionCheckNames, type DecisionModelCheckDraft } from "./buildDecisionModelParams";
@@ -39,6 +40,16 @@ const ACTION_ITEMS = [
   { label: "Block", value: "block" },
   { label: "Log only", value: "log" },
 ];
+
+const ProviderLabel: React.FC<{ provider: string }> = ({ provider }) => {
+  const { displayName } = getProviderLogoAndName(provider);
+  return (
+    <span className="flex items-center gap-2">
+      <Logo provider={provider} label={displayName} className="size-4" />
+      {displayName}
+    </span>
+  );
+};
 
 const ThresholdSlider: React.FC<{
   value: number;
@@ -101,20 +112,16 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           onValueChange={(next: string | null) => onProviderChange(next)}
         >
           <SelectTrigger className="w-full" aria-label="Decision Provider">
-            <SelectValue placeholder="Select a provider" />
+            <SelectValue>
+              {(provider: string | null) => (provider ? <ProviderLabel provider={provider} /> : "Select a provider")}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {decisionProviders.map((provider) => {
-              const { logo, displayName } = getProviderLogoAndName(provider);
-              return (
-                <SelectItem key={provider} value={provider}>
-                  <span className="flex items-center gap-2">
-                    {logo && <img src={logo} alt={`${displayName} logo`} className="size-4" />}
-                    {displayName}
-                  </span>
-                </SelectItem>
-              );
-            })}
+            {decisionProviders.map((provider) => (
+              <SelectItem key={provider} value={provider}>
+                <ProviderLabel provider={provider} />
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </Field>
