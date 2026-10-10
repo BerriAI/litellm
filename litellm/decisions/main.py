@@ -119,28 +119,24 @@ def _request_safety_identifier(safety_identifier: object, kwargs: Mapping[str, o
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class _UnsupportedSafetyIdentifier:
+    pass
+
+
 def _provider_ir_request(
     request: DecisionsRequestFormat,
     *,
     safety_identifier: str | None,
-    model: str,
-    provider: str,
     provider_config: BaseDecisionsConfig,
     kwargs: Mapping[str, object],
-) -> DecisionsIRRequest:
+) -> DecisionsIRRequest | _UnsupportedSafetyIdentifier:
     ir_request: Final = _ir_request(request, safety_identifier)
     if ir_request.safety_identifier is None or provider_config.supports_safety_identifier:
         return ir_request
     if _drops_params(kwargs):
         return replace(ir_request, safety_identifier=None)
-    raise litellm.UnsupportedParamsError(
-        message=(
-            f"{provider} does not support parameters: ['safety_identifier'], for model={model}. "
-            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
-        ),
-        model=model,
-        llm_provider=provider,
-    )
+    return _UnsupportedSafetyIdentifier()
 
 
 def _prepare_call(
@@ -213,11 +209,19 @@ def _prepare_call(
     ir_request: Final = _provider_ir_request(
         request,
         safety_identifier=request_safety_identifier,
-        model=model,
-        provider=provider,
         provider_config=provider_config,
         kwargs=kwargs,
     )
+    if isinstance(ir_request, _UnsupportedSafetyIdentifier):
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{provider} does not support parameters: ['safety_identifier'], for model={model}. "
+                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
+                "`litellm_settings:\n drop_params: true`\n"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
     body: Final = provider_config.transform_decisions_request(
         model=canonical_model, request=ir_request, custom_llm_provider=provider
     )
