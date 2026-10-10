@@ -614,10 +614,12 @@ def test_prometheus_label_value_sanitization_non_string_types():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("populate_other_bucket", (False, True))
 @pytest.mark.parametrize("original_model_group", (None, "", 123, "requested-source"))
 @pytest.mark.parametrize("stream", (False, True))
 async def test_success_hook_preserves_requested_model_and_deployment_labels(
     metadata_bucket: Literal["metadata", "litellm_metadata"],
+    populate_other_bucket: bool,
     original_model_group: str | int | None,
     stream: bool,
 ) -> None:
@@ -671,6 +673,14 @@ async def test_success_hook_preserves_requested_model_and_deployment_labels(
         "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
     }
 
+    other_bucket: Final = "litellm_metadata" if metadata_bucket == "metadata" else "metadata"
+    litellm_params: Final = {
+        metadata_bucket: {
+            "request_tag": "router",
+            **({"original_model_group": original_model_group} if original_model_group is not None else {}),
+        },
+        **({other_bucket: {"request_tag": "client"}} if populate_other_bucket else {}),
+    }
     _clear_prometheus_registry()
     try:
         logger: Final = PrometheusLogger()
@@ -678,11 +688,7 @@ async def test_success_hook_preserves_requested_model_and_deployment_labels(
         await logger.async_log_success_event(
             {
                 "model": "gpt-4o-mini",
-                "litellm_params": {
-                    metadata_bucket: {}
-                    if original_model_group is None
-                    else {"original_model_group": original_model_group}
-                },
+                "litellm_params": litellm_params,
                 "standard_logging_object": payload,
             },
             None,
