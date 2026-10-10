@@ -428,6 +428,8 @@ from litellm.proxy.common_utils.discoverable_model_filter import discoverable_ro
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
+    get_salt_key,
+    is_undecryptable_ciphertext,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.fips import (
@@ -5579,6 +5581,7 @@ class ProxyConfig:
         self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
         self._cleanup_reschedule_failed: bool = False
         self._warned_db_mcp_stdio_flag_ignored: bool = False
+        self._warned_undecryptable_db_models: frozenset[tuple[str, tuple[str, ...]]] = frozenset()
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7572,6 +7575,36 @@ class ProxyConfig:
             return get_secret(decrypted_value)
         return decrypted_value
 
+    def _log_undecryptable_db_model_params(self, model: object, litellm_params: Mapping[str, object]) -> None:
+        """Log (once per model and key set) DB model params that do not decrypt under the current key.
+
+        Without this, a row encrypted under an older key is passed on as ciphertext and the model
+        silently disappears from the router. Only key names are logged, never values.
+        """
+        signing_key: Final = get_salt_key()
+        failed_keys: Final = tuple(
+            sorted(
+                k for k, v in litellm_params.items() if is_undecryptable_ciphertext(value=v, signing_key=signing_key)
+            )
+        )
+        if not failed_keys:
+            return
+        model_name: Final = str(getattr(model, "model_name", None))
+        model_id: Final = str(getattr(model, "model_id", None))
+        warned_key: Final = (model_id, failed_keys)
+        if warned_key in self._warned_undecryptable_db_models:
+            return
+        self._warned_undecryptable_db_models = self._warned_undecryptable_db_models | {warned_key}
+        verbose_proxy_logger.error(
+            "Could not decrypt litellm_params %s of DB model model_name=%s model_id=%s. "
+            "The row was likely encrypted with a different key (LITELLM_SALT_KEY added or changed, "
+            "or master_key changed), so this model will not be routable. Restore the original key "
+            "or re-save the model. See https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key",
+            list(failed_keys),
+            model_name,
+            model_id,
+        )
+
     def _add_deployment(self, db_models: list) -> int:
         """
         Iterate through db models
@@ -7590,6 +7623,10 @@ class ProxyConfig:
         for m in db_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, dict):
+                self._log_undecryptable_db_model_params(
+                    model=m,  # pyright: ignore[reportUnknownArgumentType]  # DB model rows are untyped here
+                    litellm_params=_litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # same untyped row
+                )
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
@@ -7621,6 +7658,10 @@ class ProxyConfig:
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
+                self._log_undecryptable_db_model_params(
+                    model=m,  # pyright: ignore[reportUnknownArgumentType]  # DB model rows are untyped here
+                    litellm_params=_litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # same untyped row
+                )
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)

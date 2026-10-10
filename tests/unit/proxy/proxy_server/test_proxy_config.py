@@ -3484,6 +3484,56 @@ def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_emp
     assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
 
 
+def test_ProxyConfig_decrypt_model_list_from_db_logs_rows_encrypted_under_another_key(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A row encrypted before LITELLM_SALT_KEY was set must be reported, not dropped silently (#45574)."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-new-salt-key")
+    old_api_key = encrypt_value_helper("sk-provider-secret", new_encryption_key="sk-old-master-key")
+    old_model = encrypt_value_helper("openai/gpt-4o", new_encryption_key="sk-old-master-key")
+    pc = ProxyConfig()
+
+    def stale_row() -> SimpleNamespace:
+        return SimpleNamespace(
+            model_id="m-stale",
+            model_name="memory-model",
+            model_info={"id": "m-stale"},
+            litellm_params={"api_key": old_api_key, "model": old_model, "rpm": 10},
+            blocked=False,
+        )
+
+    with caplog.at_level(logging.ERROR):
+        pc.decrypt_model_list_from_db(new_models=[stale_row()])
+        pc.decrypt_model_list_from_db(new_models=[stale_row()])
+
+    errors = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.ERROR and "Could not decrypt" in r.getMessage()
+    ]
+    assert len(errors) == 1
+    assert "['api_key', 'model']" in errors[0]
+    assert "model_name=memory-model model_id=m-stale" in errors[0]
+    assert old_api_key not in caplog.text
+    assert "sk-provider-secret" not in caplog.text
+
+
+def test_ProxyConfig_decrypt_model_list_from_db_does_not_log_rows_under_current_key(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-new-salt-key")
+    pc = ProxyConfig()
+    m = SimpleNamespace(
+        model_id="m-ok",
+        model_name="gpt-4o",
+        model_info={"id": "m-ok"},
+        litellm_params={"api_key": encrypt_value_helper("sk-provider-secret"), "model": "openai/gpt-4o"},
+        blocked=False,
+    )
+    with caplog.at_level(logging.ERROR):
+        out = pc.decrypt_model_list_from_db(new_models=[m])
+    assert out[0]["litellm_params"]["api_key"] == "sk-provider-secret"
+    assert "Could not decrypt" not in caplog.text
+
+
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
