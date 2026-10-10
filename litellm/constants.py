@@ -1007,6 +1007,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
+    "https://api.viktor.com/api/compat/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
