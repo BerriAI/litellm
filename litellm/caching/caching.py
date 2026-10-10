@@ -445,8 +445,8 @@ class Cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
         else:
             cache_key += self._get_proxy_cache_scope(
-                cast(Mapping[str, object], kwargs)
-            )  # cast-ok: cache kwargs are string-keyed
+                cast(Mapping[str, object], kwargs)  # cast-ok: cache kwargs are string-keyed
+            )
 
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
