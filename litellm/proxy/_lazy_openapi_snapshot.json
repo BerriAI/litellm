@@ -11620,13 +11620,24 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
             "logging_only_scope": {
               "anyOf": [
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -11634,7 +11645,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask_request_content": {
@@ -14027,13 +14038,24 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
             "logging_only_scope": {
               "anyOf": [
                 {
                   "enum": [
                     "input",
-                    "output",
-                    "both"
+                    "output"
                   ],
                   "type": "string"
                 },
@@ -14041,7 +14063,7 @@
                   "type": "null"
                 }
               ],
-              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
               "title": "Logging Only Scope"
             },
             "mask": {
